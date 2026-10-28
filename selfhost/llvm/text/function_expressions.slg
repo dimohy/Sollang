@@ -1493,7 +1493,7 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
                 dictionaryItem.nextOperand => dictionaryItemIndex!
                 dictionaryItemPosition! + 1 => dictionaryItemPosition!
             }
-            "v$(expressionIndex)" -> emitGrowableDictionaryOwner("%v$(expressionIndex)_storage", "$(dictionaryLength)", "$(dictionaryCapacity)")
+            expressionIndex -> emitDictionaryLiteralOwner(dictionaryLength, dictionaryCapacity, context, state)
         }
 }
 
@@ -1513,7 +1513,7 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
         "v$(expressionIndex)" -> materialize(nameStorage!)
     } => prefix
     expression.operand0 -> mutableStorageRoot(context, state) => indexedMutableRoot
-    indexedMutableRoot >= 0 -> if { "  %$(prefix)_dictionary = load %sollang.dict, ptr %slot$(indexedMutableRoot), align 8" -> println }
+    indexedMutableRoot >= 0 -> if { "  %$(prefix)_dictionary = load %sollang.int_dictionary, ptr %slot$(indexedMutableRoot), align 8" -> println }
     -1 => indexedDictionaryKeyTypeId!
     -1 => indexedDictionaryValueTypeId!
     dictionaryTypeId >= 0 -> if {
@@ -1524,15 +1524,15 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
                 indexedDictionaryType.second => indexedDictionaryValueTypeId!
             }
     }
-    "  %$(prefix)_storage = extractvalue %sollang.dict " -> print
+    "  %$(prefix)_storage = extractvalue %sollang.int_dictionary " -> print
     indexedMutableRoot >= 0 -> if { "%$(prefix)_dictionary" -> print } else { readonlySource
             -> if { "%$(prefix)_indexed_source" -> print } else { expression.operand0 -> writeAggregateOperand(functionIndex, whileIndex, context, state) } }
     ", 0" -> println
-    "  %$(prefix)_length = extractvalue %sollang.dict " -> print
+    "  %$(prefix)_length = extractvalue %sollang.int_dictionary " -> print
     indexedMutableRoot >= 0 -> if { "%$(prefix)_dictionary" -> print } else { readonlySource
             -> if { "%$(prefix)_indexed_source" -> print } else { expression.operand0 -> writeAggregateOperand(functionIndex, whileIndex, context, state) } }
     ", 1" -> println
-    "  %$(prefix)_capacity = extractvalue %sollang.dict " -> print
+    "  %$(prefix)_capacity = extractvalue %sollang.int_dictionary " -> print
     indexedMutableRoot >= 0 -> if { "%$(prefix)_dictionary" -> print } else { readonlySource
             -> if { "%$(prefix)_indexed_source" -> print } else { expression.operand0 -> writeAggregateOperand(functionIndex, whileIndex, context, state) } }
     ", 2" -> println

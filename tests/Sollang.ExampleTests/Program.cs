@@ -26,6 +26,14 @@ if (args.Length > 0 && args[0] == "--llvm-assertion-tests")
         args.Length == 4 ? args[3] : "51-fixed-array-value-generics");
 }
 
+if (args.Length > 0 && args[0] == "--verify-common-llvm")
+{
+    if (args.Length != 5)
+        throw new ArgumentException("Expected LLVM input, fixture name, target and new result path.");
+    return CommonLlvmVerification.Run(FindRepositoryRoot(AppContext.BaseDirectory),
+        args[1], args[2], args[3], args[4]);
+}
+
 // Compiler and native fixture streams use UTF-8 regardless of the host console code page.
 Console.OutputEncoding = new UTF8Encoding(false);
 

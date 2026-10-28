@@ -1,0 +1,287 @@
+namespace sollang.compiler.llvm.emitter.type_queries
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+public isSourceText node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 24
+    } else {
+        node.typeOrigin == 1 and node.typeSymbol == 24
+    }
+}
+
+public isDynamicArray node: typedIr.TypedIrNode -> Bool {
+    # Canonical recursive identity is authoritative once available. In
+    # particular, a fixed array can retain the legacy array origin while its
+    # canonical kind already distinguishes it from a growable array.
+    node.typeId >= 0 -> if {
+        node.typeKind == 3
+            or node.typeKind == 12
+            or (node.typeKind == 7 and node.typeOrigin == 4 and (node.typeSymbol == 6 or node.typeSymbol == 7))
+    } else { node.typeOrigin == 13 }
+}
+
+public isSliceArray node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if { node.typeKind == 2 } else { node.typeOrigin == 12 }
+}
+
+public isFixedArray node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if { node.typeKind == 4 } else { node.typeOrigin == 14 }
+}
+
+public isDictionary node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 5
+            or node.typeKind == 13
+            or (node.typeKind == 7 and node.typeOrigin == 4 and node.typeSymbol == 5)
+    } else { node.typeOrigin == 15 }
+}
+
+public isGenericEnum node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 7 and (node.typeSymbol == 0 or node.typeSymbol == 1)
+    } else { false }
+}
+
+public isNominalStruct node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 1 and node.typeModule >= 0 and node.typeOrigin != 16
+    } else {
+        node.typeOrigin == 0 or node.typeOrigin == 2
+    }
+}
+
+public isText node: typedIr.TypedIrNode -> Bool {
+    node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 1
+}
+
+public isMappedBytes node: typedIr.TypedIrNode -> Bool {
+    node.typeKind == 1 and node.typeOrigin == 1 and (node.typeSymbol == 17 or node.typeSymbol == 18)
+}
+
+public isArguments node: typedIr.TypedIrNode -> Bool {
+    (node.typeOrigin == 1 and node.typeSymbol == 16) or ((node.kind == 6 or node.kind == 9) and node.opcode == -212)
+}
+
+public writeTextLike node: typedIr.TypedIrNode -> Unit uses Console {
+    node -> isSourceText -> if { "%sollang.source_text" -> print } else {
+        node -> isMappedBytes -> if { "%sollang.mapped_bytes" -> print } else { "%sollang.text" -> print }
+    }
+}
+
+public owns node: typedIr.TypedIrNode -> Bool {
+    node.typeOrigin == 1 and (node.typeSymbol == 17 or node.typeSymbol == 18)
+        -> if { true } else { node.typeOrigin == 13 or node.typeOrigin == 14 or node.typeOrigin == 15 or node.typeOrigin == 16
+                -> if { true } else {
+                    node.typeId >= 0 -> if {
+                        node.typeFlags % 2 == 1
+                    } else {
+                        node.typeOrigin == 13 or node.typeOrigin == 15 or node.typeOrigin == 0 or node.typeOrigin == 2
+                    }
+                }
+        }
+}
+
+public write node: typedIr.TypedIrNode -> Unit uses Console {
+    false => written!
+    node.typeKind == 1 and node.typeOrigin == 16 -> if {
+        "%sollang.dyn" -> print
+        true => written!
+    }
+    node.typeKind == 14 -> if {
+        "%sollang.bitset.t$(node.typeId)" -> print
+        true => written!
+    }
+    node -> isDynamicArray -> if {
+        "%sollang.array.i32" -> print
+        true => written!
+    }
+    not written! and (node -> isDictionary) -> if {
+        "%sollang.int_dictionary" -> print
+        true => written!
+    }
+    not written! and (node -> isNominalStruct) -> if {
+        "%sollang.struct.m$(node.typeModule)_s$(node.typeSymbol)" -> print
+        true => written!
+    }
+    not written! and node.typeSymbol == 1 -> if {
+        "%sollang.text" -> print
+        true => written!
+    }
+    not written! and node.typeSymbol == 15 -> if {
+        "%sollang.array.i32" -> print
+        true => written!
+    }
+    not written! and (node.typeSymbol == 17 or node.typeSymbol == 18)
+        -> if {
+            "%sollang.mapped_bytes" -> print
+            true => written!
+        }
+    not written! and (node.typeSymbol == 2 or node.typeSymbol == 5 or node.typeSymbol == 10 or node.typeSymbol == 14)
+        -> if {
+            "i32" -> print
+            true => written!
+        }
+    not written! and (node.typeSymbol == 3 or node.typeSymbol == 8)
+        -> if {
+            "i8" -> print
+            true => written!
+        }
+    not written! and (node.typeSymbol == 4 or node.typeSymbol == 9)
+        -> if {
+            "i16" -> print
+            true => written!
+        }
+    not written! and (node.typeSymbol == 6 or node.typeSymbol == 7 or node.typeSymbol == 11 or node.typeSymbol == 12 or node.typeSymbol == 13 or node.typeSymbol == 16)
+        -> if {
+            "i64" -> print
+            true => written!
+        }
+    not written! and (node.typeSymbol == 19 or node.typeSymbol == 20)
+        -> if {
+            "float" -> print
+            true => written!
+        }
+    not written! and (node.typeSymbol == 21 or node.typeSymbol == 22)
+        -> if {
+            "double" -> print
+            true => written!
+        }
+    not written! and node.typeSymbol == 23 -> if {
+        "i1" -> print
+        true => written!
+    }
+    not written! and node.typeSymbol == 24 -> if {
+        "%sollang.source_text" -> print
+        true => written!
+    }
+    not written! and node.typeSymbol == 25 -> if {
+        "{ i32, i32 }" -> print
+        true => written!
+    }
+    not written! -> if { "void" -> print }
+}
+
+public arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
+    -1 => elementTypeId!
+    node.typeId >= 0 -> if {
+        node.typeId => arrayTypeId!
+        context.types[arrayTypeId!].kind == 8 -> if { context.types[arrayTypeId!].first => arrayTypeId! }
+        context.types[arrayTypeId!].kind == 1
+            and context.types[arrayTypeId!].origin == 1
+            and (context.types[arrayTypeId!].symbol == 1 or context.types[arrayTypeId!].symbol == 17 or context.types[arrayTypeId!].symbol == 18)
+            -> if {
+                8 => builtinElementSymbol!
+                context.types[arrayTypeId!].symbol == 1 -> if { 14 => builtinElementSymbol! }
+                0 => mappedByteTypeSearch!
+                mappedByteTypeSearch! < (context.types -> len) and elementTypeId! < 0
+                    -> while {
+                        context.types[mappedByteTypeSearch!] => mappedByteType
+                        mappedByteType.kind == 1 and mappedByteType.origin == 1 and mappedByteType.symbol == builtinElementSymbol!
+                            -> if { mappedByteTypeSearch! => elementTypeId! }
+                        mappedByteTypeSearch! + 1 => mappedByteTypeSearch!
+                    }
+            }
+        context.types[arrayTypeId!].kind == 2
+            or context.types[arrayTypeId!].kind == 3
+            or context.types[arrayTypeId!].kind == 4
+            or context.types[arrayTypeId!].kind == 12
+            or (context.types[arrayTypeId!].kind == 7
+            and context.types[arrayTypeId!].origin == 4
+            and (context.types[arrayTypeId!].symbol == 5
+            or context.types[arrayTypeId!].symbol == 6
+            or context.types[arrayTypeId!].symbol == 7))
+            -> if {
+                context.types[arrayTypeId!].first => elementTypeId!
+            }
+        # A non-empty call-argument literal retains its fixed-length container
+        # identity while contextual parameter typing can narrow numeric/Bool
+        # elements (for example `[30, 40]` passed to `[UInt8]`). Only that
+        # structurally proven call context may override the container's default
+        # element identity. Return literals keep their declared container type
+        # even when an individual operand is a narrower parameter value.
+        node.parent >= 0
+            and node.parent < (context.ir -> len)
+            and (context.ir[node.parent].kind == 6 or context.ir[node.parent].kind == 9)
+            and node.operand0 >= 0
+            and node.operand0 < (context.ir -> len)
+            -> if {
+                context.ir[node.operand0] => contextualFirstElement
+                (contextualFirstElement.kind == 3 or contextualFirstElement.kind == 4)
+                    and contextualFirstElement.typeId >= 0
+                    -> if { contextualFirstElement.typeId => elementTypeId! }
+            }
+    } else {
+        # A freshly lowered non-empty array literal can temporarily retain the
+        # legacy dynamic-array projection while its canonical container type is
+        # unresolved. Its first operand still has the authoritative element
+        # type, so recover that before consulting the legacy symbol fields.
+        node.operand0 >= 0 -> if {
+            context.ir[node.operand0] => firstElement
+            firstElement.typeId >= 0 -> if { firstElement.typeId => elementTypeId! } else {
+                0 => builtinElementSearch!
+                builtinElementSearch! < (context.types -> len) and elementTypeId! < 0
+                    -> while {
+                        context.types[builtinElementSearch!] => builtinElementCandidate
+                        (firstElement.typeOrigin == 1
+                            and builtinElementCandidate.origin == 1
+                            and builtinElementCandidate.symbol == firstElement.typeSymbol)
+                            or (builtinElementCandidate.kind == firstElement.typeKind
+                            and builtinElementCandidate.origin == firstElement.typeOrigin
+                            and builtinElementCandidate.module == firstElement.typeModule
+                            and builtinElementCandidate.symbol == firstElement.typeSymbol)
+                            -> if {
+                                builtinElementSearch! => elementTypeId!
+                            }
+                        builtinElementSearch! + 1 => builtinElementSearch!
+                    }
+            }
+        }
+        # The legacy array projection stores a nominal element as
+        # typeModule/typeSymbol. Recover its canonical ID so arrays of
+        # user structs do not fall through to builtin symbol 0 (Unit).
+        elementTypeId! < 0 and node.typeModule >= 0
+            -> if {
+                0 => legacyElementSearch!
+                legacyElementSearch! < (context.types -> len)
+                    -> while {
+                        context.types[legacyElementSearch!] => legacyElementCandidate
+                        legacyElementCandidate.kind == 1 and (legacyElementCandidate.origin == 0 or legacyElementCandidate.origin == 2) and legacyElementCandidate.module == node.typeModule and legacyElementCandidate.symbol == node.typeSymbol
+                            -> if {
+                                legacyElementSearch! => elementTypeId!
+                            }
+                        legacyElementSearch! + 1 => legacyElementSearch!
+                    }
+            }
+    }
+    elementTypeId!
+}
+
+public isRange source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    source.typeId => typeId!
+    typeId! < 0 or typeId! >= (context.types -> len)
+        -> if { false -> return }
+    context.types[typeId!].kind == 8 -> if { context.types[typeId!].first => typeId! }
+    typeId! < 0 or typeId! >= (context.types -> len)
+        -> if { false -> return }
+    context.types[typeId!] => valueType
+    valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 25
+}
+
+public directEachElementTypeId source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
+    source -> isRange(context) -> if { 2 -> return }
+    source.typeId >= 0 and context.types[source.typeId].kind == 1
+        and context.types[source.typeId].origin == 1 and context.types[source.typeId].symbol == 2
+        -> if { 2 -> return }
+    source.kind == 31 -> if { 2 } else {
+        source -> isArguments -> if { 1 } else {
+            source.typeId => typeId!
+            typeId! >= 0 and context.types[typeId!].kind == 8
+                -> if { context.types[typeId!].first => typeId! }
+            typeId! >= 0 and context.types[typeId!].kind == 1
+                and context.types[typeId!].origin == 1 and context.types[typeId!].symbol == 1
+                -> if { 14 } else { source -> arrayElementTypeId(context) }
+        }
+    }
+}

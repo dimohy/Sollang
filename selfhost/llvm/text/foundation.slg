@@ -566,9 +566,9 @@ emitGrowableDictionaryAllocation prefix: Text, capacity: Text, layout: Dictionar
 }
 
 emitGrowableDictionaryOwner prefix: Text, storagePointer: Text, length: Text, capacity: Text -> Unit uses Console {
-    "  %$(prefix)_0 = insertvalue %sollang.dict poison, ptr $(storagePointer), 0" -> println
-    "  %$(prefix)_1 = insertvalue %sollang.dict %$(prefix)_0, i64 $(length), 1" -> println
-    "  %$(prefix) = insertvalue %sollang.dict %$(prefix)_1, i64 $(capacity), 2" -> println
+    "  %$(prefix)_0 = insertvalue %sollang.int_dictionary poison, ptr $(storagePointer), 0" -> println
+    "  %$(prefix)_1 = insertvalue %sollang.int_dictionary %$(prefix)_0, i64 $(length), 1" -> println
+    "  %$(prefix) = insertvalue %sollang.int_dictionary %$(prefix)_1, i64 $(capacity), 2" -> println
 }
 
 writeDictionaryEntryStorageType layout: DictionaryEntryLayout -> Unit uses Console {
@@ -2798,7 +2798,7 @@ emitInterpolationDictionaryIndex labelIndex: Int, nodeIndex: Int, nodes: ref [in
     Arena(0) => labelStorage!
     "v$(labelIndex)_expression$(nodeIndex)" -> materialize(labelStorage!) => prefix
     "  %$(prefix)_dictionary = " -> print
-    isReference -> if { "load %sollang.dict, ptr " -> print } else { "freeze %sollang.dict " -> print }
+    isReference -> if { "load %sollang.int_dictionary, ptr " -> print } else { "freeze %sollang.int_dictionary " -> print }
     labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
     isReference -> if { ", align 8" -> print }
     "" -> println
@@ -2807,8 +2807,8 @@ emitInterpolationDictionaryIndex labelIndex: Int, nodeIndex: Int, nodes: ref [in
     " " -> print
     labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
     "" -> println
-    "  %$(prefix)_storage = extractvalue %sollang.dict %$(prefix)_dictionary, 0" -> println
-    "  %$(prefix)_capacity = extractvalue %sollang.dict %$(prefix)_dictionary, 2" -> println
+    "  %$(prefix)_storage = extractvalue %sollang.int_dictionary %$(prefix)_dictionary, 0" -> println
+    "  %$(prefix)_capacity = extractvalue %sollang.int_dictionary %$(prefix)_dictionary, 2" -> println
     keyTypeId -> dictionaryEntryLayoutForTypeIds(valueTypeId, 0, 0, context, state) => entryLayout
     prefix -> emitGrowableDictionaryPointers("%$(prefix)_storage", "%$(prefix)_capacity", entryLayout)
     "  %$(prefix)_nonempty = icmp ugt i64 %$(prefix)_capacity, 0" -> println
@@ -3512,18 +3512,18 @@ emitInterpolationSetContains prefix: Text, labelIndex: Int, nodeIndex: Int, node
     "  %$(prefix)_source = " -> print
     storageRoot! >= 0 or receiverTypeId != setTypeId
         -> if {
-            "load %sollang.dict, ptr " -> print
+            "load %sollang.int_dictionary, ptr " -> print
             storageRoot! >= 0 -> if { "%slot$(storageRoot!)" -> print } else {
                 labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             }
             ", align 8" -> println
         } else {
-            "freeze %sollang.dict " -> print
+            "freeze %sollang.int_dictionary " -> print
             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             "" -> println
         }
-    "  %$(prefix)_storage = extractvalue %sollang.dict %$(prefix)_source, 0" -> println
-    "  %$(prefix)_capacity = extractvalue %sollang.dict %$(prefix)_source, 2" -> println
+    "  %$(prefix)_storage = extractvalue %sollang.int_dictionary %$(prefix)_source, 0" -> println
+    "  %$(prefix)_capacity = extractvalue %sollang.int_dictionary %$(prefix)_source, 2" -> println
     keySize -> dictionaryEntryLayout(keyAlign, 0, 1) => setEntryLayout
     prefix -> emitGrowableDictionaryPointers("%$(prefix)_storage", "%$(prefix)_capacity", setEntryLayout)
     "  store " -> print
@@ -5087,10 +5087,10 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
             "  %each$(eachIndex)_length = call i64 @sollang_argument_count()" -> println
         } else {
             eachSet -> if {
-                "  %each$(eachIndex)_storage = extractvalue %sollang.dict " -> print
+                "  %each$(eachIndex)_storage = extractvalue %sollang.int_dictionary " -> print
                 eachNode.operand0 -> writeValue(ownerIndex, context, state)
                 ", 0" -> println
-                "  %each$(eachIndex)_length = extractvalue %sollang.dict " -> print
+                "  %each$(eachIndex)_length = extractvalue %sollang.int_dictionary " -> print
                 eachNode.operand0 -> writeValue(ownerIndex, context, state)
                 ", 2" -> println
                 context.types[eachContainerTypeId!].first => eachSetElementType

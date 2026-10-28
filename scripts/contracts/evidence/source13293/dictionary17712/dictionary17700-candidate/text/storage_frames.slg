@@ -1,0 +1,376 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+import sollang.compiler.semantic.storage_placement_package as storagePackage
+import sys.process as process
+
+# Placement owns readonly admission. The committed runtime element layout still
+# decides whether this consumer can use the Int payload plan. Bounded arrays
+# keep their inline value representation and never enter this backing path.
+isPlannedDynamicIntPayload valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    valueIndex < 0 or valueIndex >= (context.ir -> len)
+        -> if { false -> return }
+    valueIndex -> ownedValueSourceIndex(context, state) => sourceIndex
+    sourceIndex < 0 or sourceIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[sourceIndex] => node
+    node.kind != 14 or node.typeKind == 12
+        or not ((node -> isDynamicArrayType) or (node -> isSliceArrayType))
+        -> if { false -> return }
+    node -> arrayElementTypeId(context, state) => elementId
+    elementId < 0 or elementId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[elementId] => element
+    element.kind != 1 or element.origin != 1 or element.symbol != 2
+        -> if { false -> return }
+    sourceIndex -> checkedStorageAllocation(context) -> when {
+        None { false }
+        Some(_) { true }
+    }
+}
+
+emitDynamicIntStorageAlias nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    nodeIndex -> checkedStorageAllocation(context) -> when {
+        None {
+            "; sollang compiler error S052: PLACEMENT_MISSING_ALLOCATION $nodeIndex" -> println
+            process.exit(1)
+        }
+        Some(allocation) {
+            context.ir[nodeIndex] => node
+            0 => count!
+            node.operand0 => elementIndex!
+            elementIndex! >= 0 -> while {
+                count! + 1 => count!
+                context.ir[elementIndex!].nextOperand => elementIndex!
+            }
+            node -> arrayLiteralLength(count!, context) => length
+            node -> arrayLiteralCapacity(length, context) => capacity
+            allocation.size < capacity * (node -> arrayElementSize(context, state))
+                -> if {
+                    "; sollang compiler error S052: PLACEMENT_PAYLOAD_SIZE $nodeIndex" -> println
+                    process.exit(1)
+                }
+            "  %v$(nodeIndex)_data = getelementptr i8, ptr %stack_slot$(allocation.slot), i64 0" -> println
+        }
+    }
+}
+
+emitDynamicIntStorageStart nodeIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console, Process {
+    nodeIndex -> checkedStorageAllocation(context) -> when {
+        None {
+            "; sollang compiler error S052: PLACEMENT_MISSING_ALLOCATION $nodeIndex" -> println
+            process.exit(1)
+        }
+        Some(allocation) {
+            "  call void @llvm.lifetime.start.p0(i64 $(allocation.size), ptr %stack_slot$(allocation.slot))" -> println
+        }
+    }
+}
+
+# Unit identity is source-owned; the caller supplies the completed emission
+# boundary, never an LLVM instruction ordinal. Terminators admit no hints.
+emitStorageLifetimeEndsAfter unitIndex: Int, blockTerminated: Bool, context: ref emitterContext.EmitContext -> Unit uses Console, Process {
+    blockTerminated -> if { return }
+    context.storagePlacement -> when {
+        Err(_) {
+            context -> placementPreparationDiagnosticCount => failures
+            process.exit(1)
+        }
+        Ok(table) {
+            unitIndex -> storagePackage.frameForNode(context.ir, table) -> when {
+                Err(_) {
+                    "; sollang compiler error S052: PLACEMENT_INVALID_LOOKUP $unitIndex" -> println
+                    process.exit(1)
+                }
+                Ok(frame) { frame -> when {
+                        None { }
+                        Some(frameIndex) {
+                            context.ir[unitIndex] => unit
+                            table.frames[frameIndex].range => range
+                            range.endStart => endIndex!
+                            endIndex! < range.endStart + range.endCount -> while {
+                                table.ends[endIndex!] => ending
+                                ending.sourceModule == unit.sourceModule
+                                    and (unitIndex -> storageLifetimeUnitCompleted(ending.unitAst, table.frames[frameIndex].functionIr, context))
+                                    -> if {
+                                        "  call void @llvm.lifetime.end.p0(i64 $(ending.size), ptr %stack_slot$(ending.slot))" -> println
+                                    }
+                                endIndex! + 1 => endIndex!
+                            }
+                        }
+                } }
+            }
+        }
+    }
+}
+
+# Emission starts only after checkedContextDiagnosticCount. Keep an explicit
+# terminating diagnostic if a consumer violates that checked boundary.
+checkedStorageAllocation nodeIndex: Int, context: ref emitterContext.EmitContext -> Option<frameMerge.Allocation> uses Console, Process {
+    context.storagePlacement -> when {
+        Err(_) {
+            context -> placementPreparationDiagnosticCount => failures
+            process.exit(1)
+        }
+        Ok(table) {
+            nodeIndex -> storageAllocationForNode(context, table) -> when {
+                Err(_) {
+                    "; sollang compiler error S052: PLACEMENT_INVALID_LOOKUP $nodeIndex" -> println
+                    process.exit(1)
+                }
+                Ok(allocation) { allocation -> return }
+            }
+        }
+    }
+    # process.exit has Unit type; this typed tail is unreachable on either
+    # rejected path. It is never a recovery choice for an invalid plan.
+    Option<frameMerge.Allocation>.None
+}
+
+isDirectFixedIntStorage nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    nodeIndex < 0 or nodeIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[nodeIndex] => node
+    node.kind != 14 or not (node -> isFixedArrayType) or node.parent < 0 or node.parent >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[node.parent] => binding
+    binding.kind != 17 or binding.operand0 != nodeIndex
+        -> if { false -> return }
+    node -> arrayElementTypeId(context, state) => elementId
+    elementId < 0 or elementId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[elementId] => element
+    element.kind == 1 and element.origin == 1 and element.symbol == 2
+}
+
+emitFixedStorageLifetimeStart nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    nodeIndex -> isDirectFixedIntStorage(context, state)
+        -> if {
+            nodeIndex -> checkedStorageAllocation(context) -> when {
+                None { }
+                Some(allocation) {
+                    "  call void @llvm.lifetime.start.p0(i64 $(allocation.size), ptr %stack_slot$(allocation.slot))" -> println
+                }
+            }
+        }
+}
+
+# Match the allocation source inside the concrete owning function. Neither an
+# AST identity alone nor a physical global slot offset identifies an instance.
+storageAllocationForNode nodeIndex: Int, context: ref emitterContext.EmitContext, table: ref storagePackage.Table -> Result<Option<frameMerge.Allocation>, storagePackage.Error> {
+    nodeIndex -> storagePackage.frameForNode(context.ir, table) -> when {
+        Err(error) { error -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Err }
+        Ok(frame) { frame -> when {
+                None { Option<frameMerge.Allocation>.None -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Ok }
+                Some(frameIndex) {
+                    context.ir[nodeIndex] => node
+                    table.frames[frameIndex].range => range
+                    range.allocationStart => allocationIndex!
+                    allocationIndex! < range.allocationStart + range.allocationCount
+                        -> while {
+                            table.allocations[allocationIndex!] => allocation
+                            allocation.sourceModule == node.sourceModule and allocation.sourceAst == node.astNode
+                                -> if { allocation -> Option<frameMerge.Allocation>.Some -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Ok -> return }
+                            allocationIndex! + 1 => allocationIndex!
+                        }
+                    Option<frameMerge.Allocation>.None -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Ok
+                }
+        } }
+    }
+}
+
+# The checked final context owns the table. Slot indexes are local to a concrete
+# IR function even when several instances share the same source declaration.
+emitStorageFrameAllocations ownerIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console, Process {
+    context.storagePlacement -> when {
+        Err(_) {
+            context -> placementPreparationDiagnosticCount => failures
+            process.exit(1)
+        }
+        Ok(table) {
+            ownerIndex -> storagePackage.frameForNode(context.ir, table) -> when {
+                Err(_) {
+                    "; sollang compiler error S052: PLACEMENT_INVALID_LOOKUP $ownerIndex" -> println
+                    process.exit(1)
+                }
+                Ok(frame) { frame -> when {
+                        None { }
+                        Some(frameIndex) {
+                            table.frames[frameIndex].range => range
+                            0 => slotIndex!
+                            slotIndex! < range.slotCount -> while {
+                                table.slots[range.slotStart + slotIndex!] => slot
+                                "  %stack_slot$(slotIndex!) = alloca [$(slot.size) x i8], align $(slot.align)" -> println
+                                slotIndex! + 1 => slotIndex!
+                            }
+                        }
+                } }
+            }
+        }
+    }
+}
+
+
+isPlannedIntDictionaryPayload valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    valueIndex < 0 or valueIndex >= (context.ir -> len)
+        -> if { false -> return }
+    valueIndex -> ownedValueSourceIndex(context, state) => sourceIndex
+    sourceIndex < 0 or sourceIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[sourceIndex] => node
+    node.kind != 16 or node.typeId < 0 or node.typeId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[node.typeId] => dictionaryType
+    dictionaryType.kind != 5 or dictionaryType.first < 0 or dictionaryType.second < 0
+        or dictionaryType.first >= (context.types -> len) or dictionaryType.second >= (context.types -> len)
+        -> if { false -> return }
+    context.types[dictionaryType.first] => keyType
+    context.types[dictionaryType.second] => valueType
+    keyType.kind != 1 or keyType.origin != 1 or keyType.symbol != 2
+        or valueType.kind != 1 or valueType.origin != 1 or valueType.symbol != 2
+        -> if { false -> return }
+    sourceIndex -> checkedStorageAllocation(context) -> when {
+        None { false }
+        Some(_) { true }
+    }
+}
+
+isPlannedContainerPayload valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    (valueIndex -> isPlannedDynamicIntPayload(context, state))
+        or (valueIndex -> isPlannedIntDictionaryPayload(context, state))
+}
+
+emitDictionaryLiteralStorage nodeIndex: Int, capacity: Int64, layout: DictionaryEntryLayout, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    nodeIndex -> isPlannedIntDictionaryPayload(context, state)
+        -> if {
+            nodeIndex -> checkedStorageAllocation(context) -> when {
+                None {
+                    "; sollang compiler error S052: PLACEMENT_MISSING_ALLOCATION $nodeIndex" -> println
+                    process.exit(1)
+                }
+                Some(allocation) {
+                    Int64(layout.stride) => entryStride
+                    Int64(allocation.size) => availableSize
+                    (capacity + 23) / 8 * 8 + capacity * entryStride => requiredSize
+                    availableSize < requiredSize -> if {
+                        "; sollang compiler error S052: PLACEMENT_PAYLOAD_SIZE $nodeIndex" -> println
+                        process.exit(1)
+                    }
+                    "  %v$(nodeIndex)_storage = getelementptr i8, ptr %stack_slot$(allocation.slot), i64 0" -> println
+                    "  call void @llvm.lifetime.start.p0(i64 $(allocation.size), ptr %stack_slot$(allocation.slot))" -> println
+                    "v$(nodeIndex)" -> emitGrowableDictionaryPointers("%v$(nodeIndex)_storage", "$(capacity)", layout)
+                    "  %v$(nodeIndex)_control_bytes = add i64 $(capacity), 16" -> println
+                    "  call void @llvm.memset.p0.i64(ptr %v$(nodeIndex)_controls, i8 0, i64 %v$(nodeIndex)_control_bytes, i1 false)" -> println
+                }
+            }
+        } else {
+            "v$(nodeIndex)" -> emitGrowableDictionaryAllocation("$(capacity)", layout)
+        }
+}
+
+
+# A source binding can reserve a header while its payload remains heap-owned.
+# Inline bounded values and boxes have different runtime representations.
+mutableContainerHeaderAllocation bindingIndex: Int, context: ref emitterContext.EmitContext -> Option<frameMerge.Allocation> uses Console, Process {
+    bindingIndex < 0 or bindingIndex >= (context.ir -> len)
+        -> if { Option<frameMerge.Allocation>.None -> return }
+    context.ir[bindingIndex] => binding
+    binding.kind != 17 or binding.flags != 1 or binding.typeKind == 12 or binding.typeKind == 13
+        or not ((binding -> isDynamicArrayType) or (binding -> isDictionaryType))
+        -> if { Option<frameMerge.Allocation>.None -> return }
+    bindingIndex -> checkedStorageAllocation(context) -> when {
+        None { Option<frameMerge.Allocation>.None }
+        Some(allocation) {
+            allocation.size != 24 -> if {
+                "; sollang compiler error S052: PLACEMENT_HEADER_SIZE $bindingIndex" -> println
+                process.exit(1)
+            }
+            allocation -> Option<frameMerge.Allocation>.Some
+        }
+    }
+}
+
+emitMutableStorageSlot bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    bindingIndex -> mutableContainerHeaderAllocation(context) -> when {
+        None {
+            "  %slot$(bindingIndex) = alloca " -> print
+            context.ir[bindingIndex] -> writeIrType(context, state)
+            ", align " -> print
+            context.ir[bindingIndex] -> storageAlign(context, state) -> writeDecimalLine
+        }
+        Some(allocation) {
+            "  %slot$(bindingIndex) = getelementptr i8, ptr %stack_slot$(allocation.slot), i64 0" -> println
+        }
+    }
+}
+
+emitMutableHeaderStart bindingIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console, Process {
+    bindingIndex -> mutableContainerHeaderAllocation(context) -> when {
+        None { }
+        Some(allocation) {
+            "  call void @llvm.lifetime.start.p0(i64 $(allocation.size), ptr %stack_slot$(allocation.slot))" -> println
+        }
+    }
+}
+
+emitMutableHeaderEnd bindingIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console, Process {
+    bindingIndex -> mutableContainerHeaderAllocation(context) -> when {
+        None { }
+        Some(allocation) {
+            "  call void @llvm.lifetime.end.p0(i64 $(allocation.size), ptr %stack_slot$(allocation.slot))" -> println
+        }
+    }
+}
+
+
+# Source lowering already identifies the terminal value when a flow wrapper is
+# elided. Use that one anchor even when a wrapper remains; upstream operands
+# and callback leaves cannot complete their containing source unit.
+storageLifetimeUnitCompleted unitIndex: Int, sourceUnitAst: Int, ownerIndex: Int, context: ref emitterContext.EmitContext -> Bool uses Console, Process {
+    context.ir[unitIndex] => unit
+    context.ranges[unit.sourceModule] => range
+    sourceUnitAst < 0 or sourceUnitAst >= range.astCount
+        or ownerIndex < 0 or ownerIndex >= (context.ir -> len)
+        -> if {
+            "; sollang compiler error S052: PLACEMENT_INVALID_UNIT $unitIndex" -> println
+            process.exit(1)
+        }
+    context.nodes[range.astStart + sourceUnitAst].kind != 10
+        -> if { unit.astNode == sourceUnitAst -> return }
+    unit.astNode => ancestor!
+    0 => depth!
+    ancestor! >= 0 and ancestor! < range.astCount and ancestor! != sourceUnitAst
+        and depth! < range.astCount -> while {
+            context.nodes[range.astStart + ancestor!].parent => ancestor!
+            depth! + 1 => depth!
+        }
+    ancestor! != sourceUnitAst -> if { false -> return }
+    ownerIndex + 1 => end!
+    end! < (context.ir -> len) and context.ir[end!].kind != 0 and context.ir[end!].kind != 11
+        -> while { end! + 1 => end! }
+    unit.sourceModule -> typedIr.sourceExpressionValueIndex(sourceUnitAst, ownerIndex + 1, end!, context.ranges, context.nodes, context.ir) => completedValue
+    completedValue == unitIndex
+}
+
+# Match the managed dictionary carrier's pointer to its physical backing.
+# Slot aliases remain available for element initialization, while the owner
+# directly carries the selected slot. Heap owners retain their data pointer.
+emitDictionaryLiteralOwner nodeIndex: Int, length: Int, capacity: Int64, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    nodeIndex -> isPlannedIntDictionaryPayload(context, state)
+        -> if {
+            nodeIndex -> checkedStorageAllocation(context) -> when {
+                None {
+                    "; sollang compiler error S052: PLACEMENT_MISSING_ALLOCATION $nodeIndex" -> println
+                    process.exit(1)
+                    return
+                }
+                Some(allocation) {
+                    "v$(nodeIndex)" -> emitGrowableDictionaryOwner("%stack_slot$(allocation.slot)", "$(length)", "$(capacity)")
+                }
+            }
+        } else {
+            "v$(nodeIndex)" -> emitGrowableDictionaryOwner("%v$(nodeIndex)_storage", "$(length)", "$(capacity)")
+        }
+}

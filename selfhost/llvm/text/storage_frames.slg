@@ -353,3 +353,24 @@ storageLifetimeUnitCompleted unitIndex: Int, sourceUnitAst: Int, ownerIndex: Int
     unit.sourceModule -> typedIr.sourceExpressionValueIndex(sourceUnitAst, ownerIndex + 1, end!, context.ranges, context.nodes, context.ir) => completedValue
     completedValue == unitIndex
 }
+
+# Match the managed dictionary carrier's pointer to its physical backing.
+# Slot aliases remain available for element initialization, while the owner
+# directly carries the selected slot. Heap owners retain their data pointer.
+emitDictionaryLiteralOwner nodeIndex: Int, length: Int, capacity: Int64, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    nodeIndex -> isPlannedIntDictionaryPayload(context, state)
+        -> if {
+            nodeIndex -> checkedStorageAllocation(context) -> when {
+                None {
+                    "; sollang compiler error S052: PLACEMENT_MISSING_ALLOCATION $nodeIndex" -> println
+                    process.exit(1)
+                    return
+                }
+                Some(allocation) {
+                    "v$(nodeIndex)" -> emitGrowableDictionaryOwner("%stack_slot$(allocation.slot)", "$(length)", "$(capacity)")
+                }
+            }
+        } else {
+            "v$(nodeIndex)" -> emitGrowableDictionaryOwner("%v$(nodeIndex)_storage", "$(length)", "$(capacity)")
+        }
+}

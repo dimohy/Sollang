@@ -24,11 +24,24 @@ internal static class LlvmAssertions
             RegexCounts: Select(".llvm.regex-counts.txt", producer));
         if (!File.Exists(producerPaths.Contains) && !File.Exists(producerPaths.NotContains)
             && !File.Exists(producerPaths.RegexCounts))
-            return (Select(".llvm.contains.txt"), Select(".llvm.not-contains.txt"), Select(".llvm.regex-counts.txt"));
+            return SelectCommonPaths(expectedDirectory, name, target);
         if (!new[] { producerPaths.Contains, producerPaths.NotContains, producerPaths.RegexCounts }
             .SelectMany(ReadAssertions).Any())
             throw new InvalidDataException("Producer-specific LLVM assertions must not be empty.");
         return producerPaths;
+    }
+
+    internal static (string Contains, string NotContains, string RegexCounts) SelectCommonPaths(
+        string expectedDirectory, string name, string target)
+    {
+        string Select(string suffix)
+        {
+            var targetPath = Path.Combine(expectedDirectory, name + "." + target + suffix);
+            return target == "linux-x64" && File.Exists(targetPath)
+                ? targetPath : Path.Combine(expectedDirectory, name + suffix);
+        }
+        return (Select(".llvm.contains.txt"), Select(".llvm.not-contains.txt"),
+            Select(".llvm.regex-counts.txt"));
     }
 
     internal static bool Verify(
