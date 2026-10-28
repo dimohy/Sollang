@@ -4,7 +4,8 @@ param(
     [ValidateSet("windows-x64", "linux-x64")]
     [string]$Target = "windows-x64",
     [string]$Distribution = "Ubuntu",
-    [string]$OutputDirectory = ''
+    [string]$OutputDirectory = '',
+    [string[]]$ReusableCompilerDirectories = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +22,11 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 $artifacts = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $artifacts) { throw 'Native format output must be fresh.' }
-Initialize-ArtifactOutput -OutputDirectory $artifacts
+$artifactInitialization = @{ OutputDirectory = $artifacts }
+if ($ReusableCompilerDirectories.Count -gt 0) {
+    $artifactInitialization.ReusableCompilerDirectories = $ReusableCompilerDirectories
+}
+Initialize-ArtifactOutput @artifactInitialization
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 
 $unformatted = Join-Path $fixtures "native-format-unformatted.slg"
