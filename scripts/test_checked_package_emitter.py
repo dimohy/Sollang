@@ -110,6 +110,52 @@ class CheckedPackageEmitterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'INPUT_MODE_INVALID'):
             validator.validate_reusable(contract, self.root)
 
+    def multi_file_contract(self):
+        contract = self.reusable_contract()
+        (self.root / 'peer.slg').write_text('namespace peer\n', encoding='utf-8')
+        first = contract['cases'][0]
+        first['programAdditionalSources'] = ['peer.slg']
+        first['observedSourceOrder'].append('peer.slg')
+        spec = importlib.util.spec_from_file_location('multi_file_generator', validator.GENERATOR)
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        order, groups = generator.validated_runtime_program_groups(contract, self.root)
+        self.wrapper.write_bytes(generator.render('', True, order,
+            runtime_program_paths=list(groups), runtime_program_groups=groups))
+        return contract
+
+    def test_multi_file_groups_keep_exact_source_order_and_consumer(self):
+        contract = self.multi_file_contract()
+        self.assertEqual(validator.validate_reusable(contract, self.root), 1)
+        rendered = self.wrapper.read_text()
+        self.assertIn('paths! -> push("program.slg")\n            paths! -> push("peer.slg")', rendered)
+        self.wrapper.write_text(rendered.replace('paths! -> push("peer.slg")', 'paths! -> push("second.slg")'))
+        with self.assertRaisesRegex(ValueError, 'NOT_CANONICAL_CHECKED'):
+            validator.validate_reusable(contract, self.root)
+
+    def test_multi_file_groups_reject_undeclared_duplicate_and_unsafe_sources(self):
+        contract = self.multi_file_contract()
+        for sources in [None, ['missing.slg'], ['../escape.slg'], ['stdlib/library.slg'],
+                        ['program.slg'], ['peer.slg', 'peer.slg']]:
+            with self.subTest(sources=sources):
+                invalid = copy.deepcopy(contract)
+                invalid['cases'][0]['programAdditionalSources'] = sources
+                with self.assertRaisesRegex(ValueError, 'PROGRAM_SOURCES_'):
+                    validator.validate_reusable(invalid, self.root)
+        invalid = copy.deepcopy(contract)
+        invalid['cases'][0]['observedSourceOrder'] = ['stdlib/library.slg', 'peer.slg', 'program.slg']
+        with self.assertRaisesRegex(ValueError, 'PROGRAM_ARGUMENT_MISMATCH'):
+            validator.validate_reusable(invalid, self.root)
+
+    def test_one_selector_cannot_choose_conflicting_source_groups(self):
+        contract = self.multi_file_contract()
+        conflicting = copy.deepcopy(contract['cases'][0])
+        conflicting['programAdditionalSources'] = []
+        conflicting['observedSourceOrder'] = ['stdlib/library.slg', 'program.slg']
+        contract['cases'].append(conflicting)
+        with self.assertRaisesRegex(ValueError, 'PROGRAM_SOURCES_AMBIGUOUS'):
+            validator.validate_reusable(contract, self.root)
+
     def test_package_source_prefix_cannot_include_the_user_program(self):
         contract = self.reusable_contract()
         contract['reusableCheckedProducer']['stdlibSourceOrder'].append('program.slg')

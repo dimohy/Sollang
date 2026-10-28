@@ -19,7 +19,7 @@ def validated_package_paths(order, program):
     return order[:-1]
 
 
-def validated_runtime_programs(contract, root=ROOT):
+def validated_runtime_program_groups(contract, root=ROOT):
     producer = contract.get('reusableCheckedProducer')
     if not isinstance(producer, dict):
         raise ValueError('SELECTION_FIXTURE_RUNTIME_PRODUCER_REQUIRED')
@@ -31,7 +31,7 @@ def validated_runtime_programs(contract, root=ROOT):
     cases = contract.get('cases')
     if not isinstance(cases, list) or not cases:
         raise ValueError('SELECTION_FIXTURE_RUNTIME_CASES_REQUIRED')
-    programs = []
+    groups = {}
     for case in cases:
         name = case.get('programSource') if isinstance(case, dict) else None
         if not isinstance(name, str) or not name:
@@ -41,11 +41,31 @@ def validated_runtime_programs(contract, root=ROOT):
                 or path.suffix != '.slg' or path.relative_to(root.resolve()).as_posix() != name
                 or name in stdlib):
             raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_INVALID')
-        if case.get('runArguments') != [name] or case.get('observedSourceOrder') != order + [name]:
+        additional = case.get('programAdditionalSources', [])
+        if not isinstance(additional, list) or any(not isinstance(item, str) or not item for item in additional):
+            raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_SOURCES_INVALID')
+        group = [name, *additional]
+        resolved = []
+        for item in group:
+            source = (root / item).resolve()
+            if (not source.is_relative_to(root.resolve()) or not source.is_file()
+                    or source.suffix != '.slg' or source.relative_to(root.resolve()).as_posix() != item
+                    or item in stdlib):
+                raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_SOURCES_INVALID')
+            resolved.append(source)
+        if len(set(resolved)) != len(resolved):
+            raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_SOURCES_DUPLICATE')
+        if case.get('runArguments') != [name] or case.get('observedSourceOrder') != order + group:
             raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_ARGUMENT_MISMATCH')
-        if name not in programs:
-            programs.append(name)
-    return order, programs
+        if name in groups and groups[name] != group:
+            raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_SOURCES_AMBIGUOUS')
+        groups[name] = group
+    return order, groups
+
+
+def validated_runtime_programs(contract, root=ROOT):
+    order, groups = validated_runtime_program_groups(contract, root)
+    return order, list(groups)
 
 
 def runtime_input_mode(contract):
@@ -56,13 +76,25 @@ def runtime_input_mode(contract):
 
 
 def render(program, checked=False, package_paths=None, program_path=None, runtime_program_paths=None,
-           checked_files=False):
+           checked_files=False, runtime_program_groups=None):
     runtime = runtime_program_paths is not None
     if checked_files and not runtime:
         raise ValueError('SELECTION_FIXTURE_CHECKED_FILES_REQUIRES_RUNTIME_PACKAGE')
     if runtime and (not checked or package_paths is None or program_path is not None
                     or not runtime_program_paths):
         raise ValueError('SELECTION_FIXTURE_RUNTIME_MODE_INVALID')
+    if runtime_program_groups is not None and (not runtime
+            or list(runtime_program_groups) != runtime_program_paths
+            or any(not group or group[0] != name for name, group in runtime_program_groups.items())):
+        raise ValueError('SELECTION_FIXTURE_RUNTIME_PROGRAM_GROUPS_INVALID')
+    multi_file = runtime_program_groups is not None and any(len(group) > 1 for group in runtime_program_groups.values())
+    selection = ''
+    if multi_file:
+        for name, group in runtime_program_groups.items():
+            selection += ('    (programPath -> text.compareOrdinal(' + json.dumps(name) + ')) == 0\n'
+                          '        -> if {\n'
+                          + ''.join('            paths! -> push(' + json.dumps(path) + ')\n' for path in group)
+                          + '        }\n')
     if program_path is not None and package_paths is None:
         raise ValueError('SELECTION_FIXTURE_PROGRAM_FILE_REQUIRES_PACKAGE')
     if '"""' in program and program_path is None and not runtime:
@@ -92,12 +124,14 @@ def render(program, checked=False, package_paths=None, program_path=None, runtim
                 '    }\n    not allowed! -> if {\n'
                 '        "SELECTION_RUNTIME_PROGRAM_PATH_NOT_DECLARED" -> println\n'
                 '        process.exit(1)\n    }\n    [\n')
-            path_items.append('programPath')
+            if not multi_file:
+                path_items.append('programPath')
         if checked_files:
             return ('import sollang.compiler.llvm.text as compiler\n' + runtime_prefix
                     + ',\n'.join('    ' + item for item in path_items) + '\n'
                     + '    ] => declaredPaths\n    [Text; ~] => paths!\n'
                     + '    declaredPaths -> each sourcePath { paths! -> push(sourcePath) }\n'
+                    + selection
                     + f'    paths! -> compiler.emitCheckedFilesWithStandardLibrarySources({len(package_paths)}) => diagnosticCount\n'
                     + '    diagnosticCount != 0 -> if { "selection-emission-rejected" -> println }\n}\n').encode('utf-8')
         prefix = ('import sollang.compiler.llvm.text as compiler\n'
@@ -106,6 +140,7 @@ def render(program, checked=False, package_paths=None, program_path=None, runtim
                   + ',\n'.join('    ' + item for item in path_items) + '\n'
                   + '    ] => declaredPaths\n    [Text; ~] => paths!\n'
                   + '    declaredPaths -> each sourcePath { paths! -> push(sourcePath) }\n'
+                  + selection
                   + '    [file.SourceText; ~] => owners!\n'
                   + '    paths! -> each sourcePath {\n'
                   '        sourcePath -> file.mapText => owner\n'
@@ -155,11 +190,13 @@ def main():
         raise ValueError('SELECTION_FIXTURE_PROGRAM_FILE_REQUIRES_PACKAGE')
     package_paths = None
     runtime_programs = None
+    runtime_groups = None
     if args.runtime_program_argument:
         if not (args.checked and args.load_program_from_file and args.package_contract):
             raise ValueError('SELECTION_FIXTURE_RUNTIME_MODE_INVALID')
         contract = json.loads(args.package_contract.read_text(encoding='utf-8-sig'))
-        package_paths, runtime_programs = validated_runtime_programs(contract)
+        package_paths, runtime_groups = validated_runtime_program_groups(contract)
+        runtime_programs = list(runtime_groups)
         if contract['reusableCheckedProducer'].get('source') != emitter.relative_to(ROOT).as_posix():
             raise ValueError('SELECTION_FIXTURE_RUNTIME_PRODUCER_SOURCE_MISMATCH')
     elif args.package_contract:
@@ -169,7 +206,7 @@ def main():
     checked_files = args.runtime_program_argument and runtime_input_mode(contract) == 'checked-files'
     expected = render('' if args.runtime_program_argument else program.read_text(encoding="utf-8-sig"),
                       args.checked, package_paths, program_path, runtime_programs,
-                      checked_files=checked_files)
+                      checked_files=checked_files, runtime_program_groups=runtime_groups)
     if args.check:
         if not emitter.is_file() or emitter.read_bytes() != expected:
             raise SystemExit("SELECTION_FIXTURE_SOURCE_DRIFT")

@@ -26,7 +26,8 @@ def validate_reusable(contract, root=ROOT):
     spec = importlib.util.spec_from_file_location('checked_package_generator', GENERATOR)
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
-    order, programs = generator.validated_runtime_programs(contract, root)
+    order, groups = generator.validated_runtime_program_groups(contract, root)
+    programs = list(groups)
     producer = contract['reusableCheckedProducer']
     if (not isinstance(producer.get('id'), str) or not producer['id']
             or any(character not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'
@@ -58,7 +59,8 @@ def validate_reusable(contract, root=ROOT):
             raise ValueError('CHECKED_PACKAGE_REUSABLE_CASE_SCOPE_INVALID')
     expected = generator.render('', checked=True, package_paths=order,
                                 runtime_program_paths=programs,
-                                checked_files=generator.runtime_input_mode(contract) == 'checked-files').decode('utf-8')
+                                checked_files=generator.runtime_input_mode(contract) == 'checked-files',
+                                runtime_program_groups=groups).decode('utf-8')
     if wrapper.read_text(encoding='utf-8-sig') != expected:
         raise ValueError('CHECKED_PACKAGE_EMITTER_NOT_CANONICAL_CHECKED')
     return len(order)

@@ -292,6 +292,9 @@ short domain name improves the flow. `public` is an API commitment; leave
 helpers private unless another module should depend on them. Several files may
 share one namespace and form one logical module, but each file owns its imports.
 Do not encode module identity through source order or manifest position.
+Within that module, use `Type.Variant` and `Type.Variant(payload)` even when the
+enum is declared in another file. A same-named local value keeps its ordinary
+field projection; an explicit `alias.Type.Variant` keeps the import's owner.
 
 Keep runtime and foreign authority explicit. `library ... from`, `native ...
 from`, native `handle ... drop`, and `com ... class` declarations are ABI

@@ -414,52 +414,35 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             }
                                         comFunctionSearch! + 1 => comFunctionSearch!
                                     }
-                                0 => localEnumSearch!
-                                localVariantResolved! -> if { sourceRange.symbolCount => localEnumSearch! }
-                                localEnumSearch! < sourceRange.symbolCount -> while {
-                                    package.symbols[sourceRange.symbolStart + localEnumSearch!] => localEnum
-                                    localEnum.kind == 4 and localEnum.parent < 0
-                                        -> if {
-                                            package.tokens[sourceRange.tokenStart + localEnum.nameToken] => localEnumName
-                                            package.tokens[sourceRange.tokenStart + previousIdentifier!] => localEnumReference
-                                            localEnumName.span.length == localEnumReference.span.length => localEnumEqual!
-                                            UIntSize(0) => localEnumByte!
-                                            localEnumEqual! and localEnumByte! < localEnumName.span.length
-                                                -> while {
-                                                    (source -> byte(localEnumName.span.start + localEnumByte!)) != (source -> byte(localEnumReference.span.start + localEnumByte!))
-                                                        -> if { false => localEnumEqual! }
-                                                    localEnumByte! + 1 => localEnumByte!
-                                                }
-                                            localEnumEqual! -> if {
-                                                0 => localVariantSearch!
-                                                localVariantSearch! < sourceRange.symbolCount
-                                                    -> while {
-                                                        package.symbols[sourceRange.symbolStart + localVariantSearch!] => localVariant
-                                                        localVariant.kind == 27 and localVariant.parent == localEnumSearch!
-                                                            -> if {
-                                                                package.tokens[sourceRange.tokenStart + localVariant.nameToken] => localVariantName
-                                                                package.tokens[sourceRange.tokenStart + lastIdentifier!] => localVariantReference
-                                                                localVariantName.span.length == localVariantReference.span.length => localVariantEqual!
-                                                                UIntSize(0) => localVariantByte!
-                                                                localVariantEqual! and localVariantByte! < localVariantName.span.length
-                                                                    -> while {
-                                                                        (source -> byte(localVariantName.span.start + localVariantByte!)) != (source -> byte(localVariantReference.span.start + localVariantByte!))
-                                                                            -> if { false => localVariantEqual! }
-                                                                        localVariantByte! + 1 => localVariantByte!
-                                                                    }
-                                                                localVariantEqual! -> if {
-                                                                    QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: currentModule!, targetSymbol: localVariantSearch!, status: 0 } => localResult
-                                                                    results! -> push(localResult)
-                                                                    true => localVariantResolved!
-                                                                    sourceRange.symbolCount => localVariantSearch!
-                                                                }
-                                                            }
-                                                        localVariantSearch! + 1 => localVariantSearch!
-                                                    }
-                                            }
+                                not localVariantResolved! and identifierCount! == 2
+                                    -> if {
+                                        package -> enumVariantInSource(sourceIndex!, previousIdentifier!, lastIdentifier!, sourceIndex!) => localVariant
+                                        localVariant >= 0 -> if {
+                                            results! -> push(QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: currentModule!, targetSymbol: localVariant, status: 0 })
+                                            true => localVariantResolved!
                                         }
-                                    localEnumSearch! + 1 => localEnumSearch!
-                                }
+                                    }
+                            }
+                        # A namespace can span source files. An unqualified enum
+                        # owner uses that logical namespace before import aliases.
+                        not localVariantResolved! and currentModule! >= 0 and identifierCount! == 2
+                            -> if {
+                                identities[currentModule!].pathHash => enumNamespaceHash
+                                0 => enumModuleIndex!
+                                enumModuleIndex! < (identities -> len) and not localVariantResolved!
+                                    -> while {
+                                        identities[enumModuleIndex!] => enumIdentity
+                                        enumIdentity.sourceIndex != sourceIndex! and enumIdentity.pathHash == enumNamespaceHash
+                                            and modules.sameLogicalAnalyzedSource(package.sources, identities, sourceIndex!, enumIdentity.sourceIndex, package.tokens, package.ranges)
+                                            -> if {
+                                                package -> enumVariantInSource(sourceIndex!, firstIdentifier!, lastIdentifier!, enumIdentity.sourceIndex) => siblingVariant
+                                                siblingVariant >= 0 -> if {
+                                                    results! -> push(QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: enumModuleIndex!, targetSymbol: siblingVariant, status: 0 })
+                                                    true => localVariantResolved!
+                                                }
+                                            }
+                                        enumModuleIndex! + 1 => enumModuleIndex!
+                                    }
                             }
                         # Native library aliases are declarations rather than
                         # imported module aliases. A logical module may span
@@ -1032,4 +1015,38 @@ localNominalFunction package: ref analysis.PackageAnalysis, sourceIndex: Int, ow
         index! + 1 => index!
     }
     result!
+}
+
+# A declared variant is a nominal value or constructor, never a module alias.
+enumVariantInSource package: ref analysis.PackageAnalysis, requestingSource: Int, ownerToken: Int, memberToken: Int, targetSource: Int -> Int {
+    package.ranges[requestingSource] => queryRange
+    package.tokens[queryRange.tokenStart + ownerToken] => owner
+    package.tokens[queryRange.tokenStart + memberToken] => member
+    package.sources[requestingSource] -> slice(owner.span.start, owner.span.length) => ownerName
+    package.sources[requestingSource] -> slice(member.span.start, member.span.length) => memberName
+    package.ranges[targetSource] => targetRange
+    0 => enumIndex!
+    enumIndex! < targetRange.symbolCount -> while {
+        package.symbols[targetRange.symbolStart + enumIndex!] => enumeration
+        enumeration.kind == 4 and enumeration.parent < 0
+            -> if {
+                package.tokens[targetRange.tokenStart + enumeration.nameToken] => name
+                (package.sources[targetSource] -> slice(name.span.start, name.span.length)) == ownerName
+                    -> if {
+                        0 => variantIndex!
+                        variantIndex! < targetRange.symbolCount -> while {
+                            package.symbols[targetRange.symbolStart + variantIndex!] => variant
+                            variant.kind == 27 and variant.parent == enumIndex!
+                                -> if {
+                                    package.tokens[targetRange.tokenStart + variant.nameToken] => variantName
+                                    (package.sources[targetSource] -> slice(variantName.span.start, variantName.span.length)) == memberName
+                                        -> if { variantIndex! -> return }
+                                }
+                            variantIndex! + 1 => variantIndex!
+                        }
+                    }
+            }
+        enumIndex! + 1 => enumIndex!
+    }
+    -1
 }

@@ -717,7 +717,11 @@ Notes:
   first. Native export lookup must not capture those module references.
 - Several explicitly supplied source files may declare the same namespace. They
   form one logical module: private top-level declarations and nominal types are
-  visible across its files, while imports remain file-local. An inherent
+  visible across its files, while imports remain file-local. `Type.Variant`
+  references and payload constructor calls resolve an enum declared in any
+  fragment of that module. A lexical value with the owner's name retains its
+  projection, and `alias.Type.Variant` follows the explicit import rather than
+  a same-named local enum. An inherent
   `impl Type` may live in a different fragment from `Type`; its implicit
   `self`, field access, and direct method calls use the same canonical nominal
   type and ABI. Input paths are normalized and ordered deterministically;
