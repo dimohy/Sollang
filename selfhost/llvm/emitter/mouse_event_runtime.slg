@@ -180,13 +180,13 @@ public emitWindowsMouseEventRuntime: -> Unit uses Console {
       %mode_ok = icmp ne i32 %got_mode, 0
       br i1 %mode_ok, label %allocate_context, label %fail
     allocate_context:
-      %context = call ptr @malloc(i64 72)
+      %context = call ptr @sollang_alloc(i64 72)
       %allocated = icmp ne ptr %context, null
       br i1 %allocated, label %allocate_buffer, label %fail
     allocate_buffer:
       %capacity64 = zext i32 %requested_capacity to i64
       %buffer_bytes = mul i64 %capacity64, 20
-      %buffer = call ptr @malloc(i64 %buffer_bytes)
+      %buffer = call ptr @sollang_alloc(i64 %buffer_bytes)
       %buffer_allocated = icmp ne ptr %buffer, null
       br i1 %buffer_allocated, label %create_event, label %free_context
     create_event:
@@ -238,10 +238,10 @@ public emitWindowsMouseEventRuntime: -> Unit uses Console {
       %event_closed = call i32 @CloseHandle(ptr %event)
       br label %free_buffer
     free_buffer:
-      call void @free(ptr %buffer)
+      call void @sollang_free(ptr %buffer)
       br label %free_context
     free_context:
-      call void @free(ptr %context)
+      call void @sollang_free(ptr %context)
       br label %fail
     fail:
       ret ptr null
@@ -338,8 +338,8 @@ public emitWindowsMouseEventRuntime: -> Unit uses Console {
       %restored = call i32 @SetConsoleMode(ptr %input, i32 %original)
       %buffer_address = getelementptr i8, ptr %context, i64 56
       %buffer = load ptr, ptr %buffer_address, align 8
-      call void @free(ptr %buffer)
-      call void @free(ptr %context)
+      call void @sollang_free(ptr %buffer)
+      call void @sollang_free(ptr %context)
       ret void
     }
     """ -> println
@@ -605,17 +605,17 @@ public emitLinuxMouseEventRuntime hasTextRuntime: Bool -> Unit uses Console {
       %is_tty = icmp ne i32 %interactive, 0
       br i1 %is_tty, label %allocate_context, label %fail
     allocate_context:
-      %context = call ptr @malloc(i64 64)
+      %context = call ptr @sollang_alloc(i64 64)
       %context_ok = icmp ne ptr %context, null
       br i1 %context_ok, label %allocate_buffer, label %fail
     allocate_buffer:
       %capacity64 = zext i32 %requested_capacity to i64
       %buffer_bytes = mul i64 %capacity64, 20
-      %buffer = call ptr @malloc(i64 %buffer_bytes)
+      %buffer = call ptr @sollang_alloc(i64 %buffer_bytes)
       %buffer_ok = icmp ne ptr %buffer, null
       br i1 %buffer_ok, label %allocate_termios, label %free_context
     allocate_termios:
-      %original = call ptr @malloc(i64 64)
+      %original = call ptr @sollang_alloc(i64 64)
       %original_ok = icmp ne ptr %original, null
       br i1 %original_ok, label %read_termios, label %free_buffer
     read_termios:
@@ -677,13 +677,13 @@ public emitLinuxMouseEventRuntime hasTextRuntime: Bool -> Unit uses Console {
       %restored = call i32 @tcsetattr(i32 0, i32 0, ptr %original)
       br label %free_termios
     free_termios:
-      call void @free(ptr %original)
+      call void @sollang_free(ptr %original)
       br label %free_buffer
     free_buffer:
-      call void @free(ptr %buffer)
+      call void @sollang_free(ptr %buffer)
       br label %free_context
     free_context:
-      call void @free(ptr %context)
+      call void @sollang_free(ptr %context)
       br label %fail
     fail:
       ret ptr null
@@ -767,9 +767,9 @@ public emitLinuxMouseEventRuntime hasTextRuntime: Bool -> Unit uses Console {
       %closed_event = call i32 @close(i32 %event_fd)
       %buffer_address = getelementptr i8, ptr %context, i64 40
       %buffer = load ptr, ptr %buffer_address, align 8
-      call void @free(ptr %original)
-      call void @free(ptr %buffer)
-      call void @free(ptr %context)
+      call void @sollang_free(ptr %original)
+      call void @sollang_free(ptr %buffer)
+      call void @sollang_free(ptr %context)
       ret void
     }
     """ -> println

@@ -37,7 +37,7 @@ emitBoxIntrinsic boxIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
     context.ir[boxIndex] => boxNode
     context.types[boxNode.typeId].first => boxElementType
     boxNode.operand0 -> aggregateValueIndex(context, state) => boxValueIndex
-    "  %v$(boxIndex) = call ptr @malloc(i64 $(context.typeSizes[boxElementType]))" -> println
+    "  %v$(boxIndex) = call ptr @sollang_alloc(i64 $(context.typeSizes[boxElementType]))" -> println
     "  store " -> print
     boxElementType -> writeSemanticTypeId(context, state)
     " " -> print
@@ -255,7 +255,7 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
         entry:
           br i1 %size_valid, label %allocate, label %fail
         allocate:
-          %data = call ptr @malloc(i64 %bytes)
+          %data = call ptr @sollang_alloc(i64 %bytes)
           %allocated = icmp ne ptr %data, null
           br i1 %allocated, label %done, label %fail
         done:
@@ -296,13 +296,13 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
           %doubled = shl i64 %old_capacity, 1
           %doubled_enough = icmp uge i64 %doubled, %end
           %new_capacity = select i1 %doubled_enough, i64 %doubled, i64 %end
-          %new_data = call ptr @malloc(i64 %new_capacity)
+          %new_data = call ptr @sollang_alloc(i64 %new_capacity)
           %allocated = icmp ne ptr %new_data, null
           br i1 %allocated, label %copy, label %fail
         copy:
           %old_data = load ptr, ptr %data_addr, align 1
           call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %used, i1 false)
-          call void @free(ptr %old_data)
+          call void @sollang_free(ptr %old_data)
           store ptr %new_data, ptr %data_addr, align 1
           store i64 %new_capacity, ptr %capacity_addr, align 8
           br label %done
@@ -502,7 +502,7 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
             "  %v$(collectionIndex)_bytes = mul i64 %v$(collectionIndex)_requested, $heapElementSize" -> println
             "  %v$(collectionIndex)_has_bytes = icmp ugt i64 %v$(collectionIndex)_bytes, 0" -> println
             "  %v$(collectionIndex)_allocation = select i1 %v$(collectionIndex)_has_bytes, i64 %v$(collectionIndex)_bytes, i64 1" -> println
-            "  %v$(collectionIndex)_data = call ptr @malloc(i64 %v$(collectionIndex)_allocation)" -> println
+            "  %v$(collectionIndex)_data = call ptr @sollang_alloc(i64 %v$(collectionIndex)_allocation)" -> println
             "  %v$(collectionIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex)_data, 0" -> println
             "  %v$(collectionIndex)_1 = insertvalue %sollang.array.i32 %v$(collectionIndex)_0, i64 0, 1" -> println
             "  %v$(collectionIndex) = insertvalue %sollang.array.i32 %v$(collectionIndex)_1, i64 %v$(collectionIndex)_requested, 2" -> println
@@ -528,7 +528,7 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
             "  %v$(collectionIndex)_capacity = add i64 %v$(collectionIndex)_round32, 1" -> println
             "  %v$(collectionIndex)_payload_bytes = mul i64 %v$(collectionIndex)_capacity, $dequeElementSize" -> println
             "  %v$(collectionIndex)_bytes = add i64 %v$(collectionIndex)_payload_bytes, 8" -> println
-            "  %v$(collectionIndex)_data = call ptr @malloc(i64 %v$(collectionIndex)_bytes)" -> println
+            "  %v$(collectionIndex)_data = call ptr @sollang_alloc(i64 %v$(collectionIndex)_bytes)" -> println
             "  store i64 0, ptr %v$(collectionIndex)_data, align 8" -> println
             "  %v$(collectionIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex)_data, 0" -> println
             "  %v$(collectionIndex)_1 = insertvalue %sollang.array.i32 %v$(collectionIndex)_0, i64 0, 1" -> println
@@ -750,7 +750,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
         "  %deque$(callIndex)_grown_capacity = mul i64 %deque$(callIndex)_capacity, 2" -> println
         "  %deque$(callIndex)_grown_payload_bytes = mul i64 %deque$(callIndex)_grown_capacity, $elementSize" -> println
         "  %deque$(callIndex)_grown_bytes = add i64 %deque$(callIndex)_grown_payload_bytes, 8" -> println
-        "  %deque$(callIndex)_grown_data = call ptr @malloc(i64 %deque$(callIndex)_grown_bytes)" -> println
+        "  %deque$(callIndex)_grown_data = call ptr @sollang_alloc(i64 %deque$(callIndex)_grown_bytes)" -> println
         "  store i64 0, ptr %deque$(callIndex)_grown_data, align 8" -> println
         "  %deque$(callIndex)_old_payload = getelementptr i8, ptr %deque$(callIndex)_data, i64 8" -> println
         "  %deque$(callIndex)_grown_payload = getelementptr i8, ptr %deque$(callIndex)_grown_data, i64 8" -> println
@@ -778,7 +778,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
         "  %deque$(callIndex)_copy_next = add i64 %deque$(callIndex)_copy_index, 1" -> println
         "  br label %deque$(callIndex)_copy" -> println
         "deque$(callIndex)_copy_done:" -> println
-        "  call void @free(ptr %deque$(callIndex)_data)" -> println
+        "  call void @sollang_free(ptr %deque$(callIndex)_data)" -> println
         "  br label %deque$(callIndex)_ready" -> println
         "deque$(callIndex)_ready:" -> println
         "  %deque$(callIndex)_active_data = phi ptr [ %deque$(callIndex)_data, %deque$(callIndex)_keep ], [ %deque$(callIndex)_grown_data, %deque$(callIndex)_copy_done ]" -> println
@@ -908,10 +908,10 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
         "  %heap$(callIndex)_doubled = mul i64 %heap$(callIndex)_capacity, 2" -> println
         "  %heap$(callIndex)_grown_capacity = select i1 %heap$(callIndex)_capacity_zero, i64 1, i64 %heap$(callIndex)_doubled" -> println
         "  %heap$(callIndex)_grown_bytes = mul i64 %heap$(callIndex)_grown_capacity, $elementSize" -> println
-        "  %heap$(callIndex)_grown_data = call ptr @malloc(i64 %heap$(callIndex)_grown_bytes)" -> println
+        "  %heap$(callIndex)_grown_data = call ptr @sollang_alloc(i64 %heap$(callIndex)_grown_bytes)" -> println
         "  %heap$(callIndex)_copy_bytes = mul i64 %heap$(callIndex)_length, $elementSize" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %heap$(callIndex)_grown_data, ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_copy_bytes, i1 false)" -> println
-        "  call void @free(ptr %heap$(callIndex)_data)" -> println
+        "  call void @sollang_free(ptr %heap$(callIndex)_data)" -> println
         "  br label %heap$(callIndex)_ready" -> println
         "heap$(callIndex)_ready:" -> println
         "  %heap$(callIndex)_active_data = phi ptr [ %heap$(callIndex)_data, %heap$(callIndex)_keep ], [ %heap$(callIndex)_grown_data, %heap$(callIndex)_grow ]" -> println
@@ -1209,7 +1209,7 @@ emitSetRehash prefix: Text, oldKeysName: Text, oldControlsName: Text, oldCapacit
     "  %$(prefix)_next_index = add i64 %$(prefix)_index, 1" -> println
     "  br label %$(prefix)_loop" -> println
     "$(prefix)_done:" -> println
-    "  call void @free(ptr $(oldControlsName))" -> println
+    "  call void @sollang_free(ptr $(oldControlsName))" -> println
     "$(prefix)_result" -> emitGrowableDictionaryOwner("%$(prefix)_storage", lengthName, newCapacityName)
 }
 
@@ -1635,7 +1635,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
     "  %materialize$(materializeIndex)_doubled = shl i64 %materialize$(materializeIndex)_capacity, 1" -> println
     "  %materialize$(materializeIndex)_doubled_enough = icmp uge i64 %materialize$(materializeIndex)_doubled, %materialize$(materializeIndex)_end" -> println
     "  %materialize$(materializeIndex)_new_capacity = select i1 %materialize$(materializeIndex)_doubled_enough, i64 %materialize$(materializeIndex)_doubled, i64 %materialize$(materializeIndex)_end" -> println
-    "  %materialize$(materializeIndex)_grown = call ptr @realloc(ptr %materialize$(materializeIndex)_data, i64 %materialize$(materializeIndex)_new_capacity)" -> println
+    "  %materialize$(materializeIndex)_grown = call ptr @sollang_resize(ptr %materialize$(materializeIndex)_data, i64 %materialize$(materializeIndex)_used, i64 %materialize$(materializeIndex)_new_capacity)" -> println
     "  br label %materialize$(materializeIndex)_ready" -> println
     "materialize$(materializeIndex)_ready:" -> println
     "  %materialize$(materializeIndex)_pointer = phi ptr [ %materialize$(materializeIndex)_data, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_grown, %materialize$(materializeIndex)_grow ]" -> println
@@ -1758,7 +1758,8 @@ emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
     "reserve$(reserveIndex)_allocate:" -> println
     reserveSource -> arrayElementSize(context, state) => reserveElementSize
     "  %reserve$(reserveIndex)_bytes = mul i64 %reserve$(reserveIndex)_requested, $reserveElementSize" -> println
-    "  %reserve$(reserveIndex)_allocated = call ptr @realloc(ptr %reserve$(reserveIndex)_data, i64 %reserve$(reserveIndex)_bytes)" -> println
+    "  %reserve$(reserveIndex)_used_bytes = mul i64 %reserve$(reserveIndex)_length, $reserveElementSize" -> println
+    "  %reserve$(reserveIndex)_allocated = call ptr @sollang_resize(ptr %reserve$(reserveIndex)_data, i64 %reserve$(reserveIndex)_used_bytes, i64 %reserve$(reserveIndex)_bytes)" -> println
     "  br label %reserve$(reserveIndex)_done" -> println
     "reserve$(reserveIndex)_keep:" -> println
     "  br label %reserve$(reserveIndex)_done" -> println
@@ -1910,7 +1911,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
         "push$(pushIndex)_keep:" -> println
         "  br label %push$(pushIndex)_ready" -> println
         "push$(pushIndex)_grow:" -> println
-        "  %push$(pushIndex)_grown_data = call ptr @malloc(i64 %push$(pushIndex)_append_bytes)" -> println
+        "  %push$(pushIndex)_grown_data = call ptr @sollang_alloc(i64 %push$(pushIndex)_append_bytes)" -> println
         "  %push$(pushIndex)_allocated = icmp ne ptr %push$(pushIndex)_grown_data, null" -> println
         "  br i1 %push$(pushIndex)_allocated, label %push$(pushIndex)_copy, label %push$(pushIndex)_allocation_failed" -> println
         "push$(pushIndex)_allocation_failed:" -> println
@@ -1919,7 +1920,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
         "push$(pushIndex)_copy:" -> println
         "  %push$(pushIndex)_copy_bytes = mul i64 %push$(pushIndex)_length, $pushElementSize" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %push$(pushIndex)_grown_data, ptr %push$(pushIndex)_data, i64 %push$(pushIndex)_copy_bytes, i1 false)" -> println
-        "  call void @free(ptr %push$(pushIndex)_data)" -> println
+        "  call void @sollang_free(ptr %push$(pushIndex)_data)" -> println
         "  br label %push$(pushIndex)_ready" -> println
         "push$(pushIndex)_ready:" -> println
         "  %push$(pushIndex)_append_data = phi ptr [ %push$(pushIndex)_data, %push$(pushIndex)_keep ], [ %push$(pushIndex)_grown_data, %push$(pushIndex)_copy ]" -> println
@@ -2416,7 +2417,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                 "  %put$(putIndex)_capacity = select i1 %put$(putIndex)_capacity_small, i64 4, i64 %put$(putIndex)_capacity_double" -> println
                 "put$(putIndex)" -> emitGrowableDictionaryAllocation("%put$(putIndex)_capacity", putEntryLayout)
                 "put$(putIndex)" -> emitDictionaryRehashEntries(putEntryLayout, putKeyTypeId!, putValueTypeId!, putSource.typeModule, putSource.typeSymbol, putKeyIsText!, putKeyIsNominal, putHashMethod!, putHashWidth, putHashSigned!, "", context, state)
-                "  call void @free(ptr %put$(putIndex)_old_storage)" -> println
+                "  call void @sollang_free(ptr %put$(putIndex)_old_storage)" -> println
                 Arena(0) => grownProbePrefixStorage!
                 "put$(putIndex)_grown_probe" -> materialize(grownProbePrefixStorage!) => grownProbePrefix
                 Arena(0) => grownProbeControlsStorage!
@@ -2968,7 +2969,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex)_rebuild_old_values = getelementptr i8, ptr %take$(takeIndex)_values, i64 0" -> println
         "take$(takeIndex)_rebuild" -> emitGrowableDictionaryAllocation("%take$(takeIndex)_rebuild_capacity", takeEntryLayout)
         "take$(takeIndex)_rebuild" -> emitDictionaryRehashEntries(takeEntryLayout, takeKeyTypeId!, takeValueTypeId!, takeSource.typeModule, takeSource.typeSymbol, takeKeyIsText!, takeKeyIsNominal, takeHashMethod!, takeHashWidth, takeHashSigned!, "%take$(takeIndex)_find_index", context, state)
-        "  call void @free(ptr %take$(takeIndex)_storage)" -> println
+        "  call void @sollang_free(ptr %take$(takeIndex)_storage)" -> println
         "take$(takeIndex)_result" -> emitGrowableDictionaryOwner("%take$(takeIndex)_rebuild_storage", "%take$(takeIndex)_new_length", "%take$(takeIndex)_capacity")
         "  store %sollang.int_dictionary %take$(takeIndex)_result, ptr " -> print
         takeStructMember -> if {

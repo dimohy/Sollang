@@ -462,7 +462,7 @@ emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterConte
         "  %v$(nodeIndex)_sleep_finite_deadline = add i64 %v$(nodeIndex)_sleep_now, %v$(nodeIndex)_sleep_normalized" -> println
         "  %v$(nodeIndex)_sleep_deadline = select i1 %v$(nodeIndex)_sleep_too_large, i64 9223372036854775807, i64 %v$(nodeIndex)_sleep_finite_deadline" -> println
         context -> usesReachableAsyncDiagnostics(state) => diagnosticSleep
-        "  %v$(nodeIndex)_sleep_context = call ptr @malloc(i64 " -> print
+        "  %v$(nodeIndex)_sleep_context = call ptr @sollang_alloc(i64 " -> print
         diagnosticSleep -> if { "56" -> print } else { "1" -> print }
         ")" -> println
         "  %v$(nodeIndex)_sleep_allocated = icmp ne ptr %v$(nodeIndex)_sleep_context, null" -> println
@@ -477,12 +477,12 @@ emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterConte
             "  store { ptr, ptr, i64, i64, ptr, ptr } zeroinitializer, ptr %v$(nodeIndex)_sleep_header, align 8" -> println
             "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_diagnostic_sleep_worker, ptr @sollang_diagnostic_sleep_destroy, ptr @sollang_diagnostic_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
         } else {
-            "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_sleep_worker, ptr @free, ptr @sollang_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
+            "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_sleep_worker, ptr @sollang_free, ptr @sollang_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
         }
         "  %v$(nodeIndex)_sleep_started = icmp ne ptr %v$(nodeIndex)_sleep_handle, null" -> println
         "  br i1 %v$(nodeIndex)_sleep_started, label %sleep$(nodeIndex)_ready, label %sleep$(nodeIndex)_start_failed" -> println
         "sleep$(nodeIndex)_start_failed:" -> println
-        "  call void @free(ptr %v$(nodeIndex)_sleep_context)" -> println
+        "  call void @sollang_free(ptr %v$(nodeIndex)_sleep_context)" -> println
         "  call void @llvm.trap()" -> println
         "  unreachable" -> println
         "sleep$(nodeIndex)_ready:" -> println
@@ -4549,7 +4549,7 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: 
                         "  %if$(ifIndex)_fixed$(branchOrdinal)_source = extractvalue %sollang.int_slice " -> print
                         valueIndex -> writeValue(ownerIndex, context, state)
                         ", 0" -> println
-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_data = call ptr @malloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
+                        "  %if$(ifIndex)_fixed$(branchOrdinal)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
                         "  call void @llvm.memcpy.p0.p0.i64(ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, ptr %if$(ifIndex)_fixed$(branchOrdinal)_source, i64 $(context.typeSizes[resultNode.typeId]), i1 false)" -> println
                         "  %if$(ifIndex)_fixed$(branchOrdinal)_0 = insertvalue %sollang.int_slice poison, ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, 0" -> println
                         "  %if$(ifIndex)_fixed$(branchOrdinal) = insertvalue %sollang.int_slice %if$(ifIndex)_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println

@@ -662,7 +662,7 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                         materializeFixedAssignment! and not (assignmentTargetFieldTypeId! -> semanticTypeOwns(context, state))
                             -> if {
                                 "  %member_assign$(request.nodeIndex)_previous_data = extractvalue %sollang.int_slice %member_assign$(request.nodeIndex)_previous, 0" -> println
-                                "  call void @free(ptr %member_assign$(request.nodeIndex)_previous_data)" -> println
+                                "  call void @sollang_free(ptr %member_assign$(request.nodeIndex)_previous_data)" -> println
                             } else {
                                 "  call void @sollang_drop_t$(assignmentTargetFieldTypeId!)(" -> print
                                 materializeFixedAssignment! -> if { "%sollang.int_slice" -> print } else { assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state) }
@@ -1272,12 +1272,12 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 (emptyWhileCallParameter >= 0 -> if {
                                                                     context.ir[emptyWhileCallParameter] -> arrayElementSize(context, state)
                                                                 } else { valueNode -> arrayElementSize(context, state) }) => emptyWhileCallStorageBytes
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_data = call ptr @malloc(i64 $emptyWhileCallStorageBytes)" -> println
+                                                                ArrayStorageIdentity { resultDomain: 2, resultIndex: valueNodeIndex, labelIndex: whileIndex } -> emitArrayHeapBacking(emptyWhileCallStorageBytes, ownerIndex, context, state)
                                                             } else {
                                                                 "  %while$(whileIndex)_v$(valueNodeIndex)_data = inttoptr i64 0 to ptr" -> println
                                                             }
                                                     } else {
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_data = call ptr @malloc(i64 $whileArrayByteLength)" -> println
+                                                        ArrayStorageIdentity { resultDomain: 2, resultIndex: valueNodeIndex, labelIndex: whileIndex } -> emitArrayHeapBacking(whileArrayByteLength, ownerIndex, context, state)
                                                     }
                                                 }
                                             valueNode.operand0 => whileArrayElementIndex!
@@ -2244,7 +2244,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 }
                 ")" -> println
                 ownedDropHasInlineArrayAbi -> if {
-                    "  call void @free(ptr " -> print
+                    "  call void @sollang_free(ptr " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                     "_fixed_data)" -> println
                     true => ownedFixedBackingReleased!
@@ -2269,7 +2269,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                     ownedDropValueIndex! -> writeCleanupValueName(ownedDropParameterIndex!, ownedDropOwner!, context, state)
                     ", 0" -> println
                 }
-                "  call void @free(ptr " -> print
+                "  call void @sollang_free(ptr " -> print
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                 ")" -> println
             }
@@ -2292,7 +2292,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                     ownedDropValueIndex! -> writeCleanupValueName(ownedDropParameterIndex!, ownedDropOwner!, context, state)
                     ", 0" -> println
                 }
-                "  call void @free(ptr " -> print
+                "  call void @sollang_free(ptr " -> print
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                 "_keys)" -> println
             }
@@ -2430,7 +2430,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and not (ownedDropCandidate.typeId -> semanticTypeOwns(context, state))
             -> if {
                 "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue %sollang.int_slice %v$(ownedDropIndex!), 0" -> println
-                "  call void @free(ptr %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data)" -> println
+                "  call void @sollang_free(ptr %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data)" -> println
             }
         ownedDropPatternFlagGuard -> if {
             "  br label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done" -> println

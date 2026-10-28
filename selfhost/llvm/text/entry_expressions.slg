@@ -1436,7 +1436,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                 entryFieldAllocationBytes! == 0 -> if {
                                     context.typeSizes[context.types[entryTargetFieldTypeId!].first] => entryFieldAllocationBytes!
                                 }
-                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned = call ptr @malloc(i64 $(entryFieldAllocationBytes!))" -> println
+                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned = call ptr @sollang_alloc(i64 $(entryFieldAllocationBytes!))" -> println
                                 "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned, ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_source, i64 $(context.typeSizes[entryTargetFieldTypeId!]), i1 false)" -> println
                                 "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned, 0" -> println
                                 "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy = insertvalue %sollang.int_slice %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0, i64 %v$(entryExpressionIndex)_field$(entryFieldPosition!)_length, 1" -> println
@@ -1968,10 +1968,10 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                                         (emptyCallParameter >= 0 -> if {
                                             context.ir[emptyCallParameter] -> arrayElementSize(context, state)
                                         } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
-                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes)
-                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes, functionIndex, context, state)
+                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0, functionIndex, context, state) }
                             } else {
-                                ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength)
+                                ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength, functionIndex, context, state)
                             }
                         }
                 }
@@ -2350,11 +2350,11 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
             "  %v$(entryExpressionIndex)_length = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 1" -> println
             "  %v$(entryExpressionIndex)_bytes = mul i64 %v$(entryExpressionIndex)_length, " -> print
             entryTryParallelOkStride -> writeDecimalLine
-            "  %v$(entryExpressionIndex)_data = call ptr @malloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
+            "  %v$(entryExpressionIndex)_data = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
             "  %v$(entryExpressionIndex)_callback_bytes = mul i64 %v$(entryExpressionIndex)_length, " -> print
             entryTryParallelCallbackStride -> writeDecimalLine
-            "  %v$(entryExpressionIndex)_callback_results = call ptr @malloc(i64 %v$(entryExpressionIndex)_callback_bytes)" -> println
-            "  %v$(entryExpressionIndex)_initialized = call ptr @malloc(i64 %v$(entryExpressionIndex)_length)" -> println
+            "  %v$(entryExpressionIndex)_callback_results = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_callback_bytes)" -> println
+            "  %v$(entryExpressionIndex)_initialized = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_length)" -> println
             "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_initialized, i8 0, i64 %v$(entryExpressionIndex)_length, i1 false)" -> println
             entryExpressionIndex -> parallelUsesComputePool(context, state)
                 -> if {
@@ -2379,7 +2379,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                         "  store ptr null, ptr %v$(entryExpressionIndex)_capture_slot, align 8" -> println
                     }
                     "  %v$(entryExpressionIndex)_sink_bytes = mul i64 %v$(entryExpressionIndex)_length, 24" -> println
-                    "  %v$(entryExpressionIndex)_sinks = call ptr @malloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
+                    "  %v$(entryExpressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_sinks, i8 0, i64 %v$(entryExpressionIndex)_sink_bytes, i1 false)" -> println
                     "  %v$(entryExpressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(entryExpressionIndex)_sinks, ptr %v$(entryExpressionIndex)_sinks_slot, align 8" -> println
@@ -2395,7 +2395,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                     "  store ptr %v$(entryExpressionIndex)_initialized, ptr %v$(entryExpressionIndex)_initialized_slot, align 8" -> println
                     "  call void @sollang_compute_execute(ptr %v$(entryExpressionIndex)_group)" -> println
                     entryTryParallelSource.kind == 14 -> if {
-                        "  call void @free(ptr %v$(entryExpressionIndex)_input)" -> println
+                        "  call void @sollang_free(ptr %v$(entryExpressionIndex)_input)" -> println
                     }
                     TryParallelCollectRequest { expressionIndex: entryExpressionIndex, outerTypeId: entryExpression.typeId, callbackTypeId: entryTryParallelBodyCall.typeId } -> emitTryParallelCollect(context, state)
                 } else {
@@ -2410,7 +2410,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
             "  %v$(entryExpressionIndex)_length = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 1" -> println
             "  %v$(entryExpressionIndex)_bytes = mul i64 %v$(entryExpressionIndex)_length, " -> print
             entryExpression -> arrayElementSize(context, state) -> writeDecimalLine
-            "  %v$(entryExpressionIndex)_data = call ptr @malloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
+            "  %v$(entryExpressionIndex)_data = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
             entryExpressionIndex -> parallelUsesComputePool(context, state)
                 -> if {
                     CallEnvironmentRequest { callerIndex: functionIndex, callIndex: entryExpressionIndex, targetModule: entryParallelBodyCall.targetModule, targetSymbol: entryParallelBodyCall.symbol, hasArgument: true } => entryParallelEnvironmentRequest
@@ -2434,7 +2434,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                         "  store ptr null, ptr %v$(entryExpressionIndex)_capture_slot, align 8" -> println
                     }
                     "  %v$(entryExpressionIndex)_sink_bytes = mul i64 %v$(entryExpressionIndex)_length, 24" -> println
-                    "  %v$(entryExpressionIndex)_sinks = call ptr @malloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
+                    "  %v$(entryExpressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_sinks, i8 0, i64 %v$(entryExpressionIndex)_sink_bytes, i1 false)" -> println
                     "  %v$(entryExpressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(entryExpressionIndex)_sinks, ptr %v$(entryExpressionIndex)_sinks_slot, align 8" -> println

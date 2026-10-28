@@ -1,0 +1,700 @@
+namespace sollang.compiler.llvm.emitter.text_output_runtime
+
+public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: Bool -> Unit uses Console {
+    """
+    declare ptr @GetStdHandle(i32)
+    declare i32 @GetConsoleMode(ptr, ptr)
+    declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+    declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+    define internal i32 @sollang_write_stream_chunk(ptr %handle, ptr %data, i32 %len, ptr %written, i1 %is_console) {
+    entry:
+      %empty = icmp eq i32 %len, 0
+      br i1 %empty, label %success_empty, label %classify
+
+    success_empty:
+      store i32 0, ptr %written, align 4
+      ret i32 1
+
+    classify:
+      br i1 %is_console, label %console_prepare, label %redirected
+
+    redirected:
+      br label %redirected_write
+
+    redirected_write:
+      %redirected_offset = phi i32 [ 0, %redirected ], [ %redirected_next, %redirected_advance ]
+      %redirected_remaining = sub i32 %len, %redirected_offset
+      %redirected_offset64 = zext i32 %redirected_offset to i64
+      %redirected_data = getelementptr i8, ptr %data, i64 %redirected_offset64
+      store i32 0, ptr %written, align 4
+      %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %redirected_data, i32 %redirected_remaining, ptr %written, ptr null)
+      %redirected_count = load i32, ptr %written, align 4
+      %redirected_succeeded = icmp ne i32 %redirected_ok, 0
+      %redirected_progress = icmp ugt i32 %redirected_count, 0
+      %redirected_bounded = icmp ule i32 %redirected_count, %redirected_remaining
+      %redirected_valid0 = and i1 %redirected_succeeded, %redirected_progress
+      %redirected_valid = and i1 %redirected_valid0, %redirected_bounded
+      br i1 %redirected_valid, label %redirected_advance, label %write_failed
+
+    redirected_advance:
+      %redirected_next = add i32 %redirected_offset, %redirected_count
+      %redirected_complete = icmp eq i32 %redirected_next, %len
+      br i1 %redirected_complete, label %write_succeeded, label %redirected_write
+
+    console_prepare:
+      %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+      %valid_utf8 = icmp sgt i32 %wide_chars, 0
+      br i1 %valid_utf8, label %allocate, label %conversion_failed
+
+    allocate:
+      %wide_bytes32 = shl i32 %wide_chars, 1
+      %wide_bytes = zext i32 %wide_bytes32 to i64
+      %heap = call ptr @GetProcessHeap()
+      %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+      %wide_written = alloca i32, align 4
+      %allocated = icmp ne ptr %wide, null
+      br i1 %allocated, label %convert, label %conversion_failed
+
+    convert:
+      %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+      %converted_all = icmp eq i32 %converted, %wide_chars
+      br i1 %converted_all, label %console_write, label %conversion_free
+
+    console_write:
+      %console_offset = phi i32 [ 0, %convert ], [ %console_next, %console_advance ]
+      %console_remaining = sub i32 %wide_chars, %console_offset
+      %console_offset64 = zext i32 %console_offset to i64
+      %console_data = getelementptr i16, ptr %wide, i64 %console_offset64
+      store i32 0, ptr %wide_written, align 4
+      %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %console_data, i32 %console_remaining, ptr %wide_written, ptr null)
+      %console_count = load i32, ptr %wide_written, align 4
+      %console_succeeded = icmp ne i32 %console_ok, 0
+      %console_progress = icmp ugt i32 %console_count, 0
+      %console_bounded = icmp ule i32 %console_count, %console_remaining
+      %console_valid0 = and i1 %console_succeeded, %console_progress
+      %console_valid = and i1 %console_valid0, %console_bounded
+      br i1 %console_valid, label %console_advance, label %console_write_failed
+
+    console_advance:
+      %console_next = add i32 %console_offset, %console_count
+      %console_complete = icmp eq i32 %console_next, %wide_chars
+      br i1 %console_complete, label %console_write_succeeded, label %console_write
+
+    console_write_succeeded:
+      %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+      br label %write_succeeded
+
+    console_write_failed:
+      %freed_after_write_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+      br label %write_failed
+
+    write_succeeded:
+      store i32 %len, ptr %written, align 4
+      ret i32 1
+
+    write_failed:
+      store i32 0, ptr %written, align 4
+      ret i32 0
+
+    conversion_free:
+      %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+      br label %conversion_failed
+
+    conversion_failed:
+      store i32 0, ptr %written, align 4
+      ret i32 0
+    }
+
+    define internal i32 @sollang_write_stream(ptr %handle, ptr %data, i64 %len64, ptr %written, i1 %is_console) {
+    entry:
+      %empty = icmp eq i64 %len64, 0
+      br i1 %empty, label %success_empty, label %prepare
+
+    success_empty:
+      store i32 0, ptr %written, align 4
+      ret i32 1
+
+    prepare:
+      %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+      %remaining = sub i64 %len64, %offset
+      %current = getelementptr i8, ptr %data, i64 %offset
+      %more = icmp ugt i64 %remaining, 1048576
+      %proposed = select i1 %more, i64 1048576, i64 %remaining
+      %split_console = and i1 %more, %is_console
+      br i1 %split_console, label %trim_boundary, label %write
+
+    trim_boundary:
+      %boundary = phi i64 [ 1048576, %prepare ], [ %previous, %trim_next ]
+      %boundary_ptr = getelementptr i8, ptr %current, i64 %boundary
+      %boundary_byte = load i8, ptr %boundary_ptr, align 1
+      %prefix = and i8 %boundary_byte, -64
+      %continuation = icmp eq i8 %prefix, -128
+      br i1 %continuation, label %trim_next, label %write
+
+    trim_next:
+      %can_trim = icmp ugt i64 %boundary, 1048573
+      %previous = sub i64 %boundary, 1
+      br i1 %can_trim, label %trim_boundary, label %failure
+
+    write:
+      %chunk64 = phi i64 [ %proposed, %prepare ], [ %boundary, %trim_boundary ]
+      %chunk32 = trunc i64 %chunk64 to i32
+      %ok = call i32 @sollang_write_stream_chunk(ptr %handle, ptr %current, i32 %chunk32, ptr %written, i1 %is_console)
+      %succeeded = icmp ne i32 %ok, 0
+      br i1 %succeeded, label %advance, label %failure
+
+    advance:
+      %next = add i64 %offset, %chunk64
+      %complete = icmp eq i64 %next, %len64
+      br i1 %complete, label %success, label %prepare
+
+    success:
+      ret i32 1
+
+    failure:
+      store i32 0, ptr %written, align 4
+      ret i32 0
+    }
+
+    define internal i32 @sollang_runtime_write_stdout_all(ptr %handle, ptr %data, i64 %len) {
+    entry:
+      %written = alloca i32, align 4
+      %mode = alloca i32, align 4
+      %empty = icmp eq i64 %len, 0
+      br i1 %empty, label %success, label %classify
+    classify:
+      %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+      %is_console = icmp ne i32 %console_status, 0
+      %ok = call i32 @sollang_write_stream(ptr %handle, ptr %data, i64 %len, ptr %written, i1 %is_console)
+      ret i32 %ok
+    success:
+      ret i32 1
+    }
+    define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+    entry:
+      %length = zext i32 %len to i64
+      %ok = call i32 @sollang_runtime_write_stdout_all(ptr %handle, ptr %data, i64 %length)
+      ret i32 %ok
+    }
+    """ -> println
+    capturesParallelOutput -> if {
+        """
+        @sollang_runtime_newline = private constant [1 x i8] c"\0A"
+        @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+        @sollang_runtime_stdout_count = private global i64 0
+        @sollang_output_sink_tls = internal global i32 -1
+        declare i32 @TlsAlloc()
+        declare i32 @TlsSetValue(i32, ptr)
+        declare ptr @TlsGetValue(i32)
+        declare i32 @TlsFree(i32)
+        declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+        define internal void @sollang_runtime_flush_stdout() {
+        entry:
+          %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+          %has_data = icmp ugt i64 %count, 0
+          br i1 %has_data, label %write, label %done
+        write:
+          %handle = call ptr @GetStdHandle(i32 -11)
+          %count32 = trunc i64 %count to i32
+          %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+          %succeeded = icmp ne i32 %ok, 0
+          br i1 %succeeded, label %clear, label %failure
+        clear:
+          store i64 0, ptr @sollang_runtime_stdout_count, align 8
+          br label %done
+        failure:
+          call void @llvm.trap()
+          unreachable
+        done:
+          ret void
+        }
+        define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
+        entry:
+          %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+          %total = add i64 %count, %len
+          %available = sub i64 1048576, %count
+          %fits = icmp ule i64 %len, %available
+          br i1 %fits, label %append, label %flush
+        flush:
+          call void @sollang_runtime_flush_stdout()
+          %large = icmp ugt i64 %len, 1048576
+          br i1 %large, label %direct, label %append_empty
+        direct:
+          %handle = call ptr @GetStdHandle(i32 -11)
+          %ok = call i32 @sollang_runtime_write_stdout_all(ptr %handle, ptr %data, i64 %len)
+          %succeeded = icmp ne i32 %ok, 0
+          br i1 %succeeded, label %direct_done, label %direct_failure
+        direct_done:
+          ret void
+        direct_failure:
+          call void @llvm.trap()
+          unreachable
+        append_empty:
+          call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+          store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+          ret void
+        append:
+          %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+          call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+          store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+          ret void
+        }
+        define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
+        entry:
+          call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
+          ret void
+        }
+        define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+        entry:
+          %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
+          %tls_valid = icmp ne i32 %tls_index, -1
+          br i1 %tls_valid, label %read_sink, label %direct
+        read_sink:
+          %sink = call ptr @TlsGetValue(i32 %tls_index)
+          %capturing = icmp ne ptr %sink, null
+          br i1 %capturing, label %capture, label %direct
+        capture:
+          call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
+          ret void
+        direct:
+          call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
+          ret void
+        }
+        define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+        entry:
+          call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+          br i1 %newline, label %write_newline, label %done
+        write_newline:
+          call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+          br label %done
+        done:
+          ret void
+        }
+        """ -> println
+    } else {
+        """
+        @sollang_runtime_newline = private constant [1 x i8] c"\0A"
+        @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+        @sollang_runtime_stdout_count = private global i64 0
+        define internal void @sollang_runtime_flush_stdout() {
+        entry:
+          %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+          %has_data = icmp ugt i64 %count, 0
+          br i1 %has_data, label %write, label %done
+        write:
+          %handle = call ptr @GetStdHandle(i32 -11)
+          %count32 = trunc i64 %count to i32
+          %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+          %succeeded = icmp ne i32 %ok, 0
+          br i1 %succeeded, label %clear, label %failure
+        clear:
+          store i64 0, ptr @sollang_runtime_stdout_count, align 8
+          br label %done
+        failure:
+          call void @llvm.trap()
+          unreachable
+        done:
+          ret void
+        }
+        define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+        entry:
+          %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+          %total = add i64 %count, %len
+          %available = sub i64 1048576, %count
+          %fits = icmp ule i64 %len, %available
+          br i1 %fits, label %append, label %flush
+        flush:
+          call void @sollang_runtime_flush_stdout()
+          %large = icmp ugt i64 %len, 1048576
+          br i1 %large, label %direct, label %append_empty
+        direct:
+          %handle = call ptr @GetStdHandle(i32 -11)
+          %ok = call i32 @sollang_runtime_write_stdout_all(ptr %handle, ptr %data, i64 %len)
+          %succeeded = icmp ne i32 %ok, 0
+          br i1 %succeeded, label %direct_done, label %direct_failure
+        direct_done:
+          ret void
+        direct_failure:
+          call void @llvm.trap()
+          unreachable
+        append_empty:
+          call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+          store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+          ret void
+        append:
+          %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+          call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+          store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+          ret void
+        }
+        define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+        entry:
+          call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+          br i1 %newline, label %write_newline, label %done
+        write_newline:
+          call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+          br label %done
+        done:
+          ret void
+        }
+        """ -> println
+    }
+    usesStandardError -> if {
+        """
+        @sollang_runtime_error_newline = private constant [2 x i8] c"\0D\0A"
+        define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+        entry:
+          %handle = call ptr @GetStdHandle(i32 -12)
+          %ok = call i32 @sollang_runtime_write_stdout_all(ptr %handle, ptr %data, i64 %len)
+          br i1 %newline, label %write_newline, label %done
+        write_newline:
+          %newline_ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_error_newline, i32 2)
+          br label %done
+        done:
+          ret void
+        }
+        define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+        entry:
+          call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+          ret void
+        }
+        """ -> println
+    }
+}
+
+public emitLinuxTextRuntime capturesParallelOutput: Bool, usesStandardError: Bool -> Unit uses Console {
+    """
+    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
+    @sollang_runtime_io_failed = internal global i8 0
+    declare i64 @write(i32, ptr, i64)
+    define internal void @sollang_runtime_flush_stdout() {
+    entry:
+      ret void
+    }
+    define internal i1 @sollang_runtime_write_stdout(ptr %data, i64 %len) {
+    entry:
+      %empty = icmp eq i64 %len, 0
+      br i1 %empty, label %success, label %write
+    write:
+      %written = call i64 @write(i32 1, ptr %data, i64 %len)
+      %complete = icmp eq i64 %written, %len
+      br i1 %complete, label %success, label %failure
+    failure:
+      store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+      ret i1 false
+    success:
+      ret i1 true
+    }
+    """ -> println
+    capturesParallelOutput -> if {
+        """
+        @sollang_output_sink_tls = internal global i32 0
+        @sollang_output_sink_tls_ready = internal global i1 false
+        declare i32 @pthread_key_create(ptr, ptr)
+        declare i32 @pthread_key_delete(i32)
+        declare i32 @pthread_setspecific(i32, ptr)
+        declare ptr @pthread_getspecific(i32)
+        declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+        define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
+        entry:
+          %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+          ret void
+        }
+        define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
+        entry:
+          call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
+          ret void
+        }
+        define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
+        entry:
+          %tls_ready = load i1, ptr @sollang_output_sink_tls_ready, align 1
+          br i1 %tls_ready, label %read_sink, label %direct
+        read_sink:
+          %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
+          %sink = call ptr @pthread_getspecific(i32 %tls_index)
+          %capturing = icmp ne ptr %sink, null
+          br i1 %capturing, label %capture, label %direct
+        capture:
+          call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
+          ret i1 true
+        direct:
+          %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+          ret i1 %ok
+        }
+        define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+        entry:
+          %ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+          ret void
+        }
+        """ -> println
+    } else {
+        """
+        define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
+        entry:
+          %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+          ret i1 %ok
+        }
+        """ -> println
+    }
+    """
+    define internal i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %data_ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      %newline_ok = call i1 @sollang_runtime_append_stdout_checked(ptr @sollang_runtime_newline, i64 1)
+      %combined = and i1 %data_ok, %newline_ok
+      br label %done
+    done:
+      %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+      ret i1 %ok
+    }
+    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline)
+      ret void
+    }
+    """ -> println
+    usesStandardError -> if {
+        """
+        define internal i1 @sollang_runtime_write_stderr(ptr %data, i64 %len) {
+        entry:
+          %empty = icmp eq i64 %len, 0
+          br i1 %empty, label %success, label %write
+        write:
+          %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+          %remaining = sub i64 %len, %offset
+          %current = getelementptr i8, ptr %data, i64 %offset
+          %count = call i64 @write(i32 2, ptr %current, i64 %remaining)
+          %positive = icmp sgt i64 %count, 0
+          br i1 %positive, label %advance, label %failure
+        advance:
+          %next = add i64 %offset, %count
+          %complete = icmp eq i64 %next, %len
+          br i1 %complete, label %success, label %write
+        failure:
+          store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+          ret i1 false
+        success:
+          ret i1 true
+        }
+        define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+        entry:
+          %ok = call i1 @sollang_runtime_write_stderr(ptr %data, i64 %len)
+          br i1 %newline, label %write_newline, label %done
+        write_newline:
+          %newline_ok = call i1 @sollang_runtime_write_stderr(ptr @sollang_runtime_newline, i64 1)
+          br label %done
+        done:
+          ret void
+        }
+        define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+        entry:
+          call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+          ret void
+        }
+        """ -> println
+    }
+}
+
+public emitWasmTextRuntime usesStandardError: Bool -> Unit uses Console {
+    """
+    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
+    declare i32 @sollang_browser_write(ptr, i32)
+    declare i32 @sollang_browser_read(ptr, i32)
+    declare i64 @sollang_browser_now_millis()
+    declare i64 @sollang_browser_utc_now_millis()
+    define internal i64 @sollang_now_millis() {
+    entry:
+      %value = call i64 @sollang_browser_now_millis()
+      ret i64 %value
+    }
+    define internal i64 @sollang_utc_now_millis() {
+    entry:
+      %value = call i64 @sollang_browser_utc_now_millis()
+      ret i64 %value
+    }
+    define internal void @sollang_runtime_flush_stdout() {
+    entry:
+      ret void
+    }
+    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %len32 = trunc i64 %len to i32
+      %written = call i32 @sollang_browser_write(ptr %data, i32 %len32)
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      %newline_written = call i32 @sollang_browser_write(ptr @sollang_runtime_newline, i32 1)
+      br label %done
+    done:
+      ret void
+    }
+    define internal i32 @sollang_runtime_read_int(ptr %prompt, i64 %prompt_len) {
+    entry:
+      call void @sollang_runtime_print(ptr %prompt, i64 %prompt_len, i1 false)
+      %buf = alloca [64 x i8], align 1
+      %count = call i32 @sollang_browser_read(ptr %buf, i32 64)
+      %has_input = icmp sgt i32 %count, 0
+      br i1 %has_input, label %skip_header, label %empty
+    skip_header:
+      br label %skip
+    skip:
+      %skip_index = phi i32 [ 0, %skip_header ], [ %skip_next, %skip_space ]
+      %skip_in_bounds = icmp slt i32 %skip_index, %count
+      br i1 %skip_in_bounds, label %skip_check, label %empty
+    skip_check:
+      %skip_ptr = getelementptr i8, ptr %buf, i32 %skip_index
+      %skip_byte = load i8, ptr %skip_ptr, align 1
+      %is_space = icmp eq i8 %skip_byte, 32
+      %is_tab = icmp eq i8 %skip_byte, 9
+      %is_newline = icmp eq i8 %skip_byte, 10
+      %space_or_tab = or i1 %is_space, %is_tab
+      %is_whitespace = or i1 %space_or_tab, %is_newline
+      br i1 %is_whitespace, label %skip_space, label %sign
+    skip_space:
+      %skip_next = add i32 %skip_index, 1
+      br label %skip
+    sign:
+      %is_minus = icmp eq i8 %skip_byte, 45
+      %digit_start_delta = zext i1 %is_minus to i32
+      %digit_start = add i32 %skip_index, %digit_start_delta
+      br label %digits
+    digits:
+      %digit_index = phi i32 [ %digit_start, %sign ], [ %digit_next, %accumulate ]
+      %value = phi i32 [ 0, %sign ], [ %next_value, %accumulate ]
+      %digit_in_bounds = icmp slt i32 %digit_index, %count
+      br i1 %digit_in_bounds, label %digit_check, label %finish
+    digit_check:
+      %digit_ptr = getelementptr i8, ptr %buf, i32 %digit_index
+      %digit_byte = load i8, ptr %digit_ptr, align 1
+      %at_least_zero = icmp uge i8 %digit_byte, 48
+      %at_most_nine = icmp ule i8 %digit_byte, 57
+      %is_digit = and i1 %at_least_zero, %at_most_nine
+      br i1 %is_digit, label %accumulate, label %finish
+    accumulate:
+      %digit_i32 = zext i8 %digit_byte to i32
+      %digit = sub i32 %digit_i32, 48
+      %times_ten = mul i32 %value, 10
+      %next_value = add i32 %times_ten, %digit
+      %digit_next = add i32 %digit_index, 1
+      br label %digits
+    finish:
+      %negative_value = sub i32 0, %value
+      %result = select i1 %is_minus, i32 %negative_value, i32 %value
+      ret i32 %result
+    empty:
+      ret i32 0
+    }
+    """ -> println
+    usesStandardError -> if {
+        """
+        declare i32 @sollang_browser_eprint(ptr, i32)
+        define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+        entry:
+          %len32 = trunc i64 %len to i32
+          %written = call i32 @sollang_browser_eprint(ptr %data, i32 %len32)
+          br i1 %newline, label %write_newline, label %done
+        write_newline:
+          %newline_written = call i32 @sollang_browser_eprint(ptr @sollang_runtime_newline, i32 1)
+          br label %done
+        done:
+          ret void
+        }
+        define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+        entry:
+          call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+          ret void
+        }
+        """ -> println
+    }
+}
+
+# Raw platform allocation matches the managed memory primitive contract.
+# A null result belongs to the caller's failure decision; allocation does not
+# trap here because I/O callers can return a recoverable failure.
+public emitMemoryPrimitives pathStyle: Int, pointerBitWidth: Int -> Unit uses Console {
+    pointerBitWidth == 32 -> if {
+        """
+        declare i32 @sollang_browser_alloc(i64)
+        declare void @sollang_browser_panic(ptr, i32)
+        define ptr @sollang_alloc(i64 %bytes) {
+        entry:
+          %value32 = call i32 @sollang_browser_alloc(i64 %bytes)
+          %value = inttoptr i32 %value32 to ptr
+          ret ptr %value
+        }
+        define internal void @sollang_free(ptr %value) {
+        entry:
+          ret void
+        }
+        """ -> println
+    } else {
+        pathStyle == 1 -> if {
+            """
+            declare ptr @GetProcessHeap()
+            declare ptr @HeapAlloc(ptr, i32, i64)
+            declare i32 @HeapFree(ptr, i32, ptr)
+            define internal ptr @sollang_alloc(i64 %bytes) {
+            entry:
+              %heap = call ptr @GetProcessHeap()
+              %value = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %bytes)
+              ret ptr %value
+            }
+            """ -> println
+        } else {
+            """
+            declare ptr @malloc(i64)
+            declare void @free(ptr)
+            define internal ptr @sollang_alloc(i64 %bytes) {
+            entry:
+              %value = call ptr @malloc(i64 %bytes)
+              ret ptr %value
+            }
+            """ -> println
+        }
+        """
+        define internal void @sollang_free(ptr %value) {
+        entry:
+          %is_null = icmp eq ptr %value, null
+          br i1 %is_null, label %done, label %release
+        release:
+        """ -> println
+        pathStyle == 1 -> if {
+            """
+              %heap = call ptr @GetProcessHeap()
+              %ignored = call i32 @HeapFree(ptr %heap, i32 0, ptr %value)
+            """ -> println
+        } else { "  call void @free(ptr %value)" -> println }
+        """
+          br label %done
+        done:
+          ret void
+        }
+        """ -> println
+    }
+    """
+    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+    define internal ptr @sollang_resize(ptr %old, i64 %used_bytes, i64 %new_bytes) {
+    entry:
+      %value = call ptr @sollang_alloc(i64 %new_bytes)
+      %allocated = icmp ne ptr %value, null
+      br i1 %allocated, label %inspect_old, label %failure
+    inspect_old:
+      %has_old = icmp ne ptr %old, null
+      %has_bytes = icmp ne i64 %used_bytes, 0
+      %copy_needed = and i1 %has_old, %has_bytes
+      br i1 %copy_needed, label %copy, label %release
+    copy:
+      %fits = icmp ule i64 %used_bytes, %new_bytes
+      %copy_bytes = select i1 %fits, i64 %used_bytes, i64 %new_bytes
+      call void @llvm.memcpy.p0.p0.i64(ptr %value, ptr %old, i64 %copy_bytes, i1 false)
+      br label %release
+    release:
+      call void @sollang_free(ptr %old)
+      ret ptr %value
+    failure:
+      ret ptr null
+    }
+    """ -> println
+}

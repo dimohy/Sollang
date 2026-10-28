@@ -186,7 +186,7 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
     "  store i64 $(branchArmCount!), ptr %v$(branchIndex)_count_slot, align 8" -> println
     "  %v$(branchIndex)_environment_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 4" -> println
     "  store ptr %v$(branchIndex)_environment, ptr %v$(branchIndex)_environment_slot, align 8" -> println
-    "  %v$(branchIndex)_sinks = call ptr @malloc(i64 $(branchArmCount! * 24))" -> println
+    "  %v$(branchIndex)_sinks = call ptr @sollang_alloc(i64 $(branchArmCount! * 24))" -> println
     "  call void @llvm.memset.p0.i64(ptr %v$(branchIndex)_sinks, i8 0, i64 $(branchArmCount! * 24), i1 false)" -> println
     "  %v$(branchIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 5" -> println
     "  store ptr %v$(branchIndex)_sinks, ptr %v$(branchIndex)_sinks_slot, align 8" -> println
@@ -450,7 +450,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                 regionFieldAllocationBytes! == 0 -> if {
                                     context.typeSizes[context.types[regionTargetFieldTypeId!].first] => regionFieldAllocationBytes!
                                 }
-                                "  %v$(regionNodeIndex)_field$(regionFieldPosition!)_owned = call ptr @malloc(i64 $(regionFieldAllocationBytes!))" -> println
+                                "  %v$(regionNodeIndex)_field$(regionFieldPosition!)_owned = call ptr @sollang_alloc(i64 $(regionFieldAllocationBytes!))" -> println
                                 "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(regionNodeIndex)_field$(regionFieldPosition!)_owned, ptr %v$(regionNodeIndex)_field$(regionFieldPosition!)_source, i64 $(context.typeSizes[regionTargetFieldTypeId!]), i1 false)" -> println
                                 "  %v$(regionNodeIndex)_field$(regionFieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(regionNodeIndex)_field$(regionFieldPosition!)_owned, 0" -> println
                                 "  %v$(regionNodeIndex)_field$(regionFieldPosition!)_copy = insertvalue %sollang.int_slice %v$(regionNodeIndex)_field$(regionFieldPosition!)_copy0, i64 %v$(regionNodeIndex)_field$(regionFieldPosition!)_length, 1" -> println
@@ -1097,10 +1097,10 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                                             (emptyCallParameter >= 0 -> if {
                                                 context.ir[emptyCallParameter] -> arrayElementSize(context, state)
                                             } else { regionNode -> arrayElementSize(context, state) }) => emptyRegionFixedStorageBytes
-                                            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyRegionFixedStorageBytes)
-                                        } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                                            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyRegionFixedStorageBytes, ownerIndex, context, state)
+                                        } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(0, ownerIndex, context, state) }
                                 } else {
-                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(regionArrayByteLength)
+                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(regionArrayByteLength, ownerIndex, context, state)
                             } }
                     }
                 regionNode.operand0 => regionArrayElementIndex!
@@ -1751,11 +1751,11 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
             ", 1" -> println
             "  %v$(regionNodeIndex)_bytes = mul i64 %v$(regionNodeIndex)_length, " -> print
             regionTryParallelOkStride -> writeDecimalLine
-            "  %v$(regionNodeIndex)_data = call ptr @malloc(i64 %v$(regionNodeIndex)_bytes)" -> println
+            "  %v$(regionNodeIndex)_data = call ptr @sollang_alloc(i64 %v$(regionNodeIndex)_bytes)" -> println
             "  %v$(regionNodeIndex)_callback_bytes = mul i64 %v$(regionNodeIndex)_length, " -> print
             regionTryParallelCallbackStride -> writeDecimalLine
-            "  %v$(regionNodeIndex)_callback_results = call ptr @malloc(i64 %v$(regionNodeIndex)_callback_bytes)" -> println
-            "  %v$(regionNodeIndex)_initialized = call ptr @malloc(i64 %v$(regionNodeIndex)_length)" -> println
+            "  %v$(regionNodeIndex)_callback_results = call ptr @sollang_alloc(i64 %v$(regionNodeIndex)_callback_bytes)" -> println
+            "  %v$(regionNodeIndex)_initialized = call ptr @sollang_alloc(i64 %v$(regionNodeIndex)_length)" -> println
             "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex)_initialized, i8 0, i64 %v$(regionNodeIndex)_length, i1 false)" -> println
             regionNodeIndex -> parallelUsesComputePool(context, state)
                 -> if {
@@ -1780,7 +1780,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
                         "  store ptr null, ptr %v$(regionNodeIndex)_capture_slot, align 8" -> println
                     }
                     "  %v$(regionNodeIndex)_sink_bytes = mul i64 %v$(regionNodeIndex)_length, 24" -> println
-                    "  %v$(regionNodeIndex)_sinks = call ptr @malloc(i64 %v$(regionNodeIndex)_sink_bytes)" -> println
+                    "  %v$(regionNodeIndex)_sinks = call ptr @sollang_alloc(i64 %v$(regionNodeIndex)_sink_bytes)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex)_sinks, i8 0, i64 %v$(regionNodeIndex)_sink_bytes, i1 false)" -> println
                     "  %v$(regionNodeIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(regionNodeIndex)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(regionNodeIndex)_sinks, ptr %v$(regionNodeIndex)_sinks_slot, align 8" -> println
@@ -1796,7 +1796,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
                     "  store ptr %v$(regionNodeIndex)_initialized, ptr %v$(regionNodeIndex)_initialized_slot, align 8" -> println
                     "  call void @sollang_compute_execute(ptr %v$(regionNodeIndex)_group)" -> println
                     regionTryParallelSource.kind == 14 -> if {
-                        "  call void @free(ptr %v$(regionNodeIndex)_input)" -> println
+                        "  call void @sollang_free(ptr %v$(regionNodeIndex)_input)" -> println
                     }
                     TryParallelCollectRequest { expressionIndex: regionNodeIndex, outerTypeId: regionNode.typeId, callbackTypeId: regionTryParallelBodyCall.typeId } -> emitTryParallelCollect(context, state)
                 } else {
@@ -1817,7 +1817,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
             ", 1" -> println
             "  %v$(regionNodeIndex)_bytes = mul i64 %v$(regionNodeIndex)_length, " -> print
             regionNode -> arrayElementSize(context, state) -> writeDecimalLine
-            "  %v$(regionNodeIndex)_data = call ptr @malloc(i64 %v$(regionNodeIndex)_bytes)" -> println
+            "  %v$(regionNodeIndex)_data = call ptr @sollang_alloc(i64 %v$(regionNodeIndex)_bytes)" -> println
             regionNodeIndex -> parallelUsesComputePool(context, state)
                 -> if {
                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: regionNodeIndex, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } => regionParallelEnvironmentRequest
@@ -1841,7 +1841,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
                         "  store ptr null, ptr %v$(regionNodeIndex)_capture_slot, align 8" -> println
                     }
                     "  %v$(regionNodeIndex)_sink_bytes = mul i64 %v$(regionNodeIndex)_length, 24" -> println
-                    "  %v$(regionNodeIndex)_sinks = call ptr @malloc(i64 %v$(regionNodeIndex)_sink_bytes)" -> println
+                    "  %v$(regionNodeIndex)_sinks = call ptr @sollang_alloc(i64 %v$(regionNodeIndex)_sink_bytes)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex)_sinks, i8 0, i64 %v$(regionNodeIndex)_sink_bytes, i1 false)" -> println
                     "  %v$(regionNodeIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(regionNodeIndex)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(regionNodeIndex)_sinks, ptr %v$(regionNodeIndex)_sinks_slot, align 8" -> println

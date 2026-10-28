@@ -194,34 +194,39 @@ emitTextSliceSize request: WhileValueRequest, operandIndex: Int, prefix: Text, s
     }
 }
 
-emitTextSliceTrap request: WhileValueRequest, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    context.expectedPathStyle == 1 -> if {
-        [UInt8; ~] => diagnostic!
-        request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].symbol >= 0
-            -> if {
-                context.ir[request.ownerIndex] => owner
-                diagnostic! -> appendDeclarationModule(owner.sourceModule, context)
-                context.modules[owner.sourceModule].pathLength == 0
-                    -> if { diagnostic! -> push(46) }
-                diagnostic! -> appendFunctionDeclarationIdentity(request.ownerIndex, context)
-            } else {
-                diagnostic! -> appendDiagnosticText("main")
+emitRuntimeTrap request: WhileValueRequest, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.expectedPathStyle == 1 or context.pointerBitWidth == 32
+        -> if {
+            [UInt8; ~] => diagnostic!
+            request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].symbol >= 0
+                -> if {
+                    context.ir[request.ownerIndex] => owner
+                    diagnostic! -> appendDeclarationModule(owner.sourceModule, context)
+                    context.modules[owner.sourceModule].pathLength == 0
+                        -> if { diagnostic! -> push(46) }
+                    diagnostic! -> appendFunctionDeclarationIdentity(request.ownerIndex, context)
+                } else {
+                    diagnostic! -> appendDiagnosticText("main")
+                }
+            diagnostic! -> push(58)
+            diagnostic! -> appendDiagnosticText(diagnosticCode)
+            diagnostic! -> len => diagnosticLength
+            "  %$(prefix)_$(suffix)_diagnostic = alloca [$(diagnosticLength) x i8], align 1" -> println
+            "  store [$(diagnosticLength) x i8] c" -> print
+            """ " """ -> slice(1, 1) -> print
+            0 => byteIndex!
+            byteIndex! < diagnosticLength -> while {
+                diagnostic![byteIndex!] -> literalEmitEscapedByte
+                byteIndex! + 1 => byteIndex!
             }
-        diagnostic! -> push(58)
-        diagnostic! -> appendDiagnosticText(diagnosticCode)
-        diagnostic! -> len => diagnosticLength
-        "  %$(prefix)_$(suffix)_diagnostic = alloca [$(diagnosticLength) x i8], align 1" -> println
-        "  store [$(diagnosticLength) x i8] c" -> print
-        """ " """ -> slice(1, 1) -> print
-        0 => byteIndex!
-        byteIndex! < diagnosticLength -> while {
-            diagnostic![byteIndex!] -> literalEmitEscapedByte
-            byteIndex! + 1 => byteIndex!
+            """ " """ -> slice(1, 1) -> print
+            ", ptr %$(prefix)_$(suffix)_diagnostic, align 1" -> println
+            context.pointerBitWidth == 32 -> if {
+                "  call void @sollang_browser_panic(ptr %$(prefix)_$(suffix)_diagnostic, i32 $(diagnosticLength))" -> println
+            } else {
+                "  call void @sollang_runtime_eprint(ptr %$(prefix)_$(suffix)_diagnostic, i64 $(diagnosticLength), i1 false)" -> println
+            }
         }
-        """ " """ -> slice(1, 1) -> print
-        ", ptr %$(prefix)_$(suffix)_diagnostic, align 1" -> println
-        "  call void @sollang_runtime_eprint(ptr %$(prefix)_$(suffix)_diagnostic, i64 $(diagnosticLength), i1 false)" -> println
-    }
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
 }
@@ -236,7 +241,7 @@ emitTextSliceBoundary request: WhileValueRequest, prefix: Text, boundary: Text, 
     "  %$(prefix)_$(boundary)_continuation = icmp eq i8 %$(prefix)_$(boundary)_prefix, -128" -> println
     "  br i1 %$(prefix)_$(boundary)_continuation, label %$(prefix)_$(boundary)_fail, label %$(prefix)_$(boundary)_valid" -> println
     "$(prefix)_$(boundary)_fail:" -> println
-    request -> emitTextSliceTrap(prefix, boundary, diagnosticCode, context, state)
+    request -> emitRuntimeTrap(prefix, boundary, diagnosticCode, context, state)
     "$(prefix)_$(boundary)_valid:" -> println
 }
 
@@ -285,13 +290,13 @@ emitCheckedTextSliceResult request: WhileValueRequest, prefix: Text, context: re
     "  %$(prefix)_start_in_bounds = icmp ule i64 %$(prefix)_index, %$(prefix)_source_length" -> println
     "  br i1 %$(prefix)_start_in_bounds, label %$(prefix)_start_ok, label %$(prefix)_start_fail" -> println
     "$(prefix)_start_fail:" -> println
-    request -> emitTextSliceTrap(prefix, "start", "text_slice_start_bounds", context, state)
+    request -> emitRuntimeTrap(prefix, "start", "text_slice_start_bounds", context, state)
     "$(prefix)_start_ok:" -> println
     "  %$(prefix)_remaining = sub i64 %$(prefix)_source_length, %$(prefix)_index" -> println
     "  %$(prefix)_length_in_bounds = icmp ule i64 %$(prefix)_length, %$(prefix)_remaining" -> println
     "  br i1 %$(prefix)_length_in_bounds, label %$(prefix)_length_ok, label %$(prefix)_length_fail" -> println
     "$(prefix)_length_fail:" -> println
-    request -> emitTextSliceTrap(prefix, "length", "text_slice_length_bounds", context, state)
+    request -> emitRuntimeTrap(prefix, "length", "text_slice_length_bounds", context, state)
     "$(prefix)_length_ok:" -> println
     "  %$(prefix)_end = add i64 %$(prefix)_index, %$(prefix)_length" -> println
     request -> emitTextSliceBoundary(prefix, "index", "text_slice_start_utf8_boundary", context, state)
@@ -508,7 +513,7 @@ emitDynExpression index: Int, ownerIndex: Int, context: ref emitterContext.EmitC
     expression.opcode == -224 -> if {
         context.ir[expression.operand0] => concrete
         concrete -> effectiveTypeId(context, state) => concreteType
-        "  %v$(index)_data = call ptr @malloc(i64 $(context.typeSizes[concreteType]))" -> println
+        "  %v$(index)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[concreteType]))" -> println
         "  store " -> print
         concrete -> writeIrType(context, state)
         " " -> print
@@ -865,7 +870,7 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
                         context.typeSizes[targetFieldTypeId!] => fieldAllocationBytes!
                         fieldAllocationBytes! == 0
                             -> if { context.typeSizes[context.types[targetFieldTypeId!].first] => fieldAllocationBytes! }
-                        "  %v$(expressionIndex)_field$(fieldPosition!)_owned = call ptr @malloc(i64 $(fieldAllocationBytes!))" -> println
+                        "  %v$(expressionIndex)_field$(fieldPosition!)_owned = call ptr @sollang_alloc(i64 $(fieldAllocationBytes!))" -> println
                         "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, ptr %v$(expressionIndex)_field$(fieldPosition!)_source, i64 $(context.typeSizes[targetFieldTypeId!]), i1 false)" -> println
                         "  %v$(expressionIndex)_field$(fieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, 0" -> println
                         "  %v$(expressionIndex)_field$(fieldPosition!)_copy = insertvalue %sollang.int_slice %v$(expressionIndex)_field$(fieldPosition!)_copy0, i64 %v$(expressionIndex)_field$(fieldPosition!)_length, 1" -> println
@@ -1344,10 +1349,10 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
                                                 (emptyCallParameter >= 0 -> if {
                                                     context.ir[emptyCallParameter] -> arrayElementSize(context, state)
                                                 } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
-                                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes)
-                                            } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes, functionIndex, context, state)
+                                            } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0, functionIndex, context, state) }
                                     } else {
-                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength)
+                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength, functionIndex, context, state)
                                 } }
                         }
                     expression.operand0 => arrayElementIndex!
@@ -1993,11 +1998,11 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
             ", 1" -> println
             "  %v$(expressionIndex)_bytes = mul i64 %v$(expressionIndex)_length, " -> print
             tryParallelOkStride -> writeDecimalLine
-            "  %v$(expressionIndex)_data = call ptr @malloc(i64 %v$(expressionIndex)_bytes)" -> println
+            "  %v$(expressionIndex)_data = call ptr @sollang_alloc(i64 %v$(expressionIndex)_bytes)" -> println
             "  %v$(expressionIndex)_callback_bytes = mul i64 %v$(expressionIndex)_length, " -> print
             tryParallelCallbackStride -> writeDecimalLine
-            "  %v$(expressionIndex)_callback_results = call ptr @malloc(i64 %v$(expressionIndex)_callback_bytes)" -> println
-            "  %v$(expressionIndex)_initialized = call ptr @malloc(i64 %v$(expressionIndex)_length)" -> println
+            "  %v$(expressionIndex)_callback_results = call ptr @sollang_alloc(i64 %v$(expressionIndex)_callback_bytes)" -> println
+            "  %v$(expressionIndex)_initialized = call ptr @sollang_alloc(i64 %v$(expressionIndex)_length)" -> println
             "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_initialized, i8 0, i64 %v$(expressionIndex)_length, i1 false)" -> println
             expressionIndex -> parallelUsesComputePool(context, state)
                 -> if {
@@ -2022,7 +2027,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                         "  store ptr null, ptr %v$(expressionIndex)_capture_slot, align 8" -> println
                     }
                     "  %v$(expressionIndex)_sink_bytes = mul i64 %v$(expressionIndex)_length, 24" -> println
-                    "  %v$(expressionIndex)_sinks = call ptr @malloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
+                    "  %v$(expressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_sinks, i8 0, i64 %v$(expressionIndex)_sink_bytes, i1 false)" -> println
                     "  %v$(expressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(expressionIndex)_sinks, ptr %v$(expressionIndex)_sinks_slot, align 8" -> println
@@ -2038,7 +2043,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                     "  store ptr %v$(expressionIndex)_initialized, ptr %v$(expressionIndex)_initialized_slot, align 8" -> println
                     "  call void @sollang_compute_execute(ptr %v$(expressionIndex)_group)" -> println
                     tryParallelSource.kind == 14 -> if {
-                        "  call void @free(ptr %v$(expressionIndex)_input)" -> println
+                        "  call void @sollang_free(ptr %v$(expressionIndex)_input)" -> println
                     }
                     TryParallelCollectRequest { expressionIndex: expressionIndex, outerTypeId: expression.typeId, callbackTypeId: tryParallelBodyCall.typeId } -> emitTryParallelCollect(context, state)
                 } else {
@@ -2059,7 +2064,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
             ", 1" -> println
             "  %v$(expressionIndex)_bytes = mul i64 %v$(expressionIndex)_length, " -> print
             expression -> arrayElementSize(context, state) -> writeDecimalLine
-            "  %v$(expressionIndex)_data = call ptr @malloc(i64 %v$(expressionIndex)_bytes)" -> println
+            "  %v$(expressionIndex)_data = call ptr @sollang_alloc(i64 %v$(expressionIndex)_bytes)" -> println
             expressionIndex -> parallelUsesComputePool(context, state)
                 -> if {
                     CallEnvironmentRequest { callerIndex: functionIndex, callIndex: expressionIndex, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } => parallelEnvironmentRequest
@@ -2083,7 +2088,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                         "  store ptr null, ptr %v$(expressionIndex)_capture_slot, align 8" -> println
                     }
                     "  %v$(expressionIndex)_sink_bytes = mul i64 %v$(expressionIndex)_length, 24" -> println
-                    "  %v$(expressionIndex)_sinks = call ptr @malloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
+                    "  %v$(expressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_sinks, i8 0, i64 %v$(expressionIndex)_sink_bytes, i1 false)" -> println
                     "  %v$(expressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(expressionIndex)_sinks, ptr %v$(expressionIndex)_sinks_slot, align 8" -> println

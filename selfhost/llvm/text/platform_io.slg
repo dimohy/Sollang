@@ -43,7 +43,17 @@ struct ArrayStorageIdentity {
 writeArrayStorageIdentity identity: ArrayStorageIdentity, suffix: Text -> Unit uses Console {
     identity.resultDomain == 1 -> if {
         "%v$(identity.labelIndex)_expression$(identity.resultIndex)$suffix" -> print
-    } else { "%v$(identity.resultIndex)$suffix" -> print }
+    } else { identity.resultDomain == 2 -> if {
+            "%while$(identity.labelIndex)_v$(identity.resultIndex)$suffix" -> print
+        } else { "%v$(identity.resultIndex)$suffix" -> print } }
+}
+
+# Physical heap identity survives descriptor publication. A while expression
+# has the same IR allocation identity; interpolation has a separate AST domain.
+writeArrayHeapIdentity identity: ArrayStorageIdentity -> Unit uses Console {
+    identity.resultDomain == 1 -> if {
+        "%heap_v$(identity.labelIndex)_expression$(identity.resultIndex)" -> print
+    } else { "%heap_v$(identity.resultIndex)" -> print }
 }
 
 emitArrayStackBacking identity: ArrayStorageIdentity, byteLength: Int, alignment: Int -> Unit uses Console {
@@ -52,12 +62,46 @@ emitArrayStackBacking identity: ArrayStorageIdentity, byteLength: Int, alignment
     " = alloca [$byteLength x i8], align $alignment" -> println
 }
 
-emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int -> Unit uses Console {
-    "  " -> print
-    identity -> writeArrayStorageIdentity("_data")
-    byteLength == 0 -> if { " = inttoptr i64 0 to ptr" -> println } else {
-        " = call ptr @malloc(i64 $byteLength)" -> println
+emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    byteLength == 0 -> if {
+        "  " -> print
+        identity -> writeArrayHeapIdentity
+        " = inttoptr i64 0 to ptr" -> println
+        "  " -> print
+        identity -> writeArrayStorageIdentity("_data")
+        " = getelementptr i8, ptr " -> print
+        identity -> writeArrayHeapIdentity
+        ", i64 0" -> println
+    } else {
+        "  " -> print
+        identity -> writeArrayHeapIdentity
+        " = call ptr @sollang_alloc(i64 $byteLength)" -> println
+        "  " -> print
+        identity -> writeArrayStorageIdentity("_data")
+        " = getelementptr i8, ptr " -> print
+        identity -> writeArrayHeapIdentity
+        ", i64 0" -> println
+        identity -> emitArrayAllocationGuard(ownerIndex, context, state)
     }
+}
+
+# The raw primitive may return null. Expression allocation owns the fatal
+# decision, before payload initialization or publication to a container.
+emitArrayAllocationGuard identity: ArrayStorageIdentity, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    Arena(0) => names!
+    (identity.resultDomain == 1 -> if {
+        "v$(identity.labelIndex)_expression$(identity.resultIndex)" -> materialize(names!)
+    } else { identity.resultDomain == 2 -> if {
+            "while$(identity.labelIndex)_v$(identity.resultIndex)" -> materialize(names!)
+        } else { "v$(identity.resultIndex)" -> materialize(names!) } }) => prefix
+    Arena(0) => failureNames!
+    "$(prefix)_allocation_failed" -> materialize(failureNames!) => failureIdentity
+    "  %$(prefix)_allocated = icmp ne ptr %$(prefix)_data, null" -> println
+    "  br i1 %$(prefix)_allocated, label %$(prefix)_allocation_ready, label %$(prefix)_allocation_failed" -> println
+    "$(prefix)_allocation_failed:" -> println
+    WhileValueRequest { whileIndex: -1, ownerIndex: ownerIndex, nodeIndex: identity.resultIndex }
+        -> emitRuntimeTrap(prefix, "allocation", failureIdentity, context, state)
+    "$(prefix)_allocation_ready:" -> println
 }
 
 writeArrayStorageElementType elementTypeId: Int, legacySymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -249,7 +293,7 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
                 ", 1" -> println
                 "  " -> print
                 request -> writeEnumStorageIdentity("_payload_copy_data")
-                " = call ptr @malloc(i64 $(context.typeSizes[request.payloadTypeId]))" -> println
+                " = call ptr @sollang_alloc(i64 $(context.typeSizes[request.payloadTypeId]))" -> println
                 "  call void @llvm.memcpy.p0.p0.i64(ptr " -> print
                 request -> writeEnumStorageIdentity("_payload_copy_data")
                 ", ptr " -> print
@@ -1022,29 +1066,29 @@ emitSocketCompletionDequeue request: SocketCallRequest, context: ref emitterCont
     request.callIndex -> socketCallArgument(1, context, state) => cancellation
     context.typeSizes[call.typeId] => resultSize
     resultSize -> runtimeTaskContextSize(context, state) => allocationSize
-    "  %v$(request.callIndex)_completion_context = call ptr @malloc(i64 $allocationSize)" -> println
+    "  %v$(request.callIndex)_completion_context = call ptr @sollang_alloc(i64 $allocationSize)" -> println
     "  %v$(request.callIndex)_completion_context_ok = icmp ne ptr %v$(request.callIndex)_completion_context, null" -> println
     "  br i1 %v$(request.callIndex)_completion_context_ok, label %completion$(request.callIndex)_descriptor, label %completion$(request.callIndex)_context_failed" -> println
     "completion$(request.callIndex)_context_failed:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "completion$(request.callIndex)_descriptor:" -> println
-    "  %v$(request.callIndex)_completion_descriptor = call ptr @malloc(i64 88)" -> println
+    "  %v$(request.callIndex)_completion_descriptor = call ptr @sollang_alloc(i64 88)" -> println
     "  %v$(request.callIndex)_completion_descriptor_ok = icmp ne ptr %v$(request.callIndex)_completion_descriptor, null" -> println
     "  br i1 %v$(request.callIndex)_completion_descriptor_ok, label %completion$(request.callIndex)_start, label %completion$(request.callIndex)_descriptor_failed" -> println
     "completion$(request.callIndex)_descriptor_failed:" -> println
-    "  call void @free(ptr %v$(request.callIndex)_completion_context)" -> println
+    "  call void @sollang_free(ptr %v$(request.callIndex)_completion_context)" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "completion$(request.callIndex)_start:" -> println
     "  call void @llvm.memset.p0.i64(ptr %v$(request.callIndex)_completion_descriptor, i8 0, i64 88, i1 false)" -> println
     "  call void @llvm.memset.p0.i64(ptr %v$(request.callIndex)_completion_context, i8 0, i64 $resultSize, i1 false)" -> println
-    "  %v$(request.callIndex)_completion_handle = call ptr @sollang_task_start(ptr @sollang_socket_completion_dequeue_task_worker, ptr @free, ptr @sollang_socket_completion_dequeue_task_cancel, ptr %v$(request.callIndex)_completion_context)" -> println
+    "  %v$(request.callIndex)_completion_handle = call ptr @sollang_task_start(ptr @sollang_socket_completion_dequeue_task_worker, ptr @sollang_free, ptr @sollang_socket_completion_dequeue_task_cancel, ptr %v$(request.callIndex)_completion_context)" -> println
     "  %v$(request.callIndex)_completion_started = icmp ne ptr %v$(request.callIndex)_completion_handle, null" -> println
     "  br i1 %v$(request.callIndex)_completion_started, label %completion$(request.callIndex)_ready, label %completion$(request.callIndex)_start_failed" -> println
     "completion$(request.callIndex)_start_failed:" -> println
-    "  call void @free(ptr %v$(request.callIndex)_completion_descriptor)" -> println
-    "  call void @free(ptr %v$(request.callIndex)_completion_context)" -> println
+    "  call void @sollang_free(ptr %v$(request.callIndex)_completion_descriptor)" -> println
+    "  call void @sollang_free(ptr %v$(request.callIndex)_completion_context)" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "completion$(request.callIndex)_ready:" -> println
@@ -1243,7 +1287,7 @@ emitCompletedSocketDequeue resultType: Int, producerIndex: Int, namePrefix: Text
         "  br label %completion_await_$(namePrefix)_merge" -> println
     }
     "completion_await_$(namePrefix)_merge:" -> println
-    "  call void @free(ptr %$(namePrefix)_completion_descriptor)" -> println
+    "  call void @sollang_free(ptr %$(namePrefix)_completion_descriptor)" -> println
 }
 
 emitSocketCompletionSubmit request: SocketCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -1817,7 +1861,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
         "  %v$(request.callIndex)_socket_receive_capacity = select i1 %v$(request.callIndex)_socket_receive_zero, i64 1, i64 " -> print
         secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
         "" -> println
-        "  %v$(request.callIndex)_socket_receive_buffer = call ptr @malloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
+        "  %v$(request.callIndex)_socket_receive_buffer = call ptr @sollang_alloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
         "  %v$(request.callIndex)_socket_endpoint_descriptor = alloca [32 x i8], align 8" -> println
         "  call void @llvm.memset.p0.i64(ptr %v$(request.callIndex)_socket_endpoint_descriptor, i8 0, i64 32, i1 false)" -> println
         "  %v$(request.callIndex)_socket_datagram_truncated_address = alloca i8, align 1" -> println
@@ -1860,7 +1904,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
                     "  %v$(request.callIndex)_socket_receive_capacity = select i1 %v$(request.callIndex)_socket_receive_zero, i64 1, i64 " -> print
                     secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
                     "" -> println
-                    "  %v$(request.callIndex)_socket_receive_buffer = call ptr @malloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
+                    "  %v$(request.callIndex)_socket_receive_buffer = call ptr @sollang_alloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
                     "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_receive(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_receive_buffer, i64 " -> print
                     secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
                     ", i32 0)" -> println
@@ -2203,7 +2247,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
             context.types[socketOkTypeId].first => dnsEndpointType
             dnsEndpointType -> enumAbiStorageSize(context, state) => dnsEndpointSize
             "  %v$(request.callIndex)_dns_bytes = mul i64 %v$(request.callIndex)_socket_value, $dnsEndpointSize" -> println
-            "  %v$(request.callIndex)_dns_storage = call ptr @malloc(i64 %v$(request.callIndex)_dns_bytes)" -> println
+            "  %v$(request.callIndex)_dns_storage = call ptr @sollang_alloc(i64 %v$(request.callIndex)_dns_bytes)" -> println
             "  br label %dns$(request.callIndex)_copy" -> println
             "dns$(request.callIndex)_copy:" -> println
             "  %v$(request.callIndex)_dns_index = phi i64 [ 0, %socket$(request.callIndex)_ok ], [ %v$(request.callIndex)_dns_next, %dns$(request.callIndex)_next ]" -> println
@@ -2241,7 +2285,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
     "  br label %socket$(request.callIndex)_merge" -> println
     "socket$(request.callIndex)_error:" -> println
     call.opcode == -261 or call.opcode == -267
-        -> if { "  call void @free(ptr %v$(request.callIndex)_socket_receive_buffer)" -> println }
+        -> if { "  call void @sollang_free(ptr %v$(request.callIndex)_socket_receive_buffer)" -> println }
     "  %v$(request.callIndex)_socket_error_tag = getelementptr inbounds " -> print
     call -> writeIrType(context, state)
     ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 0" -> println
@@ -2368,18 +2412,18 @@ emitAsyncFileScalarCall request: FileCallRequest, context: ref emitterContext.Em
     context.typeSizes[scalarTypeId!] => scalarSize
     context.typeSizes[call.typeId] => resultSize
     resultSize -> runtimeTaskContextSize(context, state) => allocationSize
-    "  %v$(request.callIndex)_file_async_context = call ptr @malloc(i64 $allocationSize)" -> println
+    "  %v$(request.callIndex)_file_async_context = call ptr @sollang_alloc(i64 $allocationSize)" -> println
     "  %v$(request.callIndex)_file_async_allocated = icmp ne ptr %v$(request.callIndex)_file_async_context, null" -> println
     "  br i1 %v$(request.callIndex)_file_async_allocated, label %file$(request.callIndex)_async_initialize, label %file$(request.callIndex)_async_allocation_failed" -> println
     "file$(request.callIndex)_async_allocation_failed:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "file$(request.callIndex)_async_initialize:" -> println
-    "  %v$(request.callIndex)_file_async_handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @free, ptr @sollang_file_operation_task_cancel, ptr %v$(request.callIndex)_file_async_context)" -> println
+    "  %v$(request.callIndex)_file_async_handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @sollang_free, ptr @sollang_file_operation_task_cancel, ptr %v$(request.callIndex)_file_async_context)" -> println
     "  %v$(request.callIndex)_file_async_started = icmp ne ptr %v$(request.callIndex)_file_async_handle, null" -> println
     "  br i1 %v$(request.callIndex)_file_async_started, label %file$(request.callIndex)_async_ready, label %file$(request.callIndex)_async_start_failed" -> println
     "file$(request.callIndex)_async_start_failed:" -> println
-    "  call void @free(ptr %v$(request.callIndex)_file_async_context)" -> println
+    "  call void @sollang_free(ptr %v$(request.callIndex)_file_async_context)" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "file$(request.callIndex)_async_ready:" -> println
@@ -3484,7 +3528,7 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder: 
     "  br label %tryparallel$(request.expressionIndex)_sequential_header" -> println
     "tryparallel$(request.expressionIndex)_sequential_collect:" -> println
     source.kind == 14 -> if {
-        "  call void @free(ptr %v$(request.expressionIndex)_input)" -> println
+        "  call void @sollang_free(ptr %v$(request.expressionIndex)_input)" -> println
     }
     TryParallelCollectRequest { expressionIndex: request.expressionIndex, outerTypeId: expression.typeId, callbackTypeId: callback.typeId } -> emitTryParallelCollect(context, state)
 }
@@ -3576,9 +3620,9 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
             "  br label %tryparallel$(request.expressionIndex)_cleanup_header" -> println
             "tryparallel$(request.expressionIndex)_cleanup_done:" -> println
         }
-    "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
-    "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
-    "  call void @free(ptr %v$(request.expressionIndex)_data)" -> println
+    "  call void @sollang_free(ptr %v$(request.expressionIndex)_callback_results)" -> println
+    "  call void @sollang_free(ptr %v$(request.expressionIndex)_initialized)" -> println
+    "  call void @sollang_free(ptr %v$(request.expressionIndex)_data)" -> println
     "  %v$(request.expressionIndex)_error_slot = alloca " -> print
     request.outerTypeId -> writeSemanticTypeId(context, state)
     ", align 8" -> println
@@ -3637,8 +3681,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     "  %v$(request.expressionIndex)_copy_next = add i64 %v$(request.expressionIndex)_copy_index, 1" -> println
     "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
     "tryparallel$(request.expressionIndex)_copy_done:" -> println
-    "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
-    "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
+    "  call void @sollang_free(ptr %v$(request.expressionIndex)_callback_results)" -> println
+    "  call void @sollang_free(ptr %v$(request.expressionIndex)_initialized)" -> println
     "  %v$(request.expressionIndex)_array0 = insertvalue %sollang.array.i32 poison, ptr %v$(request.expressionIndex)_data, 0" -> println
     "  %v$(request.expressionIndex)_array1 = insertvalue %sollang.array.i32 %v$(request.expressionIndex)_array0, i64 %v$(request.expressionIndex)_length, 1" -> println
     "  %v$(request.expressionIndex)_array = insertvalue %sollang.array.i32 %v$(request.expressionIndex)_array1, i64 %v$(request.expressionIndex)_length, 2" -> println

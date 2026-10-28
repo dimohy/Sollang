@@ -627,7 +627,7 @@ emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, cont
         bindingIndex! + 1 => bindingIndex!
     }
     loading -> if {
-        "  call void @free(ptr %async_frame$(point.state)_load)" -> println
+        "  call void @sollang_free(ptr %async_frame$(point.state)_load)" -> println
         "  store ptr null, ptr %async_frame_slot, align $(context.pointerBitWidth / 8)" -> println
     }
 }
@@ -698,7 +698,7 @@ emitAsyncSuspendPoint point: typedIr.CoroutineSuspendPoint, context: ref emitter
     point.kind == 1 -> if { point -> emitAsyncDiagnosticSuspension(-1, context, state) }
     point -> asyncPointFrameSize(context, state) => frameSize
     frameSize > 0 -> if {
-        "  %async_frame$(point.state)_store = call ptr @malloc(i64 $(frameSize))" -> println
+        "  %async_frame$(point.state)_store = call ptr @sollang_alloc(i64 $(frameSize))" -> println
         "  %async_frame$(point.state)_allocated = icmp ne ptr %async_frame$(point.state)_store, null" -> println
         "  br i1 %async_frame$(point.state)_allocated, label %async_frame$(point.state)_ready, label %async_frame$(point.state)_failed" -> println
         "async_frame$(point.state)_failed:" -> println
@@ -955,7 +955,7 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                     and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
                     -> if {
                         "  %async_cancel_fixed_data$(point.state)_$(bindingIndex!) = extractvalue %sollang.int_slice %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
-                        "  call void @free(ptr %async_cancel_fixed_data$(point.state)_$(bindingIndex!))" -> println
+                        "  call void @sollang_free(ptr %async_cancel_fixed_data$(point.state)_$(bindingIndex!))" -> println
                     }
                 hasOwnershipFlag -> if {
                     "  br label %async_cancel_owned_skip$(point.state)_$(bindingIndex!)" -> println
@@ -1005,7 +1005,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         "entry:" -> println
         "  %header = getelementptr i8, ptr %context, i64 $(headerOffset)" -> println
         "  call void @sollang_diagnostic_release_header(ptr %header, i32 2)" -> println
-        "  call void @free(ptr %context)" -> println
+        "  call void @sollang_free(ptr %context)" -> println
         "  ret void" -> println
         "}" -> println
     }
@@ -1076,14 +1076,14 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
             requestedFunctionIndex -> asyncFrameContextOffset(context, state) => cancelFrameOffset
             "  %async_cancel_frame_slot = getelementptr i8, ptr %async_cancel_context, i64 $(cancelFrameOffset)" -> println
             "  %async_cancel_frame = load ptr, ptr %async_cancel_frame_slot, align $(context.pointerBitWidth / 8)" -> println
-            "  call void @free(ptr %async_cancel_frame)" -> println
+            "  call void @sollang_free(ptr %async_cancel_frame)" -> println
         }
     diagnosticsEnabled -> if {
         requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => cancelHeaderOffset
         "  %async_cancel_header = getelementptr i8, ptr %async_cancel_context, i64 $(cancelHeaderOffset)" -> println
         "  call void @sollang_diagnostic_release_header(ptr %async_cancel_header, i32 3)" -> println
     }
-    "  call void @free(ptr %async_cancel_context)" -> println
+    "  call void @sollang_free(ptr %async_cancel_context)" -> println
     "  ret void" -> println
     "}" -> println
 
@@ -1113,7 +1113,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     ") {" -> println
     "entry:" -> println
     requestedFunctionIndex -> asyncContextStorageSize(context, state) => asyncContextSize
-    "  %async_context = call ptr @malloc(i64 $(asyncContextSize))" -> println
+    "  %async_context = call ptr @sollang_alloc(i64 $(asyncContextSize))" -> println
     "  %async_context_allocated = icmp ne ptr %async_context, null" -> println
     "  br i1 %async_context_allocated, label %async_initialize, label %async_allocation_failed" -> println
     "async_allocation_failed:" -> println
@@ -1172,12 +1172,12 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  %async_handle = call ptr @sollang_task_start(ptr @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_worker, ptr " -> print
     diagnosticsEnabled -> if {
         "@sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_destroy" -> print
-    } else { "@free" -> print }
+    } else { "@sollang_free" -> print }
     ", ptr @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_cancel, ptr %async_context)" -> println
     "  %async_started = icmp ne ptr %async_handle, null" -> println
     "  br i1 %async_started, label %async_ready, label %async_start_failed" -> println
     "async_start_failed:" -> println
-    "  call void @free(ptr %async_context)" -> println
+    "  call void @sollang_free(ptr %async_context)" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "async_ready:" -> println

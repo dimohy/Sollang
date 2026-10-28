@@ -31,7 +31,7 @@ emitFixedArrayReturnPromotion valueIndex: Int, ownerIndex: Int, typeId: Int, nam
     "  %return_fixed$(nameRoot)_source = extractvalue %sollang.int_slice " -> print
     valueIndex -> writeValue(ownerIndex, context, state)
     ", 0" -> println
-    "  %return_fixed$(nameRoot)_data = call ptr @malloc(i64 $(context.typeSizes[typeId]))" -> println
+    "  %return_fixed$(nameRoot)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[typeId]))" -> println
     "  call void @llvm.memcpy.p0.p0.i64(ptr %return_fixed$(nameRoot)_data, ptr %return_fixed$(nameRoot)_source, i64 $(context.typeSizes[typeId]), i1 false)" -> println
     "  %return_fixed$(nameRoot)_0 = insertvalue %sollang.int_slice poison, ptr %return_fixed$(nameRoot)_data, 0" -> println
     "  %return_fixed$(nameRoot) = insertvalue %sollang.int_slice %return_fixed$(nameRoot)_0, i64 $(context.types[typeId].length), 1" -> println
@@ -365,12 +365,12 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
             dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %v$(dropIndex!), 0" -> println
-                    "  call void @free(ptr %drop$(dropIndex!))" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex!))" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 16 and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary %v$(dropIndex!), 0" -> println
-                    "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex!)_keys)" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
@@ -436,7 +436,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         "%dropfixedliteral$(dropIndex!)_restored" -> print
                     } else { "%v$(dropCandidateDropValueIndex)" -> print }
                     ", 0" -> println
-                    "  call void @free(ptr %dropfixedliteral$(dropIndex!))" -> println
+                    "  call void @sollang_free(ptr %dropfixedliteral$(dropIndex!))" -> println
                 }
             -1 => dropCandidateParameterIndex!
             dropCandidate.kind == 17 and dropCandidate.flags != 1
@@ -526,7 +526,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         and context.ir[dropCandidateDropValueIndex].kind == 14
                         and (dropCandidateDropValueIndex -> fixedArrayLiteralNeedsHeap(context, state))
                         -> if {
-                            "  call void @free(ptr %dropfixedbinding$(dropIndex!)_data)" -> println
+                            "  call void @sollang_free(ptr %dropfixedbinding$(dropIndex!)_data)" -> println
                         }
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
@@ -540,7 +540,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                         ", 0" -> println
                     }
-                    "  call void @free(ptr %drop$(dropIndex!))" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex!))" -> println
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
@@ -553,7 +553,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                         ", 0" -> println
                     }
-                    "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex!)_keys)" -> println
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
@@ -757,7 +757,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             "  %drop_arg$(ownedParameterOrdinal!) = extractvalue %sollang.array.i32 " -> print
                             context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedArrayParameterWritten
                             ", 0" -> println
-                            "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!))" -> println
+                            "  call void @sollang_free(ptr %drop_arg$(ownedParameterOrdinal!))" -> println
                         }
                 }
             ownedParameter.typeId < 0 and ownedParameter.typeOrigin == 15 and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!
@@ -767,7 +767,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             "  %drop_arg$(ownedParameterOrdinal!)_keys = extractvalue %sollang.int_dictionary " -> print
                             context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedDictionaryKeyParameterWritten
                             ", 0" -> println
-                            "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!)_keys)" -> println
+                            "  call void @sollang_free(ptr %drop_arg$(ownedParameterOrdinal!)_keys)" -> println
                         }
                 }
             (ownedParameter.typeId < 0 or ownedParameterHasPartialMoves!) and (ownedParameter -> isGenericEnumType) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!

@@ -410,7 +410,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                     "]" -> println
                     "define internal void @sollang_dyn_drop_$(dynTableIndex!)(ptr %data) {" -> println
                     "entry:" -> println
-                    "  call void @free(ptr %data)" -> println
+                    "  call void @sollang_free(ptr %data)" -> println
                     "  ret void" -> println
                     "}" -> println
                     0 => dynMethod!
@@ -562,42 +562,6 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     "%sollang.int_slice = type { ptr, i64 }" -> println
     usesDynamicArray! -> if { "%sollang.array.i32 = type { ptr, i64, i64 }" -> println }
     usesMappedBytes -> if { "%sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }" -> println }
-    usesArrayAllocation! or usesArrayReallocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText or usesComputePool or usesAsyncRuntime or (context -> usesReachableAsyncDiagnostics(state)) or intrinsicRuntimeModule >= 0 or usesOwnedDropRuntime or usesDirectoryTraversal or usesDynTrait! or context.usesConcurrentStreamJoins
-        -> if {
-            context.pointerBitWidth == 32 -> if {
-                """
-                declare i32 @sollang_browser_alloc(i64)
-                declare i32 @sollang_browser_realloc(i32, i64)
-                define ptr @malloc(i64 %bytes) {
-                entry:
-                  %value32 = call i32 @sollang_browser_alloc(i64 %bytes)
-                  %value = inttoptr i32 %value32 to ptr
-                  ret ptr %value
-                }
-                define ptr @realloc(ptr %old, i64 %bytes) {
-                entry:
-                  %old32 = ptrtoint ptr %old to i32
-                  %new32 = call i32 @sollang_browser_realloc(i32 %old32, i64 %bytes)
-                  %new = inttoptr i32 %new32 to ptr
-                  ret ptr %new
-                }
-                define void @free(ptr %value) {
-                entry:
-                  ret void
-                }
-                define ptr @sollang_alloc(i64 %bytes) {
-                entry:
-                  %value = call ptr @malloc(i64 %bytes)
-                  ret ptr %value
-                }
-                """ -> println
-            } else {
-                "declare ptr @malloc(i64)" -> println
-                usesArrayReallocation! or usesTextMaterialize! or usesStandardInputSourceText
-                    -> if { "declare ptr @realloc(ptr, i64)" -> println }
-                "declare void @free(ptr)" -> println
-            }
-        }
     false => usesDictionary!
     0 => dictionaryTypeSearch!
     dictionaryTypeSearch! < (context.ir -> len) -> while {
@@ -646,11 +610,6 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     }
     usesDictionary! -> if {
         "%sollang.int_dictionary = type { ptr, i64, i64 }" -> println
-        not usesDynamicArray! and not usesSourceText and not usesComputePool and intrinsicRuntimeModule < 0 and not usesOwnedDropRuntime
-            -> if {
-                "declare ptr @malloc(i64)" -> println
-                "declare void @free(ptr)" -> println
-            }
     }
     dropTypeActive -> emitSemanticDropHelpers(context, state)
     false => usesNativeInterop!
@@ -672,7 +631,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             -> if { true => usesComInterop! }
         nativeInteropSearch! + 1 => nativeInteropSearch!
     }
-    usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> diagnostics.usesOwnedFileRuntime)
+    usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> diagnostics.usesOwnedFileRuntime)
         -> if { "declare void @llvm.trap()" -> println }
     emitRawArenaRuntime(usesRawArenaAllocation!, usesRawArenaAccess!, usesArenaConstruction!)
     usesDictionary! -> if { "declare i16 @llvm.cttz.i16(i16, i1)" -> println }
@@ -831,11 +790,11 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 release:
                   %slot = getelementptr ptr, ptr %argv, i64 %index
                   %text = load ptr, ptr %slot, align 8
-                  call void @free(ptr %text)
+                  call void @sollang_free(ptr %text)
                   %next = add i64 %index, 1
                   br label %loop
                 release_vector:
-                  call void @free(ptr %argv)
+                  call void @sollang_free(ptr %argv)
                   br label %done
                 done:
                   ret void
@@ -851,7 +810,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                   %argc32 = load i32, ptr %argc_slot, align 4
                   %argc = zext i32 %argc32 to i64
                   %argv_bytes = mul i64 %argc, 8
-                  %utf8_argv = call ptr @malloc(i64 %argv_bytes)
+                  %utf8_argv = call ptr @sollang_alloc(i64 %argv_bytes)
                   %argv_ok = icmp ne ptr %utf8_argv, null
                   br i1 %argv_ok, label %publish_owner, label %free_wide
                 publish_owner:
@@ -869,7 +828,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                   br i1 %byte_count_valid, label %allocate_text, label %release_partial
                 allocate_text:
                   %byte_count = zext i32 %byte_count32 to i64
-                  %utf8 = call ptr @malloc(i64 %byte_count)
+                  %utf8 = call ptr @sollang_alloc(i64 %byte_count)
                   %utf8_ok = icmp ne ptr %utf8, null
                   br i1 %utf8_ok, label %convert, label %release_partial
                 convert:
@@ -885,7 +844,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 success:
                   br label %free_wide
                 release_current:
-                  call void @free(ptr %utf8)
+                  call void @sollang_free(ptr %utf8)
                   br label %release_partial
                 release_partial:
                   call void @sollang_dispose_utf8_arguments()

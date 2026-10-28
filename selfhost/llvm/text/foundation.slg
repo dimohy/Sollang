@@ -553,7 +553,7 @@ emitGrowableDictionaryAllocation prefix: Text, capacity: Text, layout: Dictionar
     "  %$(prefix)_allocation_offset = and i64 %$(prefix)_allocation_mirror, -8" -> println
     "  %$(prefix)_entry_bytes = mul i64 $(capacity), $(layout.stride)" -> println
     "  %$(prefix)_allocation_bytes = add i64 %$(prefix)_allocation_offset, %$(prefix)_entry_bytes" -> println
-    "  %$(prefix)_storage = call ptr @malloc(i64 %$(prefix)_allocation_bytes)" -> println
+    "  %$(prefix)_storage = call ptr @sollang_alloc(i64 %$(prefix)_allocation_bytes)" -> println
     "  %$(prefix)_allocated = icmp ne ptr %$(prefix)_storage, null" -> println
     "  br i1 %$(prefix)_allocated, label %$(prefix)_allocation_ready, label %$(prefix)_allocation_failed" -> println
     "$(prefix)_allocation_failed:" -> println
@@ -2988,7 +2988,7 @@ emitInterpolationCallTemporaryDrops labelIndex: Int, callIndex: Int, targetIndex
                     temporaryTypeId -> writeSemanticTypeId(context, state)
                     " %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal)_elements)" -> println
                 }
-            "  call void @free(ptr %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal))" -> println
+            "  call void @sollang_free(ptr %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal))" -> println
         } else {
             context.types[temporaryTypeId].kind == 12 -> if {
                 Arena(0) => prefixStorage!
@@ -3106,7 +3106,7 @@ emitInterpolationArray labelIndex: Int, nodeIndex: Int, nodes: ref [interpolatio
     arrayType.kind == 12 -> if { arrayType.length => capacity! }
     ArrayStorageIdentity { resultDomain: 1, resultIndex: nodeIndex, labelIndex: labelIndex } => identity
     capacity! * (literal.elementTypeId -> arrayElementStorageSize(context, state)) => byteLength
-    arrayType.kind != 12 -> if { identity -> emitArrayHeapBacking(byteLength) }
+    arrayType.kind != 12 -> if { identity -> emitArrayHeapBacking(byteLength, ownerIndex, context, state) }
     0 => position!
     position! < length -> while {
         position! => elementOrdinal!
@@ -5357,7 +5357,9 @@ emitValueGenericArrayRepeat nodeIndex: Int, ownerIndex: Int, context: ref emitte
     "  %v$(nodeIndex)_repeat_nonempty = icmp sgt i64 %v$(nodeIndex)_repeat_length, 0" -> println
     "  %v$(nodeIndex)_repeat_capacity = select i1 %v$(nodeIndex)_repeat_nonempty, i64 %v$(nodeIndex)_repeat_length, i64 1" -> println
     "  %v$(nodeIndex)_repeat_bytes = mul i64 %v$(nodeIndex)_repeat_capacity, $(node -> arrayElementSize(context, state))" -> println
-    "  %v$(nodeIndex)_data = call ptr @malloc(i64 %v$(nodeIndex)_repeat_bytes)" -> println
+    "  %heap_v$(nodeIndex) = call ptr @sollang_alloc(i64 %v$(nodeIndex)_repeat_bytes)" -> println
+    "  %v$(nodeIndex)_data = getelementptr i8, ptr %heap_v$(nodeIndex), i64 0" -> println
+    ArrayStorageIdentity { resultDomain: 0, resultIndex: nodeIndex, labelIndex: -1 } -> emitArrayAllocationGuard(ownerIndex, context, state)
     "  %v$(nodeIndex)_repeat_slot = alloca i64, align 8" -> println
     "  store i64 0, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
     "  br label %repeat$(nodeIndex)_header" -> println
