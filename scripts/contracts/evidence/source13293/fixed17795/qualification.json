@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "status": "partial-source-comparison-two-distinct-abi-differences-observed",
+  "observedAtUtc": "2026-10-28T11:12:52.573929+00:00",
+  "head": "6da506c1d7da816364a5bee25a55121a8bb37bbd",
+  "sourceHashes": {
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs": "B00B4D3E5C48CEC7FB266C4DF46C6542385BE5505E97F562BECBCFB1451BAA73",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs": "CD8828556F945D8ED1909501DA5DEFCD14C0B8AE924321315090C12090ED3189",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs": "BA4A49CF377B256798B65531AE13730F109EF42CE1ECB860F56FEA197534627F",
+    "selfhost/llvm/text/ownership.slg": "06A7F48967294A471436760953F02FBBA9ED616D6F231BB59482595B5B1A6E0F",
+    "selfhost/llvm/text/call_arguments.slg": "381B496E9832B6EA1B0E95831BC29C3B2BCA592500955B762E22393214D90EC2",
+    "selfhost/ir/typed/ordinary_function.slg": "9D7BB4C715028E83A918CA2E554A8E1DCAAB1B58357DB536C1665D9A69E0FC42",
+    "selfhost/ir/typed/function_lowering.slg": "67090BCC369EB14E5F26580FDAE0DDD6048C007C337188D793407798F08D59D9",
+    "examples/regression/51-fixed-array-value-generics.slg": "D1296AF3B9576BD2C98C55A539D0CAECF1C0138339B2914A29968C38DEAB6E62",
+    "examples/regression/expected/51-fixed-array-value-generics.slg.llvm.regex-counts.txt": "4015E071DCFC9F7642B42D708C0F68FD59E3971341E1EBF0F68786A33C8DF183",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs": "8873B3E6E4B76AAD4E248F0CD2E500DF3539236943FD56C776E58422CD467156",
+    "src/Sollang.Compiler/Semantics/SemanticCompiler.cs": "768B5A59067CBB6FA04D41B1F7A2A6DE3684A9F09FF6E756825FEDBB9BE6268D"
+  },
+  "inputsStable": true,
+  "reusedLlvm": {
+    "path": "artifacts\\scratch\\resume-20261006-owner-continuation22\\allocation17766-source7\\51-fixed-array-value-generics\\run.stdout",
+    "sha256": "F72ED39957C6BC5B8EC52331BBBE670949E821DEBB40C32382C68E9D4F5F31F9",
+    "sourceEpoch": "allocation17766; historical after reserve/materialize edits; no new current-source build claimed"
+  },
+  "observations": {
+    "fixedLengthDefinitions": [
+      [
+        "@sollang_m144_s5_g118542",
+        "%sollang.int_slice %arg, i32 %arg1) {"
+      ],
+      [
+        "@sollang_m144_s5_g118548",
+        "%sollang.int_slice %arg, i32 %arg1) {"
+      ],
+      [
+        "@sollang_m144_s5_g118554",
+        "%sollang.int_slice %arg, i32 %arg1) {"
+      ],
+      [
+        "@sollang_m144_s5_g118560",
+        "%sollang.int_slice %arg, i32 %arg1) {"
+      ],
+      [
+        "@sollang_m144_s5_g118566",
+        "%sollang.int_slice %arg, i32 %arg1) {"
+      ]
+    ],
+    "fixedLengthCalls": [
+      [
+        "@sollang_m144_s5_g118542",
+        "%sollang.int_slice %v118159, i32 3)"
+      ],
+      [
+        "@sollang_m144_s5_g118548",
+        "%sollang.int_slice %v118161, i32 5)"
+      ],
+      [
+        "@sollang_m144_s5_g118554",
+        "%sollang.int_slice %v118163, i32 3)"
+      ],
+      [
+        "@sollang_m144_s5_g118560",
+        "%sollang.int_slice %v118165, i32 2)"
+      ],
+      [
+        "@sollang_m144_s5_g118566",
+        "%sollang.int_slice %v118167, i32 2)"
+      ]
+    ]
+  },
+  "decisions": [
+    {
+      "id": "named-carrier",
+      "csharp": "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs: BuildStaticArrayArgument and HasValueGenericFixedArrayInput both use BuildIntSliceArgument, which emits %sollang.int_slice; FunctionDeclarations agrees",
+      "baseline": "The same named carrier exists in a1e47bd6",
+      "slg": "selfhost/llvm/text/ownership.slg: writeIrType and writeAggregateFieldTypeId emit the same named carrier for fixed value transport",
+      "conclusion": "Returning fixed SLG values to anonymous { ptr, i64 } solely to pass the old producer-specific oracle would reverse C# alignment; do not make that edit"
+    },
+    {
+      "id": "hidden-value-parameter",
+      "csharp": "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs: HasValueGenericFixedArrayInput requires SpecializedValue; BuildInputParameter emits the slice parameter",
+      "slg": "selfhost/ir/typed/ordinary_function.slg: explicitly lowers each declared integer value generic to a hidden trailing runtime Int; call_arguments emits the numeric token as that argument",
+      "actual": "All five retained fixedLength definitions and calls contain an extra i32 value argument. Old oracle requires no trailing argument.",
+      "conclusion": "This is a separate lowering/signature decision; renaming the carrier alone cannot resolve original51. Review specialization and references to N before changing it.",
+      "csharpBody": "LlvmEmitter.Expressions.Core.cs EmitNameExpression replaces GenericParameterName with RuntimeInt(SpecializedValue); SemanticCompiler.cs sets SpecializedValue during concrete cloning. SLG body materialization currently substitutes semantic types but retains hidden value parameters."
+    }
+  ],
+  "existingPrototype": {
+    "completed": 4,
+    "total": 12,
+    "status": "failed-preserved",
+    "evidence": "artifacts\\scratch\\resume-20261006-owner-continuation22\\oracle17770-current51\\result.json"
+  },
+  "nextSourceReview": [
+    "selfhost/ir/typed/function_lowering.slg: isHiddenValueInput, clone type substitution and specialized value substitution",
+    "C# value generic specialization authority and body uses of N, repeated literals and nested generic forwarding",
+    "Keep original51 source and all common/producer goldens unchanged"
+  ],
+  "compilerImplementationChanged": false,
+  "newCompilerRun": false,
+  "compilerClosedChanged": false,
+  "claimsFullBranchComparison": false,
+  "claimsGoalComplete": false
+}
