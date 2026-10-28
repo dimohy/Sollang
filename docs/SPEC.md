@@ -1380,7 +1380,12 @@ that parent were another function boundary.
 Compile-time value generics used as expressions lower to hidden trailing `Int`
 parameters, and numeric `<...>` call arguments feed those parameters. They are
 function-scoped values in interpolation-based loop and control expressions as
-well as direct expressions. The mutable-container ABI carrier is declared from
+well as direct expressions. If no integer value generic is used at runtime,
+the self-hosted ABI omits the whole hidden value-input group. A parameter used
+only as a fixed-array type length does not require a runtime slot. Symbolic
+array-repeat counts and interpolation names are runtime uses; when any value
+input is used, the complete group retains its declared order.
+The mutable-container ABI carrier is declared from
 actual mutable-parameter use independently of dynamic-array use, because fixed
 arrays have no capacity field and therefore pass their canonical two-field
 value by pointer; growable and bounded carriers use the three-address form.
