@@ -1,0 +1,129 @@
+%sollang.int_slice = type { ptr, i64 }
+%sollang.int_dictionary = type { ptr, i64, i64 }
+
+define internal i32 @sollang_fn_sumLocal(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state) #0 {
+entry:
+  %stack_slot0 = alloca [12 x i8], align 8
+  call void @llvm.lifetime.start.p0(i64 12, ptr %stack_slot0)
+  %array_slot0 = getelementptr i32, ptr %stack_slot0, i64 0
+  store i32 4, ptr %array_slot0, align 4
+  %array_slot1 = getelementptr i32, ptr %stack_slot0, i64 1
+  store i32 5, ptr %array_slot1, align 4
+  %array_slot2 = getelementptr i32, ptr %stack_slot0, i64 2
+  store i32 6, ptr %array_slot2, align 4
+  %slice_arg4 = insertvalue %sollang.int_slice poison, ptr %stack_slot0, 0
+  %slice_arg5 = insertvalue %sollang.int_slice %slice_arg4, i64 3, 1
+  %numeric_call3 = call i32 @sollang_fn_sumValues(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, %sollang.int_slice %slice_arg5)
+  call void @llvm.lifetime.end.p0(i64 12, ptr %stack_slot0)
+  ret i32 %numeric_call3
+}
+
+define dso_local i32 @sollang_start() local_unnamed_addr {
+entry:
+  %stack_slot0 = alloca [12 x i8], align 8
+  %written = alloca i32, align 4
+  %read = alloca i32, align 4
+  %ok_state = alloca i1, align 1
+  %trap_written9 = alloca i32, align 4
+  store i1 true, ptr %ok_state, align 1
+  %stdin = call ptr @GetStdHandle(i32 -10)
+  %stdout = call ptr @GetStdHandle(i32 -11)
+  %stdout_mode = alloca i32, align 4
+  %stdout_is_console_status = call i32 @GetConsoleMode(ptr %stdout, ptr %stdout_mode)
+  %stdout_is_console = icmp ne i32 %stdout_is_console_status, 0
+  store i1 %stdout_is_console, ptr @sollang_stdout_line_buffered, align 1
+  call void @llvm.lifetime.start.p0(i64 12, ptr %stack_slot0)
+  %array_slot0 = getelementptr i32, ptr %stack_slot0, i64 0
+  store i32 10, ptr %array_slot0, align 4
+  %array_slot1 = getelementptr i32, ptr %stack_slot0, i64 1
+  store i32 20, ptr %array_slot1, align 4
+  %array_slot2 = getelementptr i32, ptr %stack_slot0, i64 2
+  store i32 30, ptr %array_slot2, align 4
+  %slice_arg4 = insertvalue %sollang.int_slice poison, ptr %stack_slot0, 0
+  %slice_arg5 = insertvalue %sollang.int_slice %slice_arg4, i64 3, 1
+  %numeric_call3 = call i32 @sollang_fn_sumValues(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, %sollang.int_slice %slice_arg5)
+  %index_size6 = sext i32 1 to i64
+  %array_in_bounds7 = icmp ult i64 %index_size6, 3
+  br i1 %array_in_bounds7, label %bb_array_bounds_ok0, label %bb_array_bounds_fail1
+
+bb_array_bounds_fail1:
+  %trap_stderr8 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr8, ptr @.slg.str.suffix.0, i32 26, ptr %trap_written9, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_array_bounds_ok0:
+  %array_slot10 = getelementptr i32, ptr %stack_slot0, i64 %index_size6
+  %array_item11 = load i32, ptr %array_slot10, align 4
+  %array_len_value12 = trunc i64 3 to i32
+  call void @llvm.lifetime.end.p0(i64 12, ptr %stack_slot0)
+  %numeric_call13 = call i32 @sollang_fn_sumLocal(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state)
+  %write14 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.1, i64 14, ptr %written)
+  %is_ok15 = icmp ne i32 %write14, 0
+  %previous_ok16 = load i1, ptr %ok_state, align 1
+  %ok17 = and i1 %previous_ok16, %is_ok15
+  store i1 %ok17, ptr %ok_state, align 1
+  %print_integer18 = sext i32 %numeric_call3 to i64
+  %write19 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer18, ptr %written)
+  %is_ok20 = icmp ne i32 %write19, 0
+  %previous_ok21 = load i1, ptr %ok_state, align 1
+  %ok22 = and i1 %previous_ok21, %is_ok20
+  store i1 %ok22, ptr %ok_state, align 1
+  %write23 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.2, i64 1, ptr %written)
+  %is_ok24 = icmp ne i32 %write23, 0
+  %previous_ok25 = load i1, ptr %ok_state, align 1
+  %ok26 = and i1 %previous_ok25, %is_ok24
+  store i1 %ok26, ptr %ok_state, align 1
+  %write27 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.3, i64 9, ptr %written)
+  %is_ok28 = icmp ne i32 %write27, 0
+  %previous_ok29 = load i1, ptr %ok_state, align 1
+  %ok30 = and i1 %previous_ok29, %is_ok28
+  store i1 %ok30, ptr %ok_state, align 1
+  %print_integer31 = sext i32 %array_item11 to i64
+  %write32 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer31, ptr %written)
+  %is_ok33 = icmp ne i32 %write32, 0
+  %previous_ok34 = load i1, ptr %ok_state, align 1
+  %ok35 = and i1 %previous_ok34, %is_ok33
+  store i1 %ok35, ptr %ok_state, align 1
+  %write36 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.4, i64 1, ptr %written)
+  %is_ok37 = icmp ne i32 %write36, 0
+  %previous_ok38 = load i1, ptr %ok_state, align 1
+  %ok39 = and i1 %previous_ok38, %is_ok37
+  store i1 %ok39, ptr %ok_state, align 1
+  %write40 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.5, i64 14, ptr %written)
+  %is_ok41 = icmp ne i32 %write40, 0
+  %previous_ok42 = load i1, ptr %ok_state, align 1
+  %ok43 = and i1 %previous_ok42, %is_ok41
+  store i1 %ok43, ptr %ok_state, align 1
+  %print_integer44 = sext i32 %array_len_value12 to i64
+  %write45 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer44, ptr %written)
+  %is_ok46 = icmp ne i32 %write45, 0
+  %previous_ok47 = load i1, ptr %ok_state, align 1
+  %ok48 = and i1 %previous_ok47, %is_ok46
+  store i1 %ok48, ptr %ok_state, align 1
+  %write49 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.6, i64 1, ptr %written)
+  %is_ok50 = icmp ne i32 %write49, 0
+  %previous_ok51 = load i1, ptr %ok_state, align 1
+  %ok52 = and i1 %previous_ok51, %is_ok50
+  store i1 %ok52, ptr %ok_state, align 1
+  %write53 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.7, i64 17, ptr %written)
+  %is_ok54 = icmp ne i32 %write53, 0
+  %previous_ok55 = load i1, ptr %ok_state, align 1
+  %ok56 = and i1 %previous_ok55, %is_ok54
+  store i1 %ok56, ptr %ok_state, align 1
+  %print_integer57 = sext i32 %numeric_call13 to i64
+  %write58 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer57, ptr %written)
+  %is_ok59 = icmp ne i32 %write58, 0
+  %previous_ok60 = load i1, ptr %ok_state, align 1
+  %ok61 = and i1 %previous_ok60, %is_ok59
+  store i1 %ok61, ptr %ok_state, align 1
+  %write62 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.8, i64 1, ptr %written)
+  %is_ok63 = icmp ne i32 %write62, 0
+  %previous_ok64 = load i1, ptr %ok_state, align 1
+  %ok65 = and i1 %previous_ok64, %is_ok63
+  store i1 %ok65, ptr %ok_state, align 1
+  %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %final_ok66 = load i1, ptr %ok_state, align 1
+  %exit67 = select i1 %final_ok66, i32 0, i32 1
+  ret i32 %exit67
+}

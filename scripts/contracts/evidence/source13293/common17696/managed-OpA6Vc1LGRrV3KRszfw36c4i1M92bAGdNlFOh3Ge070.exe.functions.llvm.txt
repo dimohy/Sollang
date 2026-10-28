@@ -1,0 +1,872 @@
+%sollang.int_slice = type { ptr, i64 }
+%sollang.int_dictionary = type { ptr, i64, i64 }
+
+define internal i32 @sollang_fn_sumLocal(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state) #0 {
+entry:
+  %stack_slot0 = alloca [56 x i8], align 8
+  call void @llvm.lifetime.start.p0(i64 56, ptr %stack_slot0)
+  call void @llvm.memset.p0.i64(ptr %stack_slot0, i8 0, i64 20, i1 false)
+  %hash_key0 = sext i32 1 to i64
+  %hash_high2 = lshr i64 %hash_key0, 32
+  %hash_fold1 = xor i64 %hash_key0, %hash_high2
+  %hash3 = mul i64 %hash_fold1, -7046029254386353131
+  %dict_h2_shifted4 = lshr i64 %hash3, 57
+  %dict_h2_raw5 = and i64 %dict_h2_shifted4, 127
+  %dict_h2_zero6 = icmp eq i64 %dict_h2_raw5, 0
+  %dict_h27 = select i1 %dict_h2_zero6, i64 1, i64 %dict_h2_raw5
+  %dict_h2_byte8 = trunc i64 %dict_h27 to i8
+  %dict_capacity_mask9 = sub i64 4, 1
+  %dict_start_slot10 = and i64 %hash3, %dict_capacity_mask9
+  br label %bb_dict_group_find0
+
+bb_dict_group_find0:
+  %dict_group_probe12 = phi i64 [ 0, %entry ], [ %dict_group_next_probe11, %bb_dict_group_next8 ]
+  %dict_group_active13 = icmp ult i64 %dict_group_probe12, 4
+  br i1 %dict_group_active13, label %bb_dict_group_body1, label %bb_dict_group_miss9
+
+bb_dict_group_body1:
+  %dict_group_unwrapped14 = add i64 %dict_start_slot10, %dict_group_probe12
+  %dict_group_start15 = and i64 %dict_group_unwrapped14, %dict_capacity_mask9
+  %dict_group_pointer16 = getelementptr i8, ptr %stack_slot0, i64 %dict_group_start15
+  %dict_group_controls17 = load <16 x i8>, ptr %dict_group_pointer16, align 1
+  %dict_group_h2_seed18 = insertelement <16 x i8> poison, i8 %dict_h2_byte8, i64 0
+  %dict_group_h2_vector19 = shufflevector <16 x i8> %dict_group_h2_seed18, <16 x i8> poison, <16 x i32> zeroinitializer
+  %dict_group_matches_vector20 = icmp eq <16 x i8> %dict_group_controls17, %dict_group_h2_vector19
+  %dict_group_match_bits21 = bitcast <16 x i1> %dict_group_matches_vector20 to i16
+  %dict_group_empty_vector22 = icmp eq <16 x i8> %dict_group_controls17, zeroinitializer
+  %dict_group_empty_bits23 = bitcast <16 x i1> %dict_group_empty_vector22 to i16
+  br label %bb_dict_group_candidates2
+
+bb_dict_group_candidates2:
+  %dict_group_candidate_bits24 = phi i16 [ %dict_group_match_bits21, %bb_dict_group_body1 ], [ %dict_group_cleared_bits25, %bb_dict_group_candidate_next4 ]
+  %dict_group_has_candidate26 = icmp ne i16 %dict_group_candidate_bits24, 0
+  br i1 %dict_group_has_candidate26, label %bb_dict_group_candidate_body3, label %bb_dict_group_decision5
+
+bb_dict_group_candidate_body3:
+  %dict_group_candidate_offset1627 = call i16 @llvm.cttz.i16(i16 %dict_group_candidate_bits24, i1 false)
+  %dict_group_candidate_offset28 = zext i16 %dict_group_candidate_offset1627 to i64
+  %dict_group_candidate_unwrapped29 = add i64 %dict_group_start15, %dict_group_candidate_offset28
+  %dict_group_candidate_slot30 = and i64 %dict_group_candidate_unwrapped29, %dict_capacity_mask9
+  %dict_entries_offset_mirror31 = add i64 4, 23
+  %dict_entries_offset32 = and i64 %dict_entries_offset_mirror31, -8
+  %dict_entries33 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset32
+  %dict_key_offset34 = mul i64 %dict_group_candidate_slot30, 2
+  %dict_key_slot35 = getelementptr i32, ptr %dict_entries33, i64 %dict_key_offset34
+  %dict_key36 = load i32, ptr %dict_key_slot35, align 4
+  %dict_group_key_match37 = icmp eq i32 %dict_key36, 1
+  br i1 %dict_group_key_match37, label %bb_dict_group_match7, label %bb_dict_group_candidate_next4
+
+bb_dict_group_candidate_next4:
+  %dict_group_bits_minus_one38 = sub i16 %dict_group_candidate_bits24, 1
+  %dict_group_cleared_bits25 = and i16 %dict_group_candidate_bits24, %dict_group_bits_minus_one38
+  br label %bb_dict_group_candidates2
+
+bb_dict_group_decision5:
+  %dict_group_has_empty39 = icmp ne i16 %dict_group_empty_bits23, 0
+  br i1 %dict_group_has_empty39, label %bb_dict_group_empty6, label %bb_dict_group_next8
+
+bb_dict_group_empty6:
+  %dict_group_empty_offset1640 = call i16 @llvm.cttz.i16(i16 %dict_group_empty_bits23, i1 false)
+  %dict_group_empty_offset41 = zext i16 %dict_group_empty_offset1640 to i64
+  %dict_group_empty_unwrapped42 = add i64 %dict_group_start15, %dict_group_empty_offset41
+  %dict_group_empty_slot43 = and i64 %dict_group_empty_unwrapped42, %dict_capacity_mask9
+  br label %bb_dict_group_done10
+
+bb_dict_group_match7:
+  br label %bb_dict_group_done10
+
+bb_dict_group_next8:
+  %dict_group_next_probe11 = add i64 %dict_group_probe12, 16
+  br label %bb_dict_group_find0
+
+bb_dict_group_miss9:
+  br label %bb_dict_group_done10
+
+bb_dict_group_done10:
+  %dict_find_found44 = phi i1 [ false, %bb_dict_group_empty6 ], [ true, %bb_dict_group_match7 ], [ false, %bb_dict_group_miss9 ]
+  %dict_find_found_slot45 = phi i64 [ %dict_group_empty_slot43, %bb_dict_group_empty6 ], [ %dict_group_candidate_slot30, %bb_dict_group_match7 ], [ 0, %bb_dict_group_miss9 ]
+  %dict_entries_offset_mirror46 = add i64 4, 23
+  %dict_entries_offset47 = and i64 %dict_entries_offset_mirror46, -8
+  %dict_entries48 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset47
+  %dict_offset49 = mul i64 %dict_find_found_slot45, 2
+  %dict_key_slot50 = getelementptr i32, ptr %dict_entries48, i64 %dict_offset49
+  %dict_value_offset51 = add i64 %dict_offset49, 1
+  %dict_value_slot52 = getelementptr i32, ptr %dict_entries48, i64 %dict_value_offset51
+  store i32 1, ptr %dict_key_slot50, align 4
+  store i32 10, ptr %dict_value_slot52, align 4
+  %dict_control_slot53 = getelementptr i8, ptr %stack_slot0, i64 %dict_find_found_slot45
+  store i8 %dict_h2_byte8, ptr %dict_control_slot53, align 1
+  %dict_control_mirrored54 = icmp ult i64 %dict_find_found_slot45, 16
+  br i1 %dict_control_mirrored54, label %bb_dict_control_mirror11, label %bb_dict_control_done12
+
+bb_dict_control_mirror11:
+  %dict_control_mirror_index55 = add i64 4, %dict_find_found_slot45
+  %dict_control_mirror_slot56 = getelementptr i8, ptr %stack_slot0, i64 %dict_control_mirror_index55
+  store i8 %dict_h2_byte8, ptr %dict_control_mirror_slot56, align 1
+  br label %bb_dict_control_done12
+
+bb_dict_control_done12:
+  %hash_key57 = sext i32 2 to i64
+  %hash_high59 = lshr i64 %hash_key57, 32
+  %hash_fold58 = xor i64 %hash_key57, %hash_high59
+  %hash60 = mul i64 %hash_fold58, -7046029254386353131
+  %dict_h2_shifted61 = lshr i64 %hash60, 57
+  %dict_h2_raw62 = and i64 %dict_h2_shifted61, 127
+  %dict_h2_zero63 = icmp eq i64 %dict_h2_raw62, 0
+  %dict_h264 = select i1 %dict_h2_zero63, i64 1, i64 %dict_h2_raw62
+  %dict_h2_byte65 = trunc i64 %dict_h264 to i8
+  %dict_capacity_mask66 = sub i64 4, 1
+  %dict_start_slot67 = and i64 %hash60, %dict_capacity_mask66
+  br label %bb_dict_group_find13
+
+bb_dict_group_find13:
+  %dict_group_probe69 = phi i64 [ 0, %bb_dict_control_done12 ], [ %dict_group_next_probe68, %bb_dict_group_next21 ]
+  %dict_group_active70 = icmp ult i64 %dict_group_probe69, 4
+  br i1 %dict_group_active70, label %bb_dict_group_body14, label %bb_dict_group_miss22
+
+bb_dict_group_body14:
+  %dict_group_unwrapped71 = add i64 %dict_start_slot67, %dict_group_probe69
+  %dict_group_start72 = and i64 %dict_group_unwrapped71, %dict_capacity_mask66
+  %dict_group_pointer73 = getelementptr i8, ptr %stack_slot0, i64 %dict_group_start72
+  %dict_group_controls74 = load <16 x i8>, ptr %dict_group_pointer73, align 1
+  %dict_group_h2_seed75 = insertelement <16 x i8> poison, i8 %dict_h2_byte65, i64 0
+  %dict_group_h2_vector76 = shufflevector <16 x i8> %dict_group_h2_seed75, <16 x i8> poison, <16 x i32> zeroinitializer
+  %dict_group_matches_vector77 = icmp eq <16 x i8> %dict_group_controls74, %dict_group_h2_vector76
+  %dict_group_match_bits78 = bitcast <16 x i1> %dict_group_matches_vector77 to i16
+  %dict_group_empty_vector79 = icmp eq <16 x i8> %dict_group_controls74, zeroinitializer
+  %dict_group_empty_bits80 = bitcast <16 x i1> %dict_group_empty_vector79 to i16
+  br label %bb_dict_group_candidates15
+
+bb_dict_group_candidates15:
+  %dict_group_candidate_bits81 = phi i16 [ %dict_group_match_bits78, %bb_dict_group_body14 ], [ %dict_group_cleared_bits82, %bb_dict_group_candidate_next17 ]
+  %dict_group_has_candidate83 = icmp ne i16 %dict_group_candidate_bits81, 0
+  br i1 %dict_group_has_candidate83, label %bb_dict_group_candidate_body16, label %bb_dict_group_decision18
+
+bb_dict_group_candidate_body16:
+  %dict_group_candidate_offset1684 = call i16 @llvm.cttz.i16(i16 %dict_group_candidate_bits81, i1 false)
+  %dict_group_candidate_offset85 = zext i16 %dict_group_candidate_offset1684 to i64
+  %dict_group_candidate_unwrapped86 = add i64 %dict_group_start72, %dict_group_candidate_offset85
+  %dict_group_candidate_slot87 = and i64 %dict_group_candidate_unwrapped86, %dict_capacity_mask66
+  %dict_entries_offset_mirror88 = add i64 4, 23
+  %dict_entries_offset89 = and i64 %dict_entries_offset_mirror88, -8
+  %dict_entries90 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset89
+  %dict_key_offset91 = mul i64 %dict_group_candidate_slot87, 2
+  %dict_key_slot92 = getelementptr i32, ptr %dict_entries90, i64 %dict_key_offset91
+  %dict_key93 = load i32, ptr %dict_key_slot92, align 4
+  %dict_group_key_match94 = icmp eq i32 %dict_key93, 2
+  br i1 %dict_group_key_match94, label %bb_dict_group_match20, label %bb_dict_group_candidate_next17
+
+bb_dict_group_candidate_next17:
+  %dict_group_bits_minus_one95 = sub i16 %dict_group_candidate_bits81, 1
+  %dict_group_cleared_bits82 = and i16 %dict_group_candidate_bits81, %dict_group_bits_minus_one95
+  br label %bb_dict_group_candidates15
+
+bb_dict_group_decision18:
+  %dict_group_has_empty96 = icmp ne i16 %dict_group_empty_bits80, 0
+  br i1 %dict_group_has_empty96, label %bb_dict_group_empty19, label %bb_dict_group_next21
+
+bb_dict_group_empty19:
+  %dict_group_empty_offset1697 = call i16 @llvm.cttz.i16(i16 %dict_group_empty_bits80, i1 false)
+  %dict_group_empty_offset98 = zext i16 %dict_group_empty_offset1697 to i64
+  %dict_group_empty_unwrapped99 = add i64 %dict_group_start72, %dict_group_empty_offset98
+  %dict_group_empty_slot100 = and i64 %dict_group_empty_unwrapped99, %dict_capacity_mask66
+  br label %bb_dict_group_done23
+
+bb_dict_group_match20:
+  br label %bb_dict_group_done23
+
+bb_dict_group_next21:
+  %dict_group_next_probe68 = add i64 %dict_group_probe69, 16
+  br label %bb_dict_group_find13
+
+bb_dict_group_miss22:
+  br label %bb_dict_group_done23
+
+bb_dict_group_done23:
+  %dict_find_found101 = phi i1 [ false, %bb_dict_group_empty19 ], [ true, %bb_dict_group_match20 ], [ false, %bb_dict_group_miss22 ]
+  %dict_find_found_slot102 = phi i64 [ %dict_group_empty_slot100, %bb_dict_group_empty19 ], [ %dict_group_candidate_slot87, %bb_dict_group_match20 ], [ 0, %bb_dict_group_miss22 ]
+  %dict_entries_offset_mirror103 = add i64 4, 23
+  %dict_entries_offset104 = and i64 %dict_entries_offset_mirror103, -8
+  %dict_entries105 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset104
+  %dict_offset106 = mul i64 %dict_find_found_slot102, 2
+  %dict_key_slot107 = getelementptr i32, ptr %dict_entries105, i64 %dict_offset106
+  %dict_value_offset108 = add i64 %dict_offset106, 1
+  %dict_value_slot109 = getelementptr i32, ptr %dict_entries105, i64 %dict_value_offset108
+  store i32 2, ptr %dict_key_slot107, align 4
+  store i32 20, ptr %dict_value_slot109, align 4
+  %dict_control_slot110 = getelementptr i8, ptr %stack_slot0, i64 %dict_find_found_slot102
+  store i8 %dict_h2_byte65, ptr %dict_control_slot110, align 1
+  %dict_control_mirrored111 = icmp ult i64 %dict_find_found_slot102, 16
+  br i1 %dict_control_mirrored111, label %bb_dict_control_mirror24, label %bb_dict_control_done25
+
+bb_dict_control_mirror24:
+  %dict_control_mirror_index112 = add i64 4, %dict_find_found_slot102
+  %dict_control_mirror_slot113 = getelementptr i8, ptr %stack_slot0, i64 %dict_control_mirror_index112
+  store i8 %dict_h2_byte65, ptr %dict_control_mirror_slot113, align 1
+  br label %bb_dict_control_done25
+
+bb_dict_control_done25:
+  %index_size114 = sext i32 1 to i64
+  %hash_key115 = sext i32 1 to i64
+  %hash_high117 = lshr i64 %hash_key115, 32
+  %hash_fold116 = xor i64 %hash_key115, %hash_high117
+  %hash118 = mul i64 %hash_fold116, -7046029254386353131
+  %dict_h2_shifted119 = lshr i64 %hash118, 57
+  %dict_h2_raw120 = and i64 %dict_h2_shifted119, 127
+  %dict_h2_zero121 = icmp eq i64 %dict_h2_raw120, 0
+  %dict_h2122 = select i1 %dict_h2_zero121, i64 1, i64 %dict_h2_raw120
+  %dict_h2_byte123 = trunc i64 %dict_h2122 to i8
+  %dict_capacity_mask124 = sub i64 4, 1
+  %dict_start_slot125 = and i64 %hash118, %dict_capacity_mask124
+  br label %bb_dict_lookup26
+
+bb_dict_lookup26:
+  %dict_lookup_probe127 = phi i64 [ 0, %bb_dict_control_done25 ], [ %dict_lookup_next_probe126, %bb_dict_lookup_next31 ]
+  %dict_lookup_active128 = icmp ult i64 %dict_lookup_probe127, 4
+  br i1 %dict_lookup_active128, label %bb_dict_lookup_body27, label %bb_dict_lookup_miss32
+
+bb_dict_lookup_body27:
+  %dict_lookup_unwrapped129 = add i64 %dict_start_slot125, %dict_lookup_probe127
+  %dict_lookup_slot130 = and i64 %dict_lookup_unwrapped129, %dict_capacity_mask124
+  %dict_control_slot131 = getelementptr i8, ptr %stack_slot0, i64 %dict_lookup_slot130
+  %dict_control132 = load i8, ptr %dict_control_slot131, align 1
+  %dict_lookup_is_empty133 = icmp eq i8 %dict_control132, 0
+  br i1 %dict_lookup_is_empty133, label %bb_dict_lookup_miss32, label %bb_dict_lookup_full28
+
+bb_dict_lookup_full28:
+  %dict_lookup_h2_match134 = icmp eq i8 %dict_control132, %dict_h2_byte123
+  br i1 %dict_lookup_h2_match134, label %bb_dict_lookup_compare29, label %bb_dict_lookup_next31
+
+bb_dict_lookup_compare29:
+  %dict_entries_offset_mirror135 = add i64 4, 23
+  %dict_entries_offset136 = and i64 %dict_entries_offset_mirror135, -8
+  %dict_entries137 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset136
+  %dict_key_offset138 = mul i64 %dict_lookup_slot130, 2
+  %dict_key_slot139 = getelementptr i32, ptr %dict_entries137, i64 %dict_key_offset138
+  %dict_key140 = load i32, ptr %dict_key_slot139, align 4
+  %dict_lookup_key_match141 = icmp eq i32 %dict_key140, 1
+  br i1 %dict_lookup_key_match141, label %bb_dict_lookup_match30, label %bb_dict_lookup_next31
+
+bb_dict_lookup_match30:
+  %dict_entries_offset_mirror142 = add i64 4, 23
+  %dict_entries_offset143 = and i64 %dict_entries_offset_mirror142, -8
+  %dict_entries144 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset143
+  %dict_value_base145 = mul i64 %dict_lookup_slot130, 2
+  %dict_value_offset146 = add i64 %dict_value_base145, 1
+  %dict_value_slot147 = getelementptr i32, ptr %dict_entries144, i64 %dict_value_offset146
+  %dict_value148 = load i32, ptr %dict_value_slot147, align 4
+  br label %bb_dict_lookup_done33
+
+bb_dict_lookup_next31:
+  %dict_lookup_next_probe126 = add i64 %dict_lookup_probe127, 1
+  br label %bb_dict_lookup26
+
+bb_dict_lookup_miss32:
+  call void @llvm.trap()
+  unreachable
+
+bb_dict_lookup_done33:
+  %index_size149 = sext i32 2 to i64
+  %hash_key150 = sext i32 2 to i64
+  %hash_high152 = lshr i64 %hash_key150, 32
+  %hash_fold151 = xor i64 %hash_key150, %hash_high152
+  %hash153 = mul i64 %hash_fold151, -7046029254386353131
+  %dict_h2_shifted154 = lshr i64 %hash153, 57
+  %dict_h2_raw155 = and i64 %dict_h2_shifted154, 127
+  %dict_h2_zero156 = icmp eq i64 %dict_h2_raw155, 0
+  %dict_h2157 = select i1 %dict_h2_zero156, i64 1, i64 %dict_h2_raw155
+  %dict_h2_byte158 = trunc i64 %dict_h2157 to i8
+  %dict_capacity_mask159 = sub i64 4, 1
+  %dict_start_slot160 = and i64 %hash153, %dict_capacity_mask159
+  br label %bb_dict_lookup34
+
+bb_dict_lookup34:
+  %dict_lookup_probe162 = phi i64 [ 0, %bb_dict_lookup_done33 ], [ %dict_lookup_next_probe161, %bb_dict_lookup_next39 ]
+  %dict_lookup_active163 = icmp ult i64 %dict_lookup_probe162, 4
+  br i1 %dict_lookup_active163, label %bb_dict_lookup_body35, label %bb_dict_lookup_miss40
+
+bb_dict_lookup_body35:
+  %dict_lookup_unwrapped164 = add i64 %dict_start_slot160, %dict_lookup_probe162
+  %dict_lookup_slot165 = and i64 %dict_lookup_unwrapped164, %dict_capacity_mask159
+  %dict_control_slot166 = getelementptr i8, ptr %stack_slot0, i64 %dict_lookup_slot165
+  %dict_control167 = load i8, ptr %dict_control_slot166, align 1
+  %dict_lookup_is_empty168 = icmp eq i8 %dict_control167, 0
+  br i1 %dict_lookup_is_empty168, label %bb_dict_lookup_miss40, label %bb_dict_lookup_full36
+
+bb_dict_lookup_full36:
+  %dict_lookup_h2_match169 = icmp eq i8 %dict_control167, %dict_h2_byte158
+  br i1 %dict_lookup_h2_match169, label %bb_dict_lookup_compare37, label %bb_dict_lookup_next39
+
+bb_dict_lookup_compare37:
+  %dict_entries_offset_mirror170 = add i64 4, 23
+  %dict_entries_offset171 = and i64 %dict_entries_offset_mirror170, -8
+  %dict_entries172 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset171
+  %dict_key_offset173 = mul i64 %dict_lookup_slot165, 2
+  %dict_key_slot174 = getelementptr i32, ptr %dict_entries172, i64 %dict_key_offset173
+  %dict_key175 = load i32, ptr %dict_key_slot174, align 4
+  %dict_lookup_key_match176 = icmp eq i32 %dict_key175, 2
+  br i1 %dict_lookup_key_match176, label %bb_dict_lookup_match38, label %bb_dict_lookup_next39
+
+bb_dict_lookup_match38:
+  %dict_entries_offset_mirror177 = add i64 4, 23
+  %dict_entries_offset178 = and i64 %dict_entries_offset_mirror177, -8
+  %dict_entries179 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset178
+  %dict_value_base180 = mul i64 %dict_lookup_slot165, 2
+  %dict_value_offset181 = add i64 %dict_value_base180, 1
+  %dict_value_slot182 = getelementptr i32, ptr %dict_entries179, i64 %dict_value_offset181
+  %dict_value183 = load i32, ptr %dict_value_slot182, align 4
+  br label %bb_dict_lookup_done41
+
+bb_dict_lookup_next39:
+  %dict_lookup_next_probe161 = add i64 %dict_lookup_probe162, 1
+  br label %bb_dict_lookup34
+
+bb_dict_lookup_miss40:
+  call void @llvm.trap()
+  unreachable
+
+bb_dict_lookup_done41:
+  %add184 = add i32 %dict_value148, %dict_value183
+  ret i32 %add184
+}
+
+define dso_local i32 @sollang_start() local_unnamed_addr {
+entry:
+  %stack_slot0 = alloca [88 x i8], align 8
+  %written = alloca i32, align 4
+  %read = alloca i32, align 4
+  %ok_state = alloca i1, align 1
+  %trap_written249 = alloca i32, align 4
+  store i1 true, ptr %ok_state, align 1
+  %stdin = call ptr @GetStdHandle(i32 -10)
+  %stdout = call ptr @GetStdHandle(i32 -11)
+  %stdout_mode = alloca i32, align 4
+  %stdout_is_console_status = call i32 @GetConsoleMode(ptr %stdout, ptr %stdout_mode)
+  %stdout_is_console = icmp ne i32 %stdout_is_console_status, 0
+  store i1 %stdout_is_console, ptr @sollang_stdout_line_buffered, align 1
+  call void @llvm.lifetime.start.p0(i64 88, ptr %stack_slot0)
+  call void @llvm.memset.p0.i64(ptr %stack_slot0, i8 0, i64 24, i1 false)
+  %hash_key0 = sext i32 1 to i64
+  %hash_high2 = lshr i64 %hash_key0, 32
+  %hash_fold1 = xor i64 %hash_key0, %hash_high2
+  %hash3 = mul i64 %hash_fold1, -7046029254386353131
+  %dict_h2_shifted4 = lshr i64 %hash3, 57
+  %dict_h2_raw5 = and i64 %dict_h2_shifted4, 127
+  %dict_h2_zero6 = icmp eq i64 %dict_h2_raw5, 0
+  %dict_h27 = select i1 %dict_h2_zero6, i64 1, i64 %dict_h2_raw5
+  %dict_h2_byte8 = trunc i64 %dict_h27 to i8
+  %dict_capacity_mask9 = sub i64 8, 1
+  %dict_start_slot10 = and i64 %hash3, %dict_capacity_mask9
+  br label %bb_dict_group_find0
+
+bb_dict_group_find0:
+  %dict_group_probe12 = phi i64 [ 0, %entry ], [ %dict_group_next_probe11, %bb_dict_group_next8 ]
+  %dict_group_active13 = icmp ult i64 %dict_group_probe12, 8
+  br i1 %dict_group_active13, label %bb_dict_group_body1, label %bb_dict_group_miss9
+
+bb_dict_group_body1:
+  %dict_group_unwrapped14 = add i64 %dict_start_slot10, %dict_group_probe12
+  %dict_group_start15 = and i64 %dict_group_unwrapped14, %dict_capacity_mask9
+  %dict_group_pointer16 = getelementptr i8, ptr %stack_slot0, i64 %dict_group_start15
+  %dict_group_controls17 = load <16 x i8>, ptr %dict_group_pointer16, align 1
+  %dict_group_h2_seed18 = insertelement <16 x i8> poison, i8 %dict_h2_byte8, i64 0
+  %dict_group_h2_vector19 = shufflevector <16 x i8> %dict_group_h2_seed18, <16 x i8> poison, <16 x i32> zeroinitializer
+  %dict_group_matches_vector20 = icmp eq <16 x i8> %dict_group_controls17, %dict_group_h2_vector19
+  %dict_group_match_bits21 = bitcast <16 x i1> %dict_group_matches_vector20 to i16
+  %dict_group_empty_vector22 = icmp eq <16 x i8> %dict_group_controls17, zeroinitializer
+  %dict_group_empty_bits23 = bitcast <16 x i1> %dict_group_empty_vector22 to i16
+  br label %bb_dict_group_candidates2
+
+bb_dict_group_candidates2:
+  %dict_group_candidate_bits24 = phi i16 [ %dict_group_match_bits21, %bb_dict_group_body1 ], [ %dict_group_cleared_bits25, %bb_dict_group_candidate_next4 ]
+  %dict_group_has_candidate26 = icmp ne i16 %dict_group_candidate_bits24, 0
+  br i1 %dict_group_has_candidate26, label %bb_dict_group_candidate_body3, label %bb_dict_group_decision5
+
+bb_dict_group_candidate_body3:
+  %dict_group_candidate_offset1627 = call i16 @llvm.cttz.i16(i16 %dict_group_candidate_bits24, i1 false)
+  %dict_group_candidate_offset28 = zext i16 %dict_group_candidate_offset1627 to i64
+  %dict_group_candidate_unwrapped29 = add i64 %dict_group_start15, %dict_group_candidate_offset28
+  %dict_group_candidate_slot30 = and i64 %dict_group_candidate_unwrapped29, %dict_capacity_mask9
+  %dict_entries_offset_mirror31 = add i64 8, 23
+  %dict_entries_offset32 = and i64 %dict_entries_offset_mirror31, -8
+  %dict_entries33 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset32
+  %dict_key_offset34 = mul i64 %dict_group_candidate_slot30, 2
+  %dict_key_slot35 = getelementptr i32, ptr %dict_entries33, i64 %dict_key_offset34
+  %dict_key36 = load i32, ptr %dict_key_slot35, align 4
+  %dict_group_key_match37 = icmp eq i32 %dict_key36, 1
+  br i1 %dict_group_key_match37, label %bb_dict_group_match7, label %bb_dict_group_candidate_next4
+
+bb_dict_group_candidate_next4:
+  %dict_group_bits_minus_one38 = sub i16 %dict_group_candidate_bits24, 1
+  %dict_group_cleared_bits25 = and i16 %dict_group_candidate_bits24, %dict_group_bits_minus_one38
+  br label %bb_dict_group_candidates2
+
+bb_dict_group_decision5:
+  %dict_group_has_empty39 = icmp ne i16 %dict_group_empty_bits23, 0
+  br i1 %dict_group_has_empty39, label %bb_dict_group_empty6, label %bb_dict_group_next8
+
+bb_dict_group_empty6:
+  %dict_group_empty_offset1640 = call i16 @llvm.cttz.i16(i16 %dict_group_empty_bits23, i1 false)
+  %dict_group_empty_offset41 = zext i16 %dict_group_empty_offset1640 to i64
+  %dict_group_empty_unwrapped42 = add i64 %dict_group_start15, %dict_group_empty_offset41
+  %dict_group_empty_slot43 = and i64 %dict_group_empty_unwrapped42, %dict_capacity_mask9
+  br label %bb_dict_group_done10
+
+bb_dict_group_match7:
+  br label %bb_dict_group_done10
+
+bb_dict_group_next8:
+  %dict_group_next_probe11 = add i64 %dict_group_probe12, 16
+  br label %bb_dict_group_find0
+
+bb_dict_group_miss9:
+  br label %bb_dict_group_done10
+
+bb_dict_group_done10:
+  %dict_find_found44 = phi i1 [ false, %bb_dict_group_empty6 ], [ true, %bb_dict_group_match7 ], [ false, %bb_dict_group_miss9 ]
+  %dict_find_found_slot45 = phi i64 [ %dict_group_empty_slot43, %bb_dict_group_empty6 ], [ %dict_group_candidate_slot30, %bb_dict_group_match7 ], [ 0, %bb_dict_group_miss9 ]
+  %dict_entries_offset_mirror46 = add i64 8, 23
+  %dict_entries_offset47 = and i64 %dict_entries_offset_mirror46, -8
+  %dict_entries48 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset47
+  %dict_offset49 = mul i64 %dict_find_found_slot45, 2
+  %dict_key_slot50 = getelementptr i32, ptr %dict_entries48, i64 %dict_offset49
+  %dict_value_offset51 = add i64 %dict_offset49, 1
+  %dict_value_slot52 = getelementptr i32, ptr %dict_entries48, i64 %dict_value_offset51
+  store i32 1, ptr %dict_key_slot50, align 4
+  store i32 100, ptr %dict_value_slot52, align 4
+  %dict_control_slot53 = getelementptr i8, ptr %stack_slot0, i64 %dict_find_found_slot45
+  store i8 %dict_h2_byte8, ptr %dict_control_slot53, align 1
+  %dict_control_mirrored54 = icmp ult i64 %dict_find_found_slot45, 16
+  br i1 %dict_control_mirrored54, label %bb_dict_control_mirror11, label %bb_dict_control_done12
+
+bb_dict_control_mirror11:
+  %dict_control_mirror_index55 = add i64 8, %dict_find_found_slot45
+  %dict_control_mirror_slot56 = getelementptr i8, ptr %stack_slot0, i64 %dict_control_mirror_index55
+  store i8 %dict_h2_byte8, ptr %dict_control_mirror_slot56, align 1
+  br label %bb_dict_control_done12
+
+bb_dict_control_done12:
+  %hash_key57 = sext i32 2 to i64
+  %hash_high59 = lshr i64 %hash_key57, 32
+  %hash_fold58 = xor i64 %hash_key57, %hash_high59
+  %hash60 = mul i64 %hash_fold58, -7046029254386353131
+  %dict_h2_shifted61 = lshr i64 %hash60, 57
+  %dict_h2_raw62 = and i64 %dict_h2_shifted61, 127
+  %dict_h2_zero63 = icmp eq i64 %dict_h2_raw62, 0
+  %dict_h264 = select i1 %dict_h2_zero63, i64 1, i64 %dict_h2_raw62
+  %dict_h2_byte65 = trunc i64 %dict_h264 to i8
+  %dict_capacity_mask66 = sub i64 8, 1
+  %dict_start_slot67 = and i64 %hash60, %dict_capacity_mask66
+  br label %bb_dict_group_find13
+
+bb_dict_group_find13:
+  %dict_group_probe69 = phi i64 [ 0, %bb_dict_control_done12 ], [ %dict_group_next_probe68, %bb_dict_group_next21 ]
+  %dict_group_active70 = icmp ult i64 %dict_group_probe69, 8
+  br i1 %dict_group_active70, label %bb_dict_group_body14, label %bb_dict_group_miss22
+
+bb_dict_group_body14:
+  %dict_group_unwrapped71 = add i64 %dict_start_slot67, %dict_group_probe69
+  %dict_group_start72 = and i64 %dict_group_unwrapped71, %dict_capacity_mask66
+  %dict_group_pointer73 = getelementptr i8, ptr %stack_slot0, i64 %dict_group_start72
+  %dict_group_controls74 = load <16 x i8>, ptr %dict_group_pointer73, align 1
+  %dict_group_h2_seed75 = insertelement <16 x i8> poison, i8 %dict_h2_byte65, i64 0
+  %dict_group_h2_vector76 = shufflevector <16 x i8> %dict_group_h2_seed75, <16 x i8> poison, <16 x i32> zeroinitializer
+  %dict_group_matches_vector77 = icmp eq <16 x i8> %dict_group_controls74, %dict_group_h2_vector76
+  %dict_group_match_bits78 = bitcast <16 x i1> %dict_group_matches_vector77 to i16
+  %dict_group_empty_vector79 = icmp eq <16 x i8> %dict_group_controls74, zeroinitializer
+  %dict_group_empty_bits80 = bitcast <16 x i1> %dict_group_empty_vector79 to i16
+  br label %bb_dict_group_candidates15
+
+bb_dict_group_candidates15:
+  %dict_group_candidate_bits81 = phi i16 [ %dict_group_match_bits78, %bb_dict_group_body14 ], [ %dict_group_cleared_bits82, %bb_dict_group_candidate_next17 ]
+  %dict_group_has_candidate83 = icmp ne i16 %dict_group_candidate_bits81, 0
+  br i1 %dict_group_has_candidate83, label %bb_dict_group_candidate_body16, label %bb_dict_group_decision18
+
+bb_dict_group_candidate_body16:
+  %dict_group_candidate_offset1684 = call i16 @llvm.cttz.i16(i16 %dict_group_candidate_bits81, i1 false)
+  %dict_group_candidate_offset85 = zext i16 %dict_group_candidate_offset1684 to i64
+  %dict_group_candidate_unwrapped86 = add i64 %dict_group_start72, %dict_group_candidate_offset85
+  %dict_group_candidate_slot87 = and i64 %dict_group_candidate_unwrapped86, %dict_capacity_mask66
+  %dict_entries_offset_mirror88 = add i64 8, 23
+  %dict_entries_offset89 = and i64 %dict_entries_offset_mirror88, -8
+  %dict_entries90 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset89
+  %dict_key_offset91 = mul i64 %dict_group_candidate_slot87, 2
+  %dict_key_slot92 = getelementptr i32, ptr %dict_entries90, i64 %dict_key_offset91
+  %dict_key93 = load i32, ptr %dict_key_slot92, align 4
+  %dict_group_key_match94 = icmp eq i32 %dict_key93, 2
+  br i1 %dict_group_key_match94, label %bb_dict_group_match20, label %bb_dict_group_candidate_next17
+
+bb_dict_group_candidate_next17:
+  %dict_group_bits_minus_one95 = sub i16 %dict_group_candidate_bits81, 1
+  %dict_group_cleared_bits82 = and i16 %dict_group_candidate_bits81, %dict_group_bits_minus_one95
+  br label %bb_dict_group_candidates15
+
+bb_dict_group_decision18:
+  %dict_group_has_empty96 = icmp ne i16 %dict_group_empty_bits80, 0
+  br i1 %dict_group_has_empty96, label %bb_dict_group_empty19, label %bb_dict_group_next21
+
+bb_dict_group_empty19:
+  %dict_group_empty_offset1697 = call i16 @llvm.cttz.i16(i16 %dict_group_empty_bits80, i1 false)
+  %dict_group_empty_offset98 = zext i16 %dict_group_empty_offset1697 to i64
+  %dict_group_empty_unwrapped99 = add i64 %dict_group_start72, %dict_group_empty_offset98
+  %dict_group_empty_slot100 = and i64 %dict_group_empty_unwrapped99, %dict_capacity_mask66
+  br label %bb_dict_group_done23
+
+bb_dict_group_match20:
+  br label %bb_dict_group_done23
+
+bb_dict_group_next21:
+  %dict_group_next_probe68 = add i64 %dict_group_probe69, 16
+  br label %bb_dict_group_find13
+
+bb_dict_group_miss22:
+  br label %bb_dict_group_done23
+
+bb_dict_group_done23:
+  %dict_find_found101 = phi i1 [ false, %bb_dict_group_empty19 ], [ true, %bb_dict_group_match20 ], [ false, %bb_dict_group_miss22 ]
+  %dict_find_found_slot102 = phi i64 [ %dict_group_empty_slot100, %bb_dict_group_empty19 ], [ %dict_group_candidate_slot87, %bb_dict_group_match20 ], [ 0, %bb_dict_group_miss22 ]
+  %dict_entries_offset_mirror103 = add i64 8, 23
+  %dict_entries_offset104 = and i64 %dict_entries_offset_mirror103, -8
+  %dict_entries105 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset104
+  %dict_offset106 = mul i64 %dict_find_found_slot102, 2
+  %dict_key_slot107 = getelementptr i32, ptr %dict_entries105, i64 %dict_offset106
+  %dict_value_offset108 = add i64 %dict_offset106, 1
+  %dict_value_slot109 = getelementptr i32, ptr %dict_entries105, i64 %dict_value_offset108
+  store i32 2, ptr %dict_key_slot107, align 4
+  store i32 200, ptr %dict_value_slot109, align 4
+  %dict_control_slot110 = getelementptr i8, ptr %stack_slot0, i64 %dict_find_found_slot102
+  store i8 %dict_h2_byte65, ptr %dict_control_slot110, align 1
+  %dict_control_mirrored111 = icmp ult i64 %dict_find_found_slot102, 16
+  br i1 %dict_control_mirrored111, label %bb_dict_control_mirror24, label %bb_dict_control_done25
+
+bb_dict_control_mirror24:
+  %dict_control_mirror_index112 = add i64 8, %dict_find_found_slot102
+  %dict_control_mirror_slot113 = getelementptr i8, ptr %stack_slot0, i64 %dict_control_mirror_index112
+  store i8 %dict_h2_byte65, ptr %dict_control_mirror_slot113, align 1
+  br label %bb_dict_control_done25
+
+bb_dict_control_done25:
+  %hash_key114 = sext i32 3 to i64
+  %hash_high116 = lshr i64 %hash_key114, 32
+  %hash_fold115 = xor i64 %hash_key114, %hash_high116
+  %hash117 = mul i64 %hash_fold115, -7046029254386353131
+  %dict_h2_shifted118 = lshr i64 %hash117, 57
+  %dict_h2_raw119 = and i64 %dict_h2_shifted118, 127
+  %dict_h2_zero120 = icmp eq i64 %dict_h2_raw119, 0
+  %dict_h2121 = select i1 %dict_h2_zero120, i64 1, i64 %dict_h2_raw119
+  %dict_h2_byte122 = trunc i64 %dict_h2121 to i8
+  %dict_capacity_mask123 = sub i64 8, 1
+  %dict_start_slot124 = and i64 %hash117, %dict_capacity_mask123
+  br label %bb_dict_group_find26
+
+bb_dict_group_find26:
+  %dict_group_probe126 = phi i64 [ 0, %bb_dict_control_done25 ], [ %dict_group_next_probe125, %bb_dict_group_next34 ]
+  %dict_group_active127 = icmp ult i64 %dict_group_probe126, 8
+  br i1 %dict_group_active127, label %bb_dict_group_body27, label %bb_dict_group_miss35
+
+bb_dict_group_body27:
+  %dict_group_unwrapped128 = add i64 %dict_start_slot124, %dict_group_probe126
+  %dict_group_start129 = and i64 %dict_group_unwrapped128, %dict_capacity_mask123
+  %dict_group_pointer130 = getelementptr i8, ptr %stack_slot0, i64 %dict_group_start129
+  %dict_group_controls131 = load <16 x i8>, ptr %dict_group_pointer130, align 1
+  %dict_group_h2_seed132 = insertelement <16 x i8> poison, i8 %dict_h2_byte122, i64 0
+  %dict_group_h2_vector133 = shufflevector <16 x i8> %dict_group_h2_seed132, <16 x i8> poison, <16 x i32> zeroinitializer
+  %dict_group_matches_vector134 = icmp eq <16 x i8> %dict_group_controls131, %dict_group_h2_vector133
+  %dict_group_match_bits135 = bitcast <16 x i1> %dict_group_matches_vector134 to i16
+  %dict_group_empty_vector136 = icmp eq <16 x i8> %dict_group_controls131, zeroinitializer
+  %dict_group_empty_bits137 = bitcast <16 x i1> %dict_group_empty_vector136 to i16
+  br label %bb_dict_group_candidates28
+
+bb_dict_group_candidates28:
+  %dict_group_candidate_bits138 = phi i16 [ %dict_group_match_bits135, %bb_dict_group_body27 ], [ %dict_group_cleared_bits139, %bb_dict_group_candidate_next30 ]
+  %dict_group_has_candidate140 = icmp ne i16 %dict_group_candidate_bits138, 0
+  br i1 %dict_group_has_candidate140, label %bb_dict_group_candidate_body29, label %bb_dict_group_decision31
+
+bb_dict_group_candidate_body29:
+  %dict_group_candidate_offset16141 = call i16 @llvm.cttz.i16(i16 %dict_group_candidate_bits138, i1 false)
+  %dict_group_candidate_offset142 = zext i16 %dict_group_candidate_offset16141 to i64
+  %dict_group_candidate_unwrapped143 = add i64 %dict_group_start129, %dict_group_candidate_offset142
+  %dict_group_candidate_slot144 = and i64 %dict_group_candidate_unwrapped143, %dict_capacity_mask123
+  %dict_entries_offset_mirror145 = add i64 8, 23
+  %dict_entries_offset146 = and i64 %dict_entries_offset_mirror145, -8
+  %dict_entries147 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset146
+  %dict_key_offset148 = mul i64 %dict_group_candidate_slot144, 2
+  %dict_key_slot149 = getelementptr i32, ptr %dict_entries147, i64 %dict_key_offset148
+  %dict_key150 = load i32, ptr %dict_key_slot149, align 4
+  %dict_group_key_match151 = icmp eq i32 %dict_key150, 3
+  br i1 %dict_group_key_match151, label %bb_dict_group_match33, label %bb_dict_group_candidate_next30
+
+bb_dict_group_candidate_next30:
+  %dict_group_bits_minus_one152 = sub i16 %dict_group_candidate_bits138, 1
+  %dict_group_cleared_bits139 = and i16 %dict_group_candidate_bits138, %dict_group_bits_minus_one152
+  br label %bb_dict_group_candidates28
+
+bb_dict_group_decision31:
+  %dict_group_has_empty153 = icmp ne i16 %dict_group_empty_bits137, 0
+  br i1 %dict_group_has_empty153, label %bb_dict_group_empty32, label %bb_dict_group_next34
+
+bb_dict_group_empty32:
+  %dict_group_empty_offset16154 = call i16 @llvm.cttz.i16(i16 %dict_group_empty_bits137, i1 false)
+  %dict_group_empty_offset155 = zext i16 %dict_group_empty_offset16154 to i64
+  %dict_group_empty_unwrapped156 = add i64 %dict_group_start129, %dict_group_empty_offset155
+  %dict_group_empty_slot157 = and i64 %dict_group_empty_unwrapped156, %dict_capacity_mask123
+  br label %bb_dict_group_done36
+
+bb_dict_group_match33:
+  br label %bb_dict_group_done36
+
+bb_dict_group_next34:
+  %dict_group_next_probe125 = add i64 %dict_group_probe126, 16
+  br label %bb_dict_group_find26
+
+bb_dict_group_miss35:
+  br label %bb_dict_group_done36
+
+bb_dict_group_done36:
+  %dict_find_found158 = phi i1 [ false, %bb_dict_group_empty32 ], [ true, %bb_dict_group_match33 ], [ false, %bb_dict_group_miss35 ]
+  %dict_find_found_slot159 = phi i64 [ %dict_group_empty_slot157, %bb_dict_group_empty32 ], [ %dict_group_candidate_slot144, %bb_dict_group_match33 ], [ 0, %bb_dict_group_miss35 ]
+  %dict_entries_offset_mirror160 = add i64 8, 23
+  %dict_entries_offset161 = and i64 %dict_entries_offset_mirror160, -8
+  %dict_entries162 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset161
+  %dict_offset163 = mul i64 %dict_find_found_slot159, 2
+  %dict_key_slot164 = getelementptr i32, ptr %dict_entries162, i64 %dict_offset163
+  %dict_value_offset165 = add i64 %dict_offset163, 1
+  %dict_value_slot166 = getelementptr i32, ptr %dict_entries162, i64 %dict_value_offset165
+  store i32 3, ptr %dict_key_slot164, align 4
+  store i32 300, ptr %dict_value_slot166, align 4
+  %dict_control_slot167 = getelementptr i8, ptr %stack_slot0, i64 %dict_find_found_slot159
+  store i8 %dict_h2_byte122, ptr %dict_control_slot167, align 1
+  %dict_control_mirrored168 = icmp ult i64 %dict_find_found_slot159, 16
+  br i1 %dict_control_mirrored168, label %bb_dict_control_mirror37, label %bb_dict_control_done38
+
+bb_dict_control_mirror37:
+  %dict_control_mirror_index169 = add i64 8, %dict_find_found_slot159
+  %dict_control_mirror_slot170 = getelementptr i8, ptr %stack_slot0, i64 %dict_control_mirror_index169
+  store i8 %dict_h2_byte122, ptr %dict_control_mirror_slot170, align 1
+  br label %bb_dict_control_done38
+
+bb_dict_control_done38:
+  %dict_arg172 = insertvalue %sollang.int_dictionary poison, ptr %stack_slot0, 0
+  %dict_arg173 = insertvalue %sollang.int_dictionary %dict_arg172, i64 3, 1
+  %dict_arg174 = insertvalue %sollang.int_dictionary %dict_arg173, i64 8, 2
+  %numeric_call171 = call i32 @sollang_fn_findScore(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, %sollang.int_dictionary %dict_arg174)
+  %index_size175 = sext i32 1 to i64
+  %hash_key176 = sext i32 1 to i64
+  %hash_high178 = lshr i64 %hash_key176, 32
+  %hash_fold177 = xor i64 %hash_key176, %hash_high178
+  %hash179 = mul i64 %hash_fold177, -7046029254386353131
+  %dict_h2_shifted180 = lshr i64 %hash179, 57
+  %dict_h2_raw181 = and i64 %dict_h2_shifted180, 127
+  %dict_h2_zero182 = icmp eq i64 %dict_h2_raw181, 0
+  %dict_h2183 = select i1 %dict_h2_zero182, i64 1, i64 %dict_h2_raw181
+  %dict_h2_byte184 = trunc i64 %dict_h2183 to i8
+  %dict_capacity_mask185 = sub i64 8, 1
+  %dict_start_slot186 = and i64 %hash179, %dict_capacity_mask185
+  br label %bb_dict_lookup39
+
+bb_dict_lookup39:
+  %dict_lookup_probe188 = phi i64 [ 0, %bb_dict_control_done38 ], [ %dict_lookup_next_probe187, %bb_dict_lookup_next44 ]
+  %dict_lookup_active189 = icmp ult i64 %dict_lookup_probe188, 8
+  br i1 %dict_lookup_active189, label %bb_dict_lookup_body40, label %bb_dict_lookup_miss45
+
+bb_dict_lookup_body40:
+  %dict_lookup_unwrapped190 = add i64 %dict_start_slot186, %dict_lookup_probe188
+  %dict_lookup_slot191 = and i64 %dict_lookup_unwrapped190, %dict_capacity_mask185
+  %dict_control_slot192 = getelementptr i8, ptr %stack_slot0, i64 %dict_lookup_slot191
+  %dict_control193 = load i8, ptr %dict_control_slot192, align 1
+  %dict_lookup_is_empty194 = icmp eq i8 %dict_control193, 0
+  br i1 %dict_lookup_is_empty194, label %bb_dict_lookup_miss45, label %bb_dict_lookup_full41
+
+bb_dict_lookup_full41:
+  %dict_lookup_h2_match195 = icmp eq i8 %dict_control193, %dict_h2_byte184
+  br i1 %dict_lookup_h2_match195, label %bb_dict_lookup_compare42, label %bb_dict_lookup_next44
+
+bb_dict_lookup_compare42:
+  %dict_entries_offset_mirror196 = add i64 8, 23
+  %dict_entries_offset197 = and i64 %dict_entries_offset_mirror196, -8
+  %dict_entries198 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset197
+  %dict_key_offset199 = mul i64 %dict_lookup_slot191, 2
+  %dict_key_slot200 = getelementptr i32, ptr %dict_entries198, i64 %dict_key_offset199
+  %dict_key201 = load i32, ptr %dict_key_slot200, align 4
+  %dict_lookup_key_match202 = icmp eq i32 %dict_key201, 1
+  br i1 %dict_lookup_key_match202, label %bb_dict_lookup_match43, label %bb_dict_lookup_next44
+
+bb_dict_lookup_match43:
+  %dict_entries_offset_mirror203 = add i64 8, 23
+  %dict_entries_offset204 = and i64 %dict_entries_offset_mirror203, -8
+  %dict_entries205 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset204
+  %dict_value_base206 = mul i64 %dict_lookup_slot191, 2
+  %dict_value_offset207 = add i64 %dict_value_base206, 1
+  %dict_value_slot208 = getelementptr i32, ptr %dict_entries205, i64 %dict_value_offset207
+  %dict_value209 = load i32, ptr %dict_value_slot208, align 4
+  br label %bb_dict_lookup_done46
+
+bb_dict_lookup_next44:
+  %dict_lookup_next_probe187 = add i64 %dict_lookup_probe188, 1
+  br label %bb_dict_lookup39
+
+bb_dict_lookup_miss45:
+  call void @llvm.trap()
+  unreachable
+
+bb_dict_lookup_done46:
+  %index_size210 = sext i32 3 to i64
+  %hash_key211 = sext i32 3 to i64
+  %hash_high213 = lshr i64 %hash_key211, 32
+  %hash_fold212 = xor i64 %hash_key211, %hash_high213
+  %hash214 = mul i64 %hash_fold212, -7046029254386353131
+  %dict_h2_shifted215 = lshr i64 %hash214, 57
+  %dict_h2_raw216 = and i64 %dict_h2_shifted215, 127
+  %dict_h2_zero217 = icmp eq i64 %dict_h2_raw216, 0
+  %dict_h2218 = select i1 %dict_h2_zero217, i64 1, i64 %dict_h2_raw216
+  %dict_h2_byte219 = trunc i64 %dict_h2218 to i8
+  %dict_capacity_mask220 = sub i64 8, 1
+  %dict_start_slot221 = and i64 %hash214, %dict_capacity_mask220
+  br label %bb_dict_lookup47
+
+bb_dict_lookup47:
+  %dict_lookup_probe223 = phi i64 [ 0, %bb_dict_lookup_done46 ], [ %dict_lookup_next_probe222, %bb_dict_lookup_next52 ]
+  %dict_lookup_active224 = icmp ult i64 %dict_lookup_probe223, 8
+  br i1 %dict_lookup_active224, label %bb_dict_lookup_body48, label %bb_dict_lookup_miss53
+
+bb_dict_lookup_body48:
+  %dict_lookup_unwrapped225 = add i64 %dict_start_slot221, %dict_lookup_probe223
+  %dict_lookup_slot226 = and i64 %dict_lookup_unwrapped225, %dict_capacity_mask220
+  %dict_control_slot227 = getelementptr i8, ptr %stack_slot0, i64 %dict_lookup_slot226
+  %dict_control228 = load i8, ptr %dict_control_slot227, align 1
+  %dict_lookup_is_empty229 = icmp eq i8 %dict_control228, 0
+  br i1 %dict_lookup_is_empty229, label %bb_dict_lookup_miss53, label %bb_dict_lookup_full49
+
+bb_dict_lookup_full49:
+  %dict_lookup_h2_match230 = icmp eq i8 %dict_control228, %dict_h2_byte219
+  br i1 %dict_lookup_h2_match230, label %bb_dict_lookup_compare50, label %bb_dict_lookup_next52
+
+bb_dict_lookup_compare50:
+  %dict_entries_offset_mirror231 = add i64 8, 23
+  %dict_entries_offset232 = and i64 %dict_entries_offset_mirror231, -8
+  %dict_entries233 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset232
+  %dict_key_offset234 = mul i64 %dict_lookup_slot226, 2
+  %dict_key_slot235 = getelementptr i32, ptr %dict_entries233, i64 %dict_key_offset234
+  %dict_key236 = load i32, ptr %dict_key_slot235, align 4
+  %dict_lookup_key_match237 = icmp eq i32 %dict_key236, 3
+  br i1 %dict_lookup_key_match237, label %bb_dict_lookup_match51, label %bb_dict_lookup_next52
+
+bb_dict_lookup_match51:
+  %dict_entries_offset_mirror238 = add i64 8, 23
+  %dict_entries_offset239 = and i64 %dict_entries_offset_mirror238, -8
+  %dict_entries240 = getelementptr i8, ptr %stack_slot0, i64 %dict_entries_offset239
+  %dict_value_base241 = mul i64 %dict_lookup_slot226, 2
+  %dict_value_offset242 = add i64 %dict_value_base241, 1
+  %dict_value_slot243 = getelementptr i32, ptr %dict_entries240, i64 %dict_value_offset242
+  %dict_value244 = load i32, ptr %dict_value_slot243, align 4
+  br label %bb_dict_lookup_done54
+
+bb_dict_lookup_next52:
+  %dict_lookup_next_probe222 = add i64 %dict_lookup_probe223, 1
+  br label %bb_dict_lookup47
+
+bb_dict_lookup_miss53:
+  call void @llvm.trap()
+  unreachable
+
+bb_dict_lookup_done54:
+  %add245 = add i32 %dict_value209, %dict_value244
+  %dict_len_value246 = trunc i64 3 to i32
+  %numeric_upper_bound247 = icmp ule i64 8, 2147483647
+  br i1 %numeric_upper_bound247, label %bb_numeric_conversion_upper_ok55, label %bb_numeric_conversion_upper_fail56
+
+bb_numeric_conversion_upper_fail56:
+  %trap_stderr248 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr248, ptr @.slg.str.suffix.0, i32 39, ptr %trap_written249, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_numeric_conversion_upper_ok55:
+  %dict_capacity_value250 = trunc i64 8 to i32
+  call void @llvm.lifetime.end.p0(i64 88, ptr %stack_slot0)
+  %numeric_call251 = call i32 @sollang_fn_sumLocal(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state)
+  %write252 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.1, i64 9, ptr %written)
+  %is_ok253 = icmp ne i32 %write252, 0
+  %previous_ok254 = load i1, ptr %ok_state, align 1
+  %ok255 = and i1 %previous_ok254, %is_ok253
+  store i1 %ok255, ptr %ok_state, align 1
+  %print_integer256 = sext i32 %numeric_call171 to i64
+  %write257 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer256, ptr %written)
+  %is_ok258 = icmp ne i32 %write257, 0
+  %previous_ok259 = load i1, ptr %ok_state, align 1
+  %ok260 = and i1 %previous_ok259, %is_ok258
+  store i1 %ok260, ptr %ok_state, align 1
+  %write261 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.2, i64 1, ptr %written)
+  %is_ok262 = icmp ne i32 %write261, 0
+  %previous_ok263 = load i1, ptr %ok_state, align 1
+  %ok264 = and i1 %previous_ok263, %is_ok262
+  store i1 %ok264, ptr %ok_state, align 1
+  %write265 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.3, i64 8, ptr %written)
+  %is_ok266 = icmp ne i32 %write265, 0
+  %previous_ok267 = load i1, ptr %ok_state, align 1
+  %ok268 = and i1 %previous_ok267, %is_ok266
+  store i1 %ok268, ptr %ok_state, align 1
+  %print_integer269 = sext i32 %add245 to i64
+  %write270 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer269, ptr %written)
+  %is_ok271 = icmp ne i32 %write270, 0
+  %previous_ok272 = load i1, ptr %ok_state, align 1
+  %ok273 = and i1 %previous_ok272, %is_ok271
+  store i1 %ok273, ptr %ok_state, align 1
+  %write274 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.4, i64 1, ptr %written)
+  %is_ok275 = icmp ne i32 %write274, 0
+  %previous_ok276 = load i1, ptr %ok_state, align 1
+  %ok277 = and i1 %previous_ok276, %is_ok275
+  store i1 %ok277, ptr %ok_state, align 1
+  %write278 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.5, i64 8, ptr %written)
+  %is_ok279 = icmp ne i32 %write278, 0
+  %previous_ok280 = load i1, ptr %ok_state, align 1
+  %ok281 = and i1 %previous_ok280, %is_ok279
+  store i1 %ok281, ptr %ok_state, align 1
+  %print_integer282 = sext i32 %dict_len_value246 to i64
+  %write283 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer282, ptr %written)
+  %is_ok284 = icmp ne i32 %write283, 0
+  %previous_ok285 = load i1, ptr %ok_state, align 1
+  %ok286 = and i1 %previous_ok285, %is_ok284
+  store i1 %ok286, ptr %ok_state, align 1
+  %write287 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.6, i64 1, ptr %written)
+  %is_ok288 = icmp ne i32 %write287, 0
+  %previous_ok289 = load i1, ptr %ok_state, align 1
+  %ok290 = and i1 %previous_ok289, %is_ok288
+  store i1 %ok290, ptr %ok_state, align 1
+  %write291 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.7, i64 11, ptr %written)
+  %is_ok292 = icmp ne i32 %write291, 0
+  %previous_ok293 = load i1, ptr %ok_state, align 1
+  %ok294 = and i1 %previous_ok293, %is_ok292
+  store i1 %ok294, ptr %ok_state, align 1
+  %print_integer295 = sext i32 %dict_capacity_value250 to i64
+  %write296 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer295, ptr %written)
+  %is_ok297 = icmp ne i32 %write296, 0
+  %previous_ok298 = load i1, ptr %ok_state, align 1
+  %ok299 = and i1 %previous_ok298, %is_ok297
+  store i1 %ok299, ptr %ok_state, align 1
+  %write300 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.8, i64 1, ptr %written)
+  %is_ok301 = icmp ne i32 %write300, 0
+  %previous_ok302 = load i1, ptr %ok_state, align 1
+  %ok303 = and i1 %previous_ok302, %is_ok301
+  store i1 %ok303, ptr %ok_state, align 1
+  %write304 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.9, i64 17, ptr %written)
+  %is_ok305 = icmp ne i32 %write304, 0
+  %previous_ok306 = load i1, ptr %ok_state, align 1
+  %ok307 = and i1 %previous_ok306, %is_ok305
+  store i1 %ok307, ptr %ok_state, align 1
+  %print_integer308 = sext i32 %numeric_call251 to i64
+  %write309 = call i32 @sollang_write_i64(ptr %stdout, i64 %print_integer308, ptr %written)
+  %is_ok310 = icmp ne i32 %write309, 0
+  %previous_ok311 = load i1, ptr %ok_state, align 1
+  %ok312 = and i1 %previous_ok311, %is_ok310
+  store i1 %ok312, ptr %ok_state, align 1
+  %write313 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.10, i64 1, ptr %written)
+  %is_ok314 = icmp ne i32 %write313, 0
+  %previous_ok315 = load i1, ptr %ok_state, align 1
+  %ok316 = and i1 %previous_ok315, %is_ok314
+  store i1 %ok316, ptr %ok_state, align 1
+  %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %final_ok317 = load i1, ptr %ok_state, align 1
+  %exit318 = select i1 %final_ok317, i32 0, i32 1
+  ret i32 %exit318
+}
