@@ -3999,6 +3999,9 @@ Container rules:
   7/8 load. A request no larger than current capacity is a no-op. Bounded
   inline collections reject `reserve` because their capacity is part of their
   type and cannot change.
+  Growing an ordinary heap array with `reserve` traps on allocation failure
+  before copying old elements, releasing their backing, or committing a new
+  pointer and capacity.
   Ordinary heap arrays accept `owner! -> pushAll(fixedArray)` when the element
   type is copyable and exactly matches. The source expression is evaluated once;
   lowering checks addition overflow, reserves the combined length at most once,
@@ -4366,6 +4369,9 @@ changing a rejected parse into an accepted compilation.
 handle containing a backing pointer, used byte count, and capacity. `box T`
 remains different and always means an individually owned heap allocation;
 ordinary structs remain inline values.
+Arena growth, including growth triggered by `materialize`, traps on allocation
+failure before copying used bytes, releasing old backing, or changing the
+arena's pointer and capacity.
 Boxed values use the same canonical size and alignment as inline values of
 their element type, after declared collection shapes have been registered.
 Aggregate alignment follows its fields independently of its total byte size.

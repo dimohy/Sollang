@@ -1,8 +1,8 @@
-"""Observe a constant-size allocation's guarded, source-owned fatal branch.
+"""Observe an allocation's guarded, source-owned fatal branch.
 
-Generated LLVM register and block identifiers are not diagnostic codes. The
-same rule binds the diagnostic to the actual failure block for both emitters;
-there are no producer-specific accepted strings or fallback paths.
+This checks a diagnostic's relationship to its own generated failure block;
+it does not establish byte-identical generated identifiers or full diagnostic
+parity. Both emitters use the same rule without producer-specific strings.
 """
 import re
 
@@ -10,17 +10,34 @@ import re
 def allocation_failure_binding(text, byte_count, source_function):
     if type(byte_count) is not int or byte_count <= 0 or not source_function:
         raise ValueError('ALLOCATION_FAILURE_CONTRACT_INVALID')
+    return allocation_failure_call_binding(
+        text, f'call ptr @sollang_alloc(i64 {byte_count})', source_function)
+
+
+def allocation_failure_call_binding(text, call_needle, source_function):
+    """Use one explicit, previously assembled allocation or resize call site."""
+    if (not source_function or not isinstance(call_needle, str)
+            or re.fullmatch(r'call ptr @sollang_(?:alloc|resize)\([^\n()]+\)', call_needle) is None):
+        raise ValueError('ALLOCATION_FAILURE_CONTRACT_INVALID')
     text = text.replace('\r\n', '\n')
     matches = list(re.finditer(
-        rf'^\s*(%[-\w.$]+) = call ptr @sollang_alloc\(i64 {byte_count}\)\s*$', text, re.M))
+        rf'^\s*(%[-\w.$]+) = {re.escape(call_needle)}\s*$', text, re.M))
     if len(matches) != 1:
         raise ValueError('ALLOCATION_FAILURE_CALL_NOT_UNIQUE')
     allocation = matches[0]
+    owners = list(re.finditer(r'^define[^\n]*\{[ \t]*$', text[:allocation.start()], re.M))
+    closing = re.search(r'^}', text[allocation.end():], re.M)
+    if not owners or closing is None:
+        raise ValueError('ALLOCATION_FAILURE_FUNCTION_MISSING')
+    # LLVM block identifiers are local to a function. A same-named failure
+    # block in a different function cannot supply this call site's evidence.
+    function_end = allocation.end() + closing.end()
+    function_text = text[owners[-1].start():function_end]
     pointers = {allocation[1]}
     condition = None
     tested_pointer = None
     branch = None
-    for line in text[allocation.end():].splitlines():
+    for line in text[allocation.end():function_end].splitlines():
         if not line.strip():
             continue
         alias = re.fullmatch(r'\s*(%[-\w.$]+) = getelementptr i8, ptr (%[-\w.$]+), i64 0\s*', line)
@@ -39,7 +56,7 @@ def allocation_failure_binding(text, byte_count, source_function):
     if branch is None or condition is None:
         raise ValueError('ALLOCATION_FAILURE_GUARD_MISSING_BEFORE_USE')
     fail = branch[3]
-    block = re.search(rf'^{re.escape(fail)}:\s*\n(.*?)(?=^[-\w.$]+:|^}})', text, re.M | re.S)
+    block = re.search(rf'^{re.escape(fail)}:\s*\n(.*?)(?=^[-\w.$]+:|^}})', function_text, re.M | re.S)
     if block is None or not re.search(r'call void @llvm\.trap\(\)\s*\n\s*unreachable', block[1]):
         raise ValueError('ALLOCATION_FAILURE_FATAL_BRANCH_MISSING')
     literals = re.findall(r'\[(\d+) x i8\] c"((?:\\[0-9A-Fa-f]{2}|[^"\\])*)"', block[1])

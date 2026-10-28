@@ -1636,10 +1636,13 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
     "  %materialize$(materializeIndex)_doubled_enough = icmp uge i64 %materialize$(materializeIndex)_doubled, %materialize$(materializeIndex)_end" -> println
     "  %materialize$(materializeIndex)_new_capacity = select i1 %materialize$(materializeIndex)_doubled_enough, i64 %materialize$(materializeIndex)_doubled, i64 %materialize$(materializeIndex)_end" -> println
     "  %materialize$(materializeIndex)_grown = call ptr @sollang_resize(ptr %materialize$(materializeIndex)_data, i64 %materialize$(materializeIndex)_used, i64 %materialize$(materializeIndex)_new_capacity)" -> println
+    Arena(0) => materializeGuardNames!
+    "materialize$(materializeIndex)" -> materialize(materializeGuardNames!) => materializeGuardPrefix
+    materializeGuardPrefix -> emitAllocationGuard("_grown", request.ownerIndex, context, state)
     "  br label %materialize$(materializeIndex)_ready" -> println
     "materialize$(materializeIndex)_ready:" -> println
-    "  %materialize$(materializeIndex)_pointer = phi ptr [ %materialize$(materializeIndex)_data, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_grown, %materialize$(materializeIndex)_grow ]" -> println
-    "  %materialize$(materializeIndex)_final_capacity = phi i64 [ %materialize$(materializeIndex)_capacity, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_new_capacity, %materialize$(materializeIndex)_grow ]" -> println
+    "  %materialize$(materializeIndex)_pointer = phi ptr [ %materialize$(materializeIndex)_data, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_grown, %materialize$(materializeIndex)_allocation_ready ]" -> println
+    "  %materialize$(materializeIndex)_final_capacity = phi i64 [ %materialize$(materializeIndex)_capacity, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_new_capacity, %materialize$(materializeIndex)_allocation_ready ]" -> println
     "  %materialize$(materializeIndex)_target = getelementptr i8, ptr %materialize$(materializeIndex)_pointer, i64 %materialize$(materializeIndex)_used" -> println
     materializeRootCount > 0 -> if {
         "  %materialize$(materializeIndex)_copy_offset0 = add i64 0, 0" -> println
@@ -1760,12 +1763,15 @@ emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
     "  %reserve$(reserveIndex)_bytes = mul i64 %reserve$(reserveIndex)_requested, $reserveElementSize" -> println
     "  %reserve$(reserveIndex)_used_bytes = mul i64 %reserve$(reserveIndex)_length, $reserveElementSize" -> println
     "  %reserve$(reserveIndex)_allocated = call ptr @sollang_resize(ptr %reserve$(reserveIndex)_data, i64 %reserve$(reserveIndex)_used_bytes, i64 %reserve$(reserveIndex)_bytes)" -> println
+    Arena(0) => reserveGuardNames!
+    "reserve$(reserveIndex)" -> materialize(reserveGuardNames!) => reserveGuardPrefix
+    reserveGuardPrefix -> emitAllocationGuard("_allocated", request.ownerIndex, context, state)
     "  br label %reserve$(reserveIndex)_done" -> println
     "reserve$(reserveIndex)_keep:" -> println
     "  br label %reserve$(reserveIndex)_done" -> println
     "reserve$(reserveIndex)_done:" -> println
-    "  %reserve$(reserveIndex)_final_data = phi ptr [ %reserve$(reserveIndex)_allocated, %reserve$(reserveIndex)_allocate ], [ %reserve$(reserveIndex)_data, %reserve$(reserveIndex)_keep ]" -> println
-    "  %reserve$(reserveIndex)_final_capacity = phi i64 [ %reserve$(reserveIndex)_requested, %reserve$(reserveIndex)_allocate ], [ %reserve$(reserveIndex)_capacity, %reserve$(reserveIndex)_keep ]" -> println
+    "  %reserve$(reserveIndex)_final_data = phi ptr [ %reserve$(reserveIndex)_allocated, %reserve$(reserveIndex)_allocation_ready ], [ %reserve$(reserveIndex)_data, %reserve$(reserveIndex)_keep ]" -> println
+    "  %reserve$(reserveIndex)_final_capacity = phi i64 [ %reserve$(reserveIndex)_requested, %reserve$(reserveIndex)_allocation_ready ], [ %reserve$(reserveIndex)_capacity, %reserve$(reserveIndex)_keep ]" -> println
     reserveBorrowOrdinal >= 0 -> if {
         "  store ptr %reserve$(reserveIndex)_final_data, ptr " -> print
         reserveBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(reserveBorrowOrdinal)_mut_ptr_addr" -> print }
