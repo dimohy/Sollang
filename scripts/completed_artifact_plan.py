@@ -1471,9 +1471,10 @@ def partial_comparison_shutdown(repo: Path, path: Path, record: dict, product: P
 
 def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path, product_sha256: str) -> dict | None:
     """Read a sealed batch supervisor for retirement without granting case credit."""
-    if (record.get('schemaVersion') != 1 or record.get('status') != 'passed'
+    if (record.get('schemaVersion') != 1 or record.get('status') not in ('passed', 'failed')
             or record.get('cases') != [] or type(record.get('total')) is not int
-            or record['total'] <= 0 or record.get('completed') != record['total']
+            or record['total'] <= 0 or type(record.get('completed')) is not int
+            or not 0 <= record['completed'] <= record['total']
             or record.get('compilerSide') != 'selfhost' or record.get('claimsGoalComplete') is not False
             or record.get('claimsAcceptancePassed') is True
             or not isinstance(record.get('scope'), str) or not record['scope']
@@ -1488,7 +1489,8 @@ def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path
     command = process.get('command')
     observation = process.get('naturalShutdownObservation', {})
     samples = observation.get('samples') if isinstance(observation, dict) else None
-    if (type(process.get('exit')) is not int or process['exit'] != 0
+    expected_exit = 0 if record['status'] == 'passed' else 1
+    if (type(process.get('exit')) is not int or process['exit'] != expected_exit
             or process.get('shutdownConfirmed') is not True
             or process.get('shutdownScope') != 'owned-windows-job'
             or not isinstance(observation, dict) or observation.get('outcome') != 'drained'
@@ -1521,23 +1523,29 @@ def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path
     if not isinstance(report, dict) or not isinstance(report.get('compilerSha256'), str):
         return None
     results, planned = report.get('results'), report.get('phaseFixturePlan')
-    if (report.get('state') != 'passed' or report.get('label') != 'selfhost'
+    if (report.get('state') != record['status'] or report.get('label') != 'selfhost'
             or report.get('compilerSha256', '').casefold() != product_sha256.casefold()
-            or any(type(report.get(key)) is not int or report[key] != record['total'] for key in ('completed', 'passed', 'total'))
-            or any(type(report.get(key)) is not int or report[key] != 0 for key in ('failed', 'missing'))
+            or any(type(report.get(key)) is not int or report[key] != record['total'] for key in ('completed', 'total'))
+            or type(report.get('passed')) is not int or report['passed'] != record['completed']
+            or type(report.get('failed')) is not int or report['failed'] != record['total'] - record['completed']
+            or (record['status'] == 'passed') != (report['failed'] == 0)
+            or type(report.get('missing')) is not int or report['missing'] != 0
             or not isinstance(results, list) or len(results) != record['total']
             or not isinstance(planned, list) or len(planned) != record['total']
             or any(not isinstance(item, str) or not item for item in planned)
             or len(set(planned)) != len(planned)
             or any(not isinstance(row, dict) or not isinstance(row.get('Fixture'), str)
-                   or row.get('Success') is not True or row.get('Error') != '' for row in results)
+                   or type(row.get('Success')) is not bool or not isinstance(row.get('Error'), str)
+                   or row['Success'] is not (row['Error'] == '') for row in results)
             or {row['Fixture'] for row in results} != set(planned)
+            or sum(row['Success'] for row in results) != report['passed']
             or not terminal_consumer_process(repo, path.parent, process)):
         return None
     assert_output_shutdown(repo, batch)
     return {'contractPath': str(contract), 'contractSha256': hashlib.sha256(contract.read_bytes()).hexdigest(),
             'reportPath': str(report_path), 'reportSha256': hashlib.sha256(raw).hexdigest(),
-            'observedCompleted': record['completed'], 'claimsAcceptancePassed': False}
+            'observedCompleted': record['completed'], 'observedExecuted': report['completed'],
+            'observedFailed': report['failed'], 'claimsAcceptancePassed': False}
 
 
 def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], replacement: Path,

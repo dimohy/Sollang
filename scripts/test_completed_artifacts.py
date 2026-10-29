@@ -2088,6 +2088,69 @@ class CompilerConsumerClosureTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 policy.consumer_closure_record(self.repo, old, [consumer], replacement, legacy_terminal=True)
 
+    def failed_phase_supervisor_fixture(self):
+        old, replacement, consumer, record, report = self.phase_supervisor_fixture()
+        data = json.loads(report.read_text())
+        data.update(state='failed', completed=3, passed=2, total=3, failed=1,
+                    phaseFixturePlan=['first', 'second', 'third'], results=[
+                        dict(Fixture='first', Success=True, Error=''),
+                        dict(Fixture='second', Success=True, Error=''),
+                        dict(Fixture='third', Success=False, Error='LLVM oracle mismatch')])
+        record.update(status='failed', completed=2, total=3,
+                      failure='batch failed with one rejected oracle')
+        record['processes'][0]['exit'] = 1
+        consumer.write_text(json.dumps(record))
+        report.write_text(json.dumps(data))
+        return old, replacement, consumer, record, report
+
+    def test_failed_phase_supervisor_retires_only_producer_and_preserves_failed_output(self):
+        old, replacement, consumer, record, report = self.failed_phase_supervisor_fixture()
+        failed_output = consumer.parent / 'unverified.ll'
+        failed_output.write_text('preserve the failed compiler output')
+        original = consumer.read_bytes(), report.read_bytes(), failed_output.read_bytes()
+        closure = policy.close_compiler_consumers(self.repo, old, [consumer], replacement,
+                                                  legacy_terminal=True)
+        row = json.loads(closure.read_text())['consumers'][0]
+        self.assertEqual('failed', row['status'])
+        self.assertEqual(0, row['completed'])
+        self.assertEqual(2, row['observedCompleted'])
+        self.assertEqual(3, row['phaseEvidence']['observedExecuted'])
+        self.assertEqual(1, row['phaseEvidence']['observedFailed'])
+        self.assertFalse(row['phaseEvidence']['claimsAcceptancePassed'])
+        plan = self.plan(retention_terminal=True, reusable_directories=[replacement])
+        self.assertIn(str(old / 'compiler.exe'), [item['path'] for item in plan['targets']])
+        self.assertNotIn(str(failed_output), [item['path'] for item in plan['targets']])
+        run = self.execute(plan)
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertFalse((old / 'compiler.exe').exists())
+        self.assertTrue((replacement / 'compiler.exe').exists())
+        self.assertEqual(original, (consumer.read_bytes(), report.read_bytes(), failed_output.read_bytes()))
+
+    def test_failed_phase_supervisor_rejects_incomplete_or_inconsistent_outcomes(self):
+        old, replacement, consumer, original, report = self.failed_phase_supervisor_fixture()
+        original_report = json.loads(report.read_text())
+        for kind in ('unfinished', 'parent-count', 'failed-count', 'passed-type', 'verdict',
+                     'empty-error', 'wrong-state', 'exit', 'live', 'unstable', 'compiler', 'missing', 'duplicate'):
+            record, data = copy.deepcopy(original), copy.deepcopy(original_report)
+            if kind == 'unfinished': data['completed'] = 2
+            elif kind == 'parent-count': record['completed'] = 3
+            elif kind == 'failed-count': data['failed'] = 0
+            elif kind == 'passed-type': data['passed'] = True
+            elif kind == 'verdict': data['results'][2]['Success'] = True
+            elif kind == 'empty-error': data['results'][2]['Error'] = ''
+            elif kind == 'wrong-state': data['state'] = 'passed'
+            elif kind == 'exit': record['processes'][0]['exit'] = 0
+            elif kind == 'live': record['processes'][0]['naturalShutdownObservation']['samples'][-1]['activeProcesses'] = 1
+            elif kind == 'unstable': record['inputsStable'] = False
+            elif kind == 'compiler': data['compilerSha256'] = '0' * 64
+            elif kind == 'missing': data['results'].pop()
+            elif kind == 'duplicate': data['phaseFixturePlan'][2] = 'first'
+            consumer.write_text(json.dumps(record))
+            report.write_text(json.dumps(data))
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                policy.consumer_closure_record(self.repo, old, [consumer], replacement,
+                                               legacy_terminal=True)
+
     def attempted_runner_fixture(self):
         old, replacement, consumer = self.products(True)
         record = json.loads(consumer.read_text())
