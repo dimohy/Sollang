@@ -1,0 +1,52 @@
+--- selfhost/llvm/emitter/diagnostics.slg
++++ artifacts/scratch/resume-20261006-owner-continuation22/heap-proposal19240/emitter_diagnostics.slg
+@@ -5476,6 +5476,7 @@
+             context -> emitExpressionSemanticPrefix(diagnostic, location)
+             diagnostic.operatorKind -> when {
+                 == -236 { "capacity" }
++                == -252 { "push" }
+                 == 1 { "alloc" }
+                 == 2 { "used" }
+                 == 3 { "store" }
+@@ -5483,6 +5484,12 @@
+                 else { "reset" }
+             } => operation
+             diagnostic.code == 60 -> if {
++                diagnostic.operatorKind == -252 -> if {
++                    diagnostic.operandTypeSymbol == 1 -> if {
++                        "push must be the final value-flow target" -> println
++                    } else { "push expects exactly one argument" -> println }
++                    return
++                }
+                 diagnostic.operatorKind -> when {
+                     == 1 { "arena alloc must be final and expects byte-count and alignment arguments" -> println }
+                     == 2 { "used does not accept arguments" -> println }
+@@ -5500,7 +5507,27 @@
+                 nameLength! > 0 and (ownerName -> byte(nameLength! - 1)) == 33
+                     -> if { nameLength! - 1 => nameLength! }
+                 ownerName -> slice(UIntSize(0), nameLength!) => name
+-                "$operation requires writable owner storage; change a readonly parameter from '$name: Type' to '$name: mut Type', declare an instance receiver as 'mut self', or bind local owned storage with '=> $name!'" -> println
++                context.nodes[range.astStart + diagnostic.astNode] => receiver
++                diagnostic.operatorKind == -252 and receiver.kind == 36
++                    -> if {
++                        name == "self" -> if {
++                            receiver.firstToken => memberNameToken!
++                            receiver.firstToken => memberTokenIndex!
++                            memberTokenIndex! < receiver.firstToken + receiver.tokenCount
++                                -> while {
++                                    context.tokens[range.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier()
++                                        -> if { memberTokenIndex! => memberNameToken! }
++                                    memberTokenIndex! + 1 => memberTokenIndex!
++                                }
++                            context.tokens[range.tokenStart + memberNameToken!] => memberToken
++                            context.sources[diagnostic.sourceModule] -> slice(memberToken.span.start, memberToken.span.length) => memberName
++                            "$operation mutates field '$memberName'; declare the method receiver as 'mut self'" -> println
++                        } else {
++                            "$operation requires writable owner storage; change a readonly parameter from '$name: Type' to '$name: mut Type', or bind local owned storage with '=> $name!'" -> println
++                        }
++                    } else {
++                        "$operation requires writable owner storage; change a readonly parameter from '$name: Type' to '$name: mut Type', declare an instance receiver as 'mut self', or bind local owned storage with '=> $name!'" -> println
++                    }
+             }
+             diagnostic.code == 62 -> if { "$operation requires a named mutable container binding" -> println }
+             diagnostic.code == 63 -> if { "arena alloc byte-count and alignment must be Int or UIntSize" -> println }
