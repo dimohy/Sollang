@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$SelfhostCompiler,
     [Parameter(Mandatory)][string[]]$Fixture,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [ValidateRange(1000, 3600000)][int]$TimeoutMilliseconds = 120000,
+    [ValidateRange(1000, 180000)][int]$TimeoutMilliseconds = 120000,
     [string[]]$AdditionalInput = @(),
     [string[]]$ReusableCompilerDirectories = @(),
     [string]$FormatCheckCompiler = '',
@@ -136,12 +136,21 @@ function InputHashes {
     foreach ($path in $inputs) { $hashes[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
     $hashes
 }
+$script:pairedCaseClock = $null
 function Invoke-CaseProcess([string]$file, [string[]]$arguments, [string]$description, [string]$prefix, [int]$processTimeoutMilliseconds = $TimeoutMilliseconds) {
+    if ($null -ne $script:pairedCaseClock) {
+        $remaining = [long]$TimeoutMilliseconds - $script:pairedCaseClock.ElapsedMilliseconds
+        if ($remaining -le 0) { throw "PAIRED_CASE_BUDGET_EXHAUSTED: $description" }
+        $processTimeoutMilliseconds = [int][Math]::Min($processTimeoutMilliseconds, $remaining)
+    }
     $run = Invoke-VerificationProcessCapture -FilePath $file -ArgumentList $arguments `
         -WorkingDirectory $root -Description $description -TimeoutMilliseconds $processTimeoutMilliseconds `
         -ExecutionRecordPath "$prefix.execution.json"
     [IO.File]::WriteAllText("$prefix.stdout.txt", $run.Stdout, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText("$prefix.stderr.txt", $run.Stderr, [Text.UTF8Encoding]::new($false))
+    if ($null -ne $script:pairedCaseClock -and $script:pairedCaseClock.ElapsedMilliseconds -gt $TimeoutMilliseconds) {
+        throw "PAIRED_CASE_BUDGET_EXHAUSTED: $description"
+    }
     $run
 }
 function Normalized([string]$value) { $value.Replace("`r`n", "`n") }
@@ -176,6 +185,7 @@ try {
             [pscustomobject]@{ Name = 'managed'; Path = $managed; Stdlib = $false },
             [pscustomobject]@{ Name = 'selfhost'; Path = $selfhost; Stdlib = $true }
         )) {
+            $script:pairedCaseClock = [Diagnostics.Stopwatch]::StartNew()
             $prefix = Join-Path $output "$($case.Name).$($compiler.Name)"
             $exe = "$prefix.exe"
             $arguments = @('build') + @($case.Sources) + @('-o', $exe, '--target', 'windows-x64',
@@ -240,7 +250,11 @@ try {
                 runtimeStdout = $actual
                 runtimeStderr = $actualStderr
                 llvmObservation = $observationLink
+                caseBudgetMilliseconds = $TimeoutMilliseconds
+                caseElapsedMilliseconds = $script:pairedCaseClock.ElapsedMilliseconds
             })
+            $script:pairedCaseClock.Stop()
+            $script:pairedCaseClock = $null
         }
     }
 } catch {

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$OutputDirectory, [string]$PreviousWrapper = '')
+param([Parameter(Mandatory)][string]$OutputDirectory, [string]$PreviousWrapper = '', [string]$PreviousBudgetWrapper = '')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -13,6 +13,7 @@ $wrapper = Join-Path $PSScriptRoot 'verify-compiler-paired-native-fixtures.ps1'
 $helper = Join-Path $PSScriptRoot 'verification-process.ps1'
 $paths = @($PSCommandPath, $wrapper, $helper)
 if ($PreviousWrapper) { $paths += (Resolve-Path -LiteralPath $PreviousWrapper).Path }
+if ($PreviousBudgetWrapper) { $paths += (Resolve-Path -LiteralPath $PreviousBudgetWrapper).Path }
 $before = [ordered]@{}
 foreach ($path in $paths) { $before[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 $tokens = $null
@@ -25,12 +26,72 @@ $functions = @($ast.FindAll({ param($node)
 if ($functions.Count -ne 1) { throw 'PAIRED_EXECUTION_WRAPPER_FUNCTION_NOT_UNIQUE' }
 . $helper
 . ([ScriptBlock]::Create($functions[0].Extent.Text))
+$script:pairedCaseClock = $null
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $shellPath = (Get-Process -Id $PID).Path
 $rows = [Collections.Generic.List[object]]::new()
 $failure = $null
-$expectedControls = 9 + [int]([bool]$PreviousWrapper)
+$expectedControls = 12 + [int]([bool]$PreviousWrapper) + [int]([bool]$PreviousBudgetWrapper)
 try {
+    $overbudgetOutput = Join-Path $output 'overbudget-must-not-start'
+    $overbudgetRejected = $false
+    try {
+        & $wrapper -ManagedCompiler 'missing-managed' -SelfhostCompiler 'missing-native' `
+            -Fixture @('unused') -OutputDirectory $overbudgetOutput -TimeoutMilliseconds 180001
+    } catch [System.Management.Automation.ParameterBindingException] {
+        $overbudgetRejected = $_.FullyQualifiedErrorId -like 'ParameterArgumentValidationError*'
+    }
+    if (-not $overbudgetRejected -or (Test-Path -LiteralPath $overbudgetOutput)) {
+        throw 'PAIRED_CASE_BUDGET_PERMISSION_EXPANSION_NOT_REJECTED'
+    }
+    $rows.Add([ordered]@{ id = 'case-budget-above180-seconds-rejected-before-launch'; passed = $true })
+    $checkCaseBudget = {
+        param($functionText, $controlPrefix)
+        . ([ScriptBlock]::Create($functionText))
+        $TimeoutMilliseconds = 1000
+        $timeouts = [Collections.Generic.List[int]]::new()
+        function Invoke-VerificationProcessCapture {
+            param($FilePath, $ArgumentList, $WorkingDirectory, $Description, $TimeoutMilliseconds, $ExecutionRecordPath)
+            $timeouts.Add($TimeoutMilliseconds)
+            [pscustomobject]@{ Stdout = ''; Stderr = ''; ExitCode = 0 }
+        }
+        $script:pairedCaseClock = [pscustomobject]@{ ElapsedMilliseconds = 600L }
+        try {
+            $null = Invoke-CaseProcess 'unused' @() 'build' "$controlPrefix-build"
+            $script:pairedCaseClock.ElapsedMilliseconds = 850L
+            $null = Invoke-CaseProcess 'unused' @() 'assemble' "$controlPrefix-assemble"
+            if ($timeouts.Count -ne 2 -or $timeouts[0] -ne 400 -or $timeouts[1] -ne 150) {
+                throw 'PAIRED_CASE_BUDGET_RESET_BETWEEN_STAGES'
+            }
+            $script:pairedCaseClock.ElapsedMilliseconds = 1000L
+            $budgetFailure = $null
+            try { $null = Invoke-CaseProcess 'unused' @() 'run' "$controlPrefix-run" }
+            catch { $budgetFailure = $_.Exception.Message }
+            if ($budgetFailure -notlike 'PAIRED_CASE_BUDGET_EXHAUSTED:*' -or $timeouts.Count -ne 2) {
+                throw 'PAIRED_CASE_BUDGET_EXHAUSTION_DID_NOT_BLOCK_LAUNCH'
+            }
+        } finally { $script:pairedCaseClock = $null }
+    }
+    & $checkCaseBudget $functions[0].Extent.Text (Join-Path $output 'budget-current')
+    $rows.Add([ordered]@{ id = 'case-budget-shared-across-build-and-assemble'; passed = $true })
+    $rows.Add([ordered]@{ id = 'case-budget-exhaustion-blocks-next-launch'; passed = $true })
+    if ($PreviousBudgetWrapper) {
+        $oldTokens = $null; $oldErrors = $null
+        $oldAst = [Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path -LiteralPath $PreviousBudgetWrapper).Path, [ref]$oldTokens, [ref]$oldErrors)
+        if ($oldErrors.Count -ne 0) { throw 'PAIRED_PREVIOUS_BUDGET_WRAPPER_PARSE_FAILED' }
+        $oldFunctions = @($oldAst.FindAll({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Invoke-CaseProcess'
+        }, $true))
+        if ($oldFunctions.Count -ne 1) { throw 'PAIRED_PREVIOUS_BUDGET_FUNCTION_NOT_UNIQUE' }
+        $oldFailure = $null
+        try { & $checkCaseBudget $oldFunctions[0].Extent.Text (Join-Path $output 'budget-previous') }
+        catch { $oldFailure = $_.Exception.Message }
+        if ($oldFailure -cne 'PAIRED_CASE_BUDGET_RESET_BETWEEN_STAGES') {
+            throw 'PAIRED_PREVIOUS_CASE_BUDGET_FAILURE_NOT_REPRODUCED'
+        }
+        $rows.Add([ordered]@{ id = 'previous-per-command-budget-reset-rejected'; passed = $true })
+    }
     $finalizationSource = {
         param($wrapperAst)
         $mainTry = @($wrapperAst.EndBlock.Statements | Where-Object {
