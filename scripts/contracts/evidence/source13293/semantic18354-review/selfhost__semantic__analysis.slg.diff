@@ -1,0 +1,130 @@
+diff --git a/selfhost/semantic/analysis.slg b/selfhost/semantic/analysis.slg
+index 24e8a58a2..e95031969 100644
+--- a/selfhost/semantic/analysis.slg
++++ b/selfhost/semantic/analysis.slg
+@@ -10,6 +10,7 @@ import sollang.compiler.semantic.symbols as symbols
+ import sollang.compiler.semantic.type_terms as typeTerms
+ import sollang.compiler.semantic.types as types
+ import sollang.compiler.syntax as syntax
++import syntax.generated.slg as grammar
+ import sys.file as file
+ 
+ # One package owns relocatable flat products. Every index stored inside an AST,
+@@ -51,6 +52,51 @@ public struct PackageAnalysis {
+     public interpolations: [interpolation.InterpolationNode; ~]
+ }
+ 
++public declaresIntegerValueGeneric package: ref PackageAnalysis, sourceModule: Int, functionAst: Int, genericToken: Int -> Bool {
++    package.ranges[sourceModule] => range
++    package.tokens[range.tokenStart + genericToken] => generic
++    package.sources[sourceModule] -> slice(generic.span.start, generic.span.length) => genericName
++    0 => astIndex!
++    astIndex! < range.astCount -> while {
++        package.nodes[range.astStart + astIndex!] => constraint
++        constraint.kind == 34 and constraint.parent >= 0
++            -> if {
++                package.nodes[range.astStart + constraint.parent] => clause
++                clause.kind == 33 and clause.parent == functionAst
++                    -> if {
++                        0 => significant!
++                        false => matches!
++                        false => colon!
++                        false => integer!
++                        constraint.firstToken => tokenIndex!
++                        tokenIndex! < constraint.firstToken + constraint.tokenCount
++                            -> while {
++                                package.tokens[range.tokenStart + tokenIndex!] => token
++                                token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
++                                    -> if {
++                                        significant! == 0 -> if {
++                                            (package.sources[sourceModule] -> slice(token.span.start, token.span.length)) == genericName => matches!
++                                        }
++                                        significant! == 1 -> if { token.kind == grammar.tokenIdColon() => colon! }
++                                        significant! == 2 -> if {
++                                            token.kind == grammar.tokenIdIdentifier()
++                                                and (package.sources[sourceModule] -> slice(token.span.start, token.span.length)) == "Int" => integer!
++                                        }
++                                        significant! + 1 => significant!
++                                    }
++                                tokenIndex! + 1 => tokenIndex!
++                            }
++                        matches! and colon! -> if {
++                            integer! and significant! == 3 => valueGeneric
++                            valueGeneric -> return
++                        }
++                    }
++            }
++        astIndex! + 1 => astIndex!
++    }
++    false
++}
++
+ withSelectedFunctionFlag symbol: symbols.Symbol, selected: Bool -> symbols.Symbol {
+     symbol.flags => flags!
+     selected and ((flags! / 4) % 2) == 0 -> if { flags! + 4 => flags! }
+@@ -101,6 +147,7 @@ failedSource failure: constantLowering.Failure -> SourceAnalysis {
+ }
+ 
+ public struct CompletedSourceInterpolations {
++    public symbols: [symbols.Symbol; ~]
+     public nodes: [ast.AstNode; ~]
+     public tokens: [syntax.SyntaxToken; ~]
+     public interpolations: [interpolation.InterpolationNode; ~]
+@@ -162,7 +209,10 @@ public completeSourceInterpolations source: Text, nodes: ref [ast.AstNode; ~], t
+             node! => sourceInterpolations![interpolationIndex!]
+             interpolationIndex! + 1 => interpolationIndex!
+         }
+-    CompletedSourceInterpolations { nodes: sourceNodes!, tokens: sourceTokens!, interpolations: sourceInterpolations! }
++    [symbols.Symbol; ~] => completedPrefix!
++    sourceSymbols -> each symbol { completedPrefix! -> push(symbol) }
++    sourceNodes! -> symbols.extendPreparedWithTokens(typeNodeStart, completedPrefix!, sourceTokens!) => completedSymbols
++    CompletedSourceInterpolations { symbols: completedSymbols, nodes: sourceNodes!, tokens: sourceTokens!, interpolations: sourceInterpolations! }
+ }
+ 
+ # Complete legacy prepared packages before building global AST indexes.
+@@ -176,6 +226,7 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
+     [typeTerms.TypeTerm; ~] => terms!
+     [types.TypeUse; ~] => typeUses!
+     [resolution.ResolvedName; ~] => names!
++    [symbols.Symbol; ~] => completedSymbolTable!
+     [interpolation.InterpolationSourceRange; ~] => interpolationRanges!
+     [interpolation.InterpolationNode; ~] => interpolations!
+     0 => sourceIndex!
+@@ -211,12 +262,15 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
+         }
+         (completed.nodes -> len) > originalRange.astCount
+             -> if {
+-                source -> resolution.resolvePrepared(completed.nodes, sourceSymbols!, completed.tokens) => completedNames
++                source -> resolution.resolvePrepared(completed.nodes, completed.symbols, completed.tokens) => completedNames
+                 completedNames -> each name {
+                     name.astNode >= originalRange.astCount -> if { names! -> push(name) }
+                 }
+             }
+         originalRange => range!
++        completedSymbolTable! -> len => range!.symbolStart
++        completed.symbols -> len => range!.symbolCount
++        completed.symbols -> each symbol { completedSymbolTable! -> push(symbol) }
+         sourceNameStart => range!.nameStart
+         (names! -> len) - sourceNameStart => range!.nameCount
+         nodes! -> len => range!.astStart
+@@ -249,7 +303,7 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
+     PackageAnalysis {
+         sources: package.sources, entrySourceModule: package.entrySourceModule,
+         interpolationRanges: interpolationRanges!, ranges: ranges!, nodes: nodes!, tokens: tokens!,
+-        symbols: package.symbols, names: names!, terms: terms!, typeUses: typeUses!,
++        symbols: completedSymbolTable!, names: names!, terms: terms!, typeUses: typeUses!,
+         constantLiterals: package.constantLiterals, constantFailures: package.constantFailures,
+         interpolations: interpolations!
+     }
+@@ -281,8 +335,9 @@ analyzePreparedSource sourceText: file.SourceText, parsed: move syntaxDiagnostic
+ analyzeLoweredSource sourceText: file.SourceText, lowered: move constantLowering.Lowering, originalTokens: ref [syntax.SyntaxToken; ~] -> SourceAnalysis {
+     sourceText -> len => sourceLength
+     sourceText -> slice(UIntSize(0), sourceLength) => source
+-    lowered.nodes -> symbols.collectPrepared => sourceSymbols
+-    source -> completeSourceInterpolations(lowered.nodes, originalTokens, sourceSymbols) => completed
++    lowered.nodes -> symbols.collectPreparedWithTokens(originalTokens) => originalSymbols
++    source -> completeSourceInterpolations(lowered.nodes, originalTokens, originalSymbols) => completed
++    completed.symbols => sourceSymbols
+     completed.nodes => sourceNodes
+     completed.tokens => sourceTokens
+     completed.interpolations => sourceInterpolations

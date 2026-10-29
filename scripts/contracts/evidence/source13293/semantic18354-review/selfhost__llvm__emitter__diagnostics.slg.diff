@@ -1,0 +1,288 @@
+diff --git a/selfhost/llvm/emitter/diagnostics.slg b/selfhost/llvm/emitter/diagnostics.slg
+index 64b0ade44..8e4059014 100644
+--- a/selfhost/llvm/emitter/diagnostics.slg
++++ b/selfhost/llvm/emitter/diagnostics.slg
+@@ -570,6 +570,7 @@ public usesStandardError context: ref emitterContext.EmitContext -> Bool {
+     nodeIndex! < (context.ir -> len) -> while {
+         context.ir[nodeIndex!] => node
+         node.symbol == -116 or node.symbol == -117
++            or (context.expectedPathStyle == 1 and node.kind == 14)
+             or (context.expectedPathStyle == 1 and node.opcode == -203)
+             or (node.kind == 0 and (node.sourceModule -> runtimeFunctionNamed(node.symbol, "eprintln", context)))
+             or (node.kind == 0 and (node.sourceModule -> runtimeFunctionNamed(node.symbol, "eprint", context)))
+@@ -610,98 +611,170 @@ public usesParallelBranches context: ref emitterContext.EmitContext -> Bool {
+ }
+ 
+ public usesProcessRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesProcessRuntimeWithReachability(reachable)
++}
++
++public usesProcessRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!].opcode -> typedIr.isProcessExecutionOpcode
+-            -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!].opcode -> typedIr.isProcessExecutionOpcode
++                    -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+ }
+ 
+ public usesProcessCapture context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesProcessCaptureWithReachability(reachable)
++}
++
++public usesProcessCaptureWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesCapture!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!].opcode == -288 -> if { true => usesCapture! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!].opcode == -288 -> if { true => usesCapture! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesCapture!
+ }
+ 
+ public usesEnvironmentRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesEnvironmentRuntimeWithReachability(reachable)
++}
++
++public usesEnvironmentRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!].opcode == -235 -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!].opcode == -235 -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+ }
+ 
+ public usesArgumentsRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesArgumentsRuntimeWithReachability(reachable)
++}
++
++public usesArgumentsRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!] -> typeQueries.isArguments
+-            -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!] -> typeQueries.isArguments
++                    -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+ }
+ 
+ public usesProcessExit context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesProcessExitWithReachability(reachable)
++}
++
++public usesProcessExitWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesExit!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!].opcode == -222 -> if { true => usesExit! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!].opcode == -222 -> if { true => usesExit! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesExit!
+ }
+ 
+ public usesSourceTextRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesSourceTextRuntimeWithReachability(reachable)
++}
++
++public usesSourceTextRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!] -> typeQueries.isSourceText
+-            -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!] -> typeQueries.isSourceText
++                    -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+ }
+ 
+ public usesStandardInputSourceTextRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesStandardInputSourceTextRuntimeWithReachability(reachable)
++}
++
++public usesStandardInputSourceTextRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!].opcode == -231 or context.ir[nodeIndex!].opcode == -234
+-            -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!].opcode == -231 or context.ir[nodeIndex!].opcode == -234
++                    -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+ }
+ 
+ public usesDirectoryRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesDirectoryRuntimeWithReachability(reachable)
++}
++
++public usesDirectoryRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!].opcode == -215 or context.ir[nodeIndex!].opcode == -233
+-            or context.ir[nodeIndex!].opcode == typedIr.pathAbsoluteOpcode()
+-            -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!].opcode == -215 or context.ir[nodeIndex!].opcode == -233
++                    or context.ir[nodeIndex!].opcode == typedIr.pathAbsoluteOpcode()
++                    -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+ }
+ 
+ public usesOwnedFileRuntime context: ref emitterContext.EmitContext -> Bool {
++    context -> reachableFunctions => reachable
++    context -> usesOwnedFileRuntimeWithReachability(reachable)
++}
++
++public usesOwnedFileRuntimeWithReachability context: ref emitterContext.EmitContext, reachable: ref [Bool; ~] -> Bool {
+     false => usesRuntime!
+     0 => nodeIndex!
+     nodeIndex! < (context.ir -> len) -> while {
+-        context.ir[nodeIndex!] => node
+-        node.opcode -> typedIr.isFileRuntimeOpcode
+-            -> if { true => usesRuntime! }
++        nodeIndex! -> nodeInReachableFunction(reachable, context)
++            -> if {
++                context.ir[nodeIndex!] => node
++                node.opcode -> typedIr.isFileRuntimeOpcode
++                    -> if { true => usesRuntime! }
++            }
+         nodeIndex! + 1 => nodeIndex!
+     }
+     usesRuntime!
+@@ -5362,6 +5435,18 @@ emitExpressionSemanticPrefix context: ref emitterContext.EmitContext, diagnostic
+ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+     context -> numericCallLiteralOverridesUnary -> if { return }
+     context.expressionOperandDiagnostic => diagnostic
++    diagnostic.code == 73 -> if {
++        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
++        context -> emitExpressionSemanticPrefix(diagnostic, location)
++        diagnostic.operatorKind == 2 -> if {
++            "owned heap containers must be bound directly so the compiler can prove and insert their drop" -> println
++        } else {
++            diagnostic.operatorKind == 3 -> if {
++                "await is only valid in async functions or main" -> println
++            } else { "await does not accept arguments" -> println }
++        }
++        return
++    }
+     diagnostic.code == 72 -> if {
+         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+         context -> emitExpressionSemanticPrefix(diagnostic, location)
+@@ -5390,6 +5475,7 @@ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit
+             context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+             context -> emitExpressionSemanticPrefix(diagnostic, location)
+             diagnostic.operatorKind -> when {
++                == -236 { "capacity" }
+                 == 1 { "alloc" }
+                 == 2 { "used" }
+                 == 3 { "store" }
+@@ -5435,6 +5521,20 @@ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit
+             }
+             return
+         }
++    diagnostic.code == 73 -> if {
++        context.ranges[diagnostic.sourceModule] => range
++        context.nodes[range.astStart + diagnostic.astNode] => function
++        context.modules[diagnostic.sourceModule] => identity
++        context.sources[diagnostic.sourceModule] => source
++        [UInt8; ~] => bytes!
++        source -> semanticDiagnostics.appendFunctionDeclarationName(context.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, function.payloadToken, bytes!)
++        bytes! -> file.borrowBytes => nameView
++        nameView -> slice(UIntSize(0), nameView -> len) => name
++        source -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
++        context -> emitExpressionSemanticPrefix(diagnostic, location)
++        "function '$name' already exists" -> println
++        return
++    }
+     diagnostic.code == 49 -> if {
+         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+         context -> emitExpressionSemanticPrefix(diagnostic, location)
+@@ -8241,9 +8341,27 @@ globalFunctionAliasAdmissionDiagnostics context: ref emitterContext.EmitContext,
+     1
+ }
+ 
++# Declaration duplicates precede body binding, but retain an earlier
++# invalid signature. Compare source order and token locations, not IR order.
++duplicateFunctionPrecedesSignature context: ref emitterContext.EmitContext -> Bool {
++    context.expressionOperandDiagnostic => diagnostic
++    diagnostic.code != 73 -> if { false -> return }
++    context.signatureTypeDiagnostic => signature
++    signature.sourceModule < 0 -> if { true -> return }
++    diagnostic.sourceModule != signature.sourceModule
++        -> if {
++            diagnostic.sourceModule < signature.sourceModule -> return
++        }
++    context.ranges[signature.sourceModule] => range
++    context.tokens[range.tokenStart + signature.nameToken] => token
++    diagnostic.locationOffset <= token.span.start
++}
++
+ public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
+     context.libraries.diagnosticCount > 0
+         -> if { context.libraries.diagnosticCount -> return }
++    context -> duplicateFunctionPrecedesSignature
++        -> if { 1 -> return }
+     context.signatureTypeDiagnostic.sourceModule >= 0 or context.inferredInputConflict.sourceModule >= 0
+         -> if { 1 -> return }
+     context -> globalFunctionAliasAdmissionDiagnostics(false) => aliasFailures
+@@ -8469,6 +8587,11 @@ public emitBlockingDiagnostics context: ref emitterContext.EmitContext -> Unit u
+         context -> emitLibraryBindingDiagnostics
+         return
+     }
++    context -> duplicateFunctionPrecedesSignature
++        -> if {
++            context -> emitExpressionOperandDiagnostics
++            return
++        }
+     context.signatureTypeDiagnostic.sourceModule >= 0
+         and (context.signatureTypeDiagnostic.code < 6 or context.signatureTypeDiagnostic.code == 15
+         or context.signatureTypeDiagnostic.code == 16)

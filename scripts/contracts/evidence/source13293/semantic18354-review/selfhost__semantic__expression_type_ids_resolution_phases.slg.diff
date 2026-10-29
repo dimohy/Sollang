@@ -1,0 +1,38 @@
+diff --git a/selfhost/semantic/expression_type_ids_resolution_phases.slg b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+index 465f07e19..20724a8b9 100644
+--- a/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -2531,7 +2531,7 @@ public inferredSignatureContractTypeId prepared: ref semanticContext.SemanticSna
+ }
+ 
+ # One canonical array carrier/interner, shared by ordinary and interpolation literals.
+-internArrayLiteralType types: mut [typeIds.SemanticType; ~], kind: Int, elementTypeId: Int, length: Int -> Int {
++public internArrayLiteralType types: mut [typeIds.SemanticType; ~], kind: Int, elementTypeId: Int, length: Int -> Int {
+     -1 => found!
+     0 => typeIndex!
+     typeIndex! < (types -> len) and found! < 0 -> while {
+@@ -2686,11 +2686,13 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                                 false => boundedComposite!
+                                 -1 => boundedCompositeCapacity!
+                                 -1 => fixedRepeatLength!
++                                false => symbolicRepeat!
+                                 compositeNode.kind == 37 -> if {
+                                     prepared.package -> typeIds.arrayStorageSyntax(compositeSourceIndex!, compositeAstIndex!) => compositeStorage
+                                     compositeStorage.dynamic => dynamicArray!
+                                     compositeStorage.bounded => boundedComposite!
+                                     compositeStorage.length => boundedCompositeCapacity!
++                                    compositeStorage.isRepeat and compositeStorage.length < 0 => symbolicRepeat!
+                                     not compositeStorage.bounded -> if { compositeStorage.length => fixedRepeatLength! }
+                                 }
+                                 compositeNode.kind == 38 -> if {
+@@ -2739,7 +2741,9 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                                 canBuildComposite! -> if {
+                                     -1 => compositeLength!
+                                     compositeKind! == 4 -> if {
+-                                        fixedRepeatLength! >= 0 -> if { fixedRepeatLength! } else { childPosition } => compositeLength!
++                                        not symbolicRepeat! -> if {
++                                            fixedRepeatLength! >= 0 -> if { fixedRepeatLength! } else { childPosition } => compositeLength!
++                                        }
+                                     }
+                                     compositeKind! == 12 or compositeKind! == 13
+                                         -> if { boundedCompositeCapacity! => compositeLength! }

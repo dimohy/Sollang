@@ -1,0 +1,328 @@
+diff --git a/selfhost/semantic/diagnostics.slg b/selfhost/semantic/diagnostics.slg
+index 6c62c20a2..839ff3706 100644
+--- a/selfhost/semantic/diagnostics.slg
++++ b/selfhost/semantic/diagnostics.slg
+@@ -2532,8 +2532,8 @@ public unresolvedMutableLocalReads package: ref analysis.PackageAnalysis -> [Unr
+ # Code 3 identifies break/continue without an enclosing while.
+ public analyze source: Text -> [SemanticDiagnostic; ~] {
+     source -> ast.lower => nodes
+-    nodes -> symbols.collectPrepared => table
+     source -> lexer.lex => tokens
++    nodes -> symbols.collectPreparedWithTokens(tokens) => table
+     [SemanticDiagnostic; ~] => diagnostics!
+     table -> len => symbolCount
+     0 => symbolIndex!
+@@ -5207,14 +5207,68 @@ functionUsesReservedSysPath prepared: ref semanticContext.SemanticSnapshot, rang
+     reservedModule and not local
+ }
+ 
+-firstFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredEffects: ref effects.DeclaredEffectIndex -> ExpressionOperandDiagnostic {
++# Canonical declaration spelling ignores namespace/name trivia, preserves case,
++# and includes the full dotted function path. The same builder renders errors.
++public appendFunctionDeclarationName source: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int, namespaceStart: UIntSize, namespaceLength: UIntSize, nameToken: Int, bytes: mut [UInt8; ~] -> Unit {
++    namespaceLength > 0 -> if {
++        tokenStart => index!
++        index! < tokenStart + tokenCount -> while {
++            tokens[index!] => token
++            token.span.start >= namespaceStart + namespaceLength
++                -> if { break }
++            token.span.start >= namespaceStart and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
++                -> if {
++                    UIntSize(0) => byteIndex!
++                    byteIndex! < token.span.length -> while {
++                        bytes -> push(source -> byte(token.span.start + byteIndex!))
++                        byteIndex! + 1 => byteIndex!
++                    }
++                }
++            index! + 1 => index!
++        }
++        bytes -> push(46)
++    }
++    nameToken => index!
++    true => identifier!
++    index! < tokenCount -> while {
++        tokens[tokenStart + index!] => token
++        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
++            -> if {
++                identifier! -> if {
++                    token.kind != grammar.tokenIdIdentifier() -> if { break }
++                    UIntSize(0) => byteIndex!
++                    byteIndex! < token.span.length -> while {
++                        bytes -> push(source -> byte(token.span.start + byteIndex!))
++                        byteIndex! + 1 => byteIndex!
++                    }
++                } else {
++                    token.kind != grammar.tokenIdDot() -> if { break }
++                    bytes -> push(46)
++                }
++                not identifier! => identifier!
++            }
++        index! + 1 => index!
++    }
++}
++
++functionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredEffects: ref effects.DeclaredEffectIndex, includeLocal: Bool -> ExpressionOperandDiagnostic {
+     ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => valid
++    [UInt8; ~] => declarationNames!
++    [Int; ~] => declarationStarts!
++    [Int; ~] => declarationLengths!
++    [Int; ~] => declarationSlots!
++    (prepared.package.symbols -> len) * 2 + 1 => capacity
++    0 => slotIndex!
++    slotIndex! < capacity -> while {
++        declarationSlots! -> push(-1)
++        slotIndex! + 1 => slotIndex!
++    }
+     prepared.package.ranges -> each range {
+         prepared.modules[range.sourceModule].pathLength > 0 => namespaced
+         0 => symbolIndex!
+         symbolIndex! < range.symbolCount -> while {
+             prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
+-            (symbol.kind == 7 or symbol.kind == 31) and symbol.astNode >= 0 and symbol.nameToken >= 0
++            (symbol.kind == 7 or symbol.kind == 31) and symbol.astNode >= 0 and symbol.nameToken >= 0 and (includeLocal or symbol.parent < 0)
+                 -> if {
+                     range.astStart + symbol.astNode => globalAst
+                     prepared.package.nodes[globalAst] => node
+@@ -5233,6 +5287,43 @@ firstFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, decl
+                         }
+                     code! == 0 and (prepared -> functionUsesReservedSysPath(range, symbol, qualified, local!))
+                         -> if { 49 => code! }
++                    code! == 0 and symbol.parent < 0 and not local!
++                        -> if {
++                            declarationNames! -> len => nameStart
++                            prepared.modules[range.sourceModule] => identity
++                            prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => declarationSource
++                            declarationSource -> appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, declarationNames!)
++                            (declarationNames! -> len) - nameStart => nameLength
++                            UInt64(0) => hash!
++                            nameStart => byteIndex!
++                            byteIndex! < nameStart + nameLength -> while {
++                                (hash! * 257 + UInt64(declarationNames![byteIndex!])) % 4294967291 => hash!
++                                byteIndex! + 1 => byteIndex!
++                            }
++                            Int(hash! % UInt64(capacity)) => slot!
++                            true => searching!
++                            searching! -> while {
++                                declarationSlots![slot!] => previous
++                                previous < 0 -> if {
++                                    declarationStarts! -> len => declarationSlots![slot!]
++                                    declarationStarts! -> push(nameStart)
++                                    declarationLengths! -> push(nameLength)
++                                    false => searching!
++                                } else {
++                                    declarationLengths![previous] == nameLength => same!
++                                    0 => character!
++                                    same! and character! < nameLength -> while {
++                                        declarationNames![declarationStarts![previous] + character!] != declarationNames![nameStart + character!]
++                                            -> if { false => same! }
++                                        character! + 1 => character!
++                                    }
++                                    same! -> if {
++                                        73 => code!
++                                        false => searching!
++                                    } else { (slot! + 1) % capacity => slot! }
++                                }
++                            }
++                        }
+                     code! > 0 -> if {
+                         ExpressionOperandDiagnostic {
+                             code: code!
+@@ -5253,6 +5344,28 @@ firstFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, decl
+     valid
+ }
+ 
++firstFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredEffects: ref effects.DeclaredEffectIndex -> ExpressionOperandDiagnostic {
++    prepared -> functionNameDiagnostic(declaredEffects, true)
++}
++
++public firstTopLevelFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot -> ExpressionOperandDiagnostic {
++    prepared -> effects.indexDeclaredEffects => declaredEffects
++    prepared -> functionNameDiagnostic(declaredEffects, false)
++}
++
++public functionDeclarationPrecedesSignature prepared: ref semanticContext.SemanticSnapshot, declaration: ExpressionOperandDiagnostic, signature: SignatureTypeDiagnostic -> Bool {
++    declaration.code <= 0 -> if { false -> return }
++    signature.sourceModule < 0 -> if { true -> return }
++    declaration.sourceModule != signature.sourceModule
++        -> if {
++            declaration.sourceModule < signature.sourceModule -> return
++        }
++    prepared.package.ranges[signature.sourceModule] => range
++    prepared.package.tokens[range.tokenStart + signature.nameToken] => token
++    declaration.locationOffset <= token.span.start
++}
++
++
+ # Repeat owns an Int role and a Unit result. Validate its declaration boundary
+ # before the body, in the same order as C# BindRepeatBlockFunctionCall.
+ firstRepeatBlockDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~] -> ExpressionOperandDiagnostic {
+@@ -5404,12 +5517,15 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+     package -> modules.identitiesAnalyzed => identities
+     package -> expressionTypeIds.continuationFlags => continuationByAst
+     package -> semanticContext.indexExpressionSourceAsts => sourceAstByExpression
++    package -> semanticContext.indexFlowSourcesByAst => taskFlowSources
+     [Int; ~] => typeIdByAst!
+     [Int; ~] => floatingLiteralTypeByAst!
++    [Bool; ~] => taskValueByAst!
+     0 => astSeed!
+     astSeed! < (package.nodes -> len) -> while {
+         typeIdByAst! -> push(-1)
+         floatingLiteralTypeByAst! -> push(-1)
++        taskValueByAst! -> push(false)
+         astSeed! + 1 => astSeed!
+     }
+     0 => typeIndex!
+@@ -5447,6 +5563,8 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                 finalRead.astNode >= 0 and finalRead.astNode < finalReadRange.astCount
+                     -> if {
+                         finalReadRange.astStart + finalRead.astNode => finalReadGlobal
++                        finalRead -> typedIr.isTaskOwnerValue(ir, prepared)
++                            -> if { true => taskValueByAst![finalReadGlobal] }
+                         (finalRead.kind == 5 and package.nodes[finalReadGlobal].kind == 15)
+                             or (finalRead.kind == 3 and package.nodes[finalReadGlobal].kind == 14)
+                             or finalRead.kind == 18 or finalRead.kind == 19 or finalRead.kind == 33 or finalRead.kind == 34
+@@ -5925,6 +6043,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                 -1 => materializeTarget!
+                 -1 => materializeCall!
+                 -1 => arenaTargetAst!
++                -1 => capacityTargetAst!
+                 firstChildByAst![flowGlobal] => flowChild!
+                 flowChild! >= 0 -> while {
+                     package.nodes[flowChild!] => child
+@@ -5935,6 +6054,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                         sourceText -> slice(nameToken.span.start, nameToken.span.length)
+                             => targetName
+                         targetName == "materialize" -> if { flowChild! => materializeTarget! }
++                        targetName == "capacity" -> if { flowChild! => capacityTargetAst! }
+                         (targetName -> calls.rawArenaIntrinsic).operation > 0
+                             -> if {
+                                 flowChild! - range.astStart => arenaTargetAst!
+@@ -5943,6 +6063,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                     child.kind == 11 -> if { flowChild! => materializeCall! }
+                     nextChildByAst![flowChild!] => flowChild!
+                 }
++                prepared -> taskFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, taskValueByAst!, taskFlowSources, firstChildByAst!, nextChildByAst!, selected!) => selected!
+                 # Raw Arena calls share canonical receiver, argument and symbol
+                 # indexes with materialize. Declared functions retain precedence.
+                 # Ordinary value flows use their indexed direct Path child;
+@@ -5955,6 +6076,26 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                     selectedCall.status == 0 and selectedCall.targetSourceModule >= 0
+                         and selectedCall.functionSymbol >= 0 -> if { true => declaredArenaTarget! }
+                 }
++                # Like the managed capacity branch, builtin spelling alone does
++                # not admit a receiver. Declared functions keep call precedence.
++                flowSource! >= 0 and capacityTargetAst! >= 0 and not declaredArenaTarget!
++                    -> if {
++                        resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![flowSource!])
++                            => capacityReceiverTypeId
++                        capacityReceiverTypeId >= 0
++                            and (-236 -> typeIds.collectionFlowResultBuiltinSymbol(resolved.types[capacityReceiverTypeId])) < 0
++                            -> if {
++                                package.nodes[capacityTargetAst!] => capacityTarget
++                                ExpressionOperandDiagnostic {
++                                    code: 67, sourceModule: sourceIndex!, astNode: astIndex!
++                                    operandAst: capacityTargetAst! - range.astStart, operatorKind: -236
++                                    locationOffset: capacityTarget.start
++                                    operandTypeSymbol: -1, operandTypeId: capacityReceiverTypeId, firstTypeId: -1
++                                } => candidate
++                                package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                    -> if { candidate => selected! }
++                            }
++                    }
+                 flowSource! >= 0 and arenaTargetAst >= 0 and not declaredArenaTarget!
+                     -> if {
+                         package.nodes[range.astStart + arenaTargetAst] => arenaTarget
+@@ -6930,3 +7071,93 @@ public returnFromAsyncFunction nodes: ref [ast.AstNode; ~], range: analysis.Sour
+     }
+     false
+ }
++
++# Match the intrinsic target by its source path, before an invalid call can
++# lose its arguments or await value during lowering. Declared targets keep
++# their own contract. All indexes below are package-global except flowAst.
++taskFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, sourceModule: Int, flowAst: Int, flowSource: Int, typesByAst: ref [Int; ~], taskValuesByAst: ref [Bool; ~], flowSources: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], previous: ExpressionOperandDiagnostic -> ExpressionOperandDiagnostic {
++    prepared.package.ranges[sourceModule] => range
++    range.astStart + flowAst => globalFlow
++    prepared.callIndexByAst[globalFlow] => callIndex
++    callIndex >= 0 -> if {
++        prepared.calls[callIndex].functionSymbol >= 0
++            -> if { previous -> return }
++    }
++    flowSource < 0 -> if { previous -> return }
++    -1 => targetPath!
++    firstChild[globalFlow] => child!
++    child! >= 0 -> while {
++        child! != flowSource -> if {
++            prepared.package.nodes[child!] => candidate
++            candidate.kind == 16 -> if { child! => targetPath! }
++            candidate.kind == 11 -> if {
++                firstChild[child!] => nested!
++                nested! >= 0 -> while {
++                    prepared.package.nodes[nested!] => path
++                    path.kind == 16 and path.start == candidate.start
++                        -> if { nested! => targetPath! }
++                    nextChild[nested!] => nested!
++                }
++            }
++        }
++        nextChild[child!] => child!
++    }
++    targetPath! < 0 -> if { previous -> return }
++    prepared.package.nodes[targetPath!] => target
++    target.tokenCount != 1 or target.payloadToken < 0
++        -> if { previous -> return }
++    prepared.package.tokens[range.tokenStart + target.payloadToken] => token
++    prepared.package.sources[sourceModule] -> slice(token.span.start, token.span.length) => name
++    name != "await" and name != "cancel" -> if { previous -> return }
++    typesByAst[flowSource] => sourceType
++    sourceType < 0 or sourceType >= (resolved.types -> len)
++        -> if { previous -> return }
++    resolved.types[sourceType] => type
++    taskValuesByAst[flowSource] or (type.kind == 7 and type.origin == 4 and type.symbol == 2) => task
++    0 => violation!
++    target.start => offset!
++    not task -> if {
++        flowSource => root!
++        prepared.package.nodes[root!].kind == 36 -> while {
++            firstChild[root!] => receiver
++            receiver < 0 -> if { previous -> return }
++            receiver => root!
++        }
++        prepared.package.nodes[root!].kind != 15 and prepared.package.nodes[root!].kind != 16
++            -> if {
++                typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => edges
++                prepared -> semanticContext.ownedResourceSeeds(resolved.types) => seeds
++                resolved.types -> typeIds.ownedStorageByType(resolved.fields, edges, seeds) => owned
++                owned[sourceType] -> if {
++                    2 => violation!
++                    prepared.package.nodes[flowSource].start => offset!
++                }
++            }
++    }
++    task and name == "await" -> if {
++        flowAst => owner!
++        false => allowed!
++        false => found!
++        owner! >= 0 and owner! < range.astCount and not found!
++            -> while {
++                prepared.package.nodes[range.astStart + owner!] => declaration
++                declaration.kind == 7 or declaration.kind == 31 or declaration.kind == 8
++                    -> if {
++                        true => found!
++                        declaration.kind == 8 or declaration.flags / 8 % 2 == 1 => allowed!
++                    }
++                declaration.parent => owner!
++            }
++        not allowed! -> if { 3 => violation! } else {
++            # The parenthesized argument envelope is a sibling of its Path.
++            # Reuse canonical call indexing, including the primary flow source.
++            calls.ModuleCallResolution { sourceModule: sourceModule, callAst: flowAst, origin: 0, targetModule: -1, targetSourceModule: -1, functionSymbol: -1, status: 0 } => intrinsic
++            prepared.package -> semanticContext.indexedCallArgumentAsts(intrinsic, flowSources, firstChild, nextChild) => arguments
++            (arguments -> len) > 1 -> if { 1 => violation! }
++        }
++    }
++    violation! == 0 -> if { previous -> return }
++    ExpressionOperandDiagnostic { code: 73, sourceModule: sourceModule, astNode: flowAst, operandAst: targetPath! - range.astStart, operatorKind: violation!, locationOffset: offset!, operandTypeSymbol: -1, operandTypeId: sourceType, firstTypeId: -1 } => diagnostic
++    prepared.package -> expressionDiagnosticPrecedes(resolved.fields, diagnostic, previous)
++        -> if { diagnostic } else { previous }
++}

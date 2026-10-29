@@ -1,0 +1,101 @@
+diff --git a/selfhost/semantic/type_ids.slg b/selfhost/semantic/type_ids.slg
+index dfa1eff95..0fc6fed8f 100644
+--- a/selfhost/semantic/type_ids.slg
++++ b/selfhost/semantic/type_ids.slg
+@@ -137,6 +137,27 @@ public arrayStorageSyntaxFromTokens source: Text, tokens: ref [syntax.SyntaxToke
+     ArrayStorageSyntax { dynamic: dynamic!, bounded: bounded!, length: length!, isRepeat: isRepeat! }
+ }
+ 
++public symbolicArrayRepeatCountToken tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, node: ast.AstNode -> Int {
++    false => afterSemicolon!
++    0 => depth!
++    node.firstToken => tokenIndex!
++    tokenIndex! < node.firstToken + node.tokenCount
++        -> while {
++            tokens[tokenStart + tokenIndex!] => token
++            token.kind == grammar.tokenIdLeftBracket() or token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdLeftParen()
++                -> if { depth! + 1 => depth! }
++            token.kind == grammar.tokenIdRightBracket() or token.kind == grammar.tokenIdRightBrace() or token.kind == grammar.tokenIdRightParen()
++                -> if { depth! - 1 => depth! }
++            depth! == 1 -> if {
++                token.kind == grammar.tokenIdSemicolon() -> if { true => afterSemicolon! }
++                afterSemicolon! and token.kind == grammar.tokenIdIdentifier()
++                    -> if { tokenIndex! -> return }
++            }
++            tokenIndex! + 1 => tokenIndex!
++        }
++    -1
++}
++
+ # Kinds match type_terms: 1 nominal, 2 slice, 3 dynamic array, 4 fixed
+ # array, 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
+ # 9 affine external handle (COM interface or native opaque handle),
+@@ -299,6 +320,22 @@ public resolveDynTrait package: ref analysis.PackageAnalysis, identities: ref [m
+     DynTraitResolution { targetSource: targetSource!, targetSymbol: targetSymbol!, status: 0 }
+ }
+ 
++# Match the C# dynamic-array and dictionary registration families. Heap and
++# Deque share dynamic-array storage; Set is a dictionary with a Unit value.
++public isDynamicArrayFamily type: SemanticType -> Bool {
++    type.kind == 3
++        or (type.kind == 7 and type.origin == 4 and (type.symbol == 6 or type.symbol == 7))
++}
++
++public isDictionaryFamily type: SemanticType -> Bool {
++    type.kind == 5 or type.kind == 13
++        or (type.kind == 7 and type.origin == 4 and type.symbol == 5)
++}
++
++public isHeapCollection type: SemanticType -> Bool {
++    (type -> isDynamicArrayFamily) or ((type -> isDictionaryFamily) and type.kind != 13)
++}
++
+ # Receiver-sensitive collection flow types are semantic facts, not storage widths.
+ public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType -> Int {
+     opcode == -244 and receiver.kind == 14 -> if { 2 -> return }
+@@ -316,7 +353,7 @@ public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType ->
+     opcode == -236 -> if {
+         receiver.kind == 1 and receiver.origin == 1 and receiver.symbol == 15
+             -> if { 13 -> return }
+-        receiver.kind == 3 or receiver.kind == 5 or receiver.kind == 12 or receiver.kind == 13
++        (receiver -> isDynamicArrayFamily) or (receiver -> isDictionaryFamily) or receiver.kind == 12
+             -> if { 2 -> return }
+         -1 -> return
+     }
+@@ -325,8 +362,8 @@ public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType ->
+             and (receiver.symbol == 1 or receiver.symbol == 16 or receiver.symbol == 17
+             or receiver.symbol == 18 or receiver.symbol == 24)
+             -> if { 13 -> return }
+-        receiver.kind == 2 or receiver.kind == 3 or receiver.kind == 4
+-            or receiver.kind == 5 or receiver.kind == 12 or receiver.kind == 13
++        receiver.kind == 2 or (receiver -> isDynamicArrayFamily) or receiver.kind == 4
++            or (receiver -> isDictionaryFamily) or receiver.kind == 12
+             or receiver.kind == 14 -> if { 2 -> return }
+     }
+     -1
+@@ -2339,6 +2376,12 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
+ # All arguments contribute to one binding environment. Repeated occurrences of
+ # a parameter must agree across argument boundaries, not just within one input.
+ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int -> SpecializationRoot {
++    types -> specializeManyWithIntegerValueInto(inputTemplates, actualInputs, resultTemplate, 0, -1)
++}
++
++# A value argument belongs to the same binding environment as inferred types.
++# Seed its extent before unification so input contracts and body types agree.
++public specializeManyWithIntegerValueInto types: mut [SemanticType; ~], inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int, valueParameterHash: UInt64, valueArgument: Int -> SpecializationRoot {
+     [Int; ~] => templateStack!
+     [Int; ~] => actualStack!
+     [Int; ~] => parameterModules!
+@@ -2347,6 +2390,12 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
+     [UInt64; ~] => lengthParameterHashes!
+     [Int; ~] => lengthReplacements!
+     [UInt64; ~] => lengthReplacementHashes!
++    valueParameterHash != 0 and valueArgument >= 0
++        -> if {
++            lengthParameterHashes! -> push(valueParameterHash)
++            lengthReplacements! -> push(valueArgument)
++            lengthReplacementHashes! -> push(0)
++        }
+     0 => status!
+     -1 => conflictParameterModule!
+     -1 => conflictParameterSymbol!
