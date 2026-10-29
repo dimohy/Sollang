@@ -51,7 +51,10 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitBinaryHeapPeek(RuntimeDynamicInlineArray heap)
     {
-        return EmitDynamicInlineArrayLoad(heap, "0");
+        var nonempty = NextTemp("heap_nonempty");
+        EmitCompare(nonempty, "ugt", "i64", heap.LengthName, "0");
+        EmitTrapUnless(nonempty, "heap_empty", "binary_heap_empty");
+        return EmitBinaryHeapLoadUnchecked(heap, "0", "heap_peek");
     }
 
     private (RuntimeDynamicInlineArray Heap, RuntimeValue Value) EmitBinaryHeapPop(

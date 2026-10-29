@@ -3824,6 +3824,12 @@ BitSet<128>() => flags!
 ```
 
 The first three are nominal heap owners with an explicit initial capacity.
+`BinaryHeap<T> -> peek` reads the largest element without mutation and accepts
+an immutable owner or readonly reference. `pop` removes that element and
+requires mutable storage. Both operations trap when the heap is empty.
+On Windows and the browser target, the diagnostic uses the source function
+identity and the stable code `binary_heap_empty`; generated basic-block names
+do not identify this source-level failure.
 Heap-backed dictionary and Set storage allocation traps on failure before
 initializing controls or accessing entries. This also applies to insertion
 growth and same-capacity rebuilding; allocation failure is not an empty or
