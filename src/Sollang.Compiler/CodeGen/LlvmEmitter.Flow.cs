@@ -82,6 +82,17 @@ internal sealed partial class LlvmEmitter
 
             if (TryEmitContainerFlowTarget(expression.Source, target, path, current, isLast, ownsFlowTemporary, out var containerResult))
             {
+                if ((path is "len" or "byte") && containerResult.Value is RuntimeInt)
+                {
+                    // Scalar reads no longer borrow the source after this stage.
+                    // Retain the same complete-parent ownership as readonly calls.
+                    var temporaryOwner = i == 0
+                        ? TakeReadonlyTemporaryOwner(expression.Source, current)
+                        : ownsFlowTemporary && IsOwnedContainerRuntimeValue(current) ? current : null;
+                    if (temporaryOwner is not null)
+                        DropOwnedRuntimeValue(temporaryOwner);
+                    ownsFlowTemporary = false;
+                }
                 if (containerResult.Value is null)
                 {
                     return new RuntimeFlowResult(

@@ -745,11 +745,15 @@ internal sealed partial class LlvmEmitter
 
     private void TrackReadonlyCallTemporary(Expression expression, RuntimeValue value, List<RuntimeValue> temporaries)
     {
+        if (TakeReadonlyTemporaryOwner(expression, value) is { } owner)
+            temporaries.Add(owner);
+    }
+
+    private RuntimeValue? TakeReadonlyTemporaryOwner(Expression expression, RuntimeValue value)
+    {
         if (_anonymousProjectionOwners.Remove(expression, out var projectedOwner))
         {
-            if (IsOwnedContainerRuntimeValue(projectedOwner))
-                temporaries.Add(projectedOwner);
-            return;
+            return IsOwnedContainerRuntimeValue(projectedOwner) ? projectedOwner : null;
         }
 
         // A field projection without an explicitly recorded anonymous parent
@@ -757,13 +761,12 @@ internal sealed partial class LlvmEmitter
         // stored outside _locals but remain owned by the matched subject; the
         // readonly call must not drop the projected payload independently.
         if (expression is FieldAccessExpression)
-            return;
+            return null;
 
         if (!IsAnonymousOwnedExpression(expression))
-            return;
+            return null;
 
-        if (IsOwnedContainerRuntimeValue(value))
-            temporaries.Add(value);
+        return IsOwnedContainerRuntimeValue(value) ? value : null;
     }
 
     private RuntimeValue EmitFlowAdditionalValue(BoundType expectedType, Expression expression, List<RuntimeValue>? temporaries = null)
