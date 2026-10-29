@@ -1,0 +1,55 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+
+sameExpressionFacts left: ref [ExpressionTypeId; ~], right: ref [ExpressionTypeId; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<Int(left -> len) -> each index {
+        left[index] => first
+        right[index] => second
+        first.sourceModule != second.sourceModule or first.astNode != second.astNode
+            or first.typeId != second.typeId or first.status != second.status
+            -> if { false -> return }
+    }
+    true
+}
+
+checkBindingReuse source: Text -> Bool {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    emptyCallContextSeeds() => seeds
+    [ExpressionTypeId; ~] => externalResults
+    prepared -> resolveContextCoreSeeded(seeds, externalResults) => rebuilt
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    prepared -> resolveContextCoreWithCallArgumentBindings(bindings, seeds, externalResults) => reused
+    (bindings -> len) > 0 and (rebuilt.expressions -> len) > 0
+        and callResolvedTypesEqual(rebuilt.types, reused.types)
+        and sameExpressionFacts(rebuilt.expressions, reused.expressions)
+        and callReceiverTypesEqual(rebuilt.lexicalBindingTypeBySymbol, reused.lexicalBindingTypeBySymbol)
+        and callReceiverTypesEqual(rebuilt.referenceIndexByTypeAst, reused.referenceIndexByTypeAst)
+}
+
+main {
+    """combine value: UInt8, other: UInt8 -> UInt8 => value + other
+main {
+    combine(1, 2) => sum
+}
+""" -> checkBindingReuse => direct
+    """combine value: Int, other: Int -> Int => value + other
+main {
+    7 -> combine(9) => sum
+}
+""" -> checkBindingReuse => flow
+    """identity<T> value: T -> T => value
+main {
+    17 -> identity => result
+}
+""" -> checkBindingReuse => generic
+    """read value: ref Int -> Int => value
+main {
+    4 => number
+    number -> read => result
+}
+""" -> checkBindingReuse => borrowed
+    "direct=$direct flow=$flow generic=$generic borrowed=$borrowed" -> println
+}

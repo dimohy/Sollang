@@ -1978,6 +1978,13 @@ resolveContextCore prepared: semanticContext.SemanticSnapshot -> ExpressionTypeI
 }
 
 resolveContextCoreSeeded prepared: semanticContext.SemanticSnapshot, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ExpressionTypeIdSet {
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    prepared -> resolveContextCoreWithCallArgumentBindings(bindings, seeds, externalResults)
+}
+
+# A completed call table owns one source-ordered argument binding table. Share
+# it with initial inference and final call facts instead of rebuilding it.
+resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSnapshot, blockAndFlowArgumentBindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ExpressionTypeIdSet {
     [typeIds.SemanticType; ~] => types!
     0 => semanticTypeCopyIndex56!
     semanticTypeCopyIndex56! < (prepared.semantic.types -> len)
@@ -2144,7 +2151,6 @@ resolveContextCoreSeeded prepared: semanticContext.SemanticSnapshot, seeds: ref 
             controlOwnerSource! + 1 => controlOwnerSource!
         }
 
-    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => blockAndFlowArgumentBindings
     resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule!, sourceTextSymbol!, seeds.ownerBySource)
     resolveContextualDictionaryStructValues(prepared, types!, expressions!, expressionIndexByAst!)
     resolveCompositeLiteralTypes(prepared, types!, expressions!, expressionIndexByAst!)
@@ -3382,7 +3388,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
 # Final typed targets already supplied the raw binding table used by move indexes.
 # Keep final core, contextual/generic call facts and enum facts in the same order.
 resolveContextWithCallArgumentBindings prepared: semanticContext.SemanticSnapshot, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ExpressionTypeIdSet {
-    prepared -> resolveContextCoreSeeded(seeds, externalResults) => resolved!
+    prepared -> resolveContextCoreWithCallArgumentBindings(bindings, seeds, externalResults) => resolved!
     resolveSemanticCallArgumentBindingsSeeded(prepared, resolved!, bindings, seeds)
     resolveEnumConstructorArguments(prepared, resolved!)
     resolved!
