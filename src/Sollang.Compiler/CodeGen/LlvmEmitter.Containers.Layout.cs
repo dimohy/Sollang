@@ -19,7 +19,7 @@ internal sealed partial class LlvmEmitter
         EmitCall(pointer, "ptr", "sollang_alloc", $"i64 {bytes}");
         var hasPointer = NextTemp("heap_ok");
         EmitCompare(hasPointer, "ne", "ptr", pointer, "null");
-        EmitTrapUnless(hasPointer, "alloc");
+        EmitTrapUnless(hasPointer, "alloc", "allocation_failed");
         return pointer;
     }
 
