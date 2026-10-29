@@ -1,0 +1,168 @@
+diff --git a/selfhost/ir/typed/ordinary_function.slg b/selfhost/ir/typed/ordinary_function.slg
+index 8b04f18a9..278198214 100644
+--- a/selfhost/ir/typed/ordinary_function.slg
++++ b/selfhost/ir/typed/ordinary_function.slg
+@@ -649,70 +649,65 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
+                             }
+                         additionalParameterSearch! + 1 => additionalParameterSearch!
+                     }
+-                # A compile-time value generic is a value in the function body
+-                # but not a source-level runtime parameter. Lower it as a
+-                # hidden trailing Int parameter so one generic body can serve
+-                # every numeric instantiation without source rewriting.
++                # Retain used value parameters as unbound template inputs.
++                # Concrete body specialization replaces them with Int constants
++                # and removes them from the published runtime signature.
++                -1 => runtimeValueGenericUse!
+                 0 => valueGenericSearch!
+                 valueGenericSearch! < sourceRange.symbolCount
+                     -> while {
+                         prepared.package.symbols[sourceRange.symbolStart + valueGenericSearch!] => valueGeneric
+-                        false => valueGenericUsed!
+                         valueGeneric.kind == 32 and valueGeneric.parent == symbolIndex
++                            and (prepared.package -> analysis.declaresIntegerValueGeneric(sourceIndex, function.astNode, valueGeneric.nameToken)) => valueGenericUsed
++                        valueGenericUsed -> if {
++                            runtimeValueGenericUse! < 0 -> if {
++                                sourceRange.astStart + function.astNode => valueGenericFunctionAst
++                                source -> functionUsesRuntimeValueGenerics(sourceIndex, symbolIndex, sourceFacts, prepared, frozenFunctionNodeIndices, frozenFunctionNodeStartsByAst[valueGenericFunctionAst], frozenFunctionNodeCountsByAst[valueGenericFunctionAst])
++                                    -> if { 1 => runtimeValueGenericUse! } else { 0 => runtimeValueGenericUse! }
++                            }
++                        }
++                        valueGenericUsed and runtimeValueGenericUse! == 1
+                             -> if {
+-                                0 => valueGenericReferenceSearch!
+-                                valueGenericReferenceSearch! < (sourceFacts.names -> len)
++                                -1 => valueGenericIntTypeId!
++                                0 => valueGenericIntTypeSearch!
++                                valueGenericIntTypeSearch! < (frozenRecursiveSemanticTypes -> len) and valueGenericIntTypeId! < 0
+                                     -> while {
+-                                        sourceFacts.names[valueGenericReferenceSearch!] => valueGenericReference
+-                                        valueGenericReference.symbol == valueGenericSearch!
+-                                            and prepared.package.nodes[sourceRange.astStart + valueGenericReference.astNode].kind == 15
++                                        frozenRecursiveSemanticTypes[valueGenericIntTypeSearch!] => valueGenericIntType
++                                        valueGenericIntType.kind == 1 and valueGenericIntType.origin == 1 and valueGenericIntType.symbol == 2
+                                             -> if {
+-                                                true => valueGenericUsed!
++                                                valueGenericIntTypeSearch! => valueGenericIntTypeId!
+                                             }
+-                                        valueGenericReferenceSearch! + 1 => valueGenericReferenceSearch!
++                                        valueGenericIntTypeSearch! + 1 => valueGenericIntTypeSearch!
+                                     }
+-                            }
+-                        valueGenericUsed! -> if {
+-                            -1 => valueGenericIntTypeId!
+-                            0 => valueGenericIntTypeSearch!
+-                            valueGenericIntTypeSearch! < (frozenRecursiveSemanticTypes -> len) and valueGenericIntTypeId! < 0
+-                                -> while {
+-                                    frozenRecursiveSemanticTypes[valueGenericIntTypeSearch!] => valueGenericIntType
+-                                    valueGenericIntType.kind == 1 and valueGenericIntType.origin == 1 and valueGenericIntType.symbol == 2
+-                                        -> if {
+-                                            valueGenericIntTypeSearch! => valueGenericIntTypeId!
+-                                        }
+-                                    valueGenericIntTypeSearch! + 1 => valueGenericIntTypeSearch!
++                                results! -> len => valueGenericIr
++                                firstAdditionalParameterIr! < 0 -> if { valueGenericIr => firstAdditionalParameterIr! }
++                                previousAdditionalParameterIr! >= 0 -> if {
++                                    results![previousAdditionalParameterIr!] => previousValueGenericParameter!
++                                    valueGenericIr => previousValueGenericParameter!.nextOperand
++                                    previousValueGenericParameter! => results![previousAdditionalParameterIr!]
+                                 }
+-                            results! -> len => valueGenericIr
+-                            firstAdditionalParameterIr! < 0 -> if { valueGenericIr => firstAdditionalParameterIr! }
+-                            previousAdditionalParameterIr! >= 0 -> if {
+-                                results![previousAdditionalParameterIr!] => previousValueGenericParameter!
+-                                valueGenericIr => previousValueGenericParameter!.nextOperand
+-                                previousValueGenericParameter! => results![previousAdditionalParameterIr!]
++                                results! -> push(TypedIrNode {
++                                    kind: 10
++                                    parent: functionIr
++                                    sourceModule: sourceIndex
++                                    astNode: valueGeneric.astNode
++                                    symbol: valueGenericSearch!
++                                    targetModule: sourceIndex
++                                    typeOrigin: 1
++                                    typeModule: -1
++                                    typeSymbol: 2
++                                    typeId: valueGenericIntTypeId!
++                                    typeKind: 1
++                                    typeFlags: 0
++                                    payloadToken: valueGeneric.nameToken
++                                    opcode: -1
++                                    operand0: -1
++                                    operand1: -1
++                                    nextOperand: -1
++                                    flags: 0
++                                })
++                                valueGenericIr => previousAdditionalParameterIr!
+                             }
+-                            results! -> push(TypedIrNode {
+-                                kind: 10
+-                                parent: functionIr
+-                                sourceModule: sourceIndex
+-                                astNode: valueGeneric.astNode
+-                                symbol: valueGenericSearch!
+-                                targetModule: sourceIndex
+-                                typeOrigin: 1
+-                                typeModule: -1
+-                                typeSymbol: 2
+-                                typeId: valueGenericIntTypeId!
+-                                typeKind: 1
+-                                typeFlags: 0
+-                                payloadToken: valueGeneric.nameToken
+-                                opcode: -1
+-                                operand0: -1
+-                                operand1: -1
+-                                nextOperand: -1
+-                                flags: 0
+-                            })
+-                            valueGenericIr => previousAdditionalParameterIr!
+-                        }
+                         valueGenericSearch! + 1 => valueGenericSearch!
+                     }
+                 firstAdditionalParameterIr! >= 0 -> if {
+@@ -908,3 +903,45 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
+     }
+     results! -> sourceTypedIr
+ }
++
++functionUsesRuntimeValueGenerics source: Text, sourceIndex: Int, functionSymbol: Int, facts: ref SourceLowerFacts, prepared: ref semanticContext.SemanticSnapshot, functionNodes: ref [Int; ~], nodeStart: Int, nodeCount: Int -> Bool {
++    prepared.package.ranges[sourceIndex] => range
++    facts.names -> each name {
++        name.symbol >= 0 and name.symbol < range.symbolCount
++            and prepared.package.nodes[range.astStart + name.astNode].kind == 15
++            -> if {
++                prepared.package.symbols[range.symbolStart + name.symbol] => symbol
++                symbol.kind == 32 and symbol.parent == functionSymbol
++                    -> if { true -> return }
++            }
++    }
++    # A symbolic repeat count is a token, rather than a resolved Name AST.
++    # The frozen body index keeps other functions and signature types out.
++    nodeStart => position!
++    position! < nodeStart + nodeCount -> while {
++        prepared.package.nodes[range.astStart + functionNodes[position!]] => node
++        node.kind == 37 -> if {
++            source -> typeIds.arrayStorageSyntaxFromTokens(prepared.package.tokens, range.tokenStart, node) => storage
++            storage.isRepeat and storage.length < 0 -> if { true -> return }
++        }
++        position! + 1 => position!
++    }
++    prepared.interpolationRanges -> each interpolationRange {
++        interpolationRange.sourceModule == sourceIndex
++            -> if {
++                interpolationRange.nodeStart => interpolationIndex!
++                interpolationIndex! < interpolationRange.nodeStart + interpolationRange.nodeCount
++                    -> while {
++                        prepared.interpolations[interpolationIndex!] => node
++                        node.kind == 1 and node.symbol >= 0 and node.symbol < range.symbolCount
++                            -> if {
++                                prepared.package.symbols[range.symbolStart + node.symbol] => symbol
++                                symbol.kind == 32 and symbol.parent == functionSymbol
++                                    -> if { true -> return }
++                            }
++                        interpolationIndex! + 1 => interpolationIndex!
++                    }
++            }
++    }
++    false
++}
