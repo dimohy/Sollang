@@ -1,0 +1,108 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.calls
+import sollang.compiler.semantic.context as semanticContext
+import std.time as time
+import sys.process as process
+
+struct FirstQueryProfile {
+    initialMilliseconds: Long
+    receiverMilliseconds: Long
+    queryMilliseconds: Long
+    sources: Int
+    types: Int
+    expressions: Int
+    calls: Int
+    changed: Int
+}
+
+# Observe only the first typed query. Its output is not a completed context.
+profileFirstQuery prepared: move semanticContext.SemanticSnapshot -> Result<FirstQueryProfile, time.Error> uses Clock {
+    time.monotonicClock() => clock
+    clock -> now => started
+    prepared -> resolveContextCore => initialTypes
+    clock -> now => initialCompleted
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    [Int; ~] => receiverTypeByCallAst!
+    prepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+    initialTypes.expressions -> each expression {
+        prepared.package.ranges[expression.sourceModule] => range
+        prepared.package.nodes[range.astStart + expression.astNode] => node
+        node.parent >= 0
+            and node.parent < range.astCount
+            and expression.status == 0
+            and expression.typeId >= 0
+            and expression.typeId < (initialTypes.types -> len)
+            and not initialTypes.types[expression.typeId].containsParameter
+            -> if {
+                prepared.package.nodes[range.astStart + node.parent] => call
+                call.kind == 10 and flowSources[range.astStart + node.parent] == range.astStart + expression.astNode
+                    -> if { expression.typeId => receiverTypeByCallAst![range.astStart + node.parent] }
+            }
+    }
+    emptyCallContextSeeds() => seeds
+    clock -> now => receiverCompleted
+    prepared.package -> calls.resolveModulesTypedWithPreparedFacts(
+    prepared.semantic,
+    receiverTypeByCallAst!,
+    initialTypes.types,
+    seeds.ownerBySource,
+    prepared.calls,
+    prepared.modules,
+    prepared.imports,
+    prepared.resolvedImports,
+    prepared.qualified
+    ) => resolvedCalls
+    clock -> now => queryCompleted
+    0 => changed!
+    0..<Int(resolvedCalls -> len) -> each index {
+        index >= (prepared.calls -> len) -> if {
+            changed! + 1 => changed!
+        } else {
+            prepared.calls[index] => previous
+            resolvedCalls[index] => current
+            previous.sourceModule != current.sourceModule or previous.callAst != current.callAst
+                or previous.origin != current.origin or previous.targetModule != current.targetModule
+                or previous.targetSourceModule != current.targetSourceModule
+                or previous.functionSymbol != current.functionSymbol or previous.status != current.status
+                -> if { changed! + 1 => changed! }
+        }
+    }
+    initialCompleted -> durationSince(started)? => initialDuration
+    receiverCompleted -> durationSince(initialCompleted)? => receiverDuration
+    queryCompleted -> durationSince(receiverCompleted)? => queryDuration
+    FirstQueryProfile {
+        initialMilliseconds: initialDuration -> asMilliseconds
+        receiverMilliseconds: receiverDuration -> asMilliseconds
+        queryMilliseconds: queryDuration -> asMilliseconds
+        sources: Int(prepared.package.sources -> len)
+        types: Int(initialTypes.types -> len)
+        expressions: Int(initialTypes.expressions -> len)
+        calls: Int(resolvedCalls -> len)
+        changed: changed!
+    } -> Result<FirstQueryProfile, time.Error>.Ok
+}
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "phase=source-preparation" -> println
+    paths! -> semanticContext.prepareFiles => prepared!
+    144 => prepared!.standardLibrarySourceCount
+    prepared! -> semanticContext.freeze => prepared
+    "phase=first-typed-query" -> println
+    prepared -> profileFirstQuery -> when {
+        Err(error) {
+            "first query profile clock failure" -> println
+            process.exit(1)
+        }
+        Ok(value) {
+            "sources=$(value.sources) initial=$(value.initialMilliseconds) receiver=$(value.receiverMilliseconds) query=$(value.queryMilliseconds) types=$(value.types) expressions=$(value.expressions) calls=$(value.calls) changed=$(value.changed)" -> println
+        }
+    }
+}
