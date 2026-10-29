@@ -1469,7 +1469,7 @@ def partial_comparison_shutdown(repo: Path, path: Path, record: dict, product: P
             'claimsTestPassed': False, 'observedCompleted': done}
 
 
-def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path) -> dict | None:
+def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path, product_sha256: str) -> dict | None:
     """Read a sealed batch supervisor for retirement without granting case credit."""
     if (record.get('schemaVersion') != 1 or record.get('status') != 'passed'
             or record.get('cases') != [] or type(record.get('total')) is not int
@@ -1522,7 +1522,7 @@ def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path
         return None
     results, planned = report.get('results'), report.get('phaseFixturePlan')
     if (report.get('state') != 'passed' or report.get('label') != 'selfhost'
-            or report.get('compilerSha256', '').casefold() != hashlib.sha256(product.read_bytes()).hexdigest().casefold()
+            or report.get('compilerSha256', '').casefold() != product_sha256.casefold()
             or any(type(report.get(key)) is not int or report[key] != record['total'] for key in ('completed', 'passed', 'total'))
             or any(type(report.get(key)) is not int or report[key] != 0 for key in ('failed', 'missing'))
             or not isinstance(results, list) or len(results) != record['total']
@@ -1631,7 +1631,9 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         producer_pinned = isinstance(pins, dict) and str(pins.get(producer['path'], '')).casefold() == producer['sha256'].casefold()
         if not binary_pinned or not (producer_pinned or legacy_terminal and missing_producer_pin):
             raise ValueError('ARTIFACT_CONSUMER_BUILD_LINK_INVALID')
-        phase_supervisor = stopped_phase_supervisor(repo, path, record, Path(producer['compilerPath'])) if legacy_terminal else None
+        # The verified producer digest remains authoritative after its binary is
+        # removed; directory cleanup revalidates the same sealed closure later.
+        phase_supervisor = stopped_phase_supervisor(repo, path, record, Path(producer['compilerPath']), producer['compilerSha256']) if legacy_terminal else None
         if phase_supervisor is not None:
             assert_output_shutdown(repo, path.parent)
             rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),

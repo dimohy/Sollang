@@ -2035,6 +2035,38 @@ class CompilerConsumerClosureTests(unittest.TestCase):
         self.assertEqual(1, row['observedCompleted'])
         self.assertEqual(originals, (consumer.read_bytes(), report.read_bytes()))
 
+    def test_phase_supervisor_closure_remains_valid_after_product_removal(self):
+        old, replacement, consumer, record, report = self.phase_supervisor_fixture()
+        closure = policy.close_compiler_consumers(self.repo, old, [consumer], replacement, legacy_terminal=True)
+        originals = closure.read_bytes(), consumer.read_bytes(), report.read_bytes()
+        (old / 'compiler.exe').unlink()
+        self.assertEqual(str(closure), policy.verified_consumer_closure(
+            self.repo, old, allow_missing_product=True)['path'])
+        self.assertEqual(originals, (closure.read_bytes(), consumer.read_bytes(), report.read_bytes()))
+
+    def test_phase_supervisor_removed_product_does_not_allow_changed_report(self):
+        old, replacement, consumer, record, report = self.phase_supervisor_fixture()
+        policy.close_compiler_consumers(self.repo, old, [consumer], replacement, legacy_terminal=True)
+        (old / 'compiler.exe').unlink()
+        data = json.loads(report.read_text())
+        data['compilerSha256'] = '0' * 64
+        report.write_text(json.dumps(data))
+        with self.assertRaises(ValueError):
+            policy.verified_consumer_closure(self.repo, old, allow_missing_product=True)
+
+    def test_phase_supervisor_cleanup_removes_product_then_empty_cache(self):
+        old, replacement, consumer, record, report = self.phase_supervisor_fixture()
+        originals = consumer.read_bytes(), report.read_bytes()
+        policy.close_compiler_consumers(self.repo, old, [consumer], replacement, legacy_terminal=True)
+        plan = self.plan(retention_terminal=True, reusable_directories=[replacement])
+        self.assertIn(str(old / '.sollang-cache'), [row['path'] for row in plan['directoryTargets']])
+        run = self.execute(plan)
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertFalse((old / 'compiler.exe').exists())
+        self.assertFalse((old / '.sollang-cache').exists())
+        self.assertTrue((replacement / 'compiler.exe').exists())
+        self.assertEqual(originals, (consumer.read_bytes(), report.read_bytes()))
+
     def test_phase_supervisor_rejects_changed_report_contract_owner_or_live_job(self):
         old, replacement, consumer, original, report = self.phase_supervisor_fixture()
         original_report = report.read_bytes()
