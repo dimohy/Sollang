@@ -4059,18 +4059,13 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                                 true => lengthFromI64!
                             }
                             projectedBaseType.kind == 2
-                                or projectedBaseType.kind == 3
-                                or projectedBaseType.kind == 5
-                                or projectedBaseType.kind == 13
+                                or (projectedBaseType -> typeIds.isDynamicArrayFamily)
+                                or (projectedBaseType -> typeIds.isDictionaryFamily)
                                 or projectedBaseType.kind == 12
                                 or (projectedBaseType.kind == 1
                                 and projectedBaseType.origin == 1
                                 and (projectedBaseType.symbol == 1
-                                or projectedBaseType.symbol == 15))
-                                or (projectedBaseType.kind == 7
-                                and projectedBaseType.origin == 4
-                                and (projectedBaseType.symbol == 6
-                                or projectedBaseType.symbol == 7)) -> if {
+                                or projectedBaseType.symbol == 15)) -> if {
                                     "  %v$(labelIndex)_expression$(nodeIndex)" -> print
                                     lengthResultWidth == 32 -> if { "_raw" -> print }
                                     " = extractvalue " -> print
@@ -5204,10 +5199,10 @@ interpolationCapacityField typeId: Int, context: ref emitterContext.EmitContext 
     -1 => field!
     valueType! >= 0 -> if {
         context.types[valueType!] => value
-        value.kind == 3 or value.kind == 12
+        (value -> typeIds.isDynamicArrayFamily) or value.kind == 12
             or (value.kind == 1 and value.origin == 1 and value.symbol == 15)
             -> if { 2 => field! }
-        value.kind == 5 -> if { 2 => field! }
+        value -> typeIds.isDictionaryFamily -> if { 2 => field! }
         # A bounded dictionary's public maximum is a type constant; the
         # nonnegative result only records that capacity is available.
         value.kind == 13 -> if { 0 => field! }

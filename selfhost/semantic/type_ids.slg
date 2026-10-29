@@ -320,6 +320,18 @@ public resolveDynTrait package: ref analysis.PackageAnalysis, identities: ref [m
     DynTraitResolution { targetSource: targetSource!, targetSymbol: targetSymbol!, status: 0 }
 }
 
+# Match the C# dynamic-array and dictionary registration families. Heap and
+# Deque share dynamic-array storage; Set is a dictionary with a Unit value.
+public isDynamicArrayFamily type: SemanticType -> Bool {
+    type.kind == 3
+        or (type.kind == 7 and type.origin == 4 and (type.symbol == 6 or type.symbol == 7))
+}
+
+public isDictionaryFamily type: SemanticType -> Bool {
+    type.kind == 5 or type.kind == 13
+        or (type.kind == 7 and type.origin == 4 and type.symbol == 5)
+}
+
 # Receiver-sensitive collection flow types are semantic facts, not storage widths.
 public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType -> Int {
     opcode == -244 and receiver.kind == 14 -> if { 2 -> return }
@@ -337,7 +349,7 @@ public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType -> 
     opcode == -236 -> if {
         receiver.kind == 1 and receiver.origin == 1 and receiver.symbol == 15
             -> if { 13 -> return }
-        receiver.kind == 3 or receiver.kind == 5 or receiver.kind == 12 or receiver.kind == 13
+        (receiver -> isDynamicArrayFamily) or (receiver -> isDictionaryFamily) or receiver.kind == 12
             -> if { 2 -> return }
         -1 -> return
     }
@@ -346,8 +358,8 @@ public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType -> 
             and (receiver.symbol == 1 or receiver.symbol == 16 or receiver.symbol == 17
             or receiver.symbol == 18 or receiver.symbol == 24)
             -> if { 13 -> return }
-        receiver.kind == 2 or receiver.kind == 3 or receiver.kind == 4
-            or receiver.kind == 5 or receiver.kind == 12 or receiver.kind == 13
+        receiver.kind == 2 or (receiver -> isDynamicArrayFamily) or receiver.kind == 4
+            or (receiver -> isDictionaryFamily) or receiver.kind == 12
             or receiver.kind == 14 -> if { 2 -> return }
     }
     -1

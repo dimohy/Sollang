@@ -2261,6 +2261,42 @@ emitAggregatePartialMoveCleanup aggregateIndex: Int, functionIndex: Int, context
         moveIndex! + 1 => moveIndex!
     }
 }
+# A borrowed flat container has no owning drop obligation. Element storage
+# and moved parameters still seed the same transitive helper closure as C#.
+borrowedFlatContainerRoot nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[nodeIndex].typeId => typeId
+    typeId < 0 or typeId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[typeId] => type
+    not ((type -> typeIds.isDynamicArrayFamily) or (type -> typeIds.isDictionaryFamily))
+        -> if { false -> return }
+    type.first < 0 or type.first >= (context.typeTraits -> len)
+        or (context.typeTraits[type.first] / 2) % 2 == 1
+        -> if { false -> return }
+    (type -> typeIds.isDictionaryFamily)
+        and not (type.kind == 7 and type.origin == 4 and type.symbol == 5)
+        -> if {
+            type.second < 0 or type.second >= (context.typeTraits -> len)
+                or (context.typeTraits[type.second] / 2) % 2 == 1
+                -> if { false -> return }
+        }
+    nodeIndex -> ownedValueSourceIndex(context, state) => sourceIndex
+    sourceIndex < 0 or sourceIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[sourceIndex] => source
+    source.kind == 10 -> if { source.flags % 2 == 0 -> return }
+    source.kind != 5 or source.operand0 >= 0 or source.symbol < 0
+        -> if { false -> return }
+    sourceIndex => functionIndex!
+    functionIndex! >= 0 and context.ir[functionIndex!].kind != 0
+        and context.ir[functionIndex!].kind != 11 -> while {
+            context.ir[functionIndex!].parent => functionIndex!
+        }
+    functionIndex! < 0 -> if { false -> return }
+    context -> parameterIndexForFunction(functionIndex!, source.symbol) => parameterIndex
+    parameterIndex >= 0 and context.ir[parameterIndex].flags % 2 == 0
+}
+
 semanticTypeOwns typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     typeId >= 0 and typeId < (context.typeTraits -> len)
         -> if {
