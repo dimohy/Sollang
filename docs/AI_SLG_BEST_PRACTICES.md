@@ -904,6 +904,12 @@ Concrete `[T; N]` type lengths use decimal integers in `0..2147483647`;
 fixed length is valid; a zero bounded capacity, fractional token, or overflow
 is rejected at the extent token before later brackets or bodies are parsed.
 Fixed-array compile-time value parameters keep their generic contract.
+Ordinary numeric generic applications distinguish different explicit values
+even when their runtime types agree. Normalize numeric spelling for instance
+identity: `3` and `0_3` denote the same value.
+Keep runtime comparisons in call arguments and flow inputs outside that identity.
+Treat a value parameter constrained by `Int` as an `Int` expression in every
+branch result; its value role is distinct from a generic type parameter.
 Digit separators are valid in these numbers: `4_096` means `4096`. Empty-array
 capacity hints and numeric repeat counts allow zero and must fit a nonnegative
 `Int`. A hint is checked before `~`; a repeat count is checked after `]`, so a

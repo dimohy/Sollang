@@ -1381,6 +1381,14 @@ Function scopes can own cleanup and participate in complete-move analysis, but
 they are not control regions. A termination query applies only to a nested
 control region; it must not climb through a function owner's `-1` parent as if
 that parent were another function boundary.
+Ordinary explicit numeric generic applications include the normalized integer
+value in concrete body identity, independently of the runtime input type.
+Digit separators and leading zeros do not create distinct value identities.
+Different explicit values remain distinct when their concrete types coincide.
+The call target owns its generic clause; comparisons in ordinary arguments
+or preceding flow inputs do not supply value-generic arguments.
+A value parameter constrained by `where N: Int` has type `Int` in body
+expressions, including conditional results, before IR specialization.
 Compile-time value generics used as expressions lower to hidden trailing `Int`
 parameters, and numeric `<...>` call arguments feed those parameters. They are
 function-scoped values in interpolation-based loop and control expressions as

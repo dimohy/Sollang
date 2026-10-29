@@ -1,5 +1,6 @@
 namespace sollang.compiler.ir.typed
 
+import sollang.compiler.ast as ast
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.symbols as symbols
@@ -7,6 +8,7 @@ import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.resolve as resolution
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
 struct SourceTypedIr {
@@ -287,6 +289,25 @@ materializeGenericProductFields nodes: ref [TypedIrNode; ~], types: mut [typeIds
     }
 }
 
+# Explicit Number arguments are semantic value identity, independently of the
+# runtime input type. Type syntax and runtime arguments own their own numbers.
+# -1 means no explicit value; -2 retains an invalid Number identity for the
+# existing parser/semantic diagnostic path rather than treating it as a value.
+explicitGenericValueIdentity call: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
+        -> if { -1 -> return }
+    prepared.package.ranges[call.sourceModule] => range
+    call.astNode < 0 or call.astNode >= range.astCount
+        -> if { -1 -> return }
+    call.astNode -> ast.explicitNumericGenericArgumentToken(range.astStart, range.astCount, range.tokenStart, prepared.package.nodes, prepared.package.tokens) => tokenIndex
+    tokenIndex < 0 -> if { -1 -> return }
+    prepared.package.sources[call.sourceModule] -> len => sourceLength
+    prepared.package.sources[call.sourceModule] -> slice(UIntSize(0), sourceLength) => sourceText
+    sourceText -> syntax.numericExtentTokenValue(prepared.package.tokens[range.tokenStart + tokenIndex]) => value
+    value < 0 -> if { -2 -> return }
+    value
+}
+
 public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericFunctionInstance; ~] {
     {UInt64: Int; 16~} => heads!
     [Int; ~] => next!
@@ -295,6 +316,7 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
     [Int; ~] => starts!
     [Int; ~] => lengths!
     [Int; ~] => arguments!
+    [Int; ~] => valueArguments!
     [Int; ~] => functions!
     [Int; ~] => counts!
     [Bool; ~] => processed!
@@ -355,15 +377,22 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
                             }
                     }
                     concrete! -> if {
+                        -1 => valueArgument!
+                        plan.callNode >= 0 -> if {
+                            nodes[plan.callNode] -> explicitGenericValueIdentity(prepared) => valueArgument!
+                        }
                         UInt64(plan.templateNode) * 65599 + UInt64(plan.resultType) => hash!
                         plan.actualInputs -> each actual {
                             hash! * 65599 + UInt64(actual) => hash!
                         }
+                        hash! * 65599 => hash!
+                        valueArgument! >= 0 -> if { hash! + UInt64(valueArgument!) + 1 => hash! }
                         heads! -> putIfAbsent(hash!, -1) => newBucket
                         heads![hash!] => candidate!
                         candidate! >= 0 and slot! < 0 -> while {
                             templates![candidate!] == plan.templateNode
                                 and results![candidate!] == plan.resultType
+                                and valueArguments![candidate!] == valueArgument!
                                 and lengths![candidate!] == (plan.actualInputs -> len) => equal!
                             0 => argumentIndex!
                             equal! and argumentIndex! < (plan.actualInputs -> len)
@@ -380,6 +409,7 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
                             next! -> push(heads![hash!])
                             templates! -> push(plan.templateNode)
                             results! -> push(plan.resultType)
+                            valueArguments! -> push(valueArgument!)
                             starts! -> push(arguments! -> len)
                             lengths! -> push(plan.actualInputs -> len)
                             plan.actualInputs -> each actual { arguments! -> push(actual) }

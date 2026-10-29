@@ -10,6 +10,7 @@ import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_terms as typeTerms
 import sollang.compiler.semantic.types as types
 import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
 import sys.file as file
 
 # One package owns relocatable flat products. Every index stored inside an AST,
@@ -49,6 +50,51 @@ public struct PackageAnalysis {
     public constantLiterals: [constantLowering.Literal; ~]
     public constantFailures: [constantLowering.Failure; ~]
     public interpolations: [interpolation.InterpolationNode; ~]
+}
+
+public declaresIntegerValueGeneric package: ref PackageAnalysis, sourceModule: Int, functionAst: Int, genericToken: Int -> Bool {
+    package.ranges[sourceModule] => range
+    package.tokens[range.tokenStart + genericToken] => generic
+    package.sources[sourceModule] -> slice(generic.span.start, generic.span.length) => genericName
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        package.nodes[range.astStart + astIndex!] => constraint
+        constraint.kind == 34 and constraint.parent >= 0
+            -> if {
+                package.nodes[range.astStart + constraint.parent] => clause
+                clause.kind == 33 and clause.parent == functionAst
+                    -> if {
+                        0 => significant!
+                        false => matches!
+                        false => colon!
+                        false => integer!
+                        constraint.firstToken => tokenIndex!
+                        tokenIndex! < constraint.firstToken + constraint.tokenCount
+                            -> while {
+                                package.tokens[range.tokenStart + tokenIndex!] => token
+                                token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                                    -> if {
+                                        significant! == 0 -> if {
+                                            (package.sources[sourceModule] -> slice(token.span.start, token.span.length)) == genericName => matches!
+                                        }
+                                        significant! == 1 -> if { token.kind == grammar.tokenIdColon() => colon! }
+                                        significant! == 2 -> if {
+                                            token.kind == grammar.tokenIdIdentifier()
+                                                and (package.sources[sourceModule] -> slice(token.span.start, token.span.length)) == "Int" => integer!
+                                        }
+                                        significant! + 1 => significant!
+                                    }
+                                tokenIndex! + 1 => tokenIndex!
+                            }
+                        matches! and colon! -> if {
+                            integer! and significant! == 3 => valueGeneric
+                            valueGeneric -> return
+                        }
+                    }
+            }
+        astIndex! + 1 => astIndex!
+    }
+    false
 }
 
 withSelectedFunctionFlag symbol: symbols.Symbol, selected: Bool -> symbols.Symbol {

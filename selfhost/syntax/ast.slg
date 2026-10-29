@@ -36,6 +36,40 @@ public bareYieldStatement source: Text, node: AstNode, token: syntax.SyntaxToken
     isBareYield -> return
 }
 
+# A call's explicit Number argument belongs to its target clause. The flow
+# input and ordinary argument list may contain unrelated comparison tokens.
+public explicitNumericGenericArgumentToken callAst: Int, astStart: Int, astCount: Int, tokenStart: Int, nodes: ref [AstNode; ~], tokens: ref [syntax.SyntaxToken; ~] -> Int {
+    callAst < 0 or callAst >= astCount -> if { -1 -> return }
+    nodes[astStart + callAst] => application
+    application.firstToken => tokenIndex!
+    application.kind == 10 -> if {
+        0 => targetSearch!
+        targetSearch! < astCount -> while {
+            nodes[astStart + targetSearch!] => target
+            target.parent == callAst and target.kind == 16 and target.payloadToken >= 0
+                -> if { target.payloadToken => tokenIndex! }
+            targetSearch! + 1 => targetSearch!
+        }
+    }
+    application.kind == 48 and application.payloadToken >= 0
+        -> if { application.payloadToken => tokenIndex! }
+    false => afterAngle!
+    tokenIndex! < application.firstToken + application.tokenCount
+        -> while {
+            tokens[tokenStart + tokenIndex!] => token
+            not afterAngle! and token.kind == grammar.tokenIdLeftParen()
+                -> if { -1 -> return }
+            afterAngle! and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                -> if {
+                    token.kind == grammar.tokenIdNumber() -> if { tokenIndex! -> return }
+                    -1 -> return
+                }
+            token.kind == grammar.tokenIdLess() -> if { true => afterAngle! }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    -1
+}
+
 struct LowerRequest {
     source: Text
     startRule: Int
