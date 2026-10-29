@@ -1,0 +1,221 @@
+diff --git a/6a0363b6ecc007124413465095c64c3277f48d25 b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+index 6a0363b6e..8b4838894 100644
+--- a/6a0363b6ecc007124413465095c64c3277f48d25
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+@@ -547,6 +547,13 @@ internal sealed partial class LlvmEmitter
+         if (additionalArgumentOffset > 0 && argument is not null
+             && function.InputOwnership == BoundFunctionInputOwnership.Default)
+             TrackReadonlyCallTemporary(expression.Arguments[0], argument, borrowedTemporaries);
++        var savedOwners = new List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)>();
++        PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
++        var savedArgument = argument is null ? null : PreserveAsyncExpressionValue(argument,
++            function.InputOwnership == BoundFunctionInputOwnership.Move
++                && additionalArgumentOffset > 0
++                && expression.Arguments[0] is not (NameExpression or FieldAccessExpression));
++        var savedAdditional = new List<AsyncExpressionCarrier?>();
+         var additionalArguments = (function.AdditionalParameters ?? [])
+             .Select((parameter, index) =>
+             {
+@@ -559,9 +566,18 @@ internal sealed partial class LlvmEmitter
+                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, path);
+                 if (parameter.Ownership == BoundFunctionInputOwnership.Default)
+                     TrackReadonlyCallTemporary(argumentExpression, value, borrowedTemporaries);
++                PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
++                savedAdditional.Add(PreserveAsyncExpressionValue(value,
++                    parameter.Ownership == BoundFunctionInputOwnership.Move
++                        && argumentExpression is not (NameExpression or FieldAccessExpression)));
+                 return value;
+             })
+             .ToArray();
++        if (argument is not null)
++            argument = RestoreAsyncExpressionValue(savedArgument, argument);
++        for (var index = 0; index < additionalArguments.Length; index++)
++            additionalArguments[index] = RestoreAsyncExpressionValue(savedAdditional[index], additionalArguments[index]);
++        RestoreAsyncCallOwners(borrowedTemporaries, savedOwners);
+         var value = EmitFunctionCall(function, argument, additionalArguments);
+         RemoveOwnedParameterArgumentsIfNeeded(function, expression.Arguments, additionalArgumentOffset);
+         if (methodReceiverName is not null && FunctionConsumesOwnedHeapInput(function))
+@@ -630,6 +646,25 @@ internal sealed partial class LlvmEmitter
+         return RuntimeUnit.Instance;
+     }
+ 
++    private void PreserveAsyncCallOwners(
++        List<RuntimeValue> temporaries,
++        List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)> saved)
++    {
++        while (saved.Count < temporaries.Count)
++        {
++            var value = temporaries[saved.Count];
++            saved.Add((value, PreserveAsyncExpressionValue(value, ownsValue: true)));
++        }
++    }
++
++    private void RestoreAsyncCallOwners(
++        List<RuntimeValue> temporaries,
++        List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)> saved)
++    {
++        for (var index = 0; index < saved.Count; index++)
++            temporaries[index] = RestoreAsyncExpressionValue(saved[index].Carrier, saved[index].Value);
++    }
++
+     private RuntimeValue EmitFlowFunctionCall(
+         BoundFunction function,
+         RuntimeValue argument,
+@@ -659,9 +694,16 @@ internal sealed partial class LlvmEmitter
+             : _program.Types.IsReference(function.InputType.Value)
+                 ? argument is RuntimeReference producedReference
+                     ? producedReference
+-                    : CreateReadonlyReferenceArgument(source, function.InputType.Value, function.Name)
++                    : receivesSourcePlace
++                        ? CreateReadonlyReferenceArgument(source, function.InputType.Value, function.Name)
++                        : CreateReadonlyFlowResultReference(argument, function.InputType.Value, function.Name)
+                 : argument;
+         EnsureFunctionArgumentRuntimeType(functionArgument, function.InputType.Value, function.Name);
++        var savedOwners = new List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)>();
++        PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
++        var savedArgument = PreserveAsyncExpressionValue(functionArgument,
++            function.InputOwnership == BoundFunctionInputOwnership.Move && ownsFlowTemporary);
++        var savedAdditional = new List<AsyncExpressionCarrier?>();
+         var additionalArguments = (function.AdditionalParameters ?? [])
+             .Select((parameter, index) =>
+             {
+@@ -673,9 +715,17 @@ internal sealed partial class LlvmEmitter
+                         : EmitFlowAdditionalValue(parameter.Type, additionalExpressions[index],
+                             parameter.Ownership == BoundFunctionInputOwnership.Default ? borrowedTemporaries : null);
+                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
++                PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
++                savedAdditional.Add(PreserveAsyncExpressionValue(value,
++                    parameter.Ownership == BoundFunctionInputOwnership.Move
++                        && additionalExpressions[index] is not (NameExpression or FieldAccessExpression)));
+                 return value;
+             })
+             .ToArray();
++        functionArgument = RestoreAsyncExpressionValue(savedArgument, functionArgument);
++        for (var index = 0; index < additionalArguments.Length; index++)
++            additionalArguments[index] = RestoreAsyncExpressionValue(savedAdditional[index], additionalArguments[index]);
++        RestoreAsyncCallOwners(borrowedTemporaries, savedOwners);
+         var value = EmitFunctionCall(function, functionArgument, additionalArguments);
+         RemoveOwnedParameterFlowArgumentsIfNeeded(function, source, additionalExpressions, receivesSourcePlace);
+         foreach (var temporary in borrowedTemporaries.AsEnumerable().Reverse())
+@@ -683,6 +733,16 @@ internal sealed partial class LlvmEmitter
+         return value;
+     }
+ 
++    private RuntimeReference CreateReadonlyFlowResultReference(RuntimeValue value, BoundType referenceType, string path)
++    {
++        var elementType = _program.Types.GetReference(referenceType).ElementType;
++        EnsureRuntimeType(value, elementType, path);
++        return new RuntimeReference(
++            referenceType,
++            elementType,
++            GetOrCreateReadonlyValuePointer(value, "ref_flow_result"));
++    }
++
+     private void TrackReadonlyCallTemporary(Expression expression, RuntimeValue value, List<RuntimeValue> temporaries)
+     {
+         if (_anonymousProjectionOwners.Remove(expression, out var projectedOwner))
+@@ -765,9 +825,9 @@ internal sealed partial class LlvmEmitter
+             var elementType = expectedType == BoundType.DynamicIntArray
+                 ? BoundType.Int
+                 : _program.Types.GetDynamicArray(expectedType).ElementType;
+-            var elements = contextualDynamicLiteral.Elements
+-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
+-                .ToArray();
++            var elements = EmitPreservedExpressionValues(contextualDynamicLiteral.Elements,
++                element => EmitFunctionArgumentExpression(element, elementType),
++                element => OwnsPendingExpressionValue(element));
+             return expectedType == BoundType.DynamicIntArray
+                 ? EmitDynamicIntArrayLiteral(contextualDynamicLiteral, elements.Cast<RuntimeInt>().ToArray())
+                 : EmitDynamicInlineArrayLiteral(expectedType, elements);
+@@ -776,9 +836,9 @@ internal sealed partial class LlvmEmitter
+             && _program.Types.IsBoundedArray(expectedType))
+         {
+             var elementType = _program.Types.GetBoundedArray(expectedType).ElementType;
+-            var elements = boundedArray.Elements
+-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
+-                .ToArray();
++            var elements = EmitPreservedExpressionValues(boundedArray.Elements,
++                element => EmitFunctionArgumentExpression(element, elementType),
++                element => OwnsPendingExpressionValue(element));
+             return EmitBoundedInlineArrayLiteral(expectedType, elements);
+         }
+         if (expression is ArrayLiteralExpression fixedArray
+@@ -792,9 +852,9 @@ internal sealed partial class LlvmEmitter
+                 BoundType.StaticTextArray => BoundType.Text,
+                 _ => _program.Types.GetStaticArray(expectedType).ElementType
+             };
+-            var elements = fixedArray.Elements
+-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
+-                .ToArray();
++            var elements = EmitPreservedExpressionValues(fixedArray.Elements,
++                element => EmitFunctionArgumentExpression(element, elementType),
++                element => OwnsPendingExpressionValue(element));
+             if (expectedType == BoundType.StaticIntArray)
+             {
+                 return EmitStaticIntArrayLiteral(fixedArray, elements.Cast<RuntimeInt>().ToArray());
+@@ -836,9 +896,9 @@ internal sealed partial class LlvmEmitter
+             && expression is ArrayLiteralExpression array)
+         {
+             var elementType = _program.Types.GetSliceElement(expectedType);
+-            var elements = array.Elements
+-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
+-                .ToArray();
++            var elements = EmitPreservedExpressionValues(array.Elements,
++                element => EmitFunctionArgumentExpression(element, elementType),
++                element => OwnsPendingExpressionValue(element));
+             if (elementType == BoundType.Int)
+             {
+                 return EmitStaticIntArrayLiteral(array, elements.Cast<RuntimeInt>().ToArray());
+@@ -2016,6 +2076,13 @@ internal sealed partial class LlvmEmitter
+             argument = EmitTransientText(argument);
+         }
+ 
++        if (function.IsAsync)
++        {
++            EnsureFunctionArgumentRuntimeType(argument, function.InputType.Value, function.Name);
++            var value = MaterializeAsyncResult(argument);
++            return $"{value.TypeName} {value.ValueName}";
++        }
++
+         if (function.HasValueGenericFixedArrayInput)
+         {
+             var (pointer, length, actualType, knownLength) = argument switch
+@@ -2317,9 +2384,37 @@ internal sealed partial class LlvmEmitter
+                 definition.FixedLength ?? 0);
+         }
+ 
++        if (_program.Types.IsBoundedArray(expectedType))
++        {
++            var definition = _program.Types.GetBoundedArray(expectedType);
++            var llvmType = LlvmBoundedArrayType(expectedType);
++            var lengthAddress = NextTemp("mut_field_len_addr");
++            EmitAssign(
++                lengthAddress,
++                $"getelementptr inbounds {llvmType}, ptr {place.PointerName}, i32 0, i32 0");
++            var pointer = NextTemp("mut_field_data");
++            EmitAssign(
++                pointer,
++                $"getelementptr inbounds {llvmType}, ptr {place.PointerName}, i32 0, i32 1, i64 0");
++
++            // The borrow ABI uses addresses of descriptor components. Bounded
++            // values store their length and elements inline, so only the data
++            // pointer and constant capacity need temporary descriptor slots.
++            var pointerAddress = NextTemp("mut_field_ptr_addr");
++            EmitAlloca(pointerAddress, "ptr", 8);
++            EmitStore("ptr", pointer, pointerAddress, 8);
++            var capacityAddress = NextTemp("mut_field_cap_addr");
++            EmitAlloca(capacityAddress, "i64", 8);
++            EmitStore("i64", definition.Capacity.ToString(CultureInfo.InvariantCulture), capacityAddress, 8);
++            return new RuntimeMutableContainerReference(
++                expectedType,
++                pointerAddress,
++                lengthAddress,
++                capacityAddress);
++        }
++
+         if (expectedType is BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena
+             || _program.Types.IsDynamicArray(expectedType)
+-            || _program.Types.IsBoundedArray(expectedType)
+             || _program.Types.IsDictionary(expectedType))
+         {
+             var llvmType = LlvmType(expectedType);

@@ -1,0 +1,39 @@
+diff --git a/f97caf91a1f241551205648f0e72849c6b239ba6 b/src/Sollang.Compiler/CodeGen/LlvmEmitter.AsyncDiagnostics.cs
+index f97caf91a..186ddc994 100644
+--- a/f97caf91a1f241551205648f0e72849c6b239ba6
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.AsyncDiagnostics.cs
+@@ -995,6 +995,14 @@ internal sealed partial class LlvmEmitter
+         out int line,
+         out int column)
+     {
++        if (site is FlowTarget targetSite && targetSite.Path.Count == 1
++            && targetSite.Path[0] == "await" && targetSite.Arguments.Count == 0)
++        {
++            byteOffset = targetSite.ByteOffset;
++            line = targetSite.SourceLine > 0 ? targetSite.SourceLine : targetSite.Line;
++            column = targetSite.SourceColumn > 0 ? targetSite.SourceColumn : targetSite.Column;
++            return byteOffset >= 0;
++        }
+         Expression? expression = site switch
+         {
+             BindingStatement binding => binding.Value,
+@@ -1015,8 +1023,8 @@ internal sealed partial class LlvmEmitter
+             && target.Arguments.Count == 0)
+         {
+             byteOffset = target.ByteOffset;
+-            line = target.Line;
+-            column = target.Column;
++            line = target.SourceLine > 0 ? target.SourceLine : target.Line;
++            column = target.SourceColumn > 0 ? target.SourceColumn : target.Column;
+             return byteOffset >= 0;
+         }
+ 
+@@ -1053,7 +1061,7 @@ internal sealed partial class LlvmEmitter
+         BoundAsyncSuspensionLocation location)
+     {
+         var module = AddGlobalString(location.Function.ModuleName);
+-        var qualifiedName = location.Function.Name;
++        var qualifiedName = location.Function.DeclarationName ?? location.Function.Name;
+         var separator = qualifiedName.LastIndexOf('.', StringComparison.Ordinal);
+         var symbol = AddGlobalString(separator < 0 ? qualifiedName : qualifiedName[(separator + 1)..]);
+         StoreDiagnosticRecordField(record, 4, "i32", resumeState.ToString(CultureInfo.InvariantCulture), 4);

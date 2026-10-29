@@ -1,0 +1,127 @@
+diff --git a/87e6b29ef739577280aaed8b602b7164fd1b8b51 b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs
+index 87e6b29ef..ded91bb7c 100644
+--- a/87e6b29ef739577280aaed8b602b7164fd1b8b51
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs
+@@ -119,7 +119,26 @@ internal sealed partial class LlvmEmitter
+         string ok,
+         bool standardError)
+     {
+-        return EmitWriteValue(EmitExpression(interpolation.Expression), ok, standardError);
++        if (_activeAsyncCfg is null)
++        {
++            return EmitWriteValue(EmitExpression(interpolation.Expression), ok, standardError);
++        }
++
++        // A hole can suspend after an earlier literal was written. Keep that
++        // write status in the same typed frame as the other live values so
++        // the resumed block never reads a pre-suspension SSA temporary.
++        var statusName = NextAsyncBindingName("interpolation_write_status");
++        _locals.Add(statusName, new RuntimeBool(ok));
++        try
++        {
++            var value = EmitExpression(interpolation.Expression);
++            var resumedStatus = (RuntimeBool)_locals[statusName];
++            return EmitWriteValue(value, resumedStatus.ValueName, standardError);
++        }
++        finally
++        {
++            ForgetAsyncSpillCarrier(statusName);
++        }
+     }
+ 
+     private string EmitWriteValue(RuntimeValue value, string ok)
+@@ -766,6 +785,7 @@ internal sealed partial class LlvmEmitter
+                 ? declaredElementType
+                 : null;
+         var elements = new RuntimeValue[expression.Elements.Count];
++        var carriers = new AsyncExpressionCarrier?[elements.Length];
+         for (var index = 0; index < expression.Elements.Count; index++)
+         {
+             var element = expression.Elements[index];
+@@ -773,7 +793,10 @@ internal sealed partial class LlvmEmitter
+                 ? EmitFunctionArgumentExpression(element, contextualElementType)
+                 : EmitExpression(element);
+             elementType ??= elements[index].Type;
++            carriers[index] = PreserveAsyncExpressionValue(elements[index], OwnsPendingExpressionValue(element));
+         }
++        for (var index = 0; index < elements.Length; index++)
++            elements[index] = RestoreAsyncExpressionValue(carriers[index], elements[index]);
+         return elements;
+     }
+ 
+@@ -938,23 +961,14 @@ internal sealed partial class LlvmEmitter
+ 
+     private bool TryResolveRuntimeTypeName(string typeName, out BoundType type)
+     {
+-        if (_program.Types.TryResolve(typeName, out type))
+-        {
+-            return true;
+-        }
+-        // Fixed arrays are interned by element identity and length, rather
+-        // than by a source spelling in the nominal name table.
+-        if (typeName.StartsWith('[') && typeName.EndsWith(']')
+-            && typeName.LastIndexOf(';') is var separator && separator > 1
+-            && int.TryParse(typeName.AsSpan(separator + 1, typeName.Length - separator - 2).Trim(),
+-                NumberStyles.None, CultureInfo.InvariantCulture, out var length)
+-            && TryResolveRuntimeTypeName(typeName[1..separator].Trim(), out var elementType)
+-            && _program.Types.TryGetFixedStaticArrayForShape(elementType, length, out type))
+-        {
+-            return true;
+-        }
+         if (_currentFunction is { } function)
+         {
++            if (_program.FunctionTypeNames.TryGetValue(function, out var names)
++                && names.TryGetValue(typeName.Trim(), out type))
++                return true;
++            if (function.SpecializedGenericTypes is { } arguments
++                && arguments.TryGetValue(typeName, out type))
++                return true;
+             if (typeName == function.GenericParameterName && function.SpecializedType is { } primaryType)
+             {
+                 type = primaryType;
+@@ -973,6 +987,16 @@ internal sealed partial class LlvmEmitter
+                 return true;
+             }
+         }
++        if (_program.Types.TryResolveInModule(typeName, _currentFunction?.ModuleName, out type))
++            return true;
++        // Structural fixed arrays are already interned during semantic analysis.
++        if (typeName.StartsWith('[') && typeName.EndsWith(']')
++            && typeName.LastIndexOf(';') is var separator && separator > 1
++            && int.TryParse(typeName.AsSpan(separator + 1, typeName.Length - separator - 2).Trim(),
++                NumberStyles.None, CultureInfo.InvariantCulture, out var length)
++            && TryResolveRuntimeTypeName(typeName[1..separator].Trim(), out var elementType)
++            && _program.Types.TryGetFixedStaticArrayForShape(elementType, length, out type))
++            return true;
+         type = default;
+         return false;
+     }
+@@ -1135,6 +1159,7 @@ internal sealed partial class LlvmEmitter
+     private RuntimeValue EmitDictionaryLiteral(DictionaryLiteralExpression expression)
+     {
+         var entries = new List<(RuntimeValue Key, RuntimeValue Value)>(expression.Entries.Count);
++        var carriers = new List<(AsyncExpressionCarrier? Key, AsyncExpressionCarrier? Value)>(expression.Entries.Count);
+         BoundType? inferredKeyType = expression.KeyType is not null
+             && _program.Types.TryResolve(expression.KeyType, out var declaredKeyType)
+                 ? declaredKeyType
+@@ -1151,6 +1176,7 @@ internal sealed partial class LlvmEmitter
+                     ? EmitContextualStructLiteral(contextual, contextualKeyType)
+                     : EmitExpression(entry.Key);
+             inferredKeyType ??= key.Type;
++            var keyCarrier = PreserveAsyncExpressionValue(key, OwnsPendingExpressionValue(entry.Key));
+             var value = entry.Value is DictionaryLiteralExpression contextualValue
+                 && inferredValueType is { } contextualValueType
+                 && _program.Types.IsStruct(contextualValueType)
+@@ -1158,7 +1184,12 @@ internal sealed partial class LlvmEmitter
+                     : EmitExpression(entry.Value);
+             inferredValueType ??= value.Type;
+             entries.Add((key, value));
++            carriers.Add((keyCarrier, PreserveAsyncExpressionValue(value, OwnsPendingExpressionValue(entry.Value))));
+         }
++        for (var index = 0; index < entries.Count; index++)
++            entries[index] = (
++                RestoreAsyncExpressionValue(carriers[index].Key, entries[index].Key),
++                RestoreAsyncExpressionValue(carriers[index].Value, entries[index].Value));
+         if (expression.BoundedCapacity is { } boundedCapacity)
+         {
+             var boundedType = _program.Types.GetOrAddBoundedDictionary(

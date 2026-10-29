@@ -1,0 +1,245 @@
+diff --git a/a53c685bb51ce1ebc5d19d0ebc33f47f0228f0ab b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
+index a53c685bb..8d300481e 100644
+--- a/a53c685bb51ce1ebc5d19d0ebc33f47f0228f0ab
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
+@@ -486,30 +486,12 @@ internal sealed partial class LlvmEmitter
+         {
+             return false;
+         }
+-
+         var child = EmitExpression(taskExpression) as RuntimeTask
+             ?? throw new SollangException(
+                 $"await in async function '{lowering.Function.Name}' did not produce Task<T>");
+-        var consumedTaskName = taskExpression is NameExpression taskName
+-            ? taskName.Name
+-            : null;
+-        if (consumedTaskName is null && taskExpression is FieldAccessExpression)
+-        {
+-            ConsumeOwnedFieldProjection(taskExpression, child.Type);
+-        }
+-        var spillPlans = BuildCfgSpillPlans(lowering, excludedName: consumedTaskName);
+-        EmitRecordCurrentDiagnosticSuspension(point, child, taskExpression);
+-        StoreSuspendedChild(lowering.Function, child);
+-        if (consumedTaskName is not null)
+-        {
+-            RemoveLocal(consumedTaskName);
+-        }
+-        SuspendAndResumeCfgPoint(lowering, point, spillPlans);
+-        var resumedValue = EmitStoredChildAwait(lowering.Function, child);
+-        if (resumedValue.Type != BoundType.Unit)
+-        {
++        var value = EmitCfgAwaitValue(lowering, point, child, taskExpression);
++        if (value.Type != BoundType.Unit)
+             throw new SollangException("an await expression statement must produce Unit");
+-        }
+         return true;
+     }
+ 
+@@ -522,27 +504,43 @@ internal sealed partial class LlvmEmitter
+         {
+             return false;
+         }
+-
+         var child = EmitExpression(taskExpression) as RuntimeTask
+             ?? throw new SollangException(
+                 $"await in async function '{lowering.Function.Name}' did not produce Task<T>");
++        value = EmitCfgAwaitValue(lowering, point, child, taskExpression);
++        return true;
++    }
++
++    private bool TryEmitCfgFlowAwait(
++        Expression source, FlowTarget target, RuntimeTask child, out RuntimeValue value)
++    {
++        value = null!;
++        if (_activeAsyncCfg is not { } lowering
++            || !lowering.Plan.ByFlowAwaitTarget.TryGetValue(target, out var point))
++        {
++            return false;
++        }
++        value = EmitCfgAwaitValue(lowering, point, child, source);
++        return true;
++    }
++
++    private RuntimeValue EmitCfgAwaitValue(
++        AsyncCfgLowering lowering, AsyncCfgSuspendPoint point, RuntimeTask child, Expression taskExpression)
++    {
+         var consumedTaskName = taskExpression is NameExpression taskName
+-            ? taskName.Name
+-            : null;
++            && _locals.TryGetValue(taskName.Name, out var local)
++            && ReferenceEquals(local, child)
++                ? taskName.Name
++                : null;
+         if (consumedTaskName is null && taskExpression is FieldAccessExpression)
+-        {
+             ConsumeOwnedFieldProjection(taskExpression, child.Type);
+-        }
+         var spillPlans = BuildCfgSpillPlans(lowering, excludedName: consumedTaskName);
+         EmitRecordCurrentDiagnosticSuspension(point, child, taskExpression);
+         StoreSuspendedChild(lowering.Function, child);
+         if (consumedTaskName is not null)
+-        {
+             RemoveLocal(consumedTaskName);
+-        }
+         SuspendAndResumeCfgPoint(lowering, point, spillPlans);
+-        value = EmitStoredChildAwait(lowering.Function, child);
+-        return true;
++        return EmitStoredChildAwait(lowering.Function, child);
+     }
+ 
+     private bool TryEmitCfgYieldStatement(ExpressionStatement statement)
+@@ -559,6 +557,54 @@ internal sealed partial class LlvmEmitter
+         return true;
+     }
+ 
++    private sealed record AsyncExpressionCarrier(string Name, bool Introduced);
++
++    private RuntimeValue[] EmitPreservedExpressionValues<T>(
++        IEnumerable<T> expressions,
++        Func<T, RuntimeValue> emit,
++        Func<T, bool>? ownsValue = null)
++    {
++        var values = new List<RuntimeValue>();
++        var carriers = new List<AsyncExpressionCarrier?>();
++        foreach (var expression in expressions)
++        {
++            var value = emit(expression);
++            values.Add(value);
++            carriers.Add(PreserveAsyncExpressionValue(value, ownsValue?.Invoke(expression) ?? true));
++        }
++        for (var index = 0; index < values.Count; index++)
++            values[index] = RestoreAsyncExpressionValue(carriers[index], values[index]);
++        return values.ToArray();
++    }
++
++    private bool OwnsPendingExpressionValue(Expression expression, BoundType? copiedType = null) =>
++        copiedType is { } type && CopiesFixedStorageField(expression, type)
++        || !TryGetOwnedFieldProjection(expression, out _, out _);
++
++    private AsyncExpressionCarrier? PreserveAsyncExpressionValue(RuntimeValue value, bool ownsValue)
++    {
++        if (_activeAsyncCfg is null || value is RuntimeUnit)
++            return null;
++        foreach (var (name, local) in _locals)
++            if (!_mutableLocals.Contains(name) && ReferenceEquals(local, value))
++                return new AsyncExpressionCarrier(name, false);
++        var carrier = NextAsyncBindingName("expression_value");
++        _locals.Add(carrier, value);
++        if (!ownsValue)
++            _borrowedOwnedLocals.Add(carrier);
++        return new AsyncExpressionCarrier(carrier, true);
++    }
++
++    private RuntimeValue RestoreAsyncExpressionValue(AsyncExpressionCarrier? carrier, RuntimeValue original)
++    {
++        if (carrier is null)
++            return original;
++        var value = ResolveLocal(carrier.Name);
++        if (carrier.Introduced)
++            ForgetAsyncSpillCarrier(carrier.Name);
++        return value;
++    }
++
+     private IReadOnlyList<AsyncSpillPlan> BuildCfgSpillPlans(
+         AsyncCfgLowering lowering,
+         string? excludedName)
+@@ -1168,6 +1214,8 @@ internal sealed partial class LlvmEmitter
+                 case ExpressionStatement expression:
+                     if (TryGetAwaitTaskExpression(expression.Expression, out _))
+                     {
++                        var flow = (FlowExpression)expression.Expression;
++                        CollectCfgFlowSuspensions(flow, candidates, flow.Targets.Count - 1);
+                         candidates.Add(new AsyncCfgCandidate(expression, IsYield: false));
+                     }
+                     else
+@@ -1204,12 +1252,30 @@ internal sealed partial class LlvmEmitter
+     {
+         if (TryGetAwaitTaskExpression(expression, out _))
+         {
++            var flow = (FlowExpression)expression;
++            CollectCfgFlowSuspensions(flow, candidates, flow.Targets.Count - 1);
+             candidates.Add(new AsyncCfgCandidate(expression, IsYield: false));
+             return;
+         }
+ 
+         switch (expression)
+         {
++            case StringExpression text:
++                foreach (var segment in text.Segments.OfType<InterpolationSegment>())
++                {
++                    CollectCfgSuspensions(segment.Expression, candidates);
++                }
++                break;
++            case FlowExpression flow:
++                CollectCfgFlowSuspensions(flow, candidates, flow.Targets.Count);
++                break;
++            case CallExpression call:
++                foreach (var argument in call.Arguments)
++                    CollectCfgSuspensions(argument, candidates);
++                break;
++            case FieldAccessExpression field:
++                CollectCfgSuspensions(field.Source, candidates);
++                break;
+             case IfExpression conditional:
+                 CollectCfgSuspensions(conditional.Then.Statements, candidates);
+                 if (conditional.Then.Value is not null)
+@@ -1258,6 +1324,24 @@ internal sealed partial class LlvmEmitter
+                     }
+                 }
+                 break;
++            default:
++                foreach (var child in ExpressionChildren(expression))
++                    CollectCfgSuspensions(child, candidates);
++                break;
++        }
++    }
++
++    private static void CollectCfgFlowSuspensions(
++        FlowExpression flow, List<AsyncCfgCandidate> candidates, int targetCount)
++    {
++        CollectCfgSuspensions(flow.Source, candidates);
++        for (var index = 0; index < targetCount; index++)
++        {
++            var target = flow.Targets[index];
++            foreach (var argument in target.Arguments)
++                CollectCfgSuspensions(argument, candidates);
++            if (target.Path.Count == 1 && target.Path[0] == "await" && target.Arguments.Count == 0)
++                candidates.Add(new AsyncCfgCandidate(target, IsYield: false));
+         }
+     }
+ 
+@@ -1318,6 +1402,7 @@ internal sealed partial class LlvmEmitter
+             || type == BoundType.IntDictionary
+             || _program.Types.IsStaticArray(type)
+             || _program.Types.IsDynamicArray(type)
++            || _program.Types.IsBoundedArray(type)
+             || _program.Types.IsDictionary(type)
+             || _program.Types.IsSet(type)
+             || _program.Types.IsDeque(type))
+@@ -1362,6 +1447,7 @@ internal sealed partial class LlvmEmitter
+             || type == BoundType.IntDictionary
+             || _program.Types.IsStaticArray(type)
+             || _program.Types.IsDynamicArray(type)
++            || _program.Types.IsBoundedArray(type)
+             || _program.Types.IsDictionary(type)
+             || _program.Types.IsSet(type)
+             || _program.Types.IsDeque(type);
+@@ -1968,6 +2054,9 @@ internal sealed partial class LlvmEmitter
+             ByAwaitExpression = points
+                 .Where(point => point.Site is Expression)
+                 .ToDictionary(point => (Expression)point.Site);
++            ByFlowAwaitTarget = points
++                .Where(point => point.Site is FlowTarget)
++                .ToDictionary(point => (FlowTarget)point.Site);
+         }
+ 
+         public IReadOnlyList<AsyncCfgSuspendPoint> Points { get; }
+@@ -1981,6 +2070,8 @@ internal sealed partial class LlvmEmitter
+         public IReadOnlyDictionary<ExpressionStatement, AsyncCfgSuspendPoint> ByAwaitExpressionStatement { get; }
+ 
+         public IReadOnlyDictionary<Expression, AsyncCfgSuspendPoint> ByAwaitExpression { get; }
++
++        public IReadOnlyDictionary<FlowTarget, AsyncCfgSuspendPoint> ByFlowAwaitTarget { get; }
+     }
+ 
+     private sealed class AsyncCfgSuspendPoint(int state, object site, bool isYield)

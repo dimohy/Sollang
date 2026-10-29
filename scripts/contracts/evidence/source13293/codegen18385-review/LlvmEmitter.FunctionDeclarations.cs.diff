@@ -1,0 +1,34 @@
+diff --git a/3f50d2c8117a8d1c20b26cf4a944bda4f9365988 b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs
+index 3f50d2c81..fbdb5f847 100644
+--- a/3f50d2c8117a8d1c20b26cf4a944bda4f9365988
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs
+@@ -761,6 +761,11 @@ internal sealed partial class LlvmEmitter
+             };
+         }
+ 
++        if (function.IsAsync && function.InputType is { } asyncInputType)
++        {
++            return $"{AsyncStorageLlvmType(asyncInputType)} %it";
++        }
++
+         if (function.HasValueGenericFixedArrayInput)
+         {
+             return "%sollang.int_slice %it";
+@@ -867,6 +872,17 @@ internal sealed partial class LlvmEmitter
+             return;
+         }
+ 
++        // Async context slots contain canonical aggregate values, matching
++        // additional parameters and results, rather than the synchronous
++        // primary parameter's legacy container descriptors.
++        if (function.IsAsync && function.InputType is { } asyncInputType)
++        {
++            _locals.Add(
++                function.InputName ?? "it",
++                DematerializeAsyncResult(asyncInputType, "%it"));
++            return;
++        }
++
+         if (function.InputType == BoundType.Arguments)
+         {
+             _locals.Add(function.InputName ?? "it", new RuntimeArguments("%it"));

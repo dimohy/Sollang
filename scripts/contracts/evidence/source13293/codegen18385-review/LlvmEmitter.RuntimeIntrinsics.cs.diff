@@ -1,0 +1,23 @@
+diff --git a/e1aaa89e171137e8b94f8b467f79b3bf591813f4 b/src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeIntrinsics.cs
+index e1aaa89e1..3a89293f9 100644
+--- a/e1aaa89e171137e8b94f8b467f79b3bf591813f4
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeIntrinsics.cs
+@@ -1727,7 +1727,17 @@ internal sealed partial class LlvmEmitter
+         EmitCompare(isOk, "ne", "i32", readOk, "0");
+         EmitConditionalBranch(isOk, continueLabel, failLabel);
+         EmitLabel(failLabel);
+-        EmitRet("i32", "1");
++        if (_currentFunction is null)
++        {
++            EmitRet("i32", "1");
++        }
++        else
++        {
++            // An I/O status is a process failure, not a value in the caller's
++            // return ABI. Ordinary functions may return Unit or aggregates.
++            EmitRuntimeExitProcessIntrinsic(new RuntimeInt("1"), "runtime I/O failure");
++            EmitUnreachable();
++        }
+         EmitLabel(continueLabel);
+         _currentBlockLabel = continueLabel;
+     }
