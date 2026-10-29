@@ -1,0 +1,94 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+
+sameNumericFacts left: ref [ExpressionTypeId; ~], right: ref [ExpressionTypeId; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<Int(left -> len) -> each position {
+        left[position] => first
+        right[position] => second
+        first.sourceModule != second.sourceModule or first.astNode != second.astNode
+            or first.typeId != second.typeId or first.status != second.status
+            -> if { false -> return }
+    }
+    true
+}
+
+checkNumericIndex source: Text, expectedContext: Bool -> Bool {
+    ["""namespace padding
+public empty: -> Int => 0
+""", source; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    (bindings -> len) == 0 -> if { false -> return }
+    bindings[0] => binding
+    binding.sourceModule != 1 -> if { false -> return }
+    prepared -> resolveContextCore => scanned!
+    prepared -> resolveContextCore => indexed!
+    [Int; ~] => scannedByAst!
+    [Int; ~] => indexedByAst!
+    prepared.package.nodes -> each node {
+        scannedByAst! -> push(-1)
+        indexedByAst! -> push(-1)
+    }
+    0..<Int(scanned!.expressions -> len) -> each position {
+        scanned!.expressions[position] => expression
+        prepared.package.ranges[expression.sourceModule] => range
+        position => scannedByAst![range.astStart + expression.astNode]
+    }
+    0..<Int(indexed!.expressions -> len) -> each position {
+        indexed!.expressions[position] => expression
+        prepared.package.ranges[expression.sourceModule] => range
+        position => indexedByAst![range.astStart + expression.astNode]
+    }
+    callParameterType(prepared, scanned!, binding) => scannedExpected
+    callParameterType(prepared, indexed!, binding) => indexedExpected
+    prepared.package -> indexContextualRecords => index
+    contextualizeNumericCallArgumentArena(prepared, scanned!.types, scanned!.expressions, scannedByAst!, binding.sourceModule, binding.argumentAst, scannedExpected) => scannedContext
+    contextualizeNumericCallArgumentArenaWithIndex(prepared, indexed!.types, indexed!.expressions, indexedByAst!, index, binding.sourceModule, binding.argumentAst, indexedExpected) => indexedContext
+    scannedExpected >= 0 and scannedExpected == indexedExpected
+        and ((scannedContext and indexedContext and expectedContext)
+        or (not scannedContext and not indexedContext and not expectedContext))
+        and sameNumericFacts(scanned!.expressions, indexed!.expressions)
+        and callReceiverTypesEqual(scannedByAst!, indexedByAst!)
+}
+
+main {
+    """take value: Int8 -> Int8 => value
+main {
+    take(1 + 2) => result
+}
+""" -> checkNumericIndex(true) => arithmetic
+    """take value: Int8 -> Int8 => value
+main {
+    take(-7) => result
+}
+""" -> checkNumericIndex(true) => negative
+    """take value: Int8 -> Int8 => value
+main {
+    take(true -> if { 1 + 2 } else { 4 + 5 }) => result
+}
+""" -> checkNumericIndex(true) => ifArithmetic
+    """take value: Int8 -> Int8 => value
+main {
+    take(true -> if { false -> if { 1 } else { 2 } } else { 3 }) => result
+}
+""" -> checkNumericIndex(true) => nestedIf
+    """take value: Int8 -> Int8 => value
+main {
+    take((true -> if { 1 } else { 2 }) + 3) => result
+}
+""" -> checkNumericIndex(true) => ifOperand
+    """take value: Int8 -> Int8 => value
+identity value: Int -> Int => value
+main {
+    take(7 -> identity) => result
+}
+""" -> checkNumericIndex(false) => independentFlow
+    """take value: Int8 -> Int8 => value
+main {
+    take(Int16(7)) => result
+}
+""" -> checkNumericIndex(false) => independentType
+    "arithmetic=$arithmetic negative=$negative ifArithmetic=$ifArithmetic nestedIf=$nestedIf ifOperand=$ifOperand independentFlow=$independentFlow independentType=$independentType" -> println
+}

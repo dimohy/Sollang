@@ -1,0 +1,174 @@
+diff --git a/selfhost/semantic/expression_type_ids.slg b/selfhost/semantic/expression_type_ids.slg
+index f952eb5ad..1ca39ba29 100644
+--- a/selfhost/semantic/expression_type_ids.slg
++++ b/selfhost/semantic/expression_type_ids.slg
+@@ -2900,8 +2900,8 @@ replaceCallArgument arguments: mut [ResolvedCallArgument; ~], index: Int, argume
+     argument => arguments[index]
+ }
+ 
+-contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+-    contextualizeNumericCallArgumentArena(prepared, resolved.types, resolved.expressions, expressionByAst, sourceModule, argumentAst, expectedTypeId)
++contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
++    contextualizeNumericCallArgumentArenaWithIndex(prepared, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, argumentAst, expectedTypeId)
+ }
+ 
+ contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+@@ -2940,6 +2940,44 @@ contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, r
+ }
+ 
+ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
++    ContextualRecordIndex {
++        firstChild: [Int; ~]
++        nextChild: [Int; ~]
++        records: [ContextualRecordAst; ~]
++    } => unindexed
++    contextualizeNumericCallArgumentArenaWithIndex(prepared, types, expressions, expressionByAst, unindexed, sourceModule, argumentAst, expectedTypeId)
++}
++
++# Existing callers retain source-order traversal. Call completion borrows the
++# child links it already built, so every numeric argument visits only its tree.
++numericContextFirstChild prepared: ref semanticContext.SemanticSnapshot, index: ref ContextualRecordIndex, sourceModule: Int, parent: Int -> Int {
++    (index.firstChild -> len) > 0 -> if { index.firstChild[parent] -> return }
++    prepared.package.ranges[sourceModule] => range
++    0 => local!
++    local! < range.astCount -> while {
++        range.astStart + local! => child
++        prepared.package.nodes[child].parent == parent - range.astStart
++            -> if { child -> return }
++        local! + 1 => local!
++    }
++    -1
++}
++
++numericContextNextChild prepared: ref semanticContext.SemanticSnapshot, index: ref ContextualRecordIndex, sourceModule: Int, previous: Int -> Int {
++    (index.nextChild -> len) > 0 -> if { index.nextChild[previous] -> return }
++    prepared.package.ranges[sourceModule] => range
++    prepared.package.nodes[previous].parent => parent
++    previous - range.astStart + 1 => local!
++    local! < range.astCount -> while {
++        range.astStart + local! => child
++        prepared.package.nodes[child].parent == parent
++            -> if { child -> return }
++        local! + 1 => local!
++    }
++    -1
++}
++
++contextualizeNumericCallArgumentArenaWithIndex prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+     expectedTypeId < 0 or expectedTypeId >= (types -> len)
+         -> if { false -> return }
+     types[expectedTypeId] => expected
+@@ -2958,49 +2996,48 @@ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnap
+         not floating or expected.symbol >= 19 -> if { true => contextual! }
+     }
+     argument.kind == 22 -> if {
+-        0 => childAst!
+-        childAst! < range.astCount -> while {
+-            prepared.package.nodes[range.astStart + childAst!] => child
+-            child.parent == argumentAst and child.kind == 14
++        numericContextFirstChild(prepared, index, sourceModule, globalAst) => childAst!
++        childAst! >= 0 -> while {
++            prepared.package.nodes[childAst!] => child
++            child.kind == 14
+                 -> if {
+-                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, childAst!, expectedTypeId) => childContextual
++                    contextualizeNumericCallArgumentArenaWithIndex(prepared, types, expressions, expressionByAst, index, sourceModule, childAst! - range.astStart, expectedTypeId) => childContextual
+                     childContextual -> if { true => contextual! }
+                 }
+-            childAst! + 1 => childAst!
++            numericContextNextChild(prepared, index, sourceModule, childAst!) => childAst!
+         }
+     }
+     argument.kind == 10 -> if {
+         false => foundBranch!
+         true => allBranchesContextual!
+-        0 => controlAst!
+-        controlAst! < range.astCount -> while {
+-            prepared.package.nodes[range.astStart + controlAst!] => control
+-            control.parent == argumentAst and control.kind == 42
++        numericContextFirstChild(prepared, index, sourceModule, globalAst) => controlAst!
++        controlAst! >= 0 -> while {
++            prepared.package.nodes[controlAst!] => control
++            control.kind == 42
+                 -> if {
+-                    0 => branchAst!
+-                    branchAst! < range.astCount -> while {
+-                        prepared.package.nodes[range.astStart + branchAst!] => branch
+-                        branch.parent == controlAst! and branch.kind == 43
++                    numericContextFirstChild(prepared, index, sourceModule, controlAst!) => branchAst!
++                    branchAst! >= 0 -> while {
++                        prepared.package.nodes[branchAst!] => branch
++                        branch.kind == 43
+                             -> if {
+                                 true => foundBranch!
+                                 -1 => valueAst!
+-                                0 => valueSearch!
+-                                valueSearch! < range.astCount -> while {
+-                                    prepared.package.nodes[range.astStart + valueSearch!] => value
+-                                    value.parent == branchAst!
+-                                        and value.start + value.length == branch.start + branch.length
++                                numericContextFirstChild(prepared, index, sourceModule, branchAst!) => valueSearch!
++                                valueSearch! >= 0 -> while {
++                                    prepared.package.nodes[valueSearch!] => value
++                                    value.start + value.length == branch.start + branch.length
+                                         -> if { valueSearch! => valueAst! }
+-                                    valueSearch! + 1 => valueSearch!
++                                    numericContextNextChild(prepared, index, sourceModule, valueSearch!) => valueSearch!
+                                 }
+                                 valueAst! < 0 -> if { false => allBranchesContextual! } else {
+-                                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, valueAst!, expectedTypeId) => branchContextual
++                                    contextualizeNumericCallArgumentArenaWithIndex(prepared, types, expressions, expressionByAst, index, sourceModule, valueAst! - range.astStart, expectedTypeId) => branchContextual
+                                     not branchContextual -> if { false => allBranchesContextual! }
+                                 }
+                             }
+-                        branchAst! + 1 => branchAst!
++                        numericContextNextChild(prepared, index, sourceModule, branchAst!) => branchAst!
+                     }
+                 }
+-            controlAst! + 1 => controlAst!
++            numericContextNextChild(prepared, index, sourceModule, controlAst!) => controlAst!
+         }
+         foundBranch! and allBranchesContextual! -> if { true => contextual! }
+     }
+@@ -3009,17 +3046,14 @@ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnap
+         -> if {
+             -1 => leftAst!
+             -1 => rightAst!
+-            0 => childAst!
+-            childAst! < range.astCount -> while {
+-                prepared.package.nodes[range.astStart + childAst!].parent == argumentAst
+-                    -> if {
+-                        leftAst! < 0 -> if { childAst! => leftAst! } else { childAst! => rightAst! }
+-                    }
+-                childAst! + 1 => childAst!
++            numericContextFirstChild(prepared, index, sourceModule, globalAst) => childAst!
++            childAst! >= 0 -> while {
++                leftAst! < 0 -> if { childAst! - range.astStart => leftAst! } else { childAst! - range.astStart => rightAst! }
++                numericContextNextChild(prepared, index, sourceModule, childAst!) => childAst!
+             }
+             leftAst! >= 0 and rightAst! >= 0 -> if {
+-                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, leftAst!, expectedTypeId) => leftContextual
+-                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, rightAst!, expectedTypeId) => rightContextual
++                contextualizeNumericCallArgumentArenaWithIndex(prepared, types, expressions, expressionByAst, index, sourceModule, leftAst!, expectedTypeId) => leftContextual
++                contextualizeNumericCallArgumentArenaWithIndex(prepared, types, expressions, expressionByAst, index, sourceModule, rightAst!, expectedTypeId) => rightContextual
+                 expressionByAst[range.astStart + leftAst!] => leftIndex
+                 expressionByAst[range.astStart + rightAst!] => rightIndex
+                 leftIndex >= 0 and rightIndex >= 0 -> if {
+@@ -3259,7 +3293,7 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                                 -> if {
+                                     expectedType! >= 0 and not resolved.types[expectedType!].containsParameter
+                                         -> if { true => contextualInput! }
+-                                    contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
++                                    contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, contextualIndex, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
+                                     contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextualArray
+                                 }
+                         }
+@@ -3352,7 +3386,7 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                                         finalSpecialization.root => fact!.expectedTypeId
+                                         fact!.actualTypeId >= 0 -> if { 0 => fact!.status }
+                                         callNode.kind != 10 -> if {
+-                                            contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
++                                            contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, contextualIndex, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
+                                             contextual -> if { fact!.expectedTypeId => fact!.actualTypeId }
+                                             contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextualArray
+                                             contextualArray -> if {
