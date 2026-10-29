@@ -1,0 +1,104 @@
+diff --git a/3c0fa3ad3c03e8fac25c1a516930405045bd5ee6 b/selfhost/llvm/text/control_regions.slg
+index 3c0fa3ad3..edc897cbe 100644
+--- a/3c0fa3ad3c03e8fac25c1a516930405045bd5ee6
++++ b/selfhost/llvm/text/control_regions.slg
+@@ -101,6 +101,11 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+         regionOrder[regionOrderIndex!] => regionNodeIndex
+         context.ir[regionNodeIndex] => regionNode
+         regionEventKinds[regionOrderIndex!] => regionEventKind!
++        # Ordinary enclosing bodies delegate interpolation to its consumer.
++        # Once inside that canonical root, its nested regions own their events.
++        state.frozenCanonicalInterpolationRootByIr[regionNodeIndex] >= 0
++            and state.frozenCanonicalInterpolationRootByIr[regionNodeIndex] != state.frozenCanonicalInterpolationRootByIr[regionIndex]
++            -> if { 0 => regionEventKind! }
+         regionNodeIndex -> regionStartingStreamPipeline(regionIndex, context, state) => eventStreamPipeline
+         eventStreamPipeline >= 0 -> if {
+             not regionTerminated! and not emittedStreamPipelines![eventStreamPipeline]
+@@ -249,14 +254,14 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                                         "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg = extractvalue %sollang.array.i32 " -> print
+                                         context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnArrayParameterWritten
+                                         ", 0" -> println
+-                                        "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg)" -> println
++                                        "  call void @sollang_free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg)" -> println
+                                     }
+                                 returnParameter.typeId < 0 and returnParameter.typeOrigin == 15 and returnParameter.flags % 2 == 1 and not returnParameterTransferred!
+                                     -> if {
+-                                        "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys = extractvalue %sollang.dict " -> print
++                                        "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys = extractvalue %sollang.int_dictionary " -> print
+                                         context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnDictionaryParameterWritten
+                                         ", 0" -> println
+-                                        "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys)" -> println
++                                        "  call void @sollang_free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys)" -> println
+                                     }
+                             }
+                             returnParameterOrdinal! + 1 => returnParameterOrdinal!
+@@ -266,28 +271,33 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                             -> if {
+                                 "  ret void" -> println
+                             } else {
++                                returnOwner -> boundedArrayValueTypeId(context, state) => boundedReturnTypeId
++                                boundedReturnTypeId >= 0 -> if {
++                                    "return_bounded$(regionNodeIndex)" -> emitBoundedArrayValue(returnedValueIndex!, ownerIndex!, boundedReturnTypeId, context, state)
++                                }
+                                 "  ret " -> print
+-                                returnOwner -> writeIrType(context, state)
++                                returnOwner -> writeFunctionValueAbiType(context, state)
+                                 " " -> print
+                                 context.ir[returnedValueIndex!] => returnedValue
+-                                promotedFixedReturn! -> if { "%return_fixed$(regionNodeIndex)" -> print } else {
+-                                    returnOwner.typeId >= 0 and context.types[returnOwner.typeId].kind == 8
+-                                        -> if {
+-                                            ownerIndex! -> writeReferencePlaceValue(returnedValueIndex!, context, state)
+-                                        } else {
+-                                            returnedValue.kind == 3 or returnedValue.kind == 4
+-                                                -> if {
+-                                                    returnedValue -> sourceToken(context, state) => returnValueToken
+-                                                    returnedValue.kind == 3 -> if { returnedValue -> writeIntegerLiteral(context, state) } else {
+-                                                        (context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == 116
+-                                                            -> if { "1" -> print } else { "0" -> print }
++                                boundedReturnTypeId >= 0 -> if { "%return_bounded$(regionNodeIndex)" -> print } else { promotedFixedReturn! -> if { "%return_fixed$(regionNodeIndex)" -> print } else {
++                                        returnOwner.typeId >= 0 and context.types[returnOwner.typeId].kind == 8
++                                            -> if {
++                                                ownerIndex! -> writeReferencePlaceValue(returnedValueIndex!, context, state)
++                                            } else {
++                                                returnedValue.kind == 3 or returnedValue.kind == 4
++                                                    -> if {
++                                                        returnedValue -> sourceToken(context, state) => returnValueToken
++                                                        returnedValue.kind == 3 -> if { returnedValue -> writeIntegerLiteral(context, state) } else {
++                                                            (context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == 116
++                                                                -> if { "1" -> print } else { "0" -> print }
++                                                        }
++                                                    } else {
++                                                        returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol
++                                                            and not (returnedValueIndex! -> referenceParameterValueIsMaterialized(ownerIndex!, context, state))
++                                                            -> if { "%arg" -> print } else { "%v$(returnedValueIndex!)" -> print }
+                                                     }
+-                                                } else {
+-                                                    returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol
+-                                                        and not (returnedValueIndex! -> referenceParameterValueIsMaterialized(ownerIndex!, context, state))
+-                                                        -> if { "%arg" -> print } else { "%v$(returnedValueIndex!)" -> print }
+-                                                }
+-                                        }
++                                            }
++                                    }
+                                 }
+                                 "" -> println
+                             }
+@@ -488,6 +498,9 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                     false => regionTerminated!
+                 }
+         }
++        (regionEventKind! == 1 and not (regionNodeIndex -> isDirectEachEmission(context, state)))
++            or regionEventKind! == 4 or regionEventKind! == 8 or regionEventKind! == 9
++            -> if { regionNodeIndex -> emitStorageLifetimeEndsAfter(regionTerminated!, context) }
+         -1 => nextRegionNode!
+         regionOrderIndex! + 1 < (regionOrder -> len)
+             -> if { regionOrder[regionOrderIndex! + 1] => nextRegionNode! }
+@@ -505,6 +518,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+             }
+             nextInside! -> if { false => closeEach! } else {
+                 eachIndex -> emitDirectEachEnd(regionTerminated!, context)
++                eachIndex -> emitStorageLifetimeEndsAfter(false, context)
+                 false => regionTerminated!
+                 activeEachSize! - 1 => activeEachSize!
+             }

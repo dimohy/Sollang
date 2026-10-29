@@ -1,0 +1,174 @@
+diff --git a/913e545cf64c30677237d527498aad7314e002b3 b/selfhost/llvm/text/runtime_preamble.slg
+index 913e545cf..2023eea90 100644
+--- a/913e545cf64c30677237d527498aad7314e002b3
++++ b/selfhost/llvm/text/runtime_preamble.slg
+@@ -38,7 +38,9 @@ usesDirectTextEqualityRuntime context: ref emitterContext.EmitContext -> Bool {
+     required!
+ }
+ 
+-emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, requiresEarlyTextType: Bool, usesComputePool: Bool, usesAsyncRuntime: Bool, usesDirectoryTraversal: Bool, usesOwnedDropRuntime: Bool, usesSourceText: Bool, usesStandardInputSourceText: Bool, usesText: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> CoreRuntimePreambleResult uses Console {
++emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, requiresEarlyTextType: Bool, usesComputePool: Bool, usesAsyncRuntime: Bool, usesDirectoryTraversal: Bool, usesOwnedDropRuntime: Bool, usesSourceText: Bool, usesStandardInputSourceText: Bool, usesText: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> CoreRuntimePreambleResult uses Console, Process {
++    "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)" -> println
++    "declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)" -> println
+     context -> emitStreamJunctionRuntimes(state)
+     0 => comGuidModule!
+     comGuidModule! < (context.ranges -> len) -> while {
+@@ -408,7 +410,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                     "]" -> println
+                     "define internal void @sollang_dyn_drop_$(dynTableIndex!)(ptr %data) {" -> println
+                     "entry:" -> println
+-                    "  call void @free(ptr %data)" -> println
++                    "  call void @sollang_free(ptr %data)" -> println
+                     "  ret void" -> println
+                     "}" -> println
+                     0 => dynMethod!
+@@ -535,6 +537,12 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                 bitSetTypeSearch! -> boundedDictionaryLayoutForType(context) => boundedLayout
+                 "%sollang.bounded_dictionary.t$(bitSetTypeSearch!) = type { i64, [$(boundedLayout.storageSize) x i8] }" -> println
+             }
++        bitSetType.kind == 12 and bitSetType.first >= 0 and context.typeLayoutStatuses[bitSetTypeSearch!] == 0
++            -> if {
++                "%sollang.bounded_array.t$(bitSetTypeSearch!) = type { i64, " -> print
++                bitSetTypeSearch! -> writeBoundedArrayBackingType(context, state)
++                " }" -> println
++            }
+         bitSetType.kind == 14 -> if {
+             "%sollang.bitset.t$(bitSetTypeSearch!) = type { [$((bitSetType.length + 63) / 64) x i64] }" -> println
+         }
+@@ -551,44 +559,9 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+     # growable storage alike. Their declaration follows actual parameter use,
+     # independently of the dynamic-array value layout.
+     usesMutableContainer! -> if { "%sollang.mutable_container = type { ptr, ptr, ptr }" -> println }
++    "%sollang.int_slice = type { ptr, i64 }" -> println
+     usesDynamicArray! -> if { "%sollang.array.i32 = type { ptr, i64, i64 }" -> println }
+     usesMappedBytes -> if { "%sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }" -> println }
+-    usesArrayAllocation! or usesArrayReallocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText or usesComputePool or usesAsyncRuntime or (context -> usesReachableAsyncDiagnostics(state)) or intrinsicRuntimeModule >= 0 or usesOwnedDropRuntime or usesDirectoryTraversal or usesDynTrait! or context.usesConcurrentStreamJoins
+-        -> if {
+-            context.pointerBitWidth == 32 -> if {
+-                """
+-                declare i32 @sollang_browser_alloc(i64)
+-                declare i32 @sollang_browser_realloc(i32, i64)
+-                define ptr @malloc(i64 %bytes) {
+-                entry:
+-                  %value32 = call i32 @sollang_browser_alloc(i64 %bytes)
+-                  %value = inttoptr i32 %value32 to ptr
+-                  ret ptr %value
+-                }
+-                define ptr @realloc(ptr %old, i64 %bytes) {
+-                entry:
+-                  %old32 = ptrtoint ptr %old to i32
+-                  %new32 = call i32 @sollang_browser_realloc(i32 %old32, i64 %bytes)
+-                  %new = inttoptr i32 %new32 to ptr
+-                  ret ptr %new
+-                }
+-                define void @free(ptr %value) {
+-                entry:
+-                  ret void
+-                }
+-                define ptr @sollang_alloc(i64 %bytes) {
+-                entry:
+-                  %value = call ptr @malloc(i64 %bytes)
+-                  ret ptr %value
+-                }
+-                """ -> println
+-            } else {
+-                "declare ptr @malloc(i64)" -> println
+-                usesArrayReallocation! or usesTextMaterialize! or usesStandardInputSourceText
+-                    -> if { "declare ptr @realloc(ptr, i64)" -> println }
+-                "declare void @free(ptr)" -> println
+-            }
+-        }
+     false => usesDictionary!
+     0 => dictionaryTypeSearch!
+     dictionaryTypeSearch! < (context.ir -> len) -> while {
+@@ -636,12 +609,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+         enumMatchSearch! + 1 => enumMatchSearch!
+     }
+     usesDictionary! -> if {
+-        "%sollang.dict = type { ptr, i64, i64 }" -> println
+-        not usesDynamicArray! and not usesSourceText and not usesComputePool and intrinsicRuntimeModule < 0 and not usesOwnedDropRuntime
+-            -> if {
+-                "declare ptr @malloc(i64)" -> println
+-                "declare void @free(ptr)" -> println
+-            }
++        "%sollang.int_dictionary = type { ptr, i64, i64 }" -> println
+     }
+     dropTypeActive -> emitSemanticDropHelpers(context, state)
+     false => usesNativeInterop!
+@@ -663,7 +631,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+             -> if { true => usesComInterop! }
+         nativeInteropSearch! + 1 => nativeInteropSearch!
+     }
+-    usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> diagnostics.usesOwnedFileRuntime)
++    usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> usesReachableOwnedFileRuntime(state))
+         -> if { "declare void @llvm.trap()" -> println }
+     emitRawArenaRuntime(usesRawArenaAllocation!, usesRawArenaAccess!, usesArenaConstruction!)
+     usesDictionary! -> if { "declare i16 @llvm.cttz.i16(i16, i1)" -> println }
+@@ -680,8 +648,8 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+         }
+         emitNativeRuntime(context, state)
+     }
+-    context -> diagnostics.usesProcessExit => needsProcessExit
+-    needsProcessExit or (intrinsicRuntimeModule >= 0 and context.pointerBitWidth != 32)
++    context -> diagnostics.usesProcessExitWithReachability(state.frozenReachableFunctions) => needsProcessExit
++    needsProcessExit or (context.pointerBitWidth != 32 and (intrinsicRuntimeModule >= 0 or (context -> usesReachableOwnedFileRuntime(state))))
+         -> if {
+             context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
+         }
+@@ -689,12 +657,12 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+     usesMappedBytes and context.pointerBitWidth != 32
+         -> if {
+             context.expectedPathStyle == 1 -> if {
+-                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> diagnostics.usesOwnedFileRuntime) or (context -> diagnostics.usesDirectoryRuntime) or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesProcessCapture) or (context -> diagnostics.usesMouseEventsRuntime) or context.usesConcurrentStreamJoins) => declareMappedCloseHandle
++                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> usesReachableOwnedFileRuntime(state)) or (context -> diagnostics.usesDirectoryRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesParallelRuntime) or (context -> usesReachableProcessRuntime(state)) or (context -> diagnostics.usesProcessCaptureWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or context.usesConcurrentStreamJoins) => declareMappedCloseHandle
+                 intrinsicRuntimeModule < 0 and not usesSourceText => declareMappedMapping
+                 llvmRuntime.emitWindowsMappedBytes(declareMappedCloseHandle, declareMappedMapping)
+             } else {
+-                not (usesSourceText or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedOpen
+-                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedClose
++                not (usesSourceText or (context -> usesReachableProcessRuntime(state)) or (context -> usesReachableOwnedFileRuntime(state))) => declareMappedOpen
++                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> usesReachableProcessRuntime(state)) or (context -> usesReachableOwnedFileRuntime(state))) => declareMappedClose
+                 not usesSourceText => declareMappedPosixMapping
+                 llvmRuntime.emitLinuxMappedBytes(declareMappedOpen, declareMappedClose, declareMappedPosixMapping)
+             }
+@@ -822,11 +790,11 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                 release:
+                   %slot = getelementptr ptr, ptr %argv, i64 %index
+                   %text = load ptr, ptr %slot, align 8
+-                  call void @free(ptr %text)
++                  call void @sollang_free(ptr %text)
+                   %next = add i64 %index, 1
+                   br label %loop
+                 release_vector:
+-                  call void @free(ptr %argv)
++                  call void @sollang_free(ptr %argv)
+                   br label %done
+                 done:
+                   ret void
+@@ -842,7 +810,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                   %argc32 = load i32, ptr %argc_slot, align 4
+                   %argc = zext i32 %argc32 to i64
+                   %argv_bytes = mul i64 %argc, 8
+-                  %utf8_argv = call ptr @malloc(i64 %argv_bytes)
++                  %utf8_argv = call ptr @sollang_alloc(i64 %argv_bytes)
+                   %argv_ok = icmp ne ptr %utf8_argv, null
+                   br i1 %argv_ok, label %publish_owner, label %free_wide
+                 publish_owner:
+@@ -860,7 +828,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                   br i1 %byte_count_valid, label %allocate_text, label %release_partial
+                 allocate_text:
+                   %byte_count = zext i32 %byte_count32 to i64
+-                  %utf8 = call ptr @malloc(i64 %byte_count)
++                  %utf8 = call ptr @sollang_alloc(i64 %byte_count)
+                   %utf8_ok = icmp ne ptr %utf8, null
+                   br i1 %utf8_ok, label %convert, label %release_partial
+                 convert:
+@@ -876,7 +844,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                 success:
+                   br label %free_wide
+                 release_current:
+-                  call void @free(ptr %utf8)
++                  call void @sollang_free(ptr %utf8)
+                   br label %release_partial
+                 release_partial:
+                   call void @sollang_dispose_utf8_arguments()

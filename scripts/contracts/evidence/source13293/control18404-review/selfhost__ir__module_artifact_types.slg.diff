@@ -1,0 +1,149 @@
+diff --git a/f50378195cd13e925ab70853b643a89fe33a3d8d b/selfhost/ir/module_artifact_types.slg
+index f50378195..27f223c0a 100644
+--- a/f50378195cd13e925ab70853b643a89fe33a3d8d
++++ b/selfhost/ir/module_artifact_types.slg
+@@ -212,6 +212,45 @@ public captureTypeDetails package: ref analysis.PackageAnalysis, types: ref type
+     package -> captureTypeDetailsAnalyzed(types.types, types.references, types.fields)
+ }
+ 
++# A substituted field retains its canonical label identity but has no new
++# source annotation. Reuse the already normalized label only when every
++# matching identity has identical bytes; ambiguity is rejected.
++appendDerivedProductLabel typeIndex: Int, types: ref [typeIds.SemanticType; ~], starts: ref [Int; ~], lengths: ref [Int; ~], words: mut [UInt64; ~] -> Bool {
++    types[typeIndex] => type
++    -1 => selected!
++    0 => selectedLength!
++    0 => previous!
++    previous! < typeIndex -> while {
++        types[previous!] => candidate
++        candidate.kind == 11 and candidate.length == type.length and candidate.lengthHash == type.lengthHash
++            -> if {
++                lengths[previous!] => length
++                length <= 0 -> if { false -> return }
++                starts[previous!] => start
++                selected! < 0 -> if {
++                    start => selected!
++                    length => selectedLength!
++                } else {
++                    length != selectedLength! -> if { false -> return }
++                    0 => byte!
++                    byte! < length -> while {
++                        words[start + byte!] != words[selected! + byte!]
++                            -> if { false -> return }
++                        byte! + 1 => byte!
++                    }
++                }
++            }
++        previous! + 1 => previous!
++    }
++    selected! < 0 -> if { false -> return }
++    0 => byte!
++    byte! < selectedLength! -> while {
++        words -> push(words[selected! + byte!])
++        byte! + 1 => byte!
++    }
++    true
++}
++
+ public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceTypes: ref [typeIds.SemanticType; ~], sourceReferences: ref [typeIds.TypeReference; ~], sourceFields: ref [typeIds.NominalField; ~] -> TypeDetails {
+     [Int; ~] => starts!
+     [Int; ~] => lengths!
+@@ -225,31 +264,62 @@ public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceT
+             sourceTypes[typeIndex!] => type
+             type.kind == 10 -> if {
+                 type.length < 0 -> if { 1 => status! }
+-                words! -> push(UInt64(type.length))
++                false => declared!
++                sourceReferences -> each reference {
++                    reference.typeId == typeIndex! and reference.status == 0
++                        -> if { true => declared! }
++                }
++                status! == 0 -> if { words! -> push(UInt64(type.length)) }
++                type.first => fieldType!
+                 0 => ordinal!
+                 ordinal! < type.length and status! == 0 -> while {
+-                    -1 => selected!
+-                    0 => fieldIndex!
+-                    fieldIndex! < (sourceFields -> len) -> while {
+-                        sourceFields[fieldIndex!] => field
+-                        field.ownerType == typeIndex! and field.ordinal == ordinal!
+-                            -> if {
+-                                selected! >= 0 -> if { 1 => status! }
+-                                fieldIndex! => selected!
+-                            }
+-                        fieldIndex! + 1 => fieldIndex!
+-                    }
+-                    selected! < 0 -> if { 1 => status! } else {
+-                        sourceFields[selected!] => field
+-                        field.status != 0 or field.fieldType < 0 or field.fieldType >= typeIndex!
++                    fieldType! < 0 or fieldType! >= typeIndex! -> if { 1 => status! } else {
++                        sourceTypes[fieldType!] => canonicalField
++                        canonicalField.kind != 11 or canonicalField.first < 0 or canonicalField.first >= fieldType!
+                             -> if { 1 => status! } else {
+-                                package -> appendLabel(field.sourceModule, field.labelToken, words!)
+-                                    -> unless { 1 => status! }
+-                                words! -> push(UInt64(field.fieldType))
++                                -1 => selected!
++                                0 => fieldIndex!
++                                fieldIndex! < (sourceFields -> len) -> while {
++                                    sourceFields[fieldIndex!] => field
++                                    field.ownerType == typeIndex! and field.ordinal == ordinal!
++                                        -> if {
++                                            selected! >= 0 -> if { 1 => status! }
++                                            fieldIndex! => selected!
++                                        }
++                                    fieldIndex! + 1 => fieldIndex!
++                                }
++                                words! -> len => labelStart
++                                lengths![fieldType!] => labelLength
++                                selected! >= 0 -> if {
++                                    sourceFields[selected!] => field
++                                    field.status != 0 or field.fieldType != canonicalField.first
++                                        -> if { 1 => status! }
++                                    package -> appendLabel(field.sourceModule, field.labelToken, words!)
++                                        -> unless { 1 => status! }
++                                    (words! -> len) - labelStart != labelLength -> if { 1 => status! } else {
++                                        0 => byte!
++                                        byte! < labelLength and status! == 0 -> while {
++                                            words![labelStart + byte!] != words![starts![fieldType!] + byte!]
++                                                -> if { 1 => status! }
++                                            byte! + 1 => byte!
++                                        }
++                                    }
++                                } else {
++                                    declared! -> if { 1 => status! } else {
++                                        0 => byte!
++                                        byte! < labelLength -> while {
++                                            words! -> push(words![starts![fieldType!] + byte!])
++                                            byte! + 1 => byte!
++                                        }
++                                    }
++                                }
++                                words! -> push(UInt64(canonicalField.first))
++                                canonicalField.second => fieldType!
+                             }
+                     }
+                     ordinal! + 1 => ordinal!
+                 }
++                fieldType! != -1 -> if { 1 => status! }
+             }
+             type.kind == 11 -> if {
+                 false => found!
+@@ -273,6 +343,9 @@ public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceT
+                         }
+                         referenceIndex! + 1 => referenceIndex!
+                     }
++                not found! -> if {
++                    typeIndex! -> appendDerivedProductLabel(sourceTypes, starts!, lengths!, words!) => found!
++                }
+                 not found! -> if { 1 => status! }
+             }
+             lengths! -> push((words! -> len) - start)
+@@ -284,6 +357,7 @@ public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceT
+     TypeDetails { starts: starts!, lengths: lengths!, words: words!, status: 0 }
+ }
+ 
++
+ normalizedDetail details: ref TypeDetails, typeIndex: Int, type: typeIds.SemanticType, mapped: ref [Int; ~] -> TypeDetails {
+     type.kind != 10 and type.kind != 11 -> if { emptyTypeDetails() -> return }
+     details.status != 0 or typeIndex < 0 or typeIndex >= (details.starts -> len)
