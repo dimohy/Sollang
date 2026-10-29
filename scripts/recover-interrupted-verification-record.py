@@ -27,8 +27,13 @@ def main():
     if not processes or any(type(row.get("pid")) is not int for row in processes):
         raise ValueError("INTERRUPTED_VERIFICATION_PROCESS_INVENTORY_MISSING")
     pids = [row["pid"] for row in processes]
+    # A drained, exited process cannot become live again. Windows may reuse
+    # its PID for an unrelated service; only unresolved process identities
+    # remain candidates by PID. The output-path scan still covers all users.
+    pending_pids = [row["pid"] for row in processes
+                    if type(row.get("exit")) is not int or row.get("shutdownConfirmed") is not True]
     owned_path = str(result_path.parent).replace("'", "''")
-    command = ("$owned = @(" + ",".join(map(str, pids)) + "); "
+    command = ("$owned = @(" + ",".join(map(str, pending_pids)) + "); "
                "$excluded = @($PID," + str(os.getpid()) + "," + str(os.getppid()) + "); "
                "@(Get-CimInstance Win32_Process | Where-Object { "
                "$_.ProcessId -notin $excluded -and ($_.ProcessId -in $owned -or "
