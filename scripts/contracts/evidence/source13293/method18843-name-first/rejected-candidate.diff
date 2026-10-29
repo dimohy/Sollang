@@ -1,0 +1,76 @@
+diff --git a/selfhost/semantic/call_resolution_sources.slg b/selfhost/semantic/call_resolution_sources.slg
+index fd3ed41a9..e71545bb7 100644
+--- a/selfhost/semantic/call_resolution_sources.slg
++++ b/selfhost/semantic/call_resolution_sources.slg
+@@ -490,6 +490,18 @@ resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: ref ana
+                                     and method.parent < range.symbolCount and method.nameToken >= 0
+                                     and (not request.blockMethod or method.blockNameToken >= 0)
+                                     -> if {
++                                        package.tokens[range.tokenStart + method.nameToken] => name
++                                        name.span.length == memberLength => equal!
++                                        UIntSize(0) => nameByte!
++                                        equal! and nameByte! < memberLength -> while {
++                                            (package.sources[methodSource] -> byte(name.span.start + nameByte!)) != (package.sources[request.sourceModule] -> byte(memberStart! + nameByte!))
++                                                -> if { false => equal! }
++                                            nameByte! + 1 => nameByte!
++                                        }
++                                        not equal! -> if {
++                                            methodOffset! + 1 => methodOffset!
++                                            continue
++                                        }
+                                         package.symbols[range.symbolStart + method.parent] => implementation
+                                         implementation.kind == 6 and implementation.astNode >= 0
+                                             and implementation.astNode < range.astCount -> if {
+@@ -573,34 +585,24 @@ resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: ref ana
+                                                                 -> if { true => eligible! }
+                                                         }
+                                                         eligible! -> if {
+-                                                            package.tokens[range.tokenStart + method.nameToken] => name
+-                                                            name.span.length == memberLength => equal!
+-                                                            UIntSize(0) => nameByte!
+-                                                            equal! and nameByte! < memberLength -> while {
+-                                                                (package.sources[methodSource] -> byte(name.span.start + nameByte!)) != (package.sources[request.sourceModule] -> byte(memberStart! + nameByte!))
+-                                                                    -> if { false => equal! }
+-                                                                nameByte! + 1 => nameByte!
+-                                                            }
+-                                                            equal! -> if {
+-                                                                selected!.status >= 0 and candidateRank! == selectedRank!
+-                                                                    -> if {
+-                                                                        2 => selected!.status
+-                                                                        -1 => selected!.functionSymbol
+-                                                                    }
+-                                                                selected!.status < 0 or candidateRank! < selectedRank!
+-                                                                    -> if {
+-                                                                        moduleIndex! => selected!.targetModule
+-                                                                        methodSource => selected!.targetSourceModule
+-                                                                        symbolIndex => selected!.functionSymbol
+-                                                                        ownerTypeId! => selected!.ownerTypeId
+-                                                                        traitIdentity!.targetModule => selected!.traitModule
+-                                                                        traitIdentity!.targetSymbol => selected!.traitSymbol
+-                                                                        candidateRank! => selectedRank!
+-                                                                        modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
+-                                                                            or method.flags / 4 % 2 == 1
+-                                                                            -> if { 0 } else { 1 } => selected!.status
+-                                                                    }
+-                                                            }
++                                                            selected!.status >= 0 and candidateRank! == selectedRank!
++                                                                -> if {
++                                                                    2 => selected!.status
++                                                                    -1 => selected!.functionSymbol
++                                                                }
++                                                            selected!.status < 0 or candidateRank! < selectedRank!
++                                                                -> if {
++                                                                    moduleIndex! => selected!.targetModule
++                                                                    methodSource => selected!.targetSourceModule
++                                                                    symbolIndex => selected!.functionSymbol
++                                                                    ownerTypeId! => selected!.ownerTypeId
++                                                                    traitIdentity!.targetModule => selected!.traitModule
++                                                                    traitIdentity!.targetSymbol => selected!.traitSymbol
++                                                                    candidateRank! => selectedRank!
++                                                                    modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
++                                                                        or method.flags / 4 % 2 == 1
++                                                                        -> if { 0 } else { 1 } => selected!.status
++                                                                }
+                                                         }
+                                                     }
+                                             }
