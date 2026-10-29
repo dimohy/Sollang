@@ -1,0 +1,99 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.qualified
+import std.time as time
+
+struct QueryPhaseTiming {
+    last: time.MonotonicInstant
+    phase0: Long
+    phase1: Long
+    phase2: Long
+    phase3: Long
+    phase4: Long
+    phase5: Long
+    phase6: Long
+    phase7: Long
+    phase8: Long
+    phase9: Long
+    phase10: Long
+    phase11: Long
+    phase12: Long
+    phase13: Long
+    phase14: Long
+    phase15: Long
+    valid: Bool
+}
+
+markQueryPhase timing: mut QueryPhaseTiming, slot: Int -> Unit uses Clock {
+    time.monotonicClock() -> now => completed
+    completed -> durationSince(timing.last) -> when {
+        Err(_) { false => timing.valid }
+        Ok(duration) {
+            duration -> asMilliseconds => elapsed
+            slot -> when {
+                == 0 { timing.phase0 + elapsed => timing.phase0 }
+                == 1 { timing.phase1 + elapsed => timing.phase1 }
+                == 2 { timing.phase2 + elapsed => timing.phase2 }
+                == 3 { timing.phase3 + elapsed => timing.phase3 }
+                == 4 { timing.phase4 + elapsed => timing.phase4 }
+                == 5 { timing.phase5 + elapsed => timing.phase5 }
+                == 6 { timing.phase6 + elapsed => timing.phase6 }
+                == 7 { timing.phase7 + elapsed => timing.phase7 }
+                == 8 { timing.phase8 + elapsed => timing.phase8 }
+                == 9 { timing.phase9 + elapsed => timing.phase9 }
+                == 10 { timing.phase10 + elapsed => timing.phase10 }
+                == 11 { timing.phase11 + elapsed => timing.phase11 }
+                == 12 { timing.phase12 + elapsed => timing.phase12 }
+                == 13 { timing.phase13 + elapsed => timing.phase13 }
+                == 14 { timing.phase14 + elapsed => timing.phase14 }
+                == 15 { timing.phase15 + elapsed => timing.phase15 }
+                else { false => timing.valid }
+            }
+        }
+    }
+    completed => timing.last
+}
+
+public struct HotQueryPhases {
+    public sourceModule: Int
+    public rows: Int
+    public valid: Bool
+    public periods: [Long; 16]
+}
+
+public profileHotQueryPhases package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, receiverTypes: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> Result<[HotQueryPhases; ~], time.Error> uses Clock {
+    package -> indexTypedMethodReferences(semantic.references) => referenceIndex
+    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => declarations
+    package -> declaredIntrinsicCallableNames => intrinsicNames
+    time.monotonicClock() => clock
+    [HotQueryPhases; ~] => observations!
+    [161, 236, 279] -> each sourceModule {
+        sourceModule -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, intrinsicNames, receiverTypes, resolvedTypes, declarations, referenceIndex) => before
+        QueryPhaseTiming { last: clock -> now, phase0: 0, phase1: 0, phase2: 0, phase3: 0, phase4: 0, phase5: 0, phase6: 0, phase7: 0, phase8: 0, phase9: 0, phase10: 0, phase11: 0, phase12: 0, phase13: 0, phase14: 0, phase15: 0, valid: true } => timing!
+        sourceModule -> resolveSourceTypedObserved(package, semantic, identities, imports, resolvedImports, qualifiedResults, intrinsicNames, receiverTypes, resolvedTypes, declarations, referenceIndex, timing!) => after
+        timing!.valid and (before -> len) == (after -> len) => valid!
+        0 => index!
+        index! < (before -> len) and index! < (after -> len)
+            -> while {
+                before[index!] => previous
+                after[index!] => current
+                previous.sourceModule != current.sourceModule or previous.callAst != current.callAst
+                    or previous.origin != current.origin or previous.targetModule != current.targetModule
+                    or previous.targetSourceModule != current.targetSourceModule
+                    or previous.functionSymbol != current.functionSymbol or previous.status != current.status
+                    -> if { false => valid! }
+                index! + 1 => index!
+            }
+        observations! -> push(HotQueryPhases {
+            sourceModule: sourceModule
+            rows: Int(after -> len)
+            valid: valid!
+            periods: [timing!.phase0, timing!.phase1, timing!.phase2, timing!.phase3, timing!.phase4, timing!.phase5, timing!.phase6, timing!.phase7, timing!.phase8, timing!.phase9, timing!.phase10, timing!.phase11, timing!.phase12, timing!.phase13, timing!.phase14, timing!.phase15]
+        })
+    }
+    observations! -> Result<[HotQueryPhases; ~], time.Error>.Ok
+}

@@ -1,0 +1,51 @@
+from pathlib import Path
+import hashlib,json,re,sys,time,subprocess
+sys.path.insert(0,str(Path.cwd()/"scripts"))
+from verification_execution import VerificationExecution
+from verification_fingerprints import managed_runtime_inputs,unique_input_files
+from completed_artifact_plan import initialize_output
+started=time.monotonic();root=Path.cwd();base=root/"artifacts/scratch/resume-20261006-owner-continuation22";plan_path=base/"query18949-plan.json";plan=json.loads(plan_path.read_text());out=base/"query18950-phases2";compiler=Path(plan["compiler"])
+assert plan["budget"]=={"maximumTotalSeconds":108.766,"maximumBuilds":1,"maximumRuntimeInvocations":1,"automaticRetry":False}
+subprocess.run([str(base/"v12432/compiler-build01/compiler.exe"),"format","--check",str(root/plan["probe"]),str(base/"query18946-observed-source.slg"),str(base/"query18947-observer.slg")],check=True)
+assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest().upper()==v for p,v in plan["runtimeInputHashes"].items())
+paths=unique_input_files([plan_path,Path(__file__),root/plan["probe"],*[root/p for p in plan["buildClosure"]],*[Path(p) for p in plan["runtimeSources"]],*managed_runtime_inputs(compiler),*sorted((root/"stdlib").rglob("*.slg")),root/".tools/llvm-22.1.8/bin/clang.exe",root/"scripts/verification_execution.py",root/"scripts/contracts/artifact-lifecycle.json"])
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest().upper()
+pins={str(p):sha(p) for p in paths};stable=lambda:all(Path(p).is_file() and sha(p)==v for p,v in pins.items())
+initialize_output(root,out,reusable_directories=[base/(v+"/compiler-build01") for v in ["v12432","v18309","v18915"]]);out.mkdir()
+row={"id":"committed-receiver-all-source-comparison","status":"running","passed":False};result={"schemaVersion":1,"status":"running","completed":0,"total":1,"inputHashes":pins,"cases":[row],"budget":plan["budget"],"sourceCount":283,"originalAcceptance":False}
+execution=VerificationExecution(root,out,result,stable,sha);error=None
+try:
+ def remaining():
+  value=108.766-(time.monotonic()-started)
+  if value<=0:raise TimeoutError("CALL_CONTEXT_PROFILE_TOTAL_180S_EXHAUSTED")
+  return value
+ exe=out/"probe.exe";build=execution.run([str(compiler),"build",str(root/plan["probe"]),*[str(root/p) for p in plan["buildClosure"]],"-o",str(exe),"--target","windows-x64","--keep-temps","-O2","--jobs","1","--llvm",str(root/".tools/llvm-22.1.8")],out/"build",timeout=remaining());row.update(buildExit=build.returncode,buildStderr=build.stderr.strip())
+ if build.returncode!=0 or build.stderr.strip():raise ValueError("CALL_CONTEXT_PROFILE_BUILD_FAILED: "+build.stderr.strip())
+ run=execution.run_program(exe,{"arguments":plan["runtimeSources"]},out/"run",timeout=remaining());row.update(runExit=run.returncode,runStdout=run.stdout.strip(),runStderr=run.stderr.strip())
+ if run.returncode!=0 or run.stderr.strip():raise ValueError("CALL_CONTEXT_PROFILE_RUNTIME_FAILED")
+ lines=run.stdout.strip().splitlines()
+ if len(lines)!=54 or lines[:2]!=["phase=source-preparation","phase=initial-core"]:raise ValueError("HOT_QUERY_PROFILE_LINES_INVALID")
+ match=re.fullmatch(r"sources=(\d+) types=(\d+) expressions=(\d+)",lines[2])
+ if match is None:raise ValueError("HOT_QUERY_INITIAL_FACTS_MISSING")
+ observation=dict(zip(["sources","types","expressions"],map(int,match.groups())))
+ if observation!=plan["expectedFactCounts"]:raise ValueError("HOT_QUERY_INITIAL_FACTS_CHANGED")
+ rows=[];reverse={v:k for k,v in plan["frozenSubstitutions"].items()}
+ for index,source in enumerate(plan["selectedSourceModules"]):
+  offset=3+17*index;match=re.fullmatch(r"source=(\d+) rows=(\d+) valid=(true|false)",lines[offset])
+  if match is None or int(match[1])!=source or match[3]!="true":raise ValueError("HOT_QUERY_ORDERED_FIELDS_CHANGED")
+  periods=[]
+  for phase,line in enumerate(lines[offset+1:offset+17]):
+   part=re.fullmatch(r"phase=(\d+) milliseconds=(\d+)",line)
+   if part is None or int(part[1])!=phase:raise ValueError("HOT_QUERY_PHASE_MISSING")
+   periods.append(int(part[2]))
+  rows.append(dict(sourceModule=source,rows=int(match[2]),periodsMilliseconds=periods,allFieldsEqual=True,path=reverse.get(plan["runtimeSources"][source],plan["runtimeSources"][source])))
+ if sum(r["rows"] for r in rows)!=plan["expectedRawRows"]:raise ValueError("HOT_QUERY_ROW_COUNT_CHANGED")
+ observation.update(totalRawRows=sum(r["rows"] for r in rows),phaseMilliseconds=[sum(r["periodsMilliseconds"][i] for r in rows) for i in range(16)],allOrderedFieldsEqual=True)
+ result["sourceTimings"]=rows
+ row.update(status="passed",passed=True);result.update(status="passed",completed=1,observation=observation)
+except BaseException as exc:
+ error=exc;row.update(status="failed");result.update(status="failed",failure=str(exc))
+finally:
+ result["inputHashesEnd"]={str(p):sha(p) for p in paths};execution.finalize(error,cleanup=False)
+print(json.dumps({"status":result["status"],"completed":result["completed"],"total":1,"observation":result.get("observation"),"topSources":result.get("sourceTimings",[]),"processes":[{"exit":p.get("exit"),"milliseconds":p.get("durationMilliseconds")} for p in result["processes"]]}))
+if error:raise error
