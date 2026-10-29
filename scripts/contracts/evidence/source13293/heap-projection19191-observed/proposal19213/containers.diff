@@ -1,0 +1,53 @@
+--- selfhost\llvm\text\containers.slg
++++ proposal/containers.slg
+@@ -879,8 +879,16 @@
+     elementSymbol -> integerSigned(context, state) => elementSigned
+     call.operand0 -> mutableStorageRoot(context, state) => heapRoot
+     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => heapBorrow
+-
+-    heapBorrow >= 0 -> if {
++    call.operand0 -> referencePlaceRootBindingForOwner(ownerIndex, context) => heapPlaceRoot
++    heapPlaceRoot -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => heapPlaceRootBorrow
++    (base.kind == 13
++        and base.operand0 >= 0
++        and heapPlaceRoot >= 0
++        and (heapPlaceRootBorrow >= 0
++        or (context.ir[heapPlaceRoot].kind == 10 and context.ir[heapPlaceRoot].flags / 2 % 2 == 1)
++        or (context.ir[heapPlaceRoot].kind == 17 and context.ir[heapPlaceRoot].flags == 1))) => heapStructMember
++
++    heapBorrow >= 0 and not heapStructMember -> if {
+         "  %heap$(callIndex)_data = load ptr, ptr " -> print
+         heapBorrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(heapBorrow)_mut_ptr_addr" -> print }
+         ", align 8" -> println
+@@ -892,7 +900,7 @@
+         ", align 8" -> println
+     } else {
+         "  %heap$(callIndex)_source = " -> print
+-        heapRoot >= 0 -> if {
++        heapRoot >= 0 and not heapStructMember -> if {
+             "load %sollang.array.i32, ptr %slot$(heapRoot), align 8" -> println
+         } else {
+             base.typeId != heapTypeId! -> if {
+@@ -988,7 +996,21 @@
+             "  %heap$(callIndex)_result0 = insertvalue %sollang.array.i32 poison, ptr %heap$(callIndex)_active_data, 0" -> println
+             "  %heap$(callIndex)_result1 = insertvalue %sollang.array.i32 %heap$(callIndex)_result0, i64 %heap$(callIndex)_next_length, 1" -> println
+             "  %heap$(callIndex)_result = insertvalue %sollang.array.i32 %heap$(callIndex)_result1, i64 %heap$(callIndex)_active_capacity, 2" -> println
+-            "  store %sollang.array.i32 %heap$(callIndex)_result, ptr %slot$(heapRoot), align 8" -> println
++            heapStructMember -> if {
++                call.operand0 -> emitMutableReferenceMemberPlace(
++                heapPlaceRoot,
++                callIndex,
++                0,
++                ownerIndex,
++                false,
++                context,
++                state) => heapMemberDepth
++                "  store %sollang.array.i32 %heap$(callIndex)_result, ptr %callref$(callIndex)_arg0_place" -> print
++                heapMemberDepth - 1 -> writeDecimal
++                ", align 8" -> println
++            } else {
++                "  store %sollang.array.i32 %heap$(callIndex)_result, ptr %slot$(heapRoot), align 8" -> println
++            }
+         }
+     }
+ 
