@@ -1,0 +1,128 @@
+diff --git a/e904937e3a8c107d66a1212bf14c5abbb3cf41a0 b/selfhost/llvm/emitter/environment_runtime.slg
+index e904937e3..e385f0a15 100644
+--- a/e904937e3a8c107d66a1212bf14c5abbb3cf41a0
++++ b/selfhost/llvm/emitter/environment_runtime.slg
+@@ -10,7 +10,7 @@ public emitWindowsRuntime: -> Unit uses Console {
+     @sollang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1
+     define internal i1 @sollang_track_environment_allocation(ptr %allocation) {
+     entry:
+-    %node = call ptr @malloc(i64 16)
++    %node = call ptr @sollang_alloc(i64 16)
+     %ok = icmp ne ptr %node, null
+     br i1 %ok, label %store, label %fail
+ 
+@@ -69,7 +69,7 @@ public emitWindowsRuntime: -> Unit uses Console {
+       %wide_chars_plus_null = add i32 %wide_chars, 1
+       %wide_chars64 = zext i32 %wide_chars_plus_null to i64
+       %key_bytes = mul i64 %wide_chars64, 2
+-      %wide_key = call ptr @malloc(i64 %key_bytes)
++      %wide_key = call ptr @sollang_alloc(i64 %key_bytes)
+       %key_ok = icmp ne ptr %wide_key, null
+       br i1 %key_ok, label %key_convert, label %error
+ 
+@@ -88,7 +88,7 @@ public emitWindowsRuntime: -> Unit uses Console {
+       br i1 %has_size, label %value_alloc, label %zero_result
+ 
+     zero_result:
+-      call void @free(ptr %wide_key)
++      call void @sollang_free(ptr %wide_key)
+       br label %classify_zero
+ 
+     classify_zero:
+@@ -110,7 +110,7 @@ public emitWindowsRuntime: -> Unit uses Console {
+     value_alloc:
+       %required64 = zext i32 %required to i64
+       %wide_bytes = mul i64 %required64, 2
+-      %wide_value = call ptr @malloc(i64 %wide_bytes)
++      %wide_value = call ptr @sollang_alloc(i64 %wide_bytes)
+       %wide_value_ok = icmp ne ptr %wide_value, null
+       br i1 %wide_value_ok, label %value_read, label %free_key_error
+ 
+@@ -118,12 +118,12 @@ public emitWindowsRuntime: -> Unit uses Console {
+       call void @SetLastError(i32 0)
+       %value_chars = call i32 @GetEnvironmentVariableW(ptr %wide_key, ptr %wide_value, i32 %required)
+       %value_error = call i32 @GetLastError()
+-      call void @free(ptr %wide_key)
++      call void @sollang_free(ptr %wide_key)
+       %value_empty = icmp eq i32 %value_chars, 0
+       br i1 %value_empty, label %free_wide_empty, label %value_read_check
+ 
+     free_wide_empty:
+-      call void @free(ptr %wide_value)
++      call void @sollang_free(ptr %wide_value)
+       br label %classify_zero
+ 
+     value_read_check:
+@@ -137,13 +137,13 @@ public emitWindowsRuntime: -> Unit uses Console {
+ 
+     utf8_alloc:
+       %utf8_bytes = zext i32 %utf8_bytes32 to i64
+-      %utf8 = call ptr @malloc(i64 %utf8_bytes)
++      %utf8 = call ptr @sollang_alloc(i64 %utf8_bytes)
+       %utf8_ok = icmp ne ptr %utf8, null
+       br i1 %utf8_ok, label %utf8_convert, label %free_wide_error
+ 
+     utf8_convert:
+       %utf8_written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide_value, i32 %value_chars, ptr %utf8, i32 %utf8_bytes32, ptr null, ptr null)
+-      call void @free(ptr %wide_value)
++      call void @sollang_free(ptr %wide_value)
+       %utf8_converted = icmp eq i32 %utf8_written, %utf8_bytes32
+       br i1 %utf8_converted, label %track, label %free_utf8_error
+ 
+@@ -159,15 +159,15 @@ public emitWindowsRuntime: -> Unit uses Console {
+       ret %sollang.environment_result %p3
+ 
+     free_utf8_error:
+-      call void @free(ptr %utf8)
++      call void @sollang_free(ptr %utf8)
+       br label %error
+ 
+     free_wide_error:
+-      call void @free(ptr %wide_value)
++      call void @sollang_free(ptr %wide_value)
+       br label %error
+ 
+     free_key_error:
+-      call void @free(ptr %wide_key)
++      call void @sollang_free(ptr %wide_key)
+       br label %error
+ 
+     missing:
+@@ -192,8 +192,8 @@ public emitWindowsRuntime: -> Unit uses Console {
+       %allocation = load ptr, ptr %node, align 8
+       %next_slot = getelementptr i8, ptr %node, i64 8
+       %next = load ptr, ptr %next_slot, align 8
+-      call void @free(ptr %allocation)
+-      call void @free(ptr %node)
++      call void @sollang_free(ptr %allocation)
++      call void @sollang_free(ptr %node)
+       br label %loop
+ 
+     finish:
+@@ -208,7 +208,7 @@ public emitLinuxRuntime: -> Unit uses Console {
+     define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) {
+     entry:
+       %bytes = add i64 %name_len, 1
+-      %key = call ptr @malloc(i64 %bytes)
++      %key = call ptr @sollang_alloc(i64 %bytes)
+       %allocated = icmp ne ptr %key, null
+       br i1 %allocated, label %copy, label %error
+     copy:
+@@ -229,7 +229,7 @@ public emitLinuxRuntime: -> Unit uses Console {
+       %end = getelementptr i8, ptr %key, i64 %name_len
+       store i8 0, ptr %end, align 1
+       %value = call ptr @getenv(ptr %key)
+-      call void @free(ptr %key)
++      call void @sollang_free(ptr %key)
+       %found = icmp ne ptr %value, null
+       br i1 %found, label %length, label %missing
+     length:
+@@ -251,7 +251,7 @@ public emitLinuxRuntime: -> Unit uses Console {
+       %m0 = insertvalue %sollang.environment_result zeroinitializer, i1 true, 3
+       ret %sollang.environment_result %m0
+     invalid_key:
+-      call void @free(ptr %key)
++      call void @sollang_free(ptr %key)
+       br label %error
+     error:
+       ret %sollang.environment_result zeroinitializer

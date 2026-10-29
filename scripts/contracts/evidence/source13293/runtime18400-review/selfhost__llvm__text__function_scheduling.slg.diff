@@ -1,0 +1,52 @@
+diff --git a/21cc6791b805e5f177e1e677cf7ae031dac49784 b/selfhost/llvm/text/function_scheduling.slg
+index 21cc6791b..6e5073bf5 100644
+--- a/21cc6791b805e5f177e1e677cf7ae031dac49784
++++ b/selfhost/llvm/text/function_scheduling.slg
+@@ -275,7 +275,20 @@ isSchedulingComparisonTextProducer node: typedIr.TypedIrNode, context: ref emitt
+     false
+ }
+ 
++isSourceBindingCapture node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
++    node.kind != 17 or node.sourceModule < 0 or node.sourceModule >= (context.ranges -> len)
++        -> if { false -> return }
++    context.ranges[node.sourceModule] => range
++    node.astNode < 0 or node.astNode >= range.astCount
++        -> if { false -> return }
++    context.nodes[range.astStart + node.astNode].kind == 9
++}
++
+ isSchedulingValueCapture node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    # A source binding snapshots its initializer before the next source unit.
++    # This also orders a reused frame slot's last read before later writes.
++    # Synthetic role/producer aliases retain their separate scheduling rules.
++    node -> isSourceBindingCapture(context) -> if { true -> return }
+     # A restored frame read belongs to its lexical continuation. Hoisting it
+     # before an await creates an SSA value unavailable on the resume edge.
+     node.kind == 5 and node.operand0 >= 0 -> if {
+@@ -285,16 +298,17 @@ isSchedulingValueCapture node: typedIr.TypedIrNode, context: ref emitterContext.
+         (node.operand0 -> asyncFrameBindingRoot(readOwner!, context, state)) >= 0
+             -> if { true -> return }
+     }
+-    node.kind == 17 and node.symbol >= 0 -> if {
+-        node.parent => owner!
+-        owner! >= 0 and context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
+-        false => frameCapture!
+-        state.coroutine.slots -> each slot {
+-            slot.functionIr == owner! and slot.sourceModule == node.sourceModule and slot.symbol == node.symbol
+-                -> if { true => frameCapture! }
++    node.kind == 17 and (node.symbol >= 0 or (node -> typedIr.isAsyncExpressionBinding))
++        -> if {
++            node.parent => owner!
++            owner! >= 0 and context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
++            false => frameCapture!
++            state.coroutine.slots -> each slot {
++                slot.functionIr == owner! and slot.sourceModule == node.sourceModule and slot.symbol == node.symbol
++                    -> if { true => frameCapture! }
++            }
++            frameCapture! -> if { true -> return }
+         }
+-        frameCapture! -> if { true -> return }
+-    }
+     node.kind == 12 or node.kind == 14 or node.kind == 16 or node.kind == 35
+         or ((node.kind == 6 or node.kind == 9) and (node.opcode == -342 or node.opcode == -344))
+         or (node -> isSchedulingComparisonTextProducer(context, state))

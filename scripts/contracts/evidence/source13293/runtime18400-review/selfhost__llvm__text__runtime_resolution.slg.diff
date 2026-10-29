@@ -1,0 +1,39 @@
+diff --git a/b31dc00f7427a00ee0034f172c83adca90894412 b/selfhost/llvm/text/runtime_resolution.slg
+index b31dc00f7..1a8d4bef6 100644
+--- a/b31dc00f7427a00ee0034f172c83adca90894412
++++ b/selfhost/llvm/text/runtime_resolution.slg
+@@ -113,7 +113,7 @@ runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitConte
+             context.ir[secureRandomFunctionSearch!] => candidate
+             ((candidate.kind == 0
+                 and candidate.sourceModule == secureRandomBytes.module)
+-                or (candidate.kind == 6
++                or ((candidate.kind == 6 or candidate.kind == 9)
+                 and candidate.targetModule == secureRandomBytes.module))
+                 and candidate.symbol == secureRandomBytes.symbol
+                 and candidate.typeId >= 0
+@@ -147,6 +147,25 @@ runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitConte
+ 
+ 
+ 
++# ABI diagnostics resolve declarations even when their runtime bodies are unused.
++# Emission additionally requires a reachable declaration or call site.
++runtimeFunctionSymbolsForEmission runtimeModule: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> llvmRuntime.RuntimeFunctionSymbols {
++    runtimeModule -> runtimeFunctionSymbols(context) => functions!
++    false => secureRandomReachable!
++    0 => nodeIndex!
++    nodeIndex! < (context.ir -> len) -> while {
++        context.ir[nodeIndex!] => candidate
++        ((candidate.kind == 0 and candidate.sourceModule == functions!.secureRandomBytesRef.module)
++            or ((candidate.kind == 6 or candidate.kind == 9) and candidate.targetModule == functions!.secureRandomBytesRef.module))
++            and candidate.symbol == functions!.secureRandomBytesRef.symbol
++            and (nodeIndex! -> irNodeReachable(context, state))
++            -> if { true => secureRandomReachable! }
++        nodeIndex! + 1 => nodeIndex!
++    }
++    not secureRandomReachable! -> if { -1 => functions!.secureRandomBytesType }
++    functions!
++}
++
+ runtimeModuleSource context: ref emitterContext.EmitContext -> Int {
+     -1 => runtimeModule!
+     0 => moduleIndex!

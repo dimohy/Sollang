@@ -1,0 +1,179 @@
+diff --git a/6bc487d26c173fb52d4e422d4e20245371905f2d b/selfhost/llvm/emitter/socket_runtime.slg
+index 6bc487d26..9e408f3f5 100644
+--- a/6bc487d26c173fb52d4e422d4e20245371905f2d
++++ b/selfhost/llvm/emitter/socket_runtime.slg
+@@ -2971,10 +2971,10 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
+       %descriptor_value_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 13
+       %descriptor_value = load i64, ptr %descriptor_value_slot, align 8
+       %descriptor = inttoptr i64 %descriptor_value to ptr
+-      call void @free(ptr %descriptor)
++      call void @sollang_free(ptr %descriptor)
+       %context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0
+       %context = load ptr, ptr %context_slot, align 8
+-      call void @free(ptr %context)
++      call void @sollang_free(ptr %context)
+       ret void
+     trap:
+       call void @llvm.trap()
+@@ -3001,22 +3001,22 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
+       %port_ok = icmp ne ptr %port, null
+       br i1 %port_ok, label %allocate_state, label %port_failed
+     allocate_state:
+-      %state = call ptr @malloc(i64 96)
++      %state = call ptr @sollang_alloc(i64 96)
+       %state_ok = icmp ne ptr %state, null
+       br i1 %state_ok, label %allocate_registrations, label %state_allocation_failed
+     allocate_registrations:
+       %registration_bytes = mul nuw i64 %registrations, 32
+-      %registration_table = call ptr @malloc(i64 %registration_bytes)
++      %registration_table = call ptr @sollang_alloc(i64 %registration_bytes)
+       %registration_table_ok = icmp ne ptr %registration_table, null
+       br i1 %registration_table_ok, label %allocate_pending, label %registration_allocation_failed
+     allocate_pending:
+       %pending_bytes = mul nuw i64 %pending, 128
+-      %pending_table = call ptr @malloc(i64 %pending_bytes)
++      %pending_table = call ptr @sollang_alloc(i64 %pending_bytes)
+       %pending_table_ok = icmp ne ptr %pending_table, null
+       br i1 %pending_table_ok, label %allocate_completions, label %pending_allocation_failed
+     allocate_completions:
+       %completion_bytes = mul nuw i64 %batch, 32
+-      %completion_table = call ptr @malloc(i64 %completion_bytes)
++      %completion_table = call ptr @sollang_alloc(i64 %completion_bytes)
+       %completion_table_ok = icmp ne ptr %completion_table, null
+       br i1 %completion_table_ok, label %initialize, label %completion_allocation_failed
+     initialize:
+@@ -3050,13 +3050,13 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
+       %success = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 -1, i32 0)
+       ret %sollang.socket_result %success
+     completion_allocation_failed:
+-      call void @free(ptr %pending_table)
++      call void @sollang_free(ptr %pending_table)
+       br label %pending_allocation_failed
+     pending_allocation_failed:
+-      call void @free(ptr %registration_table)
++      call void @sollang_free(ptr %registration_table)
+       br label %registration_allocation_failed
+     registration_allocation_failed:
+-      call void @free(ptr %state)
++      call void @sollang_free(ptr %state)
+       br label %state_allocation_failed
+     state_allocation_failed:
+       %closed = call i32 @CloseHandle(ptr %port)
+@@ -3696,7 +3696,7 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
+       %completed_has_buffer = icmp ne ptr %completed_buffer, null
+       br i1 %completed_has_buffer, label %free_pending_buffer, label %clear_pending_entry
+     free_pending_buffer:
+-      call void @free(ptr %completed_buffer)
++      call void @sollang_free(ptr %completed_buffer)
+       br label %clear_pending_entry
+     clear_pending_entry:
+       store ptr null, ptr %completed_buffer_slot, align 8
+@@ -3730,10 +3730,10 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
+       br label %close_registration_loop
+     close_handles:
+       %closed = call i32 @CloseHandle(ptr %port)
+-      call void @free(ptr %completion_table)
+-      call void @free(ptr %pending_table)
+-      call void @free(ptr %registration_table)
+-      call void @free(ptr %state)
++      call void @sollang_free(ptr %completion_table)
++      call void @sollang_free(ptr %pending_table)
++      call void @sollang_free(ptr %registration_table)
++      call void @sollang_free(ptr %state)
+       br label %done
+     close_trap:
+       call void @llvm.trap()
+@@ -4224,10 +4224,10 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
+       %descriptor_value_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 13
+       %descriptor_value = load i64, ptr %descriptor_value_slot, align 8
+       %descriptor = inttoptr i64 %descriptor_value to ptr
+-      call void @free(ptr %descriptor)
++      call void @sollang_free(ptr %descriptor)
+       %context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0
+       %context = load ptr, ptr %context_slot, align 8
+-      call void @free(ptr %context)
++      call void @sollang_free(ptr %context)
+       ret void
+     trap:
+       call void @llvm.trap()
+@@ -4265,22 +4265,22 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
+       %wakeup_registration_ok = icmp eq i32 %wakeup_registered, 0
+       br i1 %wakeup_registration_ok, label %allocate_state, label %wakeup_registration_failed
+     allocate_state:
+-      %state = call ptr @malloc(i64 144)
++      %state = call ptr @sollang_alloc(i64 144)
+       %state_ok = icmp ne ptr %state, null
+       br i1 %state_ok, label %allocate_registrations, label %state_allocation_failed
+     allocate_registrations:
+       %registration_bytes = mul nuw i64 %registrations, 32
+-      %registration_table = call ptr @malloc(i64 %registration_bytes)
++      %registration_table = call ptr @sollang_alloc(i64 %registration_bytes)
+       %registration_table_ok = icmp ne ptr %registration_table, null
+       br i1 %registration_table_ok, label %allocate_pending, label %registration_allocation_failed
+     allocate_pending:
+       %pending_bytes = mul nuw i64 %pending, 128
+-      %pending_table = call ptr @malloc(i64 %pending_bytes)
++      %pending_table = call ptr @sollang_alloc(i64 %pending_bytes)
+       %pending_table_ok = icmp ne ptr %pending_table, null
+       br i1 %pending_table_ok, label %allocate_completions, label %pending_allocation_failed
+     allocate_completions:
+       %completion_bytes = mul nuw i64 %batch, 32
+-      %completion_table = call ptr @malloc(i64 %completion_bytes)
++      %completion_table = call ptr @sollang_alloc(i64 %completion_bytes)
+       %completion_table_ok = icmp ne ptr %completion_table, null
+       br i1 %completion_table_ok, label %initialize, label %completion_allocation_failed
+     initialize:
+@@ -4323,22 +4323,22 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
+       %success = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 -1, i32 0)
+       ret %sollang.socket_result %success
+     mutex_initialization_failed:
+-      call void @free(ptr %completion_table)
+-      call void @free(ptr %pending_table)
+-      call void @free(ptr %registration_table)
+-      call void @free(ptr %state)
++      call void @sollang_free(ptr %completion_table)
++      call void @sollang_free(ptr %pending_table)
++      call void @sollang_free(ptr %registration_table)
++      call void @sollang_free(ptr %state)
+       %mutex_close_wakeup = call i32 @close(i32 %wakeup)
+       %mutex_close_epoll = call i32 @close(i32 %epoll)
+       %mutex_failure = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 8, i32 %mutex_result)
+       ret %sollang.socket_result %mutex_failure
+     completion_allocation_failed:
+-      call void @free(ptr %pending_table)
++      call void @sollang_free(ptr %pending_table)
+       br label %pending_allocation_failed
+     pending_allocation_failed:
+-      call void @free(ptr %registration_table)
++      call void @sollang_free(ptr %registration_table)
+       br label %registration_allocation_failed
+     registration_allocation_failed:
+-      call void @free(ptr %state)
++      call void @sollang_free(ptr %state)
+       br label %state_allocation_failed
+     state_allocation_failed:
+       %state_close_wakeup = call i32 @close(i32 %wakeup)
+@@ -4985,7 +4985,7 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
+       %completed_has_buffer = icmp ne ptr %completed_buffer, null
+       br i1 %completed_has_buffer, label %free_pending_buffer, label %clear_pending_entry
+     free_pending_buffer:
+-      call void @free(ptr %completed_buffer)
++      call void @sollang_free(ptr %completed_buffer)
+       br label %clear_pending_entry
+     clear_pending_entry:
+       store ptr null, ptr %completed_buffer_slot, align 8
+@@ -5026,10 +5026,10 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
+       %mutex_destroy_ok = icmp eq i32 %mutex_destroyed, 0
+       br i1 %mutex_destroy_ok, label %release_allocations, label %close_trap
+     release_allocations:
+-      call void @free(ptr %completion_table)
+-      call void @free(ptr %pending_table)
+-      call void @free(ptr %registration_table)
+-      call void @free(ptr %state)
++      call void @sollang_free(ptr %completion_table)
++      call void @sollang_free(ptr %pending_table)
++      call void @sollang_free(ptr %registration_table)
++      call void @sollang_free(ptr %state)
+       br label %done
+     close_trap:
+       call void @llvm.trap()

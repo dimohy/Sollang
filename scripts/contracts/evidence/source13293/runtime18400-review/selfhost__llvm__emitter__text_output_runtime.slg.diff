@@ -1,0 +1,136 @@
+diff --git a/b4cdd8a43044e9cf140bdd6e3abb560e80316b15 b/selfhost/llvm/emitter/text_output_runtime.slg
+index b4cdd8a43..35e964af0 100644
+--- a/b4cdd8a43044e9cf140bdd6e3abb560e80316b15
++++ b/selfhost/llvm/emitter/text_output_runtime.slg
+@@ -7,9 +7,6 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
+     declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+     declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+     declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+-    declare ptr @GetProcessHeap()
+-    declare ptr @HeapAlloc(ptr, i32, i64)
+-    declare i32 @HeapFree(ptr, i32, ptr)
+     define internal i32 @sollang_write_stream_chunk(ptr %handle, ptr %data, i32 %len, ptr %written, i1 %is_console) {
+     entry:
+       %empty = icmp eq i32 %len, 0
+@@ -191,7 +188,6 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
+         declare i32 @TlsSetValue(i32, ptr)
+         declare ptr @TlsGetValue(i32)
+         declare i32 @TlsFree(i32)
+-        declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+         define internal void @sollang_runtime_flush_stdout() {
+         entry:
+@@ -281,7 +277,6 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
+         @sollang_runtime_newline = private constant [1 x i8] c"\0A"
+         @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+         @sollang_runtime_stdout_count = private global i64 0
+-        declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+         define internal void @sollang_runtime_flush_stdout() {
+         entry:
+           %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+@@ -400,7 +395,6 @@ public emitLinuxTextRuntime capturesParallelOutput: Bool, usesStandardError: Boo
+         declare i32 @pthread_key_delete(i32)
+         declare i32 @pthread_setspecific(i32, ptr)
+         declare ptr @pthread_getspecific(i32)
+-        declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+         define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
+         entry:
+@@ -615,3 +609,97 @@ public emitWasmTextRuntime usesStandardError: Bool -> Unit uses Console {
+         """ -> println
+     }
+ }
++
++# Raw platform allocation matches the managed memory primitive contract.
++# A null result belongs to the caller's failure decision; allocation does not
++# trap here because I/O callers can return a recoverable failure.
++public emitMemoryPrimitives pathStyle: Int, pointerBitWidth: Int -> Unit uses Console {
++    pointerBitWidth == 32 -> if {
++        """
++        declare i32 @sollang_browser_alloc(i64)
++        declare void @sollang_browser_panic(ptr, i32)
++        define ptr @sollang_alloc(i64 %bytes) {
++        entry:
++          %value32 = call i32 @sollang_browser_alloc(i64 %bytes)
++          %value = inttoptr i32 %value32 to ptr
++          ret ptr %value
++        }
++        define internal void @sollang_free(ptr %value) {
++        entry:
++          ret void
++        }
++        """ -> println
++    } else {
++        pathStyle == 1 -> if {
++            """
++            declare ptr @GetProcessHeap()
++            declare ptr @HeapAlloc(ptr, i32, i64)
++            declare i32 @HeapFree(ptr, i32, ptr)
++            define internal ptr @sollang_alloc(i64 %bytes) {
++            entry:
++              %heap = call ptr @GetProcessHeap()
++              %value = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %bytes)
++              ret ptr %value
++            }
++            """ -> println
++        } else {
++            """
++            declare ptr @malloc(i64)
++            declare void @free(ptr)
++            define internal ptr @sollang_alloc(i64 %bytes) {
++            entry:
++              %value = call ptr @malloc(i64 %bytes)
++              ret ptr %value
++            }
++            """ -> println
++        }
++        """
++        define internal void @sollang_free(ptr %value) {
++        entry:
++          %is_null = icmp eq ptr %value, null
++          br i1 %is_null, label %done, label %release
++        release:
++        """ -> println
++        pathStyle == 1 -> if {
++            """
++              %heap = call ptr @GetProcessHeap()
++              %ignored = call i32 @HeapFree(ptr %heap, i32 0, ptr %value)
++            """ -> println
++        } else { "  call void @free(ptr %value)" -> println }
++        """
++          br label %done
++        done:
++          ret void
++        }
++        """ -> println
++    }
++    """
++    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
++    """ -> println
++}
++
++public emitResizePrimitive: -> Unit uses Console {
++    """
++    define internal ptr @sollang_resize(ptr %old, i64 %used_bytes, i64 %new_bytes) {
++    entry:
++      %value = call ptr @sollang_alloc(i64 %new_bytes)
++      %allocated = icmp ne ptr %value, null
++      br i1 %allocated, label %inspect_old, label %failure
++    inspect_old:
++      %has_old = icmp ne ptr %old, null
++      %has_bytes = icmp ne i64 %used_bytes, 0
++      %copy_needed = and i1 %has_old, %has_bytes
++      br i1 %copy_needed, label %copy, label %release
++    copy:
++      %fits = icmp ule i64 %used_bytes, %new_bytes
++      %copy_bytes = select i1 %fits, i64 %used_bytes, i64 %new_bytes
++      call void @llvm.memcpy.p0.p0.i64(ptr %value, ptr %old, i64 %copy_bytes, i1 false)
++      br label %release
++    release:
++      call void @sollang_free(ptr %old)
++      ret ptr %value
++    failure:
++      ret ptr null
++    }
++    """ -> println
++}

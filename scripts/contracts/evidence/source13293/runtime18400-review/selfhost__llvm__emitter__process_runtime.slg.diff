@@ -1,0 +1,376 @@
+diff --git a/f8b2eb2a59d239dc2ea16ae25e27eb4b780e1a28 b/selfhost/llvm/emitter/process_runtime.slg
+index f8b2eb2a5..cf3f3b5ac 100644
+--- a/f8b2eb2a59d239dc2ea16ae25e27eb4b780e1a28
++++ b/selfhost/llvm/emitter/process_runtime.slg
+@@ -5,7 +5,7 @@ public emitProcessRuntimeCommon: -> Unit uses Console {
+     define internal ptr @sollang_process_copy_text(ptr %data, i64 %length) {
+     entry:
+       %capacity = add i64 %length, 1
+-      %copy = call ptr @malloc(i64 %capacity)
++      %copy = call ptr @sollang_alloc(i64 %capacity)
+       %allocated = icmp ne ptr %copy, null
+       br i1 %allocated, label %loop, label %fail
+     loop:
+@@ -36,18 +36,18 @@ public emitProcessRuntimeCommon: -> Unit uses Console {
+     body:
+       %slot = getelementptr ptr, ptr %argv, i64 %index
+       %value = load ptr, ptr %slot, align 8
+-      call void @free(ptr %value)
++      call void @sollang_free(ptr %value)
+       %next = add i64 %index, 1
+       br label %loop
+     finish:
+-      call void @free(ptr %argv)
++      call void @sollang_free(ptr %argv)
+       ret void
+     }
+     define internal ptr @sollang_process_build_argv(ptr %records, i64 %count) {
+     entry:
+       %slots = add i64 %count, 1
+       %bytes = mul i64 %slots, 8
+-      %argv = call ptr @malloc(i64 %bytes)
++      %argv = call ptr @sollang_alloc(i64 %bytes)
+       %allocated = icmp ne ptr %argv, null
+       br i1 %allocated, label %loop, label %fail
+     loop:
+@@ -105,7 +105,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %double = mul i64 %chars64, 2
+       %capacity = add i64 %double, 3
+       %bytes = mul i64 %capacity, 2
+-      %output = call ptr @malloc(i64 %bytes)
++      %output = call ptr @sollang_alloc(i64 %bytes)
+       %allocated = icmp ne ptr %output, null
+       br i1 %allocated, label %initialize, label %fail
+     initialize:
+@@ -194,7 +194,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       store ptr null, ptr %program_slot, align 8
+       %slots = add i64 %count, 1
+       %argv_bytes = mul i64 %slots, 8
+-      %argv = call ptr @malloc(i64 %argv_bytes)
++      %argv = call ptr @sollang_alloc(i64 %argv_bytes)
+       %allocated = icmp ne ptr %argv, null
+       br i1 %allocated, label %loop, label %fail
+     loop:
+@@ -220,7 +220,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %chars_with_null = add i32 %chars, 1
+       %chars_with_null64 = zext i32 %chars_with_null to i64
+       %wide_bytes = mul i64 %chars_with_null64, 2
+-      %wide = call ptr @malloc(i64 %wide_bytes)
++      %wide = call ptr @sollang_alloc(i64 %wide_bytes)
+       %wide_ok = icmp ne ptr %wide, null
+       br i1 %wide_ok, label %convert, label %cleanup
+     convert:
+@@ -240,7 +240,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       store ptr %wide, ptr %program_slot, align 8
+       br label %store
+     free_unquoted:
+-      call void @free(ptr %wide)
++      call void @sollang_free(ptr %wide)
+       br label %store
+     store:
+       %slot = getelementptr ptr, ptr %argv, i64 %index
+@@ -248,11 +248,11 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %next = add i64 %index, 1
+       br label %loop
+     free_wide_error:
+-      call void @free(ptr %wide)
++      call void @sollang_free(ptr %wide)
+       br label %cleanup
+     cleanup:
+       %failed_program = load ptr, ptr %program_slot, align 8
+-      call void @free(ptr %failed_program)
++      call void @sollang_free(ptr %failed_program)
+       store ptr null, ptr %program_slot, align 8
+       call void @sollang_process_dispose_argv(ptr %argv, i64 %index)
+       ret ptr null
+@@ -278,7 +278,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %with_null = add i32 %chars, 1
+       %with_null64 = zext i32 %with_null to i64
+       %bytes = mul i64 %with_null64, 2
+-      %wide = call ptr @malloc(i64 %bytes)
++      %wide = call ptr @sollang_alloc(i64 %bytes)
+       %allocated = icmp ne ptr %wide, null
+       br i1 %allocated, label %convert, label %fail
+     convert:
+@@ -290,7 +290,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       store i16 0, ptr %end, align 2
+       ret ptr %wide
+     free_fail:
+-      call void @free(ptr %wide)
++      call void @sollang_free(ptr %wide)
+       br label %fail
+     fail:
+       ret ptr null
+@@ -353,7 +353,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %total = load i64, ptr %offset_slot, align 8
+       %with_null = add i64 %total, 1
+       %bytes = mul i64 %with_null, 2
+-      %command = call ptr @malloc(i64 %bytes)
++      %command = call ptr @sollang_alloc(i64 %bytes)
+       %allocated = icmp ne ptr %command, null
+       br i1 %allocated, label %copy_setup, label %fail
+     copy_setup:
+@@ -504,13 +504,13 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+     entry_more:
+       %slot = getelementptr ptr, ptr %entries, i64 %index
+       %value = load ptr, ptr %slot, align 8
+-      call void @free(ptr %value)
++      call void @sollang_free(ptr %value)
+       %next = add i64 %index, 1
+       br label %entry_loop
+     free_arrays:
+-      call void @free(ptr %entries)
+-      call void @free(ptr %name_lengths)
+-      call void @free(ptr %list)
++      call void @sollang_free(ptr %entries)
++      call void @sollang_free(ptr %name_lengths)
++      call void @sollang_free(ptr %list)
+       %has_parent = icmp ne ptr %parent, null
+       br i1 %has_parent, label %free_parent, label %cleanup_done
+     free_parent:
+@@ -535,11 +535,11 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+     allocate_entries:
+       %entry_slots0 = select i1 %has_changes, i64 %change_count, i64 1
+       %entry_bytes = mul i64 %entry_slots0, 8
+-      %entries = call ptr @malloc(i64 %entry_bytes)
++      %entries = call ptr @sollang_alloc(i64 %entry_bytes)
+       %entries_ok = icmp ne ptr %entries, null
+       br i1 %entries_ok, label %allocate_lengths, label %failure
+     allocate_lengths:
+-      %name_lengths = call ptr @malloc(i64 %entry_bytes)
++      %name_lengths = call ptr @sollang_alloc(i64 %entry_bytes)
+       %lengths_ok = icmp ne ptr %name_lengths, null
+       br i1 %lengths_ok, label %initialize_entries, label %free_entries_failure
+     initialize_entries:
+@@ -596,7 +596,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %entry_without_end = add i64 %wide_name_length, %wide_value_length
+       %entry_chars = add i64 %entry_without_end, 2
+       %wide_entry_bytes = mul i64 %entry_chars, 2
+-      %wide_entry = call ptr @malloc(i64 %wide_entry_bytes)
++      %wide_entry = call ptr @sollang_alloc(i64 %wide_entry_bytes)
+       %wide_entry_ok = icmp ne ptr %wide_entry, null
+       br i1 %wide_entry_ok, label %copy_entry, label %free_name_value_failure
+     copy_entry:
+@@ -611,8 +611,8 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %entry_end_offset = add i64 %value_offset, %wide_value_length
+       %entry_end = getelementptr i16, ptr %wide_entry, i64 %entry_end_offset
+       store i16 0, ptr %entry_end, align 2
+-      call void @free(ptr %wide_name)
+-      call void @free(ptr %wide_value)
++      call void @sollang_free(ptr %wide_name)
++      call void @sollang_free(ptr %wide_value)
+       br label %store_set
+     store_set:
+       %set_entry_slot = getelementptr ptr, ptr %entries, i64 %change_index
+@@ -620,11 +620,11 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %change_next_set = add i64 %change_index, 1
+       br label %convert_changes
+     free_name_failure:
+-      call void @free(ptr %wide_name)
++      call void @sollang_free(ptr %wide_name)
+       br label %build_failure
+     free_name_value_failure:
+-      call void @free(ptr %wide_name)
+-      call void @free(ptr %wide_value)
++      call void @sollang_free(ptr %wide_name)
++      call void @sollang_free(ptr %wide_value)
+       br label %build_failure
+     parent_select:
+       br i1 %inherits, label %load_parent, label %allocate_list
+@@ -650,7 +650,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %maximum_count = add i64 %selected_parent_count, %change_count
+       %list_slots = add i64 %maximum_count, 1
+       %list_bytes = mul i64 %list_slots, 8
+-      %list = call ptr @malloc(i64 %list_bytes)
++      %list = call ptr @sollang_alloc(i64 %list_bytes)
+       %list_ok = icmp ne ptr %list, null
+       br i1 %list_ok, label %copy_parent, label %build_failure_with_parent
+     copy_parent:
+@@ -753,7 +753,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %nonempty_chars = add i64 %measure_chars, 1
+       %block_chars = select i1 %empty_block, i64 2, i64 %nonempty_chars
+       %block_bytes = mul i64 %block_chars, 2
+-      %block = call ptr @malloc(i64 %block_bytes)
++      %block = call ptr @sollang_alloc(i64 %block_bytes)
+       %block_ok = icmp ne ptr %block, null
+       br i1 %block_ok, label %copy_block, label %build_failure_with_list
+     copy_block:
+@@ -797,7 +797,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       call void @sollang_windows_dispose_environment_build(ptr %entries, ptr %name_lengths, ptr null, i64 %change_count, ptr null)
+       br label %failure
+     free_entries_failure:
+-      call void @free(ptr %entries)
++      call void @sollang_free(ptr %entries)
+       br label %failure
+     failure:
+       ret %sollang.process_environment_result zeroinitializer
+@@ -871,7 +871,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %closed_stdin = call i32 @CloseHandle(ptr %stdin_handle)
+       %closed_stdout = call i32 @CloseHandle(ptr %stdout_handle)
+       %closed_stderr = call i32 @CloseHandle(ptr %stderr_handle)
+-      call void @free(ptr %command)
++      call void @sollang_free(ptr %command)
+       %token = ptrtoint ptr %process_handle to i64
+       ret i64 %token
+     close_handles_fail:
+@@ -890,7 +890,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %closed_stderr_fail = call i32 @CloseHandle(ptr %stderr_handle)
+       br label %free_fail
+     free_fail:
+-      call void @free(ptr %command)
++      call void @sollang_free(ptr %command)
+       br label %fail
+     fail:
+       ret i64 -1
+@@ -921,19 +921,19 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       br i1 %environment_ok, label %environment_ready, label %environment_error
+     environment_ready:
+       %raw = call i64 @sollang_process_spawn_windows(ptr %program, ptr %argv, i64 %count, ptr %working_directory, ptr %environment, ptr %stdin_override, ptr %stdout_override, ptr %stderr_override)
+-      call void @free(ptr %environment)
+-      call void @free(ptr %working_directory)
+-      call void @free(ptr %program)
++      call void @sollang_free(ptr %environment)
++      call void @sollang_free(ptr %working_directory)
++      call void @sollang_free(ptr %program)
+       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+       %spawned = icmp ne i64 %raw, -1
+       br i1 %spawned, label %read_process_id, label %error
+     environment_error:
+-      call void @free(ptr %working_directory)
+-      call void @free(ptr %program)
++      call void @sollang_free(ptr %working_directory)
++      call void @sollang_free(ptr %program)
+       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+       br label %error
+     build_error:
+-      call void @free(ptr %program)
++      call void @sollang_free(ptr %program)
+       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+       br label %error
+     read_process_id:
+@@ -982,7 +982,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       %access = select i1 %input, i32 -2147483648, i32 1073741824
+       %creation = select i1 %input, i32 3, i32 2
+       %handle = call ptr @CreateFileW(ptr %path_copy, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+-      call void @free(ptr %path_copy)
++      call void @sollang_free(ptr %path_copy)
+       ret ptr %handle
+     open_null:
+       %null_access = select i1 %input, i32 -2147483648, i32 1073741824
+@@ -1169,7 +1169,7 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
+       br i1 %path_ok, label %open, label %error
+     open:
+       %output = call ptr @CreateFileW(ptr %path_copy, i32 1073741824, i32 1, ptr null, i32 2, i32 128, ptr null)
+-      call void @free(ptr %path_copy)
++      call void @sollang_free(ptr %path_copy)
+       %output_handle_value = ptrtoint ptr %output to i64
+       %opened = icmp ne i64 %output_handle_value, -1
+       br i1 %opened, label %run, label %error
+@@ -1295,11 +1295,11 @@ emitLinuxProcessEnvironmentRuntime: -> Unit uses Console {
+     free_entry:
+       %slot = getelementptr ptr, ptr %environment, i64 %index
+       %entry_value = load ptr, ptr %slot, align 8
+-      call void @free(ptr %entry_value)
++      call void @sollang_free(ptr %entry_value)
+       %next = add i64 %index, 1
+       br label %loop
+     free_vector:
+-      call void @free(ptr %environment)
++      call void @sollang_free(ptr %environment)
+       br label %done
+     done:
+       ret void
+@@ -1336,7 +1336,7 @@ emitLinuxProcessEnvironmentRuntime: -> Unit uses Console {
+       %maximum_count = add i64 %inherited_count, %change_count
+       %slots = add i64 %maximum_count, 1
+       %bytes = mul i64 %slots, 8
+-      %environment = call ptr @malloc(i64 %bytes)
++      %environment = call ptr @sollang_alloc(i64 %bytes)
+       %allocated = icmp ne ptr %environment, null
+       br i1 %allocated, label %copy_parent_select, label %failure
+     copy_parent_select:
+@@ -1392,7 +1392,7 @@ emitLinuxProcessEnvironmentRuntime: -> Unit uses Console {
+       %append_value_length = extractvalue %sollang.text %append_value, 1
+       %entry_without_end = add i64 %append_name_length, %append_value_length
+       %entry_bytes = add i64 %entry_without_end, 2
+-      %new_entry = call ptr @malloc(i64 %entry_bytes)
++      %new_entry = call ptr @sollang_alloc(i64 %entry_bytes)
+       %entry_allocated = icmp ne ptr %new_entry, null
+       br i1 %entry_allocated, label %append_copy, label %append_failure
+     append_copy:
+@@ -1504,7 +1504,7 @@ public emitLinuxProcessRuntime hasCloseDeclaration: Bool -> Unit uses Console {
+       %destroyed_after_error = call i32 @posix_spawn_file_actions_destroy(ptr %file_actions)
+       br label %working_directory_free_error
+     working_directory_free_error:
+-      call void @free(ptr %working_directory)
++      call void @sollang_free(ptr %working_directory)
+       br label %configuration_error
+     working_directory_ready:
+       br label %configuration_ready
+@@ -1529,12 +1529,12 @@ public emitLinuxProcessRuntime hasCloseDeclaration: Bool -> Unit uses Console {
+       br i1 %stderr_ok, label %spawn_ready, label %stdio_action_error
+     stdio_action_error:
+       %destroyed_after_stdio_error = call i32 @posix_spawn_file_actions_destroy(ptr %file_actions)
+-      call void @free(ptr %working_directory_allocation)
++      call void @sollang_free(ptr %working_directory_allocation)
+       br label %configuration_error
+     spawn_ready:
+       %spawn_code = call i32 @posix_spawnp(ptr %pid_slot, ptr %program, ptr %file_actions, ptr null, ptr %argv, ptr %environment)
+       %actions_destroyed = call i32 @posix_spawn_file_actions_destroy(ptr %file_actions)
+-      call void @free(ptr %working_directory_allocation)
++      call void @sollang_free(ptr %working_directory_allocation)
+       call void @sollang_process_dispose_environment(ptr %environment, i64 %environment_count, i64 %environment_owned_start)
+       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+       %spawned = icmp eq i32 %spawn_code, 0
+@@ -1579,7 +1579,7 @@ public emitLinuxProcessRuntime hasCloseDeclaration: Bool -> Unit uses Console {
+     open:
+       %flags = select i1 %input, i32 0, i32 577
+       %descriptor = call i32 @open(ptr %path_copy, i32 %flags, i32 438)
+-      call void @free(ptr %path_copy)
++      call void @sollang_free(ptr %path_copy)
+       ret i32 %descriptor
+     open_null:
+       %null_flags = select i1 %input, i32 0, i32 577
+@@ -1801,7 +1801,7 @@ public emitLinuxProcessRuntime hasCloseDeclaration: Bool -> Unit uses Console {
+       br i1 %path_ok, label %open_output, label %error
+     open_output:
+       %output = call i32 @open(ptr %path_copy, i32 577, i32 438)
+-      call void @free(ptr %path_copy)
++      call void @sollang_free(ptr %path_copy)
+       %opened = icmp sge i32 %output, 0
+       br i1 %opened, label %run, label %error
+     run:
+@@ -1864,7 +1864,7 @@ emitProcessCaptureRuntimeCommon: -> Unit uses Console {
+       %initial_candidate = select i1 %needs_initial, i64 4096, i64 %required_candidate
+       %exceeds_limit = icmp ugt i64 %initial_candidate, %limit
+       %new_capacity = select i1 %exceeds_limit, i64 %limit, i64 %initial_candidate
+-      %new_data = call ptr @malloc(i64 %new_capacity)
++      %new_data = call ptr @sollang_alloc(i64 %new_capacity)
+       %allocated = icmp ne ptr %new_data, null
+       br i1 %allocated, label %copy_old_check, label %allocation_error
+     copy_old_check:
+@@ -1873,7 +1873,7 @@ emitProcessCaptureRuntimeCommon: -> Unit uses Console {
+       br i1 %has_old, label %copy_old, label %replace
+     copy_old:
+       call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+-      call void @free(ptr %old_data)
++      call void @sollang_free(ptr %old_data)
+       br label %replace
+     replace:
+       store ptr %new_data, ptr %data_slot, align 8
+@@ -1896,13 +1896,13 @@ emitProcessCaptureRuntimeCommon: -> Unit uses Console {
+       %has_stdout = icmp ne ptr %stdout_data, null
+       br i1 %has_stdout, label %free_stdout, label %check_stderr
+     free_stdout:
+-      call void @free(ptr %stdout_data)
++      call void @sollang_free(ptr %stdout_data)
+       br label %check_stderr
+     check_stderr:
+       %has_stderr = icmp ne ptr %stderr_data, null
+       br i1 %has_stderr, label %free_stderr, label %return
+     free_stderr:
+-      call void @free(ptr %stderr_data)
++      call void @sollang_free(ptr %stderr_data)
+       br label %return
+     return:
+       %result0 = insertvalue %sollang.process_capture_result poison, i32 0, 0

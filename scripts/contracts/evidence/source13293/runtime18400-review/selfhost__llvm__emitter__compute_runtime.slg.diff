@@ -1,0 +1,50 @@
+diff --git a/d433f66c4b0314ac45a7ca7b7862630d4ed2c41e b/selfhost/llvm/emitter/compute_runtime.slg
+index d433f66c4..27e5e9e42 100644
+--- a/d433f66c4b0314ac45a7ca7b7862630d4ed2c41e
++++ b/selfhost/llvm/emitter/compute_runtime.slg
+@@ -618,13 +618,13 @@ public emitMemoryOutputSinkRuntime: -> Unit uses Console {
+       %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+       %enough = icmp uge i64 %base_capacity, %required
+       %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+-      %new_data = call ptr @malloc(i64 %new_capacity)
++      %new_data = call ptr @sollang_alloc(i64 %new_capacity)
+       %old_data = load ptr, ptr %data_slot, align 8
+       %has_old = icmp ne ptr %old_data, null
+       br i1 %has_old, label %copy_old, label %publish
+     copy_old:
+       call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+-      call void @free(ptr %old_data)
++      call void @sollang_free(ptr %old_data)
+       br label %publish
+     publish:
+       store ptr %new_data, ptr %data_slot, align 8
+@@ -658,13 +658,13 @@ public emitMemoryOutputSinkRuntime: -> Unit uses Console {
+       call void %writer(ptr %context, ptr %data, i64 %length)
+       br label %dispose_one
+     dispose_one:
+-      call void @free(ptr %data)
++      call void @sollang_free(ptr %data)
+       br label %flush_one_done
+     flush_one_done:
+       %next = add i64 %index, 1
+       br label %flush_loop
+     finish:
+-      call void @free(ptr %sinks)
++      call void @sollang_free(ptr %sinks)
+       ret void
+     }
+     define internal void @sollang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
+@@ -683,11 +683,11 @@ public emitMemoryOutputSinkRuntime: -> Unit uses Console {
+       %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
+       %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
+       %data = load ptr, ptr %data_slot, align 8
+-      call void @free(ptr %data)
++      call void @sollang_free(ptr %data)
+       %next = add i64 %index, 1
+       br label %dispose_loop
+     finish:
+-      call void @free(ptr %sinks)
++      call void @sollang_free(ptr %sinks)
+       ret void
+     }
+     """ -> println
