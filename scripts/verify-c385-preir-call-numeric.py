@@ -6,6 +6,7 @@ import importlib.util
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from verification_fingerprints import managed_runtime_inputs, input_file_identity, unique_input_files
@@ -28,6 +29,24 @@ def sha(path):
 
 def read(path):
     return path.read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+
+
+class CaseBudget:
+    """One deadline covers compilation, execution, linking and allocation audit."""
+    seconds = 180
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.started = clock()
+
+    def elapsed(self):
+        return self.clock() - self.started
+
+    def remaining(self, command, step_limit):
+        remaining = self.seconds - self.elapsed()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, self.seconds)
+        return min(step_limit, remaining)
 
 
 def native_build_timeout(contract, mode="paired"):
@@ -556,6 +575,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                 and binary_inputs_stable(binary_pins))
 
     execution = VerificationExecution(ROOT, output, result, stable, sha)
+    case_budget = None
 
     def run(command, prefix):
         if len(command) > 1 and command[0] == str(compiler) and command[1] == 'build':
@@ -563,6 +583,8 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
         diagnostics = None if args.diagnostics_configuration is None else SlowStepDiagnostics(
             args.diagnostics_configuration, prefix.with_suffix('.diagnostics.json'))
         timeout = native_timeout if args.mode == "paired" and command[:2] == [str(compiler), "build"] else 180
+        if case_budget is not None:
+            timeout = case_budget.remaining(command, timeout)
         exit_code = execution.run(command, prefix, timeout=timeout, diagnostics=diagnostics).returncode
         if group is not None and not stable():
             raise ValueError("CHECKED_PRODUCER_INPUT_OR_BINARY_DRIFT_AFTER_COMMAND")
@@ -580,10 +602,11 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             if format_exit != 0:
                 raise ValueError("FORMAT_PREFLIGHT_FAILED_BEFORE_BUILD")
         for case in cases:
+            case_budget = CaseBudget()
             folder = output / case["id"]
             folder.mkdir()
             row = {"id": case["id"], "status": "running", "passed": False,
-                   "expectedBuildExit": case["exit"]}
+                   "expectedBuildExit": case["exit"], "wholeCaseBudgetSeconds": CaseBudget.seconds}
             result["cases"].append(row)
             save()
             if group is not None:
@@ -693,6 +716,8 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                     audit_source, folder, case["expectedAllocations"], case["stdout"], run)
                 row.update(audit_row)
                 passed = passed and audit_passed
+            case_budget.remaining(["case-completion", case["id"]], CaseBudget.seconds)
+            row["wholeCaseElapsedSeconds"] = round(case_budget.elapsed(), 6)
             row["status"] = "passed" if passed else "failed"
             row["passed"] = passed
             result["completed"] += int(passed)
