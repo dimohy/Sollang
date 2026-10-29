@@ -2654,7 +2654,7 @@ if ($codePointEvidence.status -cne 'passed-slice-unit-open' -or
 $snapshotInterpolationQuery = [regex]::Match($semanticContext, '(?s)public lowerAnalyzedInterpolations .*?(?=\r?\nprepareAnalyzed\s)')
 if ([regex]::Matches($semanticAnalysis, '-> interpolation\.lowerPreparedWithTypes').Count -ne 1 -or
     $semanticAnalysis -notmatch 'public completeSourceInterpolations source: Text, nodes: ref \[ast\.AstNode; ~\]' -or
-    -not $semanticAnalysis.Contains('source -> completeSourceInterpolations(lowered.nodes, originalTokens, sourceSymbols) => completed', [StringComparison]::Ordinal) -or
+    -not $semanticAnalysis.Contains('source -> completeSourceInterpolations(lowered.nodes, originalTokens, originalSymbols) => completed', [StringComparison]::Ordinal) -or
     $semanticContext -match 'interpolation\.lowerPrepared' -or
     -not $snapshotInterpolationQuery.Success -or
     -not $snapshotInterpolationQuery.Value.Contains('package.interpolations -> each node { nodes! -> push(node) }', [StringComparison]::Ordinal) -or
