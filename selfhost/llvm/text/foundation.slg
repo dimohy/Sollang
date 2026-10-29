@@ -1763,6 +1763,8 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
     targetWidth! => targetUpperBits!
     targetSigned -> if { targetWidth! - 1 => targetUpperBits! }
     targetBuiltin == 14 -> if { 21 => targetUpperBits! }
+    Arena(0) => diagnosticNames!
+    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(diagnosticNames!) => diagnosticPrefix
     sourceSigned and (not targetSigned or sourceWidth > targetWidth!)
         -> if {
             conversion.typeSymbol -> numericLiteralRange.minimumText(context.pointerBitWidth) => lowerBound
@@ -1771,8 +1773,7 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
             ", $lowerBound" -> println
             "  br i1 %v$(labelIndex)_expression$(nodeIndex)_lower_valid, label %v$(labelIndex)_expression$(nodeIndex)_lower_ok, label %v$(labelIndex)_expression$(nodeIndex)_lower_fail" -> println
             "v$(labelIndex)_expression$(nodeIndex)_lower_fail:" -> println
-            "  call void @llvm.trap()" -> println
-            "  unreachable" -> println
+            ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "lower", "numeric_conversion_lower", context, state)
             "v$(labelIndex)_expression$(nodeIndex)_lower_ok:" -> println
         }
     sourceUpperBits! > targetUpperBits! -> if {
@@ -1784,8 +1785,7 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
         ", $upperBound" -> println
         "  br i1 %v$(labelIndex)_expression$(nodeIndex)_upper_valid, label %v$(labelIndex)_expression$(nodeIndex)_upper_ok, label %v$(labelIndex)_expression$(nodeIndex)_upper_fail" -> println
         "v$(labelIndex)_expression$(nodeIndex)_upper_fail:" -> println
-        "  call void @llvm.trap()" -> println
-        "  unreachable" -> println
+        ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "upper", "numeric_conversion_upper", context, state)
         "v$(labelIndex)_expression$(nodeIndex)_upper_ok:" -> println
     }
     targetBuiltin == 14 and sourceUpperBits! >= 16
@@ -1803,8 +1803,7 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
             "  %v$(labelIndex)_expression$(nodeIndex)_valid_scalar = or i1 %v$(labelIndex)_expression$(nodeIndex)_below_surrogate, %v$(labelIndex)_expression$(nodeIndex)_above_surrogate" -> println
             "  br i1 %v$(labelIndex)_expression$(nodeIndex)_valid_scalar, label %v$(labelIndex)_expression$(nodeIndex)_scalar_ok, label %v$(labelIndex)_expression$(nodeIndex)_scalar_fail" -> println
             "v$(labelIndex)_expression$(nodeIndex)_scalar_fail:" -> println
-            "  call void @llvm.trap()" -> println
-            "  unreachable" -> println
+            ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "scalar", "numeric_conversion_surrogate", context, state)
             "v$(labelIndex)_expression$(nodeIndex)_scalar_ok:" -> println
         }
 }

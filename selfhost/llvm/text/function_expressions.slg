@@ -195,16 +195,20 @@ emitTextSliceSize request: WhileValueRequest, operandIndex: Int, prefix: Text, s
 }
 
 emitRuntimeTrap request: WhileValueRequest, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    request.ownerIndex -> emitRuntimeTrapForOwner(prefix, suffix, diagnosticCode, context, state)
+}
+
+emitRuntimeTrapForOwner ownerIndex: Int, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.expectedPathStyle == 1 or context.pointerBitWidth == 32
         -> if {
             [UInt8; ~] => diagnostic!
-            request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].symbol >= 0
+            ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].symbol >= 0
                 -> if {
-                    context.ir[request.ownerIndex] => owner
+                    context.ir[ownerIndex] => owner
                     diagnostic! -> appendDeclarationModule(owner.sourceModule, context)
                     context.modules[owner.sourceModule].pathLength == 0
                         -> if { diagnostic! -> push(46) }
-                    diagnostic! -> appendFunctionDeclarationIdentity(request.ownerIndex, context)
+                    diagnostic! -> appendFunctionDeclarationIdentity(ownerIndex, context)
                 } else {
                     diagnostic! -> appendDiagnosticText("main")
                 }

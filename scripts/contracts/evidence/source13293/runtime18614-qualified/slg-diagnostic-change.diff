@@ -1,0 +1,71 @@
+diff --git a/selfhost/llvm/text/foundation.slg b/selfhost/llvm/text/foundation.slg
+index c50363162..97d1ddd1e 100644
+--- a/selfhost/llvm/text/foundation.slg
++++ b/selfhost/llvm/text/foundation.slg
+@@ -1763,6 +1763,8 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
+     targetWidth! => targetUpperBits!
+     targetSigned -> if { targetWidth! - 1 => targetUpperBits! }
+     targetBuiltin == 14 -> if { 21 => targetUpperBits! }
++    Arena(0) => diagnosticNames!
++    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(diagnosticNames!) => diagnosticPrefix
+     sourceSigned and (not targetSigned or sourceWidth > targetWidth!)
+         -> if {
+             conversion.typeSymbol -> numericLiteralRange.minimumText(context.pointerBitWidth) => lowerBound
+@@ -1771,8 +1773,7 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
+             ", $lowerBound" -> println
+             "  br i1 %v$(labelIndex)_expression$(nodeIndex)_lower_valid, label %v$(labelIndex)_expression$(nodeIndex)_lower_ok, label %v$(labelIndex)_expression$(nodeIndex)_lower_fail" -> println
+             "v$(labelIndex)_expression$(nodeIndex)_lower_fail:" -> println
+-            "  call void @llvm.trap()" -> println
+-            "  unreachable" -> println
++            ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "lower", "numeric_conversion_lower", context, state)
+             "v$(labelIndex)_expression$(nodeIndex)_lower_ok:" -> println
+         }
+     sourceUpperBits! > targetUpperBits! -> if {
+@@ -1784,8 +1785,7 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
+         ", $upperBound" -> println
+         "  br i1 %v$(labelIndex)_expression$(nodeIndex)_upper_valid, label %v$(labelIndex)_expression$(nodeIndex)_upper_ok, label %v$(labelIndex)_expression$(nodeIndex)_upper_fail" -> println
+         "v$(labelIndex)_expression$(nodeIndex)_upper_fail:" -> println
+-        "  call void @llvm.trap()" -> println
+-        "  unreachable" -> println
++        ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "upper", "numeric_conversion_upper", context, state)
+         "v$(labelIndex)_expression$(nodeIndex)_upper_ok:" -> println
+     }
+     targetBuiltin == 14 and sourceUpperBits! >= 16
+@@ -1803,8 +1803,7 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
+             "  %v$(labelIndex)_expression$(nodeIndex)_valid_scalar = or i1 %v$(labelIndex)_expression$(nodeIndex)_below_surrogate, %v$(labelIndex)_expression$(nodeIndex)_above_surrogate" -> println
+             "  br i1 %v$(labelIndex)_expression$(nodeIndex)_valid_scalar, label %v$(labelIndex)_expression$(nodeIndex)_scalar_ok, label %v$(labelIndex)_expression$(nodeIndex)_scalar_fail" -> println
+             "v$(labelIndex)_expression$(nodeIndex)_scalar_fail:" -> println
+-            "  call void @llvm.trap()" -> println
+-            "  unreachable" -> println
++            ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "scalar", "numeric_conversion_surrogate", context, state)
+             "v$(labelIndex)_expression$(nodeIndex)_scalar_ok:" -> println
+         }
+ }
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index c7149c997..a672e35bc 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -195,16 +195,20 @@ emitTextSliceSize request: WhileValueRequest, operandIndex: Int, prefix: Text, s
+ }
+ 
+ emitRuntimeTrap request: WhileValueRequest, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    request.ownerIndex -> emitRuntimeTrapForOwner(prefix, suffix, diagnosticCode, context, state)
++}
++
++emitRuntimeTrapForOwner ownerIndex: Int, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.expectedPathStyle == 1 or context.pointerBitWidth == 32
+         -> if {
+             [UInt8; ~] => diagnostic!
+-            request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].symbol >= 0
++            ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].symbol >= 0
+                 -> if {
+-                    context.ir[request.ownerIndex] => owner
++                    context.ir[ownerIndex] => owner
+                     diagnostic! -> appendDeclarationModule(owner.sourceModule, context)
+                     context.modules[owner.sourceModule].pathLength == 0
+                         -> if { diagnostic! -> push(46) }
+-                    diagnostic! -> appendFunctionDeclarationIdentity(request.ownerIndex, context)
++                    diagnostic! -> appendFunctionDeclarationIdentity(ownerIndex, context)
+                 } else {
+                     diagnostic! -> appendDiagnosticText("main")
+                 }
