@@ -1,0 +1,78 @@
+import difflib, hashlib, json, pathlib, re, shutil, subprocess
+from datetime import datetime, timezone
+
+root = pathlib.Path.cwd()
+base = root / 'artifacts/scratch/resume-20261006-owner-continuation22'
+out = base / 'oracle18212-review'
+out.mkdir(exist_ok=False)
+fixture = '51-fixed-array-value-generics'
+original = root / 'examples/regression/expected' / (fixture + '.llvm.contains.txt')
+llvm = base / 'oracle18201-managed1/original51/probe.exe.ll'
+testbin = root / 'tests/Sollang.ExampleTests/bin/Release/net11.0'
+hashof = lambda p: hashlib.sha256(p.read_bytes()).hexdigest().upper()
+protected = [original, root / 'examples/regression' / (fixture + '.slg'), root / 'examples/regression/expected' / (fixture + '.txt')]
+protected = [p for p in protected if p.exists()]
+before = {str(p.relative_to(root)): hashof(p) for p in protected}
+text = llvm.read_text(encoding='utf-8')
+symbols = {}
+for match in re.finditer(r'^define internal i32 (@sollang_fn_\$([0-9A-F]+))\(', text, re.M):
+    canonical = bytes.fromhex(match[2]).decode('utf-8')
+    if canonical.startswith('fixedLength$'):
+        symbols[canonical] = match[1]
+assert set(symbols) == {'fixedLength$v3$t2', 'fixedLength$v5$t2', 'fixedLength$v3$t1', 'fixedLength$v2$t1448', 'fixedLength$v2$t1449'}, symbols
+mapping = {}
+for old, new in [(3, 3), (5, 5)]:
+    mapping[f'@sollang_fn_fixedLength_v{old}_t2'] = symbols[f'fixedLength$v{new}$t2']
+mapping['@sollang_fn_fixedLength_v3_t1'] = symbols['fixedLength$v3$t1']
+mapping['@sollang_fn_fixedLength_v2_t1041'] = symbols['fixedLength$v2$t1448']
+mapping['@sollang_fn_fixedLength_v2_t1042'] = symbols['fixedLength$v2$t1449']
+old = original.read_text(encoding='utf-8')
+proposed = old
+for previous, current in mapping.items():
+    assert proposed.count(previous) == 2
+    proposed = proposed.replace(previous, current)
+assert len(old.splitlines()) == len(proposed.splitlines()) == 10
+workspace = out / 'workspace'
+expected = workspace / 'examples/regression/expected'
+expected.mkdir(parents=True)
+shutil.copy2(root / 'Sollang.slnx', workspace / 'Sollang.slnx')
+sources = workspace / 'tests/Sollang.ExampleTests'
+sources.mkdir(parents=True)
+shutil.copy2(root / 'tests/Sollang.ExampleTests/LlvmAssertions.cs', sources / 'LlvmAssertions.cs')
+copiedbin = workspace / 'testbin'
+copiedbin.mkdir()
+for p in testbin.iterdir():
+    if p.is_file() and p.suffix in {'.dll', '.json'}:
+        shutil.copy2(p, copiedbin / p.name)
+checker = copiedbin / 'Sollang.ExampleTests.dll'
+assert hashof(checker) == 'C8E1097366DA97E2509B1C6EC00C5392B5305A0386042393D5E6938584BA34E0'
+for suffix in ['.llvm.contains.txt', '.llvm.not-contains.txt', '.llvm.regex-counts.txt']:
+    source = original.parent / (fixture + suffix)
+    if source.exists():
+        shutil.copy2(source, expected / source.name)
+proposal_path = expected / original.name
+proposal_path.write_text(proposed, encoding='utf-8', newline='\n')
+(out / 'proposal.diff').write_text(''.join(difflib.unified_diff(old.splitlines(True), proposed.splitlines(True), fromfile=str(original.relative_to(root)), tofile='review-copy/'+original.name)), encoding='utf-8')
+records = []
+def verify(identifier, path, accept):
+    result = out / (identifier + '.json')
+    run = subprocess.run(['dotnet', str(checker), '--verify-common-llvm', str(path), fixture, 'windows-x64', str(result)], cwd=root, capture_output=True, text=True, timeout=15)
+    (out / (identifier + '.stdout.log')).write_text(run.stdout, encoding='utf-8')
+    (out / (identifier + '.stderr.log')).write_text(run.stderr, encoding='utf-8')
+    data = json.loads(result.read_text(encoding='utf-8'))
+    passed = (run.returncode == 0) == accept and data['inputsStable'] and (data['status'] == 'passed') == accept
+    records.append({'id':identifier, 'passed':passed, 'expectedAcceptance':accept, 'exitCode':run.returncode, 'result':result.name})
+    assert passed, records[-1]
+verify('valid-current-csharp', llvm, True)
+for index, line in enumerate(proposed.splitlines()):
+    assert line in text
+    mutant = text.replace(line, line.replace('@sollang_fn_', '@removed_expected_'), 1 if line.startswith('define') else -1)
+    assert mutant != text
+    path = out / ('missing-condition-%02d.ll' % (index + 1))
+    path.write_text(mutant, encoding='utf-8')
+    verify('missing-condition-%02d' % (index + 1), path, False)
+after = {str(p.relative_to(root)): hashof(p) for p in protected}
+assert before == after
+result = {'schemaVersion':1, 'status':'review-only-passed', 'observedAtUtc':datetime.now(timezone.utc).isoformat(), 'completed':sum(x['passed'] for x in records), 'total':len(records), 'appliedToOfficialExpected':False, 'requiresNewApproval':True, 'approvedSlgSpellingScopeDoesNotCoverThis':True, 'proposedFile':str(proposal_path.relative_to(root)), 'diff':'proposal.diff', 'changedLines':10, 'symbolMapping':mapping, 'controls':records, 'protectedHashesBefore':before, 'protectedHashesEnd':after, 'actualLlvm':str(llvm.relative_to(root)), 'actualLlvmSha256':hashof(llvm), 'checkerSha256':hashof(checker), 'claimsCompilerParityComplete':False}
+(out / 'proposal.json').write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+print(json.dumps({'status':result['status'], 'completed':result['completed'], 'total':result['total'], 'officialExpectedUnchanged':before == after}))
