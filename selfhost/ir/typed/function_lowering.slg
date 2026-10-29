@@ -308,6 +308,134 @@ explicitGenericValueIdentity call: TypedIrNode, prepared: ref semanticContext.Se
     value
 }
 
+genericIntegerParameterHash function: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> UInt64 {
+    function.kind != 0 or function.sourceModule < 0
+        or function.sourceModule >= (prepared.package.ranges -> len)
+        or function.symbol < 0 -> if { 0 -> return }
+    prepared.package.ranges[function.sourceModule] => range
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        prepared.package.symbols[range.symbolStart + symbolIndex!] => parameter
+        parameter.kind == 32 and parameter.parent == function.symbol
+            and (prepared.package -> analysis.declaresIntegerValueGeneric(function.sourceModule, function.astNode, parameter.nameToken))
+            -> if {
+                prepared.package.tokens[range.tokenStart + parameter.nameToken] => name
+                UInt64(1469598103934665603) => hash!
+                UIntSize(0) => byteIndex!
+                byteIndex! < name.span.length -> while {
+                    prepared.package.sources[function.sourceModule] -> byte(name.span.start + byteIndex!) => value
+                    hash! * 1099511628211 + UInt64(value) => hash!
+                    byteIndex! + 1 => byteIndex!
+                }
+                hash! -> return
+            }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    0
+}
+
+# Template value parameters are compile-time bindings, never runtime inputs of
+# a concrete instance. Resolved Name edges retain the same constant identity.
+specializeGenericArrayRepeatLength array: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], valueSymbols: ref [Int; ~], value: Int -> Option<TypedIrNode> {
+    prepared.package.ranges[array.sourceModule] => range
+    prepared.package.nodes[range.astStart + array.astNode] => literal
+    prepared.package.sources[array.sourceModule] -> len => sourceLength
+    prepared.package.sources[array.sourceModule] -> slice(UIntSize(0), sourceLength) => source
+    source -> typeIds.arrayStorageSyntaxFromTokens(prepared.package.tokens, range.tokenStart, literal) => storage
+    not storage.isRepeat or storage.length >= 0 -> if { array -> Option<TypedIrNode>.Some -> return }
+    array.typeId < 0 or array.typeId >= (types -> len) or types[array.typeId].kind != 4
+        -> if { Option<TypedIrNode>.None -> return }
+    prepared.package.tokens -> typeIds.symbolicArrayRepeatCountToken(range.tokenStart, literal) => countToken
+    countToken < 0 -> if { Option<TypedIrNode>.None -> return }
+    prepared.package.tokens[range.tokenStart + countToken] => countName
+    source -> slice(countName.span.start, countName.span.length) => countSpelling
+    false => boundCount!
+    valueSymbols -> each symbol {
+        prepared.package.symbols[range.symbolStart + symbol] => parameter
+        prepared.package.tokens[range.tokenStart + parameter.nameToken] => parameterName
+        (source -> slice(parameterName.span.start, parameterName.span.length)) == countSpelling
+            -> if { true => boundCount! }
+    }
+    not boundCount! -> if { Option<TypedIrNode>.None -> return }
+    types -> expressionTypeIds.internArrayLiteralType(4, types[array.typeId].first, value) => concreteType
+    types[concreteType] => canonical
+    array => specialized!
+    concreteType => specialized!.typeId
+    canonical.kind => specialized!.typeKind
+    canonical.origin => specialized!.typeOrigin
+    canonical.module => specialized!.typeModule
+    canonical.symbol => specialized!.typeSymbol
+    specialized! -> Option<TypedIrNode>.Some
+}
+
+sealGenericIntegerConstants nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], functionIndex: Int, nodeCount: Int, value: Int -> Bool {
+    value < 0 -> if { true -> return }
+    nodes[functionIndex] => function!
+    [Int; ~] => runtimeParameters!
+    [Int; ~] => valueSymbols!
+    function!.operand1 => parameterIndex!
+    0 => ordinal!
+    parameterIndex! >= 0 -> while {
+        nodes[parameterIndex!] => parameter!
+        ordinal! == 0 -> if { function!.nextOperand } else { parameter!.nextOperand } => nextParameter
+        parameter! -> isHiddenValueInput(prepared) -> if {
+            valueSymbols! -> push(parameter!.symbol)
+            3 => parameter!.kind
+            value => parameter!.opcode
+            -1 => parameter!.payloadToken
+            -1 => parameter!.operand0
+            -1 => parameter!.operand1
+            -1 => parameter!.nextOperand
+            parameter! => nodes[parameterIndex!]
+        } else { runtimeParameters! -> push(parameterIndex!) }
+        nextParameter => parameterIndex!
+        ordinal! + 1 => ordinal!
+    }
+    -1 => function!.operand1
+    -1 => function!.nextOperand
+    (runtimeParameters! -> len) > 0 -> if { runtimeParameters![0] => function!.operand1 }
+    (runtimeParameters! -> len) > 1 -> if { runtimeParameters![1] => function!.nextOperand }
+    function! => nodes[functionIndex]
+    1 => runtimeIndex!
+    runtimeIndex! < (runtimeParameters! -> len) -> while {
+        runtimeParameters![runtimeIndex!] => runtimeParameter
+        nodes[runtimeParameter] => parameter!
+        -1 => parameter!.nextOperand
+        runtimeIndex! + 1 < (runtimeParameters! -> len)
+            -> if { runtimeParameters![runtimeIndex! + 1] => parameter!.nextOperand }
+        parameter! => nodes[runtimeParameter]
+        runtimeIndex! + 1 => runtimeIndex!
+    }
+    functionIndex + 1 => readIndex!
+    readIndex! < functionIndex + nodeCount -> while {
+        nodes[readIndex!] => read!
+        false => valueReference!
+        read!.kind == 5 and read!.sourceModule == function!.sourceModule
+            -> if {
+                valueSymbols! -> each symbol {
+                    read!.symbol == symbol -> if { true => valueReference! }
+                }
+            }
+        valueReference!
+            -> if {
+                value => read!.opcode
+                3 => read!.kind
+                -1 => read!.payloadToken
+                -1 => read!.operand0
+                -1 => read!.operand1
+                read! => nodes[readIndex!]
+            }
+        read!.kind == 14 -> if {
+            read! -> specializeGenericArrayRepeatLength(prepared, types, valueSymbols!, value) -> when {
+                Some(literal) { literal => nodes[readIndex!] }
+                None { false -> return }
+            }
+        }
+        readIndex! + 1 => readIndex!
+    }
+    true
+}
+
 public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericFunctionInstance; ~] {
     {UInt64: Int; 16~} => heads!
     [Int; ~] => next!
@@ -354,7 +482,16 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
         nodes -> sealEachRoleTypes(prepared, resolved.types, roleFlags)
         [Int; ~] => planSlots!
         [Bool; ~] => selected!
+        [Int; ~] => planValueArguments!
+        [UInt64; ~] => planValueHashes!
         plans! -> each plan {
+            -1 => planValue!
+            plan.callNode >= 0 -> if {
+                nodes[plan.callNode] -> explicitGenericValueIdentity(prepared) => planValue!
+            }
+            planValueArguments! -> push(planValue!)
+            nodes[plan.templateNode] -> genericIntegerParameterHash(prepared) => planValueHash
+            planValueHashes! -> push(planValueHash)
             -1 => slot!
             false => materialize!
             false => alreadyProcessed!
@@ -377,22 +514,19 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
                             }
                     }
                     concrete! -> if {
-                        -1 => valueArgument!
-                        plan.callNode >= 0 -> if {
-                            nodes[plan.callNode] -> explicitGenericValueIdentity(prepared) => valueArgument!
-                        }
+                        planValue! => valueArgument
                         UInt64(plan.templateNode) * 65599 + UInt64(plan.resultType) => hash!
                         plan.actualInputs -> each actual {
                             hash! * 65599 + UInt64(actual) => hash!
                         }
                         hash! * 65599 => hash!
-                        valueArgument! >= 0 -> if { hash! + UInt64(valueArgument!) + 1 => hash! }
+                        valueArgument >= 0 -> if { hash! + UInt64(valueArgument) + 1 => hash! }
                         heads! -> putIfAbsent(hash!, -1) => newBucket
                         heads![hash!] => candidate!
                         candidate! >= 0 and slot! < 0 -> while {
                             templates![candidate!] == plan.templateNode
                                 and results![candidate!] == plan.resultType
-                                and valueArguments![candidate!] == valueArgument!
+                                and valueArguments![candidate!] == valueArgument
                                 and lengths![candidate!] == (plan.actualInputs -> len) => equal!
                             0 => argumentIndex!
                             equal! and argumentIndex! < (plan.actualInputs -> len)
@@ -409,7 +543,7 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
                             next! -> push(heads![hash!])
                             templates! -> push(plan.templateNode)
                             results! -> push(plan.resultType)
-                            valueArguments! -> push(valueArgument!)
+                            valueArguments! -> push(valueArgument)
                             starts! -> push(arguments! -> len)
                             lengths! -> push(plan.actualInputs -> len)
                             plan.actualInputs -> each actual { arguments! -> push(actual) }
@@ -427,22 +561,28 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
         nodes -> materializeGenericProductFields(resolved.types, resolved.fields, plans!, selected!)
         typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => payloadEdges
         prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds
-        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans!, selected!) => batch
+        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans!, selected!, planValueArguments!, planValueHashes!) => batch!
         0 => instanceIndex!
-        instanceIndex! < (batch -> len) -> while {
-            batch[instanceIndex!] => instance
+        instanceIndex! < (batch! -> len) -> while {
+            batch![instanceIndex!] => instance!
             planSlots![instanceIndex!] => slot
-            slot >= 0 and instance.status == 0 -> if {
-                instance.functionNode => functions![slot]
-                instance.nodeCount => counts![slot]
+            slot >= 0 and instance!.status == 0 -> if {
+                nodes -> sealGenericIntegerConstants(prepared, resolved.types, instance!.functionNode, instance!.nodeCount, planValueArguments![instanceIndex!])
+                    -> if {
+                        instance!.functionNode => functions![slot]
+                        instance!.nodeCount => counts![slot]
+                    } else {
+                        2 => instance!.status
+                        instance! => batch![instanceIndex!]
+                    }
             }
             instanceIndex! + 1 => instanceIndex!
         }
         0 => bindingIndex!
-        bindingIndex! < (batch -> len) -> while {
+        bindingIndex! < (batch! -> len) -> while {
             planSlots![bindingIndex!] => slot
             slot >= 0 -> if {
-                batch[bindingIndex!] => instance!
+                batch![bindingIndex!] => instance!
                 functions![slot] >= 0 -> if {
                     functions![slot] => instance!.functionNode
                     counts![slot] => instance!.nodeCount
@@ -476,20 +616,26 @@ public materializeGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeIds
     [typeIds.PayloadEdge; ~] => payloadEdges
     [Bool; ~] => resourceSeeds
     [Bool; ~] => selected!
+    [Int; ~] => valueArguments!
+    [UInt64; ~] => valueParameterHashes!
     0 => index!
     index! < (plans -> len) -> while {
         selected! -> push(true)
+        valueArguments! -> push(-1)
+        valueParameterHashes! -> push(0)
         index! + 1 => index!
     }
-    nodes -> materializeSelectedGenericBodies(types, fields, payloadEdges, resourceSeeds, plans, selected!)
+    nodes -> materializeSelectedGenericBodies(types, fields, payloadEdges, resourceSeeds, plans, selected!, valueArguments!, valueParameterHashes!)
 }
 
-materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], resourceSeeds: ref [Bool; ~], plans: ref [GenericCallPlan; ~], selected: ref [Bool; ~] -> [GenericFunctionInstance; ~] {
+materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], resourceSeeds: ref [Bool; ~], plans: ref [GenericCallPlan; ~], selected: ref [Bool; ~], valueArguments: ref [Int; ~], valueParameterHashes: ref [UInt64; ~] -> [GenericFunctionInstance; ~] {
     nodes -> len => originalCount
     [GenericFunctionInstance; ~] => instances!
     0 => selectionIndex!
     plans -> each plan {
         plan.status => status!
+        valueArguments[selectionIndex!] => valueArgument
+        valueParameterHashes[selectionIndex!] => valueParameterHash
         not selected[selectionIndex!] -> if { 3 => status! }
         selectionIndex! + 1 => selectionIndex!
         -1 => instanceStart!
@@ -521,7 +667,7 @@ materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeId
                 node!.typeId >= 0 and node!.typeId < (types -> len)
                     -> if {
                         types[node!.typeId].containsParameter -> if {
-                            types -> typeIds.specializeManyInto(plan.inputTemplates, plan.actualInputs, node!.typeId) => specialized
+                            types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, node!.typeId, valueParameterHash, valueArgument) => specialized
                             specialized.status == 0 and specialized.root >= 0
                                 -> if {
                                     types[specialized.root] => canonical

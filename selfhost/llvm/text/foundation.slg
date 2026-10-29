@@ -1467,7 +1467,8 @@ interpolationBindingIndex node: interpolation.InterpolationNode, sourceModule: I
         context.nodes[bindingRange.astStart + context.ir[lexicalUseIndex].astNode].start => interpolationStart
         bindingSearch! < bindingEnd! -> while {
             context.ir[bindingSearch!] => bindingCandidate
-            (bindingCandidate.kind == 17 or bindingCandidate.kind == 29)
+            (bindingCandidate.kind == 17 or bindingCandidate.kind == 29
+                or (bindingCandidate -> typedIr.isSpecializedIntegerConstant))
                 and bindingCandidate.sourceModule == sourceModule
                 and bindingCandidate.symbol == node.symbol
                 and bindingCandidate.astNode >= 0 -> if {
@@ -1892,6 +1893,11 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
         -> if { return }
     node.kind == 1 -> if {
         node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+        bindingIndex >= 0 and (context.ir[bindingIndex] -> typedIr.isSpecializedIntegerConstant)
+            -> if {
+                bindingIndex -> writeValue(ownerIndex, context, state)
+                return
+            }
         (bindingIndex -> asyncFrameBindingRoot(ownerIndex, context, state)) >= 0
             -> if {
                 "%v$(labelIndex)_expression$(nodeIndex)_mutable" -> print
@@ -5300,92 +5306,8 @@ invalidInterpolationFlowTargetNode context: ref emitterContext.EmitContext -> In
 # Symbolic repeat cardinality comes from the owning value-generic ABI slot.
 # Keep one source body while producing the same backing, fill and logical
 # length as the managed compiler's concrete value specialization.
-emitValueGenericArrayRepeat nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
-    context.ir[nodeIndex] => node
-    node.kind != 14 or node.sourceModule < 0 -> if { false -> return }
-    context.ranges[node.sourceModule] => range
-    context.nodes[range.astStart + node.astNode] => literal
-    context.sources[node.sourceModule] -> typeIds.arrayStorageSyntaxFromTokens(context.tokens, range.tokenStart, literal) => storage
-    not storage.isRepeat or storage.length >= 0 -> if { false -> return }
-    -1 => countToken!
-    false => afterSemicolon!
-    0 => depth!
-    literal.firstToken => tokenIndex!
-    tokenIndex! < literal.firstToken + literal.tokenCount
-        -> while {
-            context.tokens[range.tokenStart + tokenIndex!] => token
-            token.kind == grammar.tokenIdLeftBracket() or token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdLeftParen()
-                -> if { depth! + 1 => depth! }
-            token.kind == grammar.tokenIdRightBracket() or token.kind == grammar.tokenIdRightBrace() or token.kind == grammar.tokenIdRightParen()
-                -> if { depth! - 1 => depth! }
-            depth! == 1 -> if {
-                token.kind == grammar.tokenIdSemicolon() -> if { true => afterSemicolon! }
-                afterSemicolon! and token.kind == grammar.tokenIdIdentifier()
-                    -> if { tokenIndex! => countToken! }
-            }
-            tokenIndex! + 1 => tokenIndex!
-        }
-    -1 => countParameter!
-    countToken! >= 0 and ownerIndex >= 0 -> if {
-        context.tokens[range.tokenStart + countToken!] => countName
-        context.sources[node.sourceModule] -> slice(countName.span.start, countName.span.length) => spelling
-        context.ir[ownerIndex] => owner
-        owner.operand1 => parameterIndex!
-        0 => ordinal!
-        parameterIndex! >= 0 -> while {
-            context.ir[parameterIndex!] => parameter
-            parameter.kind == 10 and parameter.sourceModule == node.sourceModule and parameter.symbol >= 0
-                -> if {
-                    context.symbols[range.symbolStart + parameter.symbol] => symbol
-                    symbol.kind == 32 -> if {
-                        context.tokens[range.tokenStart + symbol.nameToken] => name
-                        (context.sources[node.sourceModule] -> slice(name.span.start, name.span.length)) == spelling
-                            -> if { parameterIndex! => countParameter! }
-                    }
-                }
-            ordinal! == 0 -> if { owner.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
-            ordinal! + 1 => ordinal!
-        }
-    }
-    countParameter! < 0 or node.operand0 < 0 -> if {
-        "; sollang compiler error: symbolic array repeat has no owning value parameter at ir $nodeIndex" -> println
-        process.exit(1)
-    }
-    "  %v$(nodeIndex)_repeat_length = sext i32 " -> print
-    context -> writeParameterReference(ownerIndex, context.ir[countParameter!].symbol) => countWritten
-    " to i64" -> println
-    "  %v$(nodeIndex)_repeat_nonempty = icmp sgt i64 %v$(nodeIndex)_repeat_length, 0" -> println
-    "  %v$(nodeIndex)_repeat_capacity = select i1 %v$(nodeIndex)_repeat_nonempty, i64 %v$(nodeIndex)_repeat_length, i64 1" -> println
-    "  %v$(nodeIndex)_repeat_bytes = mul i64 %v$(nodeIndex)_repeat_capacity, $(node -> arrayElementSize(context, state))" -> println
-    "  %heap_v$(nodeIndex) = call ptr @sollang_alloc(i64 %v$(nodeIndex)_repeat_bytes)" -> println
-    "  %v$(nodeIndex)_data = getelementptr i8, ptr %heap_v$(nodeIndex), i64 0" -> println
-    ArrayStorageIdentity { resultDomain: 0, resultIndex: nodeIndex, labelIndex: -1 } -> emitArrayAllocationGuard(ownerIndex, context, state)
-    "  %v$(nodeIndex)_repeat_slot = alloca i64, align 8" -> println
-    "  store i64 0, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
-    "  br label %repeat$(nodeIndex)_header" -> println
-    "repeat$(nodeIndex)_header:" -> println
-    "  %v$(nodeIndex)_repeat_index = load i64, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
-    "  %v$(nodeIndex)_repeat_done = icmp eq i64 %v$(nodeIndex)_repeat_index, %v$(nodeIndex)_repeat_length" -> println
-    "  br i1 %v$(nodeIndex)_repeat_done, label %repeat$(nodeIndex)_end, label %repeat$(nodeIndex)_body" -> println
-    "repeat$(nodeIndex)_body:" -> println
-    "  %v$(nodeIndex)_repeat_ptr = getelementptr " -> print
-    node -> writeArrayElementType(context, state)
-    ", ptr %v$(nodeIndex)_data, i64 %v$(nodeIndex)_repeat_index" -> println
-    "  store " -> print
-    node -> writeArrayElementType(context, state)
-    " " -> print
-    node.operand0 -> writeValue(ownerIndex, context, state)
-    ", ptr %v$(nodeIndex)_repeat_ptr, align $(node -> arrayElementAlign(context, state))" -> println
-    "  %v$(nodeIndex)_repeat_next = add i64 %v$(nodeIndex)_repeat_index, 1" -> println
-    "  store i64 %v$(nodeIndex)_repeat_next, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
-    "  br label %repeat$(nodeIndex)_header" -> println
-    "repeat$(nodeIndex)_end:" -> println
-    "  %v$(nodeIndex)_0 = insertvalue %sollang.int_slice poison, ptr %v$(nodeIndex)_data, 0" -> println
-    "  %v$(nodeIndex) = insertvalue %sollang.int_slice %v$(nodeIndex)_0, i64 %v$(nodeIndex)_repeat_length, 1" -> println
-    true
-}
-
-# A symbolic count has no constant backing size, even if its seed is literal.
+# CSharp syntax-only placement does not promote a symbolic source count,
+# even after body specialization has supplied its concrete runtime value.
 arrayRepeatHasValueCount node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
     node.kind != 14 or node.sourceModule < 0 or node.sourceModule >= (context.ranges -> len)
         -> if { false -> return }

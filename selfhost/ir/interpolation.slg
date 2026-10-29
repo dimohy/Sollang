@@ -287,9 +287,17 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                             # tree in common semantic/IR indexes. Keeping only their
                             # leaves loses control ownership and evaluates siblings.
                             false => retainFlowValues!
+                            0 => flowValueAstIndex!
                             fragmentAst -> each candidate {
                                 candidate.kind == 43 or candidate.kind == 58
                                     -> if { true => retainFlowValues! }
+                                # Numeric generic calls keep the same parsed owner
+                                # and specialization path as ordinary expressions.
+                                candidate.kind == 10 or candidate.kind == 11 or candidate.kind == 48
+                                    -> if {
+                                        flowValueAstIndex! -> ast.explicitNumericGenericArgumentToken(0, Int(fragmentAst -> len), 0, fragmentAst, fragmentTokens) => valueToken
+                                        valueToken >= 0 -> if { true => retainFlowValues! }
+                                    }
                                 candidate.kind == 16 and candidate.parent >= 0
                                     and fragmentAst[candidate.parent].kind == 10
                                     and candidate.payloadToken >= 0
@@ -298,6 +306,7 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                         (fragment -> slice(targetToken.span.start, targetToken.span.length)) == "await"
                                             -> if { true => retainFlowValues! }
                                     }
+                                flowValueAstIndex! + 1 => flowValueAstIndex!
                             }
                             # Preserve real array subtrees alongside type syntax. Their
                             # expression identities are consumed by the canonical literal typer.

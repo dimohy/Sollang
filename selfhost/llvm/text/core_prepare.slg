@@ -1691,6 +1691,8 @@ emitBodyScheduleDiagnostics state: ref CoreEmitterState -> Unit uses Console {
 
 # Keep prepared-emitter failures ahead of target headers and LLVM output.
 preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context -> unboundArrayRepeatDiagnosticCount(state) => repeatCount
+    repeatCount > 0 -> if { repeatCount -> return }
     context -> placementPreparationDiagnosticCount => placementCount
     placementCount > 0 -> if { placementCount -> return }
     context -> asyncArenaFrameDiagnosticCount(state) => arenaCount
@@ -1703,6 +1705,52 @@ preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: r
         scheduleCount -> return
     }
     context -> consumedEnumSubjectReadDiagnostics(state)
+}
+
+# A source error must be reported before LLVM text and parallel callbacks.
+# Those callbacks own output sinks; terminating inside one is not a diagnostic.
+unboundArrayRepeatDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    0 => index!
+    index! < (context.ir -> len) -> while {
+        context.ir[index!] => node
+        node.kind == 14 and node.operand0 >= 0 and node.sourceModule >= 0
+            and not (context -> isUnspecializedTemplateBody(index!))
+            -> if {
+                context -> irFunctionOwner(index!) => owner
+                false => emittedBody!
+                owner >= 0 -> if {
+                    context.ir[owner] => function
+                    function.kind == 11 -> if { true => emittedBody! }
+                    function.kind == 0 and (owner -> nativeFunctionReachable(state))
+                        and not (function -> isIntrinsicDeclaration)
+                        and not (function -> isComFunction(context, state))
+                        and not (owner -> isStreamFunctionIr(context, state))
+                        -> if { true => emittedBody! }
+                }
+                emittedBody! -> if {
+                    false => concreteCount!
+                    node.typeId >= 0 and node.typeId < (context.types -> len)
+                        and context.types[node.typeId].kind == 4 and context.types[node.typeId].length >= 0
+                        -> if { true => concreteCount! }
+                    not concreteCount! -> if {
+                        context.ranges[node.sourceModule] => range
+                        context.nodes[range.astStart + node.astNode] => literal
+                        context.sources[node.sourceModule] -> typeIds.arrayStorageSyntaxFromTokens(context.tokens, range.tokenStart, literal) => storage
+                        storage.isRepeat and storage.length < 0 -> if {
+                            context.tokens -> typeIds.symbolicArrayRepeatCountToken(range.tokenStart, literal) => countToken
+                            countToken >= 0 -> if {
+                                context.tokens[range.tokenStart + countToken] => countName
+                                context.sources[node.sourceModule] -> slice(countName.span.start, countName.span.length) => name
+                                "sollang: array repeat count '$name' was not specialized" -> println
+                                1 -> return
+                            }
+                        }
+                    }
+                }
+            }
+        index! + 1 => index!
+    }
+    0
 }
 
 # Checked source diagnostics have already won before this prepared-emitter

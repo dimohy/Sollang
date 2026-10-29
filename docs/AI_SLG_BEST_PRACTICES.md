@@ -910,6 +910,9 @@ identity: `3` and `0_3` denote the same value.
 Keep runtime comparisons in call arguments and flow inputs outside that identity.
 Treat a value parameter constrained by `Int` as an `Int` expression in every
 branch result; its value role is distinct from a generic type parameter.
+Specialize that value as a compile-time constant in the body and fixed extents.
+Keep it out of concrete runtime signatures and call arguments. Interpolation
+names and numeric generic calls use the same bindings and instance identity.
 Digit separators are valid in these numbers: `4_096` means `4096`. Empty-array
 capacity hints and numeric repeat counts allow zero and must fit a nonnegative
 `Int`. A hint is checked before `~`; a repeat count is checked after `]`, so a

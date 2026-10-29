@@ -1389,14 +1389,14 @@ The call target owns its generic clause; comparisons in ordinary arguments
 or preceding flow inputs do not supply value-generic arguments.
 A value parameter constrained by `where N: Int` has type `Int` in body
 expressions, including conditional results, before IR specialization.
-Compile-time value generics used as expressions lower to hidden trailing `Int`
-parameters, and numeric `<...>` call arguments feed those parameters. They are
-function-scoped values in interpolation-based loop and control expressions as
-well as direct expressions. If no integer value generic is used at runtime,
-the self-hosted ABI omits the whole hidden value-input group. A parameter used
-only as a fixed-array type length does not require a runtime slot. Symbolic
-array-repeat counts and interpolation names are runtime uses; when any value
-input is used, the complete group retains its declared order.
+An explicit integer value argument belongs to the concrete function's
+compile-time binding environment. Specialization substitutes that constant
+for resolved body names and symbolic fixed-array extents, including array
+repeat counts and names inside interpolation or control expressions.
+Value parameters do not occupy runtime signature slots, and callers do not
+append their numeric generic arguments to the runtime argument list.
+Calls inside interpolation use the same target-owned value identity and
+body specialization as ordinary calls.
 The mutable-container ABI carrier is declared from
 actual mutable-parameter use independently of dynamic-array use, because fixed
 arrays have no capacity field and therefore pass their canonical two-field

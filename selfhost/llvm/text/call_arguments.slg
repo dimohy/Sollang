@@ -1073,73 +1073,6 @@ branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, st
         }
     flowIndex!
 }
-emitCompileTimeValueArguments callIndex: Int, hasRuntimeArgument: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    context.ir[callIndex] => genericCall
-    CallEnvironmentRequest { callerIndex: -1, callIndex: callIndex, targetModule: genericCall.targetModule, targetSymbol: genericCall.symbol, hasArgument: genericCall.operand0 >= 0 } -> targetFunctionIndex(context, state) => genericTargetFunction
-    genericTargetFunction >= 0 -> if {
-        context.ranges[genericCall.sourceModule] => genericCallRange
-        context.nodes[genericCallRange.astStart + genericCall.astNode] => genericCallAst
-        genericCall.astNode -> ast.explicitNumericGenericArgumentToken(genericCallRange.astStart, genericCallRange.astCount, genericCallRange.tokenStart, context.nodes, context.tokens) => genericTokenStart
-        genericTokenStart < 0 -> if { return }
-        genericTokenStart => genericTokenIndex!
-        genericCallAst.firstToken + genericCallAst.tokenCount => genericTokenEnd
-        true => inGenericArguments!
-        false => emittedGenericArgument!
-        context.ir[genericTargetFunction].operand1 => genericParameterIndex!
-        0 => genericParameterOrdinal!
-        genericParameterIndex! >= 0 -> while {
-            context.ir[genericParameterIndex!] => genericParameter
-            false => valueGenericParameter!
-            genericParameter.symbol >= 0
-                and genericParameter.sourceModule >= 0
-                and genericParameter.sourceModule < (context.ranges -> len)
-                -> if {
-                    context.ranges[genericParameter.sourceModule] => genericParameterRange
-                    genericParameter.symbol < genericParameterRange.symbolCount
-                        and context.symbols[genericParameterRange.symbolStart + genericParameter.symbol].kind == 32
-                        -> if {
-                            true => valueGenericParameter!
-                        }
-                }
-            valueGenericParameter! -> if {
-                -1 => genericNumberToken!
-                genericTokenIndex! < genericTokenEnd and genericNumberToken! < 0
-                    -> while {
-                        context.tokens[genericCallRange.tokenStart + genericTokenIndex!] => genericToken
-                        genericToken.kind == grammar.tokenIdLess() -> if { true => inGenericArguments! }
-                        inGenericArguments! and genericToken.kind == grammar.tokenIdNumber()
-                            -> if { genericTokenIndex! => genericNumberToken! }
-                        genericToken.kind == grammar.tokenIdGreater()
-                            -> if { false => inGenericArguments! }
-                        genericTokenIndex! + 1 => genericTokenIndex!
-                    }
-                genericNumberToken! >= 0 -> if {
-                    hasRuntimeArgument or emittedGenericArgument!
-                        -> if { ", " -> print }
-                    genericParameter -> writeIrType(context, state)
-                    " " -> print
-                    context.tokens[genericCallRange.tokenStart + genericNumberToken!] => genericNumber
-                    genericNumber.span.start => genericNumberByte!
-                    genericNumber.span.start + genericNumber.span.length => genericNumberEnd
-                    genericNumberByte! < genericNumberEnd -> while {
-                        context.sources[genericCall.sourceModule] -> byte(genericNumberByte!) => genericNumberCharacter
-                        genericNumberCharacter != 95 -> if {
-                            context.sources[genericCall.sourceModule] -> slice(genericNumberByte!, 1) -> print
-                        }
-                        genericNumberByte! + 1 => genericNumberByte!
-                    }
-                    true => emittedGenericArgument!
-                }
-            }
-            genericParameterOrdinal! == 0 -> if {
-                context.ir[genericTargetFunction].nextOperand => genericParameterIndex!
-            } else {
-                genericParameter.nextOperand => genericParameterIndex!
-            }
-            genericParameterOrdinal! + 1 => genericParameterOrdinal!
-        }
-    }
-}
 emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[callIndex] => call
     false => hasLeadingArgument!
@@ -1158,8 +1091,6 @@ emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
     } else {
         call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!, context, state)
     }
-    (hasLeadingArgument! or branchFlowIndex >= 0 or call.operand0 >= 0) => hasRuntimeArgument
-    callIndex -> emitCompileTimeValueArguments(hasRuntimeArgument, context, state)
     call -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
     nativeTryOutputType > 0 -> if {
         (callIndex -> callTargetParameter(0, context, state)) >= 0
