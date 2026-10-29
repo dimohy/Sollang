@@ -6065,7 +6065,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     nextChildByAst![flowChild!] => flowChild!
                 }
                 prepared -> taskFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, taskValueByAst!, taskFlowSources, firstChildByAst!, nextChildByAst!, selected!) => selected!
-                prepared -> heapPushFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, sourceAstByExpression, resolvedSymbolByAst!, firstChildByAst!, nextChildByAst!, selected!) => selected!
+                prepared -> heapFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, sourceAstByExpression, resolvedSymbolByAst!, firstChildByAst!, nextChildByAst!, selected!) => selected!
                 # Raw Arena calls share canonical receiver, argument and symbol
                 # indexes with materialize. Declared functions retain precedence.
                 # Ordinary value flows use their indexed direct Path child;
@@ -7164,9 +7164,8 @@ taskFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref e
         -> if { diagnostic } else { previous }
 }
 
-# Match C# push ordering: final target, writable source, then argument count.
-# Anonymous heap temporaries retain their earlier owned-storage diagnostic.
-heapPushFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, sourceModule: Int, flowAst: Int, flowSource: Int, typesByAst: ref [Int; ~], sourceAsts: ref [Int; ~], symbolsByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], previous: ExpressionOperandDiagnostic -> ExpressionOperandDiagnostic {
+# Match C#: first reject unbound owners, then check push finality, place and arity.
+heapFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, sourceModule: Int, flowAst: Int, flowSource: Int, typesByAst: ref [Int; ~], sourceAsts: ref [Int; ~], symbolsByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], previous: ExpressionOperandDiagnostic -> ExpressionOperandDiagnostic {
     flowSource < 0 -> if { previous -> return }
     resolved.types -> typeIds.materializedReadTypeId(typesByAst[flowSource]) => receiverTypeId
     receiverTypeId < 0 or receiverTypeId >= (resolved.types -> len)
@@ -7177,8 +7176,6 @@ heapPushFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: r
     prepared.package.ranges[sourceModule] => range
     range.astStart + flowAst => globalFlow
     prepared.callIndexByAst[globalFlow] => callIndex
-    callIndex >= 0 and prepared.calls[callIndex].functionSymbol >= 0
-        -> if { previous -> return }
     -1 => targetPath!
     -1 => targetCall!
     firstChild[globalFlow] => child!
@@ -7201,14 +7198,50 @@ heapPushFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: r
     }
     targetPath! < 0 -> if { previous -> return }
     prepared.package.nodes[targetPath!] => target
-    target.tokenCount != 1 or target.payloadToken < 0
+    target.payloadToken < 0
         -> if { previous -> return }
     prepared.package.tokens[range.tokenStart + target.payloadToken] => token
     prepared.package.sources[sourceModule] -> slice(token.span.start, token.span.length) => name
-    name != "push" -> if { previous -> return }
     prepared.package.nodes[flowSource] => receiver
     flowSource => root!
-    receiver.kind != 15 and receiver.kind != 36 -> if { previous -> return }
+    flowSource => ownerRoot!
+    prepared.package.nodes[ownerRoot!].kind == 36
+        -> while {
+            sourceAsts[ownerRoot!] => ownerSource
+            ownerSource < 0 -> if { previous -> return }
+            range.astStart + ownerSource => ownerRoot!
+        }
+    target.tokenCount == 1 and (name == "len" or name == "byte" or name == "slice") => readonlyTarget!
+    false => consumingTarget!
+    false => declaredTarget!
+    callIndex >= 0 and prepared.calls[callIndex].functionSymbol >= 0
+        -> if {
+            true => declaredTarget!
+            false => readonlyTarget!
+            prepared.calls[callIndex] => call
+            prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => parameters
+            (parameters -> len) > 0 -> if {
+                prepared.package.ranges[call.targetSourceModule] => targetRange
+                prepared.package.symbols[targetRange.symbolStart + parameters[0]] => parameter
+                parameter.flags % 4 == 0 => readonlyTarget!
+                parameter.flags % 4 == 1 => consumingTarget!
+            }
+        }
+    not readonlyTarget! and not consumingTarget!
+        and prepared.package.nodes[ownerRoot!].kind != 15
+        and prepared.package.nodes[ownerRoot!].kind != 16
+        -> if {
+            receiver.start => ownerOffset!
+            receiver.kind == 36 -> if {
+                prepared.package -> ordinaryFieldDiagnosticOffset(sourceAsts, sourceModule, flowSource - range.astStart) => ownerOffset!
+            }
+            ExpressionOperandDiagnostic { code: 73, sourceModule: sourceModule, astNode: flowAst, operandAst: targetPath! - range.astStart, operatorKind: 2, locationOffset: ownerOffset!, operandTypeSymbol: -1, operandTypeId: receiverTypeId, firstTypeId: -1 } => diagnostic
+            prepared.package -> expressionDiagnosticPrecedes(resolved.fields, diagnostic, previous)
+                -> if { diagnostic -> return }
+            previous -> return
+        }
+    declaredTarget! or target.tokenCount != 1 or name != "push"
+        -> if { previous -> return }
     receiver.kind == 36 -> if {
         sourceAsts[flowSource] => receiverSource
         receiverSource >= 0 -> if { range.astStart + receiverSource => root! } else { -1 => root! }

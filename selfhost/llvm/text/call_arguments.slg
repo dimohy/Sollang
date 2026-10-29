@@ -1744,13 +1744,24 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
     parameterIndex < 0 -> if { return }
     context.ir[parameterIndex] => parameter
+    argumentIndex -> emitBorrowedTemporaryDrop(callIndex, ordinal, whileIndex, ownerIndex, parameter.typeId, parameter.flags, droppedOwners, context, state)
+}
+
+# Readonly intrinsic receivers obey the same owner and cleanup rules as formals.
+emitReadonlyScalarTemporaryDrop callIndex: Int, whileIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[callIndex] => call
+    [Int; ~] => droppedOwners!
+    call.operand0 -> emitBorrowedTemporaryDrop(callIndex, 0, whileIndex, ownerIndex, context.ir[call.operand0].typeId, 0, droppedOwners!, context, state)
+}
+
+emitBorrowedTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileIndex: Int, ownerIndex: Int, formalTypeId: Int, formalFlags: Int, droppedOwners: mut [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[argumentIndex] => argument
     # A move fixed formal consumes inline elements, while its named caller
     # still owns promoted backing. Discharge that storage at the completed
     # call, before the moved binding's later cleanup is suppressed.
-    parameter.flags % 4 == 1
-        and parameter.typeId >= 0 and parameter.typeId < (context.types -> len)
-        and context.types[parameter.typeId].kind == 4
+    formalFlags % 4 == 1
+        and formalTypeId >= 0 and formalTypeId < (context.types -> len)
+        and context.types[formalTypeId].kind == 4
         and argument.kind == 5 and argument.operand0 >= 0
         and context.ir[argument.operand0].kind == 17
         -> if {
@@ -1798,23 +1809,24 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
         or (suspendedOwner and (value -> isResolvedAwaitNode(context))) => owningProducer
     not owningProducer or value.typeId < 0 or value.typeId >= (context.types -> len)
         -> if { return }
-    value.kind == 6 -> if {
-        (value -> targetsNativeFunction(context, state))
-            or not (producerIndex -> callHasResolvedFunctionTarget(context, state))
-            -> if { return }
-    }
+    value.kind == 6 and not (value.opcode <= -237 and value.opcode >= -240)
+        -> if {
+            (value -> targetsNativeFunction(context, state))
+                or not (producerIndex -> callHasResolvedFunctionTarget(context, state))
+                -> if { return }
+        }
     (producerIndex -> freshEmptyArrayCallParameter(context, state)) >= 0 => dropEmptyArrayBacking
     dropEmptyArrayBacking => dropFixedBacking!
     (value.kind == 6 or (value.kind == 14 and (producerIndex -> fixedArrayLiteralNeedsHeap(context, state))))
         and context.types[value.typeId].kind == 4
-        and parameter.typeId >= 0 and parameter.typeId < (context.types -> len)
+        and formalTypeId >= 0 and formalTypeId < (context.types -> len)
         -> if {
-            context.types[parameter.typeId] => parameterType
-            (parameterType.kind == 2 and parameter.flags % 4 == 0)
-                or (parameterType.kind == 4 and parameter.flags % 4 <= 1)
+            context.types[formalTypeId] => parameterType
+            (parameterType.kind == 2 and formalFlags % 4 == 0)
+                or (parameterType.kind == 4 and formalFlags % 4 <= 1)
                 -> if { true => dropFixedBacking! }
         }
-    parameter.flags % 4 == 0 and context.typeTraits[value.typeId] % 2 == 1
+    formalFlags % 4 == 0 and context.typeTraits[value.typeId] % 2 == 1
         and context.types[value.typeId].kind != 4 => dropBorrowedOwner
     not dropFixedBacking! and not dropBorrowedOwner
         -> if { return }
@@ -1837,7 +1849,7 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
                 "%v$(valueIndex)" -> print
             }
         ", 0" -> println
-        not dropEmptyArrayBacking and context.typeTraits[value.typeId] % 2 == 1 and parameter.flags % 2 == 0
+        not dropEmptyArrayBacking and context.typeTraits[value.typeId] % 2 == 1 and formalFlags % 2 == 0
             -> if {
                 "  $(temporaryName!)_value = load " -> print
                 value.typeId -> writeSemanticTypeId(context, state)
