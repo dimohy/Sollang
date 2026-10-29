@@ -1,0 +1,30 @@
+diff --git a/selfhost/cli_format.slg b/selfhost/cli_format.slg
+index ca513dfb2..ede5cabae 100644
+--- a/selfhost/cli_format.slg
++++ b/selfhost/cli_format.slg
+@@ -201,14 +201,14 @@ multilineRawOpening source: file.SourceText, line: LineSpan -> Bool {
+     opening!
+ }
+ 
+-appendFormattedLine bytes: mut [UInt8; ~], source: file.SourceText, line: LineSpan, indentation: Int, arrow: Int -> Bool {
++appendFormattedLine bytes: mut [UInt8; ~], source: file.SourceText, line: LineSpan, arrowIndentation: Int, arrow: Int -> Bool {
+     arrow >= 0 -> if {
+         UIntSize(arrow) => conditionEnd!
+         conditionEnd! > 0 and ((source -> byte(line.start + conditionEnd! - 1)) -> isHorizontalWhitespace)
+             -> while { conditionEnd! - 1 => conditionEnd! }
+         bytes -> appendSource(source, line.start, conditionEnd!)
+         bytes -> push(10)
+-        bytes -> appendSpaces(indentation + 4)
++        bytes -> appendSpaces(arrowIndentation)
+         bytes -> appendSource(source, line.start + UIntSize(arrow), line.length - UIntSize(arrow))
+     } else {
+         bytes -> appendSource(source, line.start, line.length)
+@@ -450,7 +450,7 @@ public format source: file.SourceText -> FormatResult {
+                     and controlArrows[controlIndex!] >= trimmed.start
+                     and controlArrows[controlIndex!] < trimmed.start + trimmed.length
+                     -> if { Int(controlArrows[controlIndex!] - trimmed.start) => arrow! }
+-                output! -> appendFormattedLine(normalizedSource, trimmed, lineDepth! * 4, arrow!) => inlineControlContinuation
++                output! -> appendFormattedLine(normalizedSource, trimmed, (baseDepth! + continuationCount! + 1) * 4, arrow!) => inlineControlContinuation
+                 output! -> push(10)
+                 depth! + scan.opens - scan.closes => depth!
+                 depth! < 0 -> if { 0 => depth! }

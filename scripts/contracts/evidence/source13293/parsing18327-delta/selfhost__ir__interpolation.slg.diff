@@ -1,0 +1,94 @@
+diff --git a/selfhost/ir/interpolation.slg b/selfhost/ir/interpolation.slg
+index daa93aa7a..ab517d41a 100644
+--- a/selfhost/ir/interpolation.slg
++++ b/selfhost/ir/interpolation.slg
+@@ -17,7 +17,7 @@ import syntax.generated.slg as grammar
+ # 12 contextual struct literal, 13 struct field name, 14 nominal struct literal,
+ # 15 generic enum constructor with a canonical source-local type AST,
+ # 16 array literal retaining its actual source-local expression AST,
+-# 17 suspending expression evaluated through its canonical Typed IR identity.
++# 17 scoped or suspending expression evaluated through its canonical Typed IR identity.
+ # Builtin result ids match the nominal
+ # table. Member nodes retain their absolute source span and point at the
+ # lexical base through operand0 so code generation can project the field.
+@@ -283,11 +283,21 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
+                                 }
+                                 qualifiedPathIndex! + 1 => qualifiedPathIndex!
+                             }
+-                            # Suspending fragments need their complete source tree in
+-                            # the common semantic and coroutine indexes. Keeping only
+-                            # the target token loses its flow receiver and async owner.
++                            # Nested scopes and suspension need the complete source
++                            # tree in common semantic/IR indexes. Keeping only their
++                            # leaves loses control ownership and evaluates siblings.
+                             false => retainFlowValues!
++                            0 => flowValueAstIndex!
+                             fragmentAst -> each candidate {
++                                candidate.kind == 43 or candidate.kind == 58
++                                    -> if { true => retainFlowValues! }
++                                # Numeric generic calls keep the same parsed owner
++                                # and specialization path as ordinary expressions.
++                                candidate.kind == 10 or candidate.kind == 11 or candidate.kind == 48
++                                    -> if {
++                                        flowValueAstIndex! -> ast.explicitNumericGenericArgumentToken(0, Int(fragmentAst -> len), 0, fragmentAst, fragmentTokens) => valueToken
++                                        valueToken >= 0 -> if { true => retainFlowValues! }
++                                    }
+                                 candidate.kind == 16 and candidate.parent >= 0
+                                     and fragmentAst[candidate.parent].kind == 10
+                                     and candidate.payloadToken >= 0
+@@ -296,6 +306,7 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
+                                         (fragment -> slice(targetToken.span.start, targetToken.span.length)) == "await"
+                                             -> if { true => retainFlowValues! }
+                                     }
++                                flowValueAstIndex! + 1 => flowValueAstIndex!
+                             }
+                             # Preserve real array subtrees alongside type syntax. Their
+                             # expression identities are consumed by the canonical literal typer.
+@@ -599,7 +610,7 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
+                                             suffixToken! + 1 => suffixToken!
+                                         }
+                                 }
+-                                # A suspending fragment has one bridge to ordinary IR.
++                                # A scoped or suspending fragment has one bridge to ordinary IR.
+                                 # Its descendants are already owned by the retained AST.
+                                 retainFlowValues! -> if {
+                                     fragmentNode.parent < 0 -> if { 17 => loweredKind! } else { -1 => loweredKind! }
+@@ -797,6 +808,29 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
+                                                                             mutableDeclarationScope! == mutableDeclaration.parent
+                                                                                 -> if { true => mutableDeclarationVisible! }
+                                                                         }
++                                                                    # Symbol parents omit branch blocks. A prior mutable
++                                                                    # declaration must also own this binding's AST scope;
++                                                                    # a sibling branch cannot supply its storage identity.
++                                                                    request.nodes[mutableDeclaration.astNode].parent => mutableDeclarationAstScope!
++                                                                    false => mutableDeclarationScopeFound!
++                                                                    mutableDeclarationAstScope! >= 0 and not mutableDeclarationScopeFound!
++                                                                        -> while {
++                                                                            request.nodes[mutableDeclarationAstScope!] => mutableDeclarationScopeNode
++                                                                            mutableDeclarationScopeNode.kind == 7 or mutableDeclarationScopeNode.kind == 8
++                                                                                or mutableDeclarationScopeNode.kind == 31 or mutableDeclarationScopeNode.kind == 43
++                                                                                or mutableDeclarationScopeNode.kind == 48 or mutableDeclarationScopeNode.kind == 58
++                                                                                -> if { true => mutableDeclarationScopeFound! } else {
++                                                                                    mutableDeclarationScopeNode.parent => mutableDeclarationAstScope!
++                                                                                }
++                                                                        }
++                                                                    false => mutableDeclarationAstVisible!
++                                                                    mutableReassignment.astNode => mutableDeclarationUseAncestor!
++                                                                    mutableDeclarationUseAncestor! >= 0 -> while {
++                                                                        mutableDeclarationUseAncestor! == mutableDeclarationAstScope!
++                                                                            -> if { true => mutableDeclarationAstVisible! }
++                                                                        request.nodes[mutableDeclarationUseAncestor!].parent => mutableDeclarationUseAncestor!
++                                                                    }
++                                                                    not mutableDeclarationAstVisible! -> if { false => mutableDeclarationVisible! }
+                                                                     request.nodes[mutableDeclaration.astNode].start => mutableDeclarationCandidateStart
+                                                                     request.nodes[mutableReassignment.astNode].start => mutableReassignmentStart
+                                                                     mutableDeclarationNameEqual!
+@@ -1542,7 +1576,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
+ public lower source: Text -> [InterpolationNode; ~] {
+     source -> lexer.lex => sourceTokens
+     source -> ast.lower => sourceAst
+-    sourceAst -> symbols.collectPrepared => table
++    sourceAst -> symbols.collectPreparedWithTokens(sourceTokens) => table
+     PreparedInterpolationRequest {
+         source: source
+         nodes: sourceAst
