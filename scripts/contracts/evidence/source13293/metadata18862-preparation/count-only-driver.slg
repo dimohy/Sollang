@@ -1,0 +1,27 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "phase=source-preparation" -> println
+    paths! -> semanticContext.prepareFiles => prepared!
+    144 => prepared!.standardLibrarySourceCount
+    prepared! -> semanticContext.freeze => prepared
+    "phase=typed-query-metadata" -> println
+    prepared.package -> calls.profileMetadata(prepared.semantic, prepared.modules, prepared.resolvedImports) -> when {
+        Err(error) {
+            "metadata profile clock failure" -> println
+            process.exit(1)
+        }
+        Ok(value) {
+            "sources=$(value.sourceCount) references=$(value.referenceHeads) declarationSymbols=$(value.declarationSymbols) methods=$(value.methods) intrinsics=$(value.intrinsicNames) reference=$(value.referenceMilliseconds) declarations=$(value.declarationMilliseconds) intrinsicNames=$(value.intrinsicMilliseconds)" -> println
+        }
+    }
+}

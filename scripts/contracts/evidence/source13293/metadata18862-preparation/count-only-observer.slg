@@ -1,0 +1,43 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import std.time as time
+
+public struct MetadataProfile {
+    public sourceCount: Int
+    public referenceHeads: Int
+    public declarationSymbols: Int
+    public methods: Int
+    public intrinsicNames: Int
+    public referenceMilliseconds: Long
+    public declarationMilliseconds: Long
+    public intrinsicMilliseconds: Long
+}
+
+# These inputs are immutable during call refinement. No type core or call query.
+public profileMetadata package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> Result<MetadataProfile, time.Error> uses Clock {
+    time.monotonicClock() => clock
+    clock -> now => started
+    package -> indexTypedMethodReferences(semantic.references) => referenceIndex
+    clock -> now => referencesCompleted
+    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => declarations
+    clock -> now => declarationsCompleted
+    package -> declaredIntrinsicCallableNames => intrinsicNames
+    clock -> now => completed
+    referencesCompleted -> durationSince(started)? => referenceDuration
+    declarationsCompleted -> durationSince(referencesCompleted)? => declarationDuration
+    completed -> durationSince(declarationsCompleted)? => intrinsicDuration
+    MetadataProfile {
+        sourceCount: Int(package.sources -> len)
+        referenceHeads: Int(referenceIndex.heads -> len)
+        declarationSymbols: Int(declarations.ownerTypes -> len)
+        methods: Int(declarations.methodSymbols -> len)
+        intrinsicNames: Int(intrinsicNames -> len)
+        referenceMilliseconds: referenceDuration -> asMilliseconds
+        declarationMilliseconds: declarationDuration -> asMilliseconds
+        intrinsicMilliseconds: intrinsicDuration -> asMilliseconds
+    } -> Result<MetadataProfile, time.Error>.Ok
+}

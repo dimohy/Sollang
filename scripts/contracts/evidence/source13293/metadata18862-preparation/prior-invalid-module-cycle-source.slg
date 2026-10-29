@@ -1,0 +1,65 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.context as semanticContext
+import std.time as time
+import sys.process as process
+
+struct MetadataProfile {
+    sourceCount: Int
+    referenceHeads: Int
+    declarationSymbols: Int
+    methods: Int
+    intrinsicNames: Int
+    referenceMilliseconds: Long
+    declarationMilliseconds: Long
+    intrinsicMilliseconds: Long
+}
+
+# These inputs are immutable during call refinement. No type core or call query.
+profileMetadata prepared: ref semanticContext.SemanticSnapshot -> Result<MetadataProfile, time.Error> uses Clock {
+    time.monotonicClock() => clock
+    clock -> now => started
+    prepared.package -> indexTypedMethodReferences(prepared.semantic.references) => referenceIndex
+    clock -> now => referencesCompleted
+    prepared.package -> prepareTypedMethodDeclarationFacts(prepared.semantic.references, prepared.modules, prepared.resolvedImports) => declarations
+    clock -> now => declarationsCompleted
+    prepared.package -> declaredIntrinsicCallableNames => intrinsicNames
+    clock -> now => completed
+    referencesCompleted -> durationSince(started)? => referenceDuration
+    declarationsCompleted -> durationSince(referencesCompleted)? => declarationDuration
+    completed -> durationSince(declarationsCompleted)? => intrinsicDuration
+    MetadataProfile {
+        sourceCount: Int(prepared.package.sources -> len)
+        referenceHeads: Int(referenceIndex.heads -> len)
+        declarationSymbols: Int(declarations.ownerTypes -> len)
+        methods: Int(declarations.methodSymbols -> len)
+        intrinsicNames: Int(intrinsicNames -> len)
+        referenceMilliseconds: referenceDuration -> asMilliseconds
+        declarationMilliseconds: declarationDuration -> asMilliseconds
+        intrinsicMilliseconds: intrinsicDuration -> asMilliseconds
+    } -> Result<MetadataProfile, time.Error>.Ok
+}
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "phase=source-preparation" -> println
+    paths! -> semanticContext.prepareFiles => prepared!
+    144 => prepared!.standardLibrarySourceCount
+    prepared! -> semanticContext.freeze => prepared
+    "phase=typed-query-metadata" -> println
+    prepared -> profileMetadata -> when {
+        Err(error) {
+            "metadata profile clock failure" -> println
+            process.exit(1)
+        }
+        Ok(value) {
+            "sources=$(value.sourceCount) references=$(value.referenceHeads) declarationSymbols=$(value.declarationSymbols) methods=$(value.methods) intrinsics=$(value.intrinsicNames) reference=$(value.referenceMilliseconds) declarations=$(value.declarationMilliseconds) intrinsicNames=$(value.intrinsicMilliseconds)" -> println
+        }
+    }
+}

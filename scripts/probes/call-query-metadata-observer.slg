@@ -1,0 +1,74 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import std.time as time
+
+public struct MetadataProfile {
+    public sourceCount: Int
+    public referenceHeads: Int
+    public declarationSymbols: Int
+    public methods: Int
+    public intrinsicNames: Int
+    public referenceMilliseconds: Long
+    public declarationMilliseconds: Long
+    public intrinsicMilliseconds: Long
+    public checksum: Long
+}
+
+sumMetadataInts values: ref [Int; ~] -> Long {
+    Long(values -> len) => total!
+    values -> each value { total! + Long(value) => total! }
+    total!
+}
+
+sumMetadataBools values: ref [Bool; ~] -> Long {
+    Long(values -> len) => total!
+    values -> each value { value -> if { total! + 1 => total! } }
+    total!
+}
+
+# These inputs are immutable during call refinement. No type core or call query.
+public profileMetadata package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> Result<MetadataProfile, time.Error> uses Clock {
+    time.monotonicClock() => clock
+    clock -> now => started
+    package -> indexTypedMethodReferences(semantic.references) => referenceIndex
+    clock -> now => referencesCompleted
+    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => declarations
+    clock -> now => declarationsCompleted
+    package -> declaredIntrinsicCallableNames => intrinsicNames
+    sumMetadataInts(referenceIndex.heads) => checksum!
+    checksum! + sumMetadataInts(referenceIndex.previous) => checksum!
+    checksum! + sumMetadataInts(declarations.ownerTypes) => checksum!
+    checksum! + sumMetadataBools(declarations.primaryMatches) => checksum!
+    checksum! + sumMetadataInts(declarations.traitAsts) => checksum!
+    checksum! + sumMetadataInts(declarations.methodSymbols) => checksum!
+    checksum! + sumMetadataInts(declarations.methodStarts) => checksum!
+    checksum! + sumMetadataInts(declarations.methodCounts) => checksum!
+    checksum! + sumMetadataInts(declarations.openFunctionSymbols) => checksum!
+    checksum! + sumMetadataInts(declarations.openFunctionStarts) => checksum!
+    checksum! + sumMetadataInts(declarations.openFunctionCounts) => checksum!
+    checksum! + sumMetadataBools(declarations.importReachability) => checksum!
+    intrinsicNames -> each name {
+        checksum! + Long(name.sourceModule) + Long(name.nameToken) => checksum!
+        name.sourceFunction -> if { checksum! + 1 => checksum! }
+        name.publicDeclaration -> if { checksum! + 1 => checksum! }
+    }
+    clock -> now => completed
+    referencesCompleted -> durationSince(started)? => referenceDuration
+    declarationsCompleted -> durationSince(referencesCompleted)? => declarationDuration
+    completed -> durationSince(declarationsCompleted)? => intrinsicDuration
+    MetadataProfile {
+        sourceCount: Int(package.sources -> len)
+        referenceHeads: Int(referenceIndex.heads -> len)
+        declarationSymbols: Int(declarations.ownerTypes -> len)
+        methods: Int(declarations.methodSymbols -> len)
+        intrinsicNames: Int(intrinsicNames -> len)
+        referenceMilliseconds: referenceDuration -> asMilliseconds
+        declarationMilliseconds: declarationDuration -> asMilliseconds
+        intrinsicMilliseconds: intrinsicDuration -> asMilliseconds
+        checksum: checksum!
+    } -> Result<MetadataProfile, time.Error>.Ok
+}
