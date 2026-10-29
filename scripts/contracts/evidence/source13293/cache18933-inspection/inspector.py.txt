@@ -1,0 +1,141 @@
+"""Read-only inspection of the protected original1999 cache stage; no admission."""
+import ast
+import ctypes
+import hashlib
+import json
+import pathlib
+import re
+import struct
+from ctypes import wintypes
+from datetime import datetime, timezone
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+B = ROOT / "artifacts/scratch/resume-20261006-owner-continuation22"
+E = ROOT / "scripts/contracts/evidence/source13293/cache18933-inspection"
+E.mkdir(exist_ok=True)
+stage = B / "context18923-native1/1999-selfhost-context-fixture-suite/.l0.ll.semantic"
+record = json.loads((B / "context18923-native1/result.json").read_text())
+plan = json.loads((B / "sources18877-plan.json").read_text())
+command = record["activeProcess"]["command"]
+unfreeze = {value: key for key, value in plan["frozenSubstitutions"].items()}
+paths = [pathlib.Path(unfreeze.get(p, p)) for p in plan["runtimeSources"]]
+assert [str(p) for p in paths[144:]] == [p for p in command if p.endswith(".slg")]
+sources = {str(p): p.read_bytes() for p in paths}
+assert all(hashlib.sha256(data).hexdigest().upper() == record["inputHashes"][p]
+           for p, data in sources.items())
+groups = {}
+by_hash = {}
+kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                              wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+kernel.CreateFileW.restype = wintypes.HANDLE
+kernel.GetFinalPathNameByHandleW.argtypes = (wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD)
+kernel.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+canonical_paths = {}
+for p in sources:
+    handle = kernel.CreateFileW(p, 0, 7, None, 3, 0x80, None)
+    assert handle != wintypes.HANDLE(-1).value
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        count = kernel.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
+        assert 0 < count < len(buffer)
+        canonical_paths[p] = buffer.value
+    finally:
+        assert kernel.CloseHandle(handle)
+for p, data in sources.items():
+    declaration = re.search(rb"(?m)^namespace\s+([^\r\n#]+)", data)
+    name = re.sub(rb"\s+", b"", declaration.group(1)) if declaration else b""
+    groups.setdefault(name, []).append(p)
+    by_hash.setdefault(hashlib.sha256(data).hexdigest(), []).append(p)
+module_digests = {}
+for name, members in groups.items():
+    h = hashlib.sha256()
+    for p in sorted(members, key=lambda member: canonical_paths[member]):
+        for payload in (canonical_paths[p].encode(), sources[p]):
+            h.update(struct.pack("<Q", len(payload)))
+            h.update(payload)
+    module_digests[name] = h.digest()
+tree = ast.parse((ROOT / "scripts/verify-contextual-numeric-cache.py").read_text())
+function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == "verify_native_envelope")
+ns = {"hashlib": hashlib}
+exec(compile(ast.Module(body=[function], type_ignores=[]), "existing-envelope-check", "exec"), ns)
+verify = ns["verify_native_envelope"]
+data = stage.read_bytes()
+assert len(data) % 8 == 0
+words = memoryview(data).cast("Q")
+verify(words, 6002245308512486735, 41)
+assert len(words) <= 16000000 and words[8] == 0
+compiler = pathlib.Path(command[0])
+compiler_hash = hashlib.sha256(compiler.read_bytes()).digest()
+expected_identity = (int.from_bytes(compiler_hash[:8], "little"), 0,
+                     int.from_bytes(hashlib.sha256(b"-O1").digest()[:8], "little"))
+cursor, statuses, rows, fingerprints = 9, {}, [], set()
+for ordinal in range(words[3]):
+    status, length = words[cursor:cursor + 2]
+    cursor += 2
+    assert status <= 255 and length <= len(words) - 32 - cursor
+    assert (length >= 72) if status == 0 else length == 0
+    generation = words[cursor:cursor + length]
+    cursor += length
+    statuses[str(status)] = statuses.get(str(status), 0) + 1
+    row = {"ordinal": ordinal, "status": status, "generationWords": length}
+    rows.append(row)
+    if status:
+        continue
+    verify(generation, 6002245308512486734, 72)
+    assert tuple(generation[3:6]) == expected_identity
+    fingerprints.add(bytes(list(generation[8:40])).hex())
+    at, references = 40, []
+    for _ in range(generation[7]):
+        size = generation[at]
+        assert at + 1 + size + 32 <= len(generation) - 32
+        name = bytes(list(generation[at + 1:at + 1 + size]))
+        digest = bytes(list(generation[at + 1 + size:at + 1 + size + 32]))
+        assert module_digests[name] == digest
+        references.append({"namespace": name.decode(), "sha256": digest.hex(),
+                           "matchesObservedCanonicalPaths": True})
+        at += 1 + size + 32
+    assert at + generation[6] == len(generation) - 32
+    calls = generation[at:at + generation[6]]
+    assert len(calls) >= 6 and tuple(calls[:3]) == (6002245308495514451, 2, len(calls))
+    owner = calls[6:6 + calls[3]]
+    assert len(owner) >= 7 and tuple(owner[:3]) == (6002245308478540870, 1, len(owner))
+    start = 7 + owner[3] + owner[4]
+    assert start + 2 * (owner[5] + owner[6]) == len(owner)
+    source = bytes(list(owner[7:7 + owner[3]]))
+    digest = hashlib.sha256(source).hexdigest()
+    matches = by_hash[digest]
+    assert len(matches) == 1 and source == sources[matches[0]]
+    row.update(source=matches[0], sourceSha256=digest, sourceBytes=len(source),
+               namespaceGroups=references, bindingFacts=owner[5], expressionFacts=owner[6])
+assert cursor == len(words) - 32
+assert statuses.get("0", 0) + words[7] == words[3]
+result = {
+    "schemaVersion": 1, "status": "read-only-framing-and-exact-source-identity-verified-not-admitted",
+    "observedAtUtc": datetime.now(timezone.utc).isoformat(),
+    "stage": str(stage.relative_to(ROOT)), "bytes": len(data), "words": len(words),
+    "sha256": hashlib.sha256(data).hexdigest(), "header": list(words[:9]),
+    "rowStatuses": statuses, "generationChecksumsValid": statuses["0"],
+    "exactCurrentOwnerSources": statuses["0"], "currentInputFilesVerified": len(sources),
+    "compilerSha256": compiler_hash.hex(), "compilerTargetConfiguration": list(expected_identity),
+    "sourceOrdinalOrderVerified": False,
+    "canonicalPathAuthority": "GetFinalPathNameByHandleW flags0 as selfhost/llvm/runtime.slg:1506",
+    "canonicalSourcePaths": canonical_paths,
+    "allPersistedNamespaceGroupsMatch": all(r["matchesObservedCanonicalPaths"]
+        for row in rows for r in row.get("namespaceGroups", [])),
+    "persistedDeclarationFingerprints": sorted(fingerprints),
+    "currentSemanticDeclarationFingerprintVerified": False,
+    "recipeAndCallSemanticsAdmitted": False, "restoredTypedIR": False,
+    "completeExecutionSnapshot": False, "reuseAuthorizedByThisInspection": False,
+    "nativeOriginalAccepted": False, "claimsGoalComplete": False,
+    "failedOutputsProtected": True, "rows": rows,
+    "limits": ["Read-only framing and byte identity checks are not the compiler restoration/admission procedure.",
+               "131 omitted owners and missing full IR/ownership/codegen state prohibit resuming the full compilation from this stage alone.",
+               "Cache publication requires successful emission and linking; no publication occurred.",
+               "A valid stage does not prove writeStage readback finished or locate the exact instruction at termination.",
+               "Command path spelling can differ from internal parsed Path rendering. Namespace digests require the exact internal spelling; mismatches here are not compiler admission failures."]
+}
+(E / "inspection.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+print(json.dumps({k: v for k, v in result.items() if k not in ("rows", "limits", "canonicalSourcePaths")}, indent=2))
