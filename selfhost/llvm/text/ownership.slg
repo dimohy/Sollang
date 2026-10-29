@@ -1387,25 +1387,37 @@ fixedResultPropagationBinding bindingIndex: Int, context: ref emitterContext.Emi
         and ((binding.operand0 -> fixedResultPropagationValue(context, state))
         or (binding.operand0 -> callResultPropagationBindingIndex(context, state)) == bindingIndex)
 }
+readonlyTemporaryProducer valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[valueIndex] => value
+    value.kind == 6 or value.kind == 12 or value.kind == 14 or value.kind == 16
+        or value.kind == 26 or value.kind == 30 or value.kind == 35
+        or (value.kind == 9 and value.opcode == -27)
+        -> unless { false -> return }
+    value.kind == 6 and not (value.opcode <= -237 and value.opcode >= -240)
+        -> if {
+            (value -> targetsNativeFunction(context, state))
+                or not (valueIndex -> callHasResolvedFunctionTarget(context, state))
+                -> if { false -> return }
+        }
+    true
+}
+
 anonymousProjectionOwnerIndex valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     valueIndex -> aggregateValueIndex(context, state) => projectionIndex!
     projectionIndex! >= 0 and projectionIndex! < (context.ir -> len)
         -> unless { -1 -> return }
-    context.ir[projectionIndex!].kind == 13 -> unless { -1 -> return }
+    context.ir[projectionIndex!].kind == 13 or context.ir[projectionIndex!].kind == 15
+        -> unless { -1 -> return }
     projectionIndex! >= 0 and projectionIndex! < (context.ir -> len)
-        and context.ir[projectionIndex!].kind == 13
+        and (context.ir[projectionIndex!].kind == 13 or context.ir[projectionIndex!].kind == 15)
         -> while {
             context.ir[projectionIndex!].operand0 -> aggregateValueIndex(context, state) => projectionIndex!
         }
     projectionIndex! >= 0 and projectionIndex! < (context.ir -> len)
         -> unless { -1 -> return }
     context.ir[projectionIndex!] => producer
-    producer.kind == 6 or producer.kind == 12 or producer.kind == 35
+    projectionIndex! -> readonlyTemporaryProducer(context, state)
         -> unless { -1 -> return }
-    producer.kind == 6
-        and ((producer -> targetsNativeFunction(context, state))
-        or not (projectionIndex! -> callHasResolvedFunctionTarget(context, state)))
-        -> if { -1 -> return }
     producer.typeId >= 0 and producer.typeId < (context.types -> len)
         and (producer.typeId -> semanticTypeOwns(context, state))
         -> unless { -1 -> return }

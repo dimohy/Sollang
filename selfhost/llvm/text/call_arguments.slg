@@ -1794,7 +1794,9 @@ emitBorrowedTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whil
         and argument.operand0 >= 0
         and not (context.ir[argument.operand0] -> typedIr.isBorrowedAsyncExpressionBinding)
         => suspendedOwner
-    (argument.kind == 5 and not suspendedOwner) or (argument.kind == 13 and anonymousProjectionOwner < 0) or argument.kind == 15 or argument.kind == 17
+    (argument.kind == 5 and not suspendedOwner)
+        or ((argument.kind == 13 or argument.kind == 15) and anonymousProjectionOwner < 0)
+        or argument.kind == 17
         -> if { return }
     (anonymousProjectionOwner >= 0 -> if { anonymousProjectionOwner } else {
         argumentIndex -> aggregateValueIndex(context, state)
@@ -1803,18 +1805,10 @@ emitBorrowedTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whil
         context.ir[argument.operand0].operand0
     } else { valueIndex }) => producerIndex
     context.ir[producerIndex] => value
-    value.kind == 6 or value.kind == 12 or value.kind == 14
-        or value.kind == 16 or value.kind == 26 or value.kind == 30
-        or (value.kind == 9 and value.opcode == -27)
+    (producerIndex -> readonlyTemporaryProducer(context, state))
         or (suspendedOwner and (value -> isResolvedAwaitNode(context))) => owningProducer
     not owningProducer or value.typeId < 0 or value.typeId >= (context.types -> len)
         -> if { return }
-    value.kind == 6 and not (value.opcode <= -237 and value.opcode >= -240)
-        -> if {
-            (value -> targetsNativeFunction(context, state))
-                or not (producerIndex -> callHasResolvedFunctionTarget(context, state))
-                -> if { return }
-        }
     (producerIndex -> freshEmptyArrayCallParameter(context, state)) >= 0 => dropEmptyArrayBacking
     dropEmptyArrayBacking => dropFixedBacking!
     (value.kind == 6 or (value.kind == 14 and (producerIndex -> fixedArrayLiteralNeedsHeap(context, state))))
