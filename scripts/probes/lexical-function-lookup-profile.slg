@@ -1,0 +1,27 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "phase=source-preparation" -> println
+    paths! -> semanticContext.prepareFiles => prepared
+    "sources=$(prepared.package.sources -> len)" -> println
+    0..<Int(prepared.package.sources -> len) -> each source {
+        prepared.package -> calls.profileLexicalLookups(source) -> when {
+            Err(error) {
+                "lexical profile clock failure" -> println
+                process.exit(1)
+            }
+            Ok(value) {
+                "source=$(value.sourceModule) functions=$(value.functions) lookups=$(value.lookups) ms=$(value.milliseconds) checksum=$(value.checksum) valid=$(value.valid)" -> println
+            }
+        }
+    }
+}

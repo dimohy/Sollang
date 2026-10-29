@@ -1,0 +1,52 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.symbols
+import std.time as time
+
+public struct LexicalLookupProfile {
+    public sourceModule: Int
+    public functions: Int
+    public lookups: Int
+    public milliseconds: Long
+    public checksum: Long
+    public valid: Bool
+}
+
+# A source-level lexical request must resolve each unique global declaration.
+# The requests reuse real declaration name tokens, without modifying source text.
+public profileLexicalLookups package: ref analysis.PackageAnalysis, sourceModule: Int -> Result<LexicalLookupProfile, time.Error> uses Clock {
+    package.ranges[sourceModule] => range
+    package.sources[sourceModule] -> slice(UIntSize(0), package.sources[sourceModule] -> len) => source
+    indexLexicalFunctions(package.tokens, package.symbols, range.tokenStart, range.tokenCount, range.symbolStart, range.symbolCount, range.astCount) => index
+    [Int; ~] => functions!
+    0..<range.symbolCount -> each symbol {
+        package.symbols[range.symbolStart + symbol] => declaration
+        declaration.kind == 7 and declaration.parent == -1
+            and declaration.astNode >= 0 and declaration.nameToken >= 0
+            and not (declaration -> symbols.hasQualifiedFunctionName(package.tokens, range.tokenStart, range.tokenCount))
+            -> if { functions! -> push(symbol) }
+    }
+    index.functionSymbolByAst[0] == -1 and (functions! -> len) > 0 => valid!
+    Long(functions! -> len) => checksum!
+    time.monotonicClock() => clock
+    clock -> now => started
+    0..<128 -> each repetition {
+        functions! -> each expected {
+            package.symbols[range.symbolStart + expected] => declaration
+            resolveLexicalFunction(source, package.nodes, package.tokens, package.symbols, index, range.astStart, range.tokenStart, range.symbolStart, -1, declaration.nameToken, 11) => actual
+            actual != expected -> if { false => valid! }
+            checksum! + Long(actual) => checksum!
+        }
+    }
+    clock -> now => completed
+    completed -> durationSince(started)? => duration
+    LexicalLookupProfile {
+        sourceModule: sourceModule
+        functions: Int(functions! -> len)
+        lookups: Int(functions! -> len) * 128
+        milliseconds: duration -> asMilliseconds
+        checksum: checksum!
+        valid: valid!
+    } -> Result<LexicalLookupProfile, time.Error>.Ok
+}

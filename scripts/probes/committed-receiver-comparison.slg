@@ -1,0 +1,54 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.qualified
+import std.time as time
+
+public struct ReceiverCallComparison {
+    public sourceModule: Int
+    public beforeMilliseconds: Long
+    public afterMilliseconds: Long
+    public rows: Int
+    public valid: Bool
+}
+
+public compareReceiverCalls package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, receiverTypes: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> Result<[ReceiverCallComparison; ~], time.Error> uses Clock {
+    package -> indexTypedMethodReferences(semantic.references) => referenceIndex
+    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => declarations
+    package -> declaredIntrinsicCallableNames => intrinsicNames
+    time.monotonicClock() => clock
+    [ReceiverCallComparison; ~] => observations!
+    0..<Int(package.sources -> len) -> each sourceModule {
+        clock -> now => started
+        sourceModule -> resolveSourceTypedBeforeCommittedReceiver(package, semantic, identities, imports, resolvedImports, qualifiedResults, intrinsicNames, receiverTypes, resolvedTypes, declarations, referenceIndex) => before
+        clock -> now => beforeCompleted
+        sourceModule -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, intrinsicNames, receiverTypes, resolvedTypes, declarations, referenceIndex) => after
+        clock -> now => afterCompleted
+        (before -> len) == (after -> len) => valid!
+        0 => index!
+        index! < (before -> len) and index! < (after -> len)
+            -> while {
+                before[index!] => previous
+                after[index!] => current
+                previous.sourceModule != current.sourceModule or previous.callAst != current.callAst
+                    or previous.origin != current.origin or previous.targetModule != current.targetModule
+                    or previous.targetSourceModule != current.targetSourceModule
+                    or previous.functionSymbol != current.functionSymbol or previous.status != current.status
+                    -> if { false => valid! }
+                index! + 1 => index!
+            }
+        beforeCompleted -> durationSince(started)? => beforeDuration
+        afterCompleted -> durationSince(beforeCompleted)? => afterDuration
+        observations! -> push(ReceiverCallComparison {
+            sourceModule: sourceModule
+            beforeMilliseconds: beforeDuration -> asMilliseconds
+            afterMilliseconds: afterDuration -> asMilliseconds
+            rows: Int(after -> len)
+            valid: valid!
+        })
+    }
+    observations! -> Result<[ReceiverCallComparison; ~], time.Error>.Ok
+}

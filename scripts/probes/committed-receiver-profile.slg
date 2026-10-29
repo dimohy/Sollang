@@ -1,0 +1,51 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "phase=source-preparation" -> println
+    paths! -> semanticContext.prepareFiles => prepared!
+    144 => prepared!.standardLibrarySourceCount
+    prepared! -> semanticContext.freeze => prepared
+    "phase=initial-core" -> println
+    prepared -> resolveContextCore => initialTypes
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    [Int; ~] => receiverTypeByCallAst!
+    prepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+    initialTypes.expressions -> each expression {
+        prepared.package.ranges[expression.sourceModule] => range
+        prepared.package.nodes[range.astStart + expression.astNode] => node
+        node.parent >= 0
+            and node.parent < range.astCount
+            and expression.status == 0
+            and expression.typeId >= 0
+            and expression.typeId < (initialTypes.types -> len)
+            and not initialTypes.types[expression.typeId].containsParameter
+            -> if {
+                prepared.package.nodes[range.astStart + node.parent] => call
+                call.kind == 10 and flowSources[range.astStart + node.parent] == range.astStart + expression.astNode
+                    -> if { expression.typeId => receiverTypeByCallAst![range.astStart + node.parent] }
+            }
+    }
+    "sources=$(prepared.package.sources -> len) types=$(initialTypes.types -> len) expressions=$(initialTypes.expressions -> len)" -> println
+    prepared.package -> calls.compareReceiverCalls(prepared.semantic, receiverTypeByCallAst!, initialTypes.types, prepared.modules, prepared.imports, prepared.resolvedImports, prepared.qualified) -> when {
+        Err(error) {
+            "source query profile clock failure" -> println
+            process.exit(1)
+        }
+        Ok(observations) {
+            observations -> each value {
+                "source=$(value.sourceModule) before=$(value.beforeMilliseconds) after=$(value.afterMilliseconds) rows=$(value.rows) valid=$(value.valid)" -> println
+            }
+        }
+    }
+}
