@@ -1,0 +1,23 @@
+import sys.process as process
+import sys.runtime as runtime
+
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        "child stdout" -> println
+        "child stderr" -> runtime.eprintln
+    } else {
+        process.command(arguments[0]) => command!
+        command! -> arg("--child")
+        command! -> stdin(process.Input.Null)
+        command! -> collect(process.CaptureLimits {
+            standardOutputBytes: 5
+            standardErrorBytes: 4
+        }) -> when {
+            Ok(output) {
+                "capture=$(output.status -> exitCode),$(output.standardOutput -> len),$(output.standardError -> len),$(output.standardOutputTruncated),$(output.standardErrorTruncated)" -> println
+            }
+            Err(error) { "error=$error" -> println }
+        }
+    }
+}
