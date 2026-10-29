@@ -4367,7 +4367,11 @@ checks identify the source function declaration, retaining its namespace and
 method owner; generic specialization does not add backend type numbers to this
 identity. Bounds
 checks precede UTF-8 boundary checks; the start boundary precedes the end
-boundary. Other trap diagnostics retain their existing contracts.
+boundary. A checked heap-allocation guard uses the same source function
+identity followed by `allocation_failed`. It checks the nullable allocation
+before initializing or publishing its payload; private LLVM block names and
+ordinals do not participate in this diagnostic. Other trap diagnostics retain
+their existing contracts.
 
 The self-hosting syntax substrate defines `SourceSpan { fileId, start, length }`
 with `UIntSize` byte offsets and `SyntaxToken { kind, span }`. Byte offsets are

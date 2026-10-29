@@ -1803,6 +1803,12 @@ before formatting. Task contract errors use the common semantic prefix so the
 CLI can relay and remove diagnostic-only stages without broadening its handling
 of unknown failures.
 
+Checked heap-allocation failures reuse the source declaration identity and
+the `allocation_failed` semantic diagnostic code on Windows and browser targets.
+Keep the nullable pointer check before payload initialization or publication.
+LLVM block identities remain private; do not make diagnostics depend on their
+names, ordinals, or generic specialization suffixes.
+
 Expanded numeric elements retain their selector source span and indexed computed
 value separately. Bounds checks consume the computed value. Preserve the owning
 range or `each` diagnostic position during expansion; diagnostics must not recover
