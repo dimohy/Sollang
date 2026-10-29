@@ -1,0 +1,284 @@
+diff --git a/80de26696779d2b637b6a08e8e57d437416dcb1b b/selfhost/ir/typed.slg
+index 80de26696..5dfa5b3af 100644
+--- a/80de26696779d2b637b6a08e8e57d437416dcb1b
++++ b/selfhost/ir/typed.slg
+@@ -138,11 +138,36 @@ interpolationTokenMembership prepared: ref semanticContext.SemanticSnapshot, sou
+     membership!
+ }
+ 
+-isInterpolationOwnedAst prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, localAst: Int, interpolatedTokenBySource: ref [Bool; ~] -> Bool {
++canonicalInterpolationAstMembership prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int -> [Bool; ~] {
++    prepared.package.ranges[sourceIndex] => sourceRange
++    [Bool; ~] => membership!
++    0 => astIndex!
++    astIndex! < sourceRange.astCount -> while {
++        membership! -> push(false)
++        astIndex! + 1 => astIndex!
++    }
++    prepared.interpolationRanges -> each fragmentRange {
++        fragmentRange.sourceModule == sourceIndex -> if {
++            fragmentRange.nodeStart => fragmentIndex!
++            fragmentIndex! < fragmentRange.nodeStart + fragmentRange.nodeCount
++                -> while {
++                    prepared.interpolations[fragmentIndex!] => fragment
++                    fragment.kind == 17 and fragment.valueAst >= 0 and fragment.valueAst < sourceRange.astCount
++                        -> if { true => membership![fragment.valueAst] }
++                    fragmentIndex! + 1 => fragmentIndex!
++                }
++        }
++    }
++    membership!
++}
++
++isInterpolationOwnedAst prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, localAst: Int, interpolatedTokenBySource: ref [Bool; ~], canonicalRootByAst: ref [Bool; ~] -> Bool {
++    canonicalRootByAst[localAst] -> if { false -> return }
+     prepared.package.ranges[sourceIndex] => sourceRange
+     prepared.package.nodes[sourceRange.astStart + localAst].parent => ownerAst!
+     ownerAst! >= 0 and ownerAst! < sourceRange.astCount
+         -> while {
++            canonicalRootByAst[ownerAst!] -> if { false -> return }
+             prepared.package.nodes[sourceRange.astStart + ownerAst!] => owner
+             owner.kind == 13 and owner.payloadToken >= 0 and owner.payloadToken < sourceRange.tokenCount
+                 -> if {
+@@ -322,6 +347,8 @@ isTargetlessBuiltinTypeApplication value: expressionTypes.ExpressionType, builti
+ # is a predicate route (operand0 Bool predicate), kind 42 is the else route,
+ # and kind 43 is a policy-specific stream join (operand0 product of streams).
+ # Kind 44 is a cooperative yield statement: Unit-typed, effectful and never a value read.
++# A specialized Int constant has no source payload token; opcode stores its
++# normalized value. It retains declaration/Name AST identity for diagnostics.
+ public struct TypedIrNode {
+     public kind: Int
+     public parent: Int
+@@ -343,6 +370,10 @@ public struct TypedIrNode {
+     public flags: Int
+ }
+ 
++public isSpecializedIntegerConstant node: TypedIrNode -> Bool {
++    node.kind == 3 and node.payloadToken < 0 and node.opcode >= 0
++}
++
+ # Console calls may remain ordinary calls or become materialized expressions
+ # when their source is a completed control value. Both forms are the same
+ # ordered runtime effect and must share scheduling and emission policy.
+@@ -820,6 +851,9 @@ resolvedFlowIntrinsicOpcode source: Text, prepared: ref semanticContext.Semantic
+                     -> if { -1 -> return }
+             }
+     }
++    # A selected final printer owns this call. Its producer keeps its own
++    # AST and intrinsic opcode; a broad flow scan must not replace the printer.
++    selectedConsole! -> if { -1 -> return }
+     prepared.package.nodes[globalAst] => flowNode
+     # Callback role names are bindings, not intrinsic targets. Use the
+     # same direct target Path as managed BlockFunctionCallStatement lowering.
+@@ -837,16 +871,12 @@ resolvedFlowIntrinsicOpcode source: Text, prepared: ref semanticContext.Semantic
+                         targetToken.kind == grammar.tokenIdIdentifier()
+                             -> if {
+                                 IntrinsicNameRequest { source: source, token: targetToken } -> flowTargetIntrinsicOpcode => targetOpcode
+-                                selectedConsole! and targetOpcode == -214 -> if { -1 -> return }
+                                 targetOpcode -> return
+                             }
+                     }
+             }
+         }
+     source -> flowIntrinsicOpcode(prepared.package.tokens, range.tokenStart, prepared.package.nodes[globalAst]) => flowOpcode
+-    # Console is the selected final callee; a preceding mapPath hint belongs
+-    # to its actual producer. Preserve combined materialize/Console opcodes.
+-    selectedConsole! and flowOpcode == -214 -> if { -1 -> return }
+     flowOpcode
+ }
+ 
+@@ -1214,6 +1244,7 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
+         -> while {
+             prepared.package.ranges[functionOwnerSource!] => functionOwnerRange
+             prepared -> interpolationTokenMembership(functionOwnerSource!) => interpolatedTokenBySource
++            prepared -> canonicalInterpolationAstMembership(functionOwnerSource!) => canonicalRootByAst
+             0 => functionOwnerLocalAst!
+             functionOwnerLocalAst! < functionOwnerRange.astCount
+                 -> while {
+@@ -1229,7 +1260,7 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
+                                     functionOwnerCandidate.parent => functionOwnerAncestor!
+                                 }
+                         }
+-                    prepared -> isInterpolationOwnedAst(functionOwnerSource!, functionOwnerLocalAst!, interpolatedTokenBySource)
++                    prepared -> isInterpolationOwnedAst(functionOwnerSource!, functionOwnerLocalAst!, interpolatedTokenBySource, canonicalRootByAst)
+                         -> if { -1 => functionOwnerGlobalAst! }
+                     functionOwnerRange.astStart + functionOwnerLocalAst! => functionOwnedGlobalAst
+                     functionOwnerGlobalAst! => functionOwnerByAst![functionOwnedGlobalAst]
+@@ -1361,6 +1392,7 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
+     results! -> sealNestedStandardEnumConstructors(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+     results! -> sealReturnedSubjectWhenTypes
+     results! -> sealDirectAwaitFunctionOrder => awaitRelocation
++    results! -> sealAsyncExpressionValues(prepared) => expressionRelocation
+     results!
+ }
+ 
+@@ -2035,8 +2067,6 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
+                         }
+                     functionAstIndex! >= 0 and (nodes[sourceRange.astStart + functionAstIndex!].flags / 8) % 2 == 1
+                         -> if {
+-                            -1 => functionIr!
+-                            -1 => awaitIr!
+                             awaitAstIndex! => suspendSourceAst!
+                             isAwait! -> if {
+                                 -1 => suspendSourceAst!
+@@ -2049,39 +2079,42 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
+                                     flowChild! + 1 => flowChild!
+                                 }
+                             }
+-                            0 => irIndex!
+-                            irIndex! < (ir -> len) -> while {
+-                                ir[irIndex!] => node
+-                                node.sourceModule == sourceIndex! and node.astNode == functionAstIndex! and node.kind == 0
+-                                    and ((selectedFunctions -> len) == 0 or selectedFunctions[irIndex!])
++                            # Each materialized generic function owns a distinct
++                            # continuation, even when its source AST is shared.
++                            0 => functionIr!
++                            functionIr! < (ir -> len) -> while {
++                                ir[functionIr!] => function
++                                function.sourceModule == sourceIndex! and function.astNode == functionAstIndex!
++                                    and function.kind == 0 and function.flags / 8 % 2 == 1
++                                    and ((selectedFunctions -> len) == 0 or selectedFunctions[functionIr!])
+                                     -> if {
+-                                        irIndex! => functionIr!
+-                                    }
+-                                node.sourceModule == sourceIndex! and node.astNode == suspendSourceAst!
+-                                    and ((isYield! and node.kind == 44) or (isAwait! and node.kind == 5))
+-                                    -> if {
+-                                        irIndex! => awaitIr!
++                                        -1 => awaitIr!
++                                        0 => candidateIr!
++                                        candidateIr! < (ir -> len) and awaitIr! < 0 -> while {
++                                            ir[candidateIr!] => candidate
++                                            candidate.sourceModule == sourceIndex! and candidate.astNode == suspendSourceAst!
++                                                and not (candidate -> isAsyncExpressionRead)
++                                                and ((isYield! and candidate.kind == 44) or (isAwait! and candidate.kind == 5))
++                                                -> if {
++                                                    candidate.parent => ownerIr!
++                                                    ownerIr! >= 0 and ir[ownerIr!].kind != 0 and ir[ownerIr!].kind != 11
++                                                        -> while { ir[ownerIr!].parent => ownerIr! }
++                                                    ownerIr! == functionIr! -> if { candidateIr! => awaitIr! }
++                                                }
++                                            candidateIr! + 1 => candidateIr!
++                                        }
++                                        awaitIr! >= 0 -> if {
++                                            points! -> push(CoroutineSuspendPoint {
++                                                functionIr: functionIr!
++                                                sourceModule: sourceIndex!
++                                                awaitAst: awaitAstIndex!
++                                                awaitIr: awaitIr!
++                                                state: 0
++                                                kind: isYield! -> if { 1 } else { 0 }
++                                            })
++                                        }
+                                     }
+-                                irIndex! + 1 => irIndex!
+-                            }
+-                            functionIr! >= 0 -> if {
+-                                1 => state!
+-                                0 => pointSearch!
+-                                pointSearch! < (points! -> len) -> while {
+-                                    points![pointSearch!].functionIr == functionIr!
+-                                        -> if { state! + 1 => state! }
+-                                    pointSearch! + 1 => pointSearch!
+-                                }
+-                                0 => suspendKind!
+-                                isYield! -> if { 1 => suspendKind! }
+-                                points! -> push(CoroutineSuspendPoint {
+-                                    functionIr: functionIr!
+-                                    sourceModule: sourceIndex!
+-                                    awaitAst: awaitAstIndex!
+-                                    awaitIr: awaitIr!
+-                                    state: state!
+-                                    kind: suspendKind!
+-                                })
++                                functionIr! + 1 => functionIr!
+                             }
+                         }
+                 }
+@@ -2089,6 +2122,25 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
+             }
+             sourceIndex! + 1 => sourceIndex!
+         }
++    # Fragment AST is appended after the original parse. Resume numbering
++    # follows source evaluation order rather than append order.
++    0 => orderedPointIndex!
++    orderedPointIndex! < (points! -> len) -> while {
++        points![orderedPointIndex!] => point!
++        ranges[point!.sourceModule] => range
++        nodes[range.astStart + point!.awaitAst].start => start
++        1 => state!
++        points! -> each earlier {
++            earlier.functionIr == point!.functionIr -> if {
++                nodes[range.astStart + earlier.awaitAst].start => earlierStart
++                earlierStart < start or (earlierStart == start and earlier.awaitAst < point!.awaitAst)
++                    -> if { state! + 1 => state! }
++            }
++        }
++        state! => point!.state
++        point! => points![orderedPointIndex!]
++        orderedPointIndex! + 1 => orderedPointIndex!
++    }
+     [CoroutineFrameSlot; ~] => slots!
+     0 => pointIndex!
+     pointIndex! < (points! -> len) -> while {
+@@ -2115,18 +2167,41 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
+                         nodes[sourceRange.astStart + definitionAncestor!].parent => definitionAncestor!
+                     }
+                 }
+-            (definition.kind == 17 or definition.kind == 29) and definition.sourceModule == point.sourceModule and definition.symbol >= 0 and definition.astNode != awaitBindingAst! and belongsToFunction! and nodes[sourceRange.astStart + definition.astNode].start < awaitStart
++            (definition.kind == 17 or definition.kind == 29) and definition.sourceModule == point.sourceModule
++                and (definition.symbol >= 0 or (definition -> isAsyncExpressionBinding))
++                and definition.astNode != awaitBindingAst! and belongsToFunction! and nodes[sourceRange.astStart + definition.astNode].start < awaitStart
+                 -> if {
++                    # A shared source symbol must not select the binding or
++                    # concrete type of another generic materialization.
++                    definition.parent => definitionOwner!
++                    definitionOwner! >= 0 and ir[definitionOwner!].kind != 0 and ir[definitionOwner!].kind != 11
++                        -> while { ir[definitionOwner!].parent => definitionOwner! }
+                     # C# snapshots every active lexical binding, including names
+                     # used only by interpolation and owners needed by cleanup.
+                     false => activeAtSuspension!
+-                    point.awaitIr => scopeAncestor!
++                    definitionOwner! == point.functionIr -> if { point.awaitIr } else { -1 } => scopeAncestor!
+                     scopeAncestor! >= 0 and scopeAncestor! < (ir -> len) and not activeAtSuspension!
+                         -> while {
+                             scopeAncestor! == definition.parent -> if {
+                                 true => activeAtSuspension!
+                             } else { ir[scopeAncestor!].parent => scopeAncestor! }
+                         }
++                    # A temporary containing this or a later suspension has
++                    # no value to store yet, even when its source starts early.
++                    definition -> isAsyncExpressionBinding -> if {
++                        points! -> each dependencyPoint {
++                            dependencyPoint.functionIr == point.functionIr and dependencyPoint.state >= point.state
++                                -> if {
++                                    dependencyPoint.awaitIr => dependency!
++                                    dependency! >= 0 -> while {
++                                        dependency! == definition.operand0 -> if {
++                                            false => activeAtSuspension!
++                                            -1 => dependency!
++                                        } else { ir[dependency!].parent => dependency! }
++                                    }
++                                }
++                        }
++                    }
+                     # A prior await in the same lexical continuation has
+                     # consumed this binding; no later spill may retain it.
+                     -1 => suspensionScope!
+@@ -2165,10 +2240,12 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
+                     activeAtSuspension! and (isTaskSlot or not (definition.typeOrigin == 1 and definition.typeSymbol == 0))
+                         -> if {
+                             definition.flags => frameFlags!
+-                            (definition.typeFlags / 2) % 2 == 1 -> if {
+-                                frameFlags! + 2 => frameFlags!
+-                            }
+-                            isTaskSlot -> if { frameFlags! + 4 => frameFlags! }
++                            (definition.typeFlags / 2) % 2 == 1 and not (definition -> isBorrowedAsyncExpressionBinding)
++                                -> if {
++                                    frameFlags! + 2 => frameFlags!
++                                }
++                            isTaskSlot and not (definition -> isBorrowedAsyncExpressionBinding)
++                                -> if { frameFlags! + 4 => frameFlags! }
+                             false => recorded!
+                             slots! -> each existing {
+                                 existing.functionIr == point.functionIr and existing.state == point.state

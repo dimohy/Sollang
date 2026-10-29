@@ -1,0 +1,369 @@
+diff --git a/3b58be12caf794de253ce66e7ce650e7507bf52a b/selfhost/llvm/text/platform_io.slg
+index 3b58be12c..ef92ea8b5 100644
+--- a/3b58be12caf794de253ce66e7ce650e7507bf52a
++++ b/selfhost/llvm/text/platform_io.slg
+@@ -43,19 +43,73 @@ struct ArrayStorageIdentity {
+ writeArrayStorageIdentity identity: ArrayStorageIdentity, suffix: Text -> Unit uses Console {
+     identity.resultDomain == 1 -> if {
+         "%v$(identity.labelIndex)_expression$(identity.resultIndex)$suffix" -> print
+-    } else { "%v$(identity.resultIndex)$suffix" -> print }
++    } else { identity.resultDomain == 2 -> if {
++            "%while$(identity.labelIndex)_v$(identity.resultIndex)$suffix" -> print
++        } else { "%v$(identity.resultIndex)$suffix" -> print } }
+ }
+ 
+-emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int -> Unit uses Console {
++# Physical heap identity survives descriptor publication. A while expression
++# has the same IR allocation identity; interpolation has a separate AST domain.
++writeArrayHeapIdentity identity: ArrayStorageIdentity -> Unit uses Console {
++    identity.resultDomain == 1 -> if {
++        "%heap_v$(identity.labelIndex)_expression$(identity.resultIndex)" -> print
++    } else { "%heap_v$(identity.resultIndex)" -> print }
++}
++
++emitArrayStackBacking identity: ArrayStorageIdentity, byteLength: Int, alignment: Int -> Unit uses Console {
+     "  " -> print
+     identity -> writeArrayStorageIdentity("_data")
+-    byteLength == 0 -> if { " = inttoptr i64 0 to ptr" -> println } else {
+-        " = call ptr @malloc(i64 $byteLength)" -> println
++    " = alloca [$byteLength x i8], align $alignment" -> println
++}
++
++emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    byteLength == 0 -> if {
++        "  " -> print
++        identity -> writeArrayHeapIdentity
++        " = inttoptr i64 0 to ptr" -> println
++        "  " -> print
++        identity -> writeArrayStorageIdentity("_data")
++        " = getelementptr i8, ptr " -> print
++        identity -> writeArrayHeapIdentity
++        ", i64 0" -> println
++    } else {
++        "  " -> print
++        identity -> writeArrayHeapIdentity
++        " = call ptr @sollang_alloc(i64 $byteLength)" -> println
++        "  " -> print
++        identity -> writeArrayStorageIdentity("_data")
++        " = getelementptr i8, ptr " -> print
++        identity -> writeArrayHeapIdentity
++        ", i64 0" -> println
++        identity -> emitArrayAllocationGuard(ownerIndex, context, state)
+     }
+ }
+ 
++# The raw primitive may return null. Expression allocation owns the fatal
++# decision, before payload initialization or publication to a container.
++emitArrayAllocationGuard identity: ArrayStorageIdentity, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    Arena(0) => names!
++    (identity.resultDomain == 1 -> if {
++        "v$(identity.labelIndex)_expression$(identity.resultIndex)" -> materialize(names!)
++    } else { identity.resultDomain == 2 -> if {
++            "while$(identity.labelIndex)_v$(identity.resultIndex)" -> materialize(names!)
++        } else { "v$(identity.resultIndex)" -> materialize(names!) } }) => prefix
++    prefix -> emitAllocationGuard("_data", ownerIndex, context, state)
++}
++
++# A nullable resize and a fresh literal allocation share the same fatal
++# decision. The pointer suffix also separates pointer and Boolean SSA names.
++emitAllocationGuard prefix: Text, pointerSuffix: Text, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    "  %$(prefix)_allocation_ok = icmp ne ptr %$(prefix)$(pointerSuffix), null" -> println
++    "  br i1 %$(prefix)_allocation_ok, label %$(prefix)_allocation_ready, label %$(prefix)_allocation_failed" -> println
++    "$(prefix)_allocation_failed:" -> println
++    WhileValueRequest { whileIndex: -1, ownerIndex: ownerIndex, nodeIndex: -1 }
++        -> emitRuntimeTrap(prefix, "allocation", "allocation_failed", context, state)
++    "$(prefix)_allocation_ready:" -> println
++}
++
+ writeArrayStorageElementType elementTypeId: Int, legacySymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+-    elementTypeId >= 0 -> if { elementTypeId -> writeSemanticTypeId(context, state) } else {
++    elementTypeId >= 0 -> if { elementTypeId -> writeAggregateFieldTypeId(context, state) } else {
+         legacySymbol -> llvmType(context, state) -> print
+     }
+ }
+@@ -79,17 +133,33 @@ emitArrayElementStoreSuffix identity: ArrayStorageIdentity, position: Int, align
+     "$position, align $alignment" -> println
+ }
+ 
++emitArrayValueElementStore identity: ArrayStorageIdentity, position: Int, elementTypeId: Int, legacySymbol: Int, valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    elementTypeId >= 0 and context.types[elementTypeId].kind == 12 => boundedElement
++    boundedElement -> if {
++        "v$(identity.resultIndex)_element$(position)_bounded" -> emitBoundedArrayValue(valueIndex, ownerIndex, elementTypeId, context, state)
++    }
++    identity -> emitArrayElementStorePrefix(position, elementTypeId, legacySymbol, context, state)
++    boundedElement -> if { "%v$(identity.resultIndex)_element$(position)_bounded" -> print } else {
++        valueIndex -> writeValue(ownerIndex, context, state)
++    }
++    elementTypeId >= 0 -> if {
++        identity -> emitArrayElementStoreSuffix(position, elementTypeId -> arrayElementStorageAlign(context, state))
++    } else {
++        identity -> emitArrayElementStoreSuffix(position, legacySymbol -> legacyStorageAlign(context, state))
++    }
++}
++
+ emitArrayStorageCarrier identity: ArrayStorageIdentity, length: Int, capacity: Int, view: Bool -> Unit uses Console {
+     "  " -> print
+     identity -> writeArrayStorageIdentity("_0")
+-    view -> if { " = insertvalue { ptr, i64 } poison, ptr " -> print } else {
++    view -> if { " = insertvalue %sollang.int_slice poison, ptr " -> print } else {
+         " = insertvalue %sollang.array.i32 poison, ptr " -> print
+     }
+     identity -> writeArrayStorageIdentity("_data")
+     ", 0" -> println
+     "  " -> print
+     view -> if { identity -> writeArrayStorageIdentity("") } else { identity -> writeArrayStorageIdentity("_1") }
+-    view -> if { " = insertvalue { ptr, i64 } " -> print } else { " = insertvalue %sollang.array.i32 " -> print }
++    view -> if { " = insertvalue %sollang.int_slice " -> print } else { " = insertvalue %sollang.array.i32 " -> print }
+     identity -> writeArrayStorageIdentity("_0")
+     ", i64 $length, 1" -> println
+     not view -> if {
+@@ -149,6 +219,11 @@ writeEnumStoragePayload request: EnumStorageRequest, interpolationNodes: ref [in
+             request -> writeEnumStorageIdentity("_payload_value")
+             return
+         }
++    request.payloadTypeId >= 0 and context.types[request.payloadTypeId].kind == 12
++        -> if {
++            request -> writeEnumStorageIdentity("_payload_bounded")
++            return
++        }
+     request.payloadInterpolation >= 0 -> if {
+         request.labelIndex -> writeInterpolationValue(request.payloadInterpolation, interpolationNodes, request.sourceModule, request.ownerIndex, request.beforeIndex, context, state)
+     } else {
+@@ -173,6 +248,20 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
+         ", align " -> print
+         payloadReferenceType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
+     }
++    request.payloadTypeId >= 0 and context.types[request.payloadTypeId].kind == 12
++        and payloadReferenceType < 0 -> if {
++            Arena(0) => boundedPrefixStorage!
++            request.resultDomain == 1 -> if {
++                "v$(request.labelIndex)_expression$(request.resultIndex)_payload_bounded" -> materialize(boundedPrefixStorage!)
++            } else {
++                "v$(request.resultIndex)_payload_bounded" -> materialize(boundedPrefixStorage!)
++            } => boundedPrefix
++            request.payloadInterpolation >= 0 -> if {
++                boundedPrefix -> emitInterpolationBoundedValue(request.labelIndex, request.payloadInterpolation, request.payloadTypeId, interpolationNodes, request.sourceModule, request.ownerIndex, request.beforeIndex, context, state)
++            } else {
++                boundedPrefix -> emitBoundedArrayValue(request.payloadIr, request.ownerIndex, request.payloadTypeId, context, state)
++            }
++        }
+     "  " -> print
+     request -> writeEnumStorageIdentity("_enum_slot")
+     " = alloca " -> print
+@@ -198,17 +287,17 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
+             -> if {
+                 "  " -> print
+                 request -> writeEnumStorageIdentity("_payload_data")
+-                " = extractvalue { ptr, i64 } " -> print
++                " = extractvalue %sollang.int_slice " -> print
+                 request -> writeEnumStoragePayload(interpolationNodes, context, state)
+                 ", 0" -> println
+                 "  " -> print
+                 request -> writeEnumStorageIdentity("_payload_length")
+-                " = extractvalue { ptr, i64 } " -> print
++                " = extractvalue %sollang.int_slice " -> print
+                 request -> writeEnumStoragePayload(interpolationNodes, context, state)
+                 ", 1" -> println
+                 "  " -> print
+                 request -> writeEnumStorageIdentity("_payload_copy_data")
+-                " = call ptr @malloc(i64 $(context.typeSizes[request.payloadTypeId]))" -> println
++                " = call ptr @sollang_alloc(i64 $(context.typeSizes[request.payloadTypeId]))" -> println
+                 "  call void @llvm.memcpy.p0.p0.i64(ptr " -> print
+                 request -> writeEnumStorageIdentity("_payload_copy_data")
+                 ", ptr " -> print
+@@ -216,12 +305,12 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
+                 ", i64 $(context.typeSizes[request.payloadTypeId]), i1 false)" -> println
+                 "  " -> print
+                 request -> writeEnumStorageIdentity("_payload_copy0")
+-                " = insertvalue { ptr, i64 } poison, ptr " -> print
++                " = insertvalue %sollang.int_slice poison, ptr " -> print
+                 request -> writeEnumStorageIdentity("_payload_copy_data")
+                 ", 0" -> println
+                 "  " -> print
+                 request -> writeEnumStorageIdentity("_payload_copy")
+-                " = insertvalue { ptr, i64 } " -> print
++                " = insertvalue %sollang.int_slice " -> print
+                 request -> writeEnumStorageIdentity("_payload_copy0")
+                 ", i64 " -> print
+                 request -> writeEnumStorageIdentity("_payload_length")
+@@ -981,29 +1070,29 @@ emitSocketCompletionDequeue request: SocketCallRequest, context: ref emitterCont
+     request.callIndex -> socketCallArgument(1, context, state) => cancellation
+     context.typeSizes[call.typeId] => resultSize
+     resultSize -> runtimeTaskContextSize(context, state) => allocationSize
+-    "  %v$(request.callIndex)_completion_context = call ptr @malloc(i64 $allocationSize)" -> println
++    "  %v$(request.callIndex)_completion_context = call ptr @sollang_alloc(i64 $allocationSize)" -> println
+     "  %v$(request.callIndex)_completion_context_ok = icmp ne ptr %v$(request.callIndex)_completion_context, null" -> println
+     "  br i1 %v$(request.callIndex)_completion_context_ok, label %completion$(request.callIndex)_descriptor, label %completion$(request.callIndex)_context_failed" -> println
+     "completion$(request.callIndex)_context_failed:" -> println
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+     "completion$(request.callIndex)_descriptor:" -> println
+-    "  %v$(request.callIndex)_completion_descriptor = call ptr @malloc(i64 88)" -> println
++    "  %v$(request.callIndex)_completion_descriptor = call ptr @sollang_alloc(i64 88)" -> println
+     "  %v$(request.callIndex)_completion_descriptor_ok = icmp ne ptr %v$(request.callIndex)_completion_descriptor, null" -> println
+     "  br i1 %v$(request.callIndex)_completion_descriptor_ok, label %completion$(request.callIndex)_start, label %completion$(request.callIndex)_descriptor_failed" -> println
+     "completion$(request.callIndex)_descriptor_failed:" -> println
+-    "  call void @free(ptr %v$(request.callIndex)_completion_context)" -> println
++    "  call void @sollang_free(ptr %v$(request.callIndex)_completion_context)" -> println
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+     "completion$(request.callIndex)_start:" -> println
+     "  call void @llvm.memset.p0.i64(ptr %v$(request.callIndex)_completion_descriptor, i8 0, i64 88, i1 false)" -> println
+     "  call void @llvm.memset.p0.i64(ptr %v$(request.callIndex)_completion_context, i8 0, i64 $resultSize, i1 false)" -> println
+-    "  %v$(request.callIndex)_completion_handle = call ptr @sollang_task_start(ptr @sollang_socket_completion_dequeue_task_worker, ptr @free, ptr @sollang_socket_completion_dequeue_task_cancel, ptr %v$(request.callIndex)_completion_context)" -> println
++    "  %v$(request.callIndex)_completion_handle = call ptr @sollang_task_start(ptr @sollang_socket_completion_dequeue_task_worker, ptr @sollang_free, ptr @sollang_socket_completion_dequeue_task_cancel, ptr %v$(request.callIndex)_completion_context)" -> println
+     "  %v$(request.callIndex)_completion_started = icmp ne ptr %v$(request.callIndex)_completion_handle, null" -> println
+     "  br i1 %v$(request.callIndex)_completion_started, label %completion$(request.callIndex)_ready, label %completion$(request.callIndex)_start_failed" -> println
+     "completion$(request.callIndex)_start_failed:" -> println
+-    "  call void @free(ptr %v$(request.callIndex)_completion_descriptor)" -> println
+-    "  call void @free(ptr %v$(request.callIndex)_completion_context)" -> println
++    "  call void @sollang_free(ptr %v$(request.callIndex)_completion_descriptor)" -> println
++    "  call void @sollang_free(ptr %v$(request.callIndex)_completion_context)" -> println
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+     "completion$(request.callIndex)_ready:" -> println
+@@ -1202,7 +1291,7 @@ emitCompletedSocketDequeue resultType: Int, producerIndex: Int, namePrefix: Text
+         "  br label %completion_await_$(namePrefix)_merge" -> println
+     }
+     "completion_await_$(namePrefix)_merge:" -> println
+-    "  call void @free(ptr %$(namePrefix)_completion_descriptor)" -> println
++    "  call void @sollang_free(ptr %$(namePrefix)_completion_descriptor)" -> println
+ }
+ 
+ emitSocketCompletionSubmit request: SocketCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+@@ -1776,7 +1865,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
+         "  %v$(request.callIndex)_socket_receive_capacity = select i1 %v$(request.callIndex)_socket_receive_zero, i64 1, i64 " -> print
+         secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+         "" -> println
+-        "  %v$(request.callIndex)_socket_receive_buffer = call ptr @malloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
++        "  %v$(request.callIndex)_socket_receive_buffer = call ptr @sollang_alloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
+         "  %v$(request.callIndex)_socket_endpoint_descriptor = alloca [32 x i8], align 8" -> println
+         "  call void @llvm.memset.p0.i64(ptr %v$(request.callIndex)_socket_endpoint_descriptor, i8 0, i64 32, i1 false)" -> println
+         "  %v$(request.callIndex)_socket_datagram_truncated_address = alloca i8, align 1" -> println
+@@ -1819,7 +1908,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
+                     "  %v$(request.callIndex)_socket_receive_capacity = select i1 %v$(request.callIndex)_socket_receive_zero, i64 1, i64 " -> print
+                     secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+                     "" -> println
+-                    "  %v$(request.callIndex)_socket_receive_buffer = call ptr @malloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
++                    "  %v$(request.callIndex)_socket_receive_buffer = call ptr @sollang_alloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
+                     "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_receive(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_receive_buffer, i64 " -> print
+                     secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+                     ", i32 0)" -> println
+@@ -2162,7 +2251,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
+             context.types[socketOkTypeId].first => dnsEndpointType
+             dnsEndpointType -> enumAbiStorageSize(context, state) => dnsEndpointSize
+             "  %v$(request.callIndex)_dns_bytes = mul i64 %v$(request.callIndex)_socket_value, $dnsEndpointSize" -> println
+-            "  %v$(request.callIndex)_dns_storage = call ptr @malloc(i64 %v$(request.callIndex)_dns_bytes)" -> println
++            "  %v$(request.callIndex)_dns_storage = call ptr @sollang_alloc(i64 %v$(request.callIndex)_dns_bytes)" -> println
+             "  br label %dns$(request.callIndex)_copy" -> println
+             "dns$(request.callIndex)_copy:" -> println
+             "  %v$(request.callIndex)_dns_index = phi i64 [ 0, %socket$(request.callIndex)_ok ], [ %v$(request.callIndex)_dns_next, %dns$(request.callIndex)_next ]" -> println
+@@ -2200,7 +2289,7 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
+     "  br label %socket$(request.callIndex)_merge" -> println
+     "socket$(request.callIndex)_error:" -> println
+     call.opcode == -261 or call.opcode == -267
+-        -> if { "  call void @free(ptr %v$(request.callIndex)_socket_receive_buffer)" -> println }
++        -> if { "  call void @sollang_free(ptr %v$(request.callIndex)_socket_receive_buffer)" -> println }
+     "  %v$(request.callIndex)_socket_error_tag = getelementptr inbounds " -> print
+     call -> writeIrType(context, state)
+     ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 0" -> println
+@@ -2327,18 +2416,18 @@ emitAsyncFileScalarCall request: FileCallRequest, context: ref emitterContext.Em
+     context.typeSizes[scalarTypeId!] => scalarSize
+     context.typeSizes[call.typeId] => resultSize
+     resultSize -> runtimeTaskContextSize(context, state) => allocationSize
+-    "  %v$(request.callIndex)_file_async_context = call ptr @malloc(i64 $allocationSize)" -> println
++    "  %v$(request.callIndex)_file_async_context = call ptr @sollang_alloc(i64 $allocationSize)" -> println
+     "  %v$(request.callIndex)_file_async_allocated = icmp ne ptr %v$(request.callIndex)_file_async_context, null" -> println
+     "  br i1 %v$(request.callIndex)_file_async_allocated, label %file$(request.callIndex)_async_initialize, label %file$(request.callIndex)_async_allocation_failed" -> println
+     "file$(request.callIndex)_async_allocation_failed:" -> println
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+     "file$(request.callIndex)_async_initialize:" -> println
+-    "  %v$(request.callIndex)_file_async_handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @free, ptr @sollang_file_operation_task_cancel, ptr %v$(request.callIndex)_file_async_context)" -> println
++    "  %v$(request.callIndex)_file_async_handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @sollang_free, ptr @sollang_file_operation_task_cancel, ptr %v$(request.callIndex)_file_async_context)" -> println
+     "  %v$(request.callIndex)_file_async_started = icmp ne ptr %v$(request.callIndex)_file_async_handle, null" -> println
+     "  br i1 %v$(request.callIndex)_file_async_started, label %file$(request.callIndex)_async_ready, label %file$(request.callIndex)_async_start_failed" -> println
+     "file$(request.callIndex)_async_start_failed:" -> println
+-    "  call void @free(ptr %v$(request.callIndex)_file_async_context)" -> println
++    "  call void @sollang_free(ptr %v$(request.callIndex)_file_async_context)" -> println
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+     "file$(request.callIndex)_async_ready:" -> println
+@@ -3403,7 +3492,7 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder:
+     request.expressionIndex -> parallelHasDirectBodyCall(context, state)
+         -> if {
+             CallEnvironmentRequest { callerIndex: request.ownerIndex, callIndex: request.expressionIndex, targetModule: callback.targetModule, targetSymbol: callback.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
+-            context.ir[callback.operand0].nextOperand -> emitReferenceArgumentValues(expression.operand1, request.ownerIndex, 1, context, state)
++            expression.operand1 -> emitParallelAdditionalArgumentValues(request.ownerIndex, context, state)
+             "  %v$(request.expressionIndex)_mapped = call " -> print
+             callback -> writeIrType(context, state)
+             " @sollang_m$(callback.targetModule)_s$(callback.symbol)(" -> print
+@@ -3443,12 +3532,12 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder:
+     "  br label %tryparallel$(request.expressionIndex)_sequential_header" -> println
+     "tryparallel$(request.expressionIndex)_sequential_collect:" -> println
+     source.kind == 14 -> if {
+-        "  call void @free(ptr %v$(request.expressionIndex)_input)" -> println
++        "  call void @sollang_free(ptr %v$(request.expressionIndex)_input)" -> println
+     }
+     TryParallelCollectRequest { expressionIndex: request.expressionIndex, outerTypeId: expression.typeId, callbackTypeId: callback.typeId } -> emitTryParallelCollect(context, state)
+ }
+ 
+-emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.types[request.callbackTypeId] => callbackResultType
+     callbackResultType.first => okTypeId
+     callbackResultType.second => errorTypeId
+@@ -3535,9 +3624,9 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
+             "  br label %tryparallel$(request.expressionIndex)_cleanup_header" -> println
+             "tryparallel$(request.expressionIndex)_cleanup_done:" -> println
+         }
+-    "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
+-    "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
+-    "  call void @free(ptr %v$(request.expressionIndex)_data)" -> println
++    "  call void @sollang_free(ptr %v$(request.expressionIndex)_callback_results)" -> println
++    "  call void @sollang_free(ptr %v$(request.expressionIndex)_initialized)" -> println
++    "  call void @sollang_free(ptr %v$(request.expressionIndex)_data)" -> println
+     "  %v$(request.expressionIndex)_error_slot = alloca " -> print
+     request.outerTypeId -> writeSemanticTypeId(context, state)
+     ", align 8" -> println
+@@ -3596,8 +3685,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
+     "  %v$(request.expressionIndex)_copy_next = add i64 %v$(request.expressionIndex)_copy_index, 1" -> println
+     "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
+     "tryparallel$(request.expressionIndex)_copy_done:" -> println
+-    "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
+-    "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
++    "  call void @sollang_free(ptr %v$(request.expressionIndex)_callback_results)" -> println
++    "  call void @sollang_free(ptr %v$(request.expressionIndex)_initialized)" -> println
+     "  %v$(request.expressionIndex)_array0 = insertvalue %sollang.array.i32 poison, ptr %v$(request.expressionIndex)_data, 0" -> println
+     "  %v$(request.expressionIndex)_array1 = insertvalue %sollang.array.i32 %v$(request.expressionIndex)_array0, i64 %v$(request.expressionIndex)_length, 1" -> println
+     "  %v$(request.expressionIndex)_array = insertvalue %sollang.array.i32 %v$(request.expressionIndex)_array1, i64 %v$(request.expressionIndex)_length, 2" -> println
+@@ -3661,7 +3750,10 @@ arrayElementSize node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
+ arrayElementStorageAlign elementTypeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+     context.types[elementTypeId] => elementType
+     elementType.kind == 1 and elementType.origin == 1 and elementType.symbol == 24
+-        -> if { elementType.symbol -> legacyStorageAlign(context, state) } else { context.typeAligns[elementTypeId] }
++        -> if { elementType.symbol -> legacyStorageAlign(context, state) } else {
++            elementType -> aggregateFieldLayout(context.typeSizes[elementTypeId], context.typeAligns[elementTypeId]) => elementLayout
++            elementLayout.align
++        }
+ }
+ arrayElementAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+     node -> arrayElementTypeId(context, state) => elementTypeId
+@@ -3669,7 +3761,7 @@ arrayElementAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitCon
+ }
+ writeArrayElementType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     node -> arrayElementTypeId(context, state) => elementTypeId
+-    elementTypeId >= 0 -> if { elementTypeId -> writeSemanticTypeId(context, state) } else { node.typeSymbol -> llvmType(context, state) -> print }
++    elementTypeId >= 0 -> if { elementTypeId -> writeAggregateFieldTypeId(context, state) } else { node.typeSymbol -> llvmType(context, state) -> print }
+ }
+ 
+ writeArrayViewType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+@@ -3686,7 +3778,7 @@ writeArrayViewType typeId: Int, context: ref emitterContext.EmitContext, state:
+                 or (arrayType.kind == 7
+                 and arrayType.origin == 4
+                 and (arrayType.symbol == 6 or arrayType.symbol == 7))
+-                -> if { "%sollang.array.i32" -> print } else { "{ ptr, i64 }" -> print }
++                -> if { "%sollang.array.i32" -> print } else { "%sollang.int_slice" -> print }
+         }
+ }
+ emitTextLiteralConstant request: TextLiteralRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
