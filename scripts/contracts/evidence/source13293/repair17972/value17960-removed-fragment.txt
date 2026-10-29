@@ -1,0 +1,70 @@
+    # Reconnect a binary operand that names a compile-time value generic to the
+    # hidden parameter created for its owning function. The resolved-name table
+    # proves the exact generic symbol; AST position restores left/right order.
+    0 => valueGenericOperandRepairIndex!
+    valueGenericOperandRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[valueGenericOperandRepairIndex!] => valueGenericOperandRepair!
+            valueGenericOperandRepair!.kind == 8
+                and valueGenericOperandRepair!.operand0 >= 0
+                and valueGenericOperandRepair!.operand1 < 0
+                and valueGenericOperandRepair!.sourceModule >= 0
+                -> if {
+                    valueGenericOperandRepair!.parent => valueGenericOwnerFunction!
+                    valueGenericOwnerFunction! >= 0 and nodes[valueGenericOwnerFunction!].kind != 0
+                        -> while {
+                            nodes[valueGenericOwnerFunction!].parent => valueGenericOwnerFunction!
+                        }
+                    valueGenericOwnerFunction! >= 0 -> if {
+                        prepared.package.ranges[valueGenericOperandRepair!.sourceModule] => valueGenericOperandRange
+                        0 => valueGenericParameterSearch!
+                        valueGenericParameterSearch! < (nodes -> len) and valueGenericOperandRepair!.operand1 < 0
+                            -> while {
+                                nodes[valueGenericParameterSearch!] => valueGenericParameter
+                                valueGenericParameter.kind == 10
+                                    and valueGenericParameter.parent == valueGenericOwnerFunction!
+                                    and valueGenericParameter.symbol >= 0
+                                    and prepared.package.symbols[valueGenericOperandRange.symbolStart + valueGenericParameter.symbol].kind == 32
+                                    -> if {
+                                        -1 => valueGenericNameAst!
+                                        0 => valueGenericNameSearch!
+                                        valueGenericNameSearch! < valueGenericOperandRange.nameCount
+                                            -> while {
+                                                prepared.package.names[valueGenericOperandRange.nameStart + valueGenericNameSearch!] => valueGenericName
+                                                valueGenericName.symbol == valueGenericParameter.symbol
+                                                    and valueGenericName.astNode >= 0 -> if {
+                                                        valueGenericName.astNode => valueGenericNameAncestor!
+                                                        false => valueGenericNameBelongs!
+                                                        valueGenericNameAncestor! >= 0 and not valueGenericNameBelongs!
+                                                            -> while {
+                                                                valueGenericNameAncestor! == valueGenericOperandRepair!.astNode
+                                                                    -> if {
+                                                                        true => valueGenericNameBelongs!
+                                                                    } else {
+                                                                        prepared.package.nodes[valueGenericOperandRange.astStart + valueGenericNameAncestor!].parent => valueGenericNameAncestor!
+                                                                    }
+                                                            }
+                                                        valueGenericNameBelongs! -> if { valueGenericName.astNode => valueGenericNameAst! }
+                                                    }
+                                                valueGenericNameSearch! + 1 => valueGenericNameSearch!
+                                            }
+                                        valueGenericNameAst! >= 0 -> if {
+                                            prepared.package.nodes[valueGenericOperandRange.astStart + valueGenericNameAst!] => valueGenericNameNode
+                                            prepared.package.nodes[valueGenericOperandRange.astStart + nodes[valueGenericOperandRepair!.operand0].astNode] => existingBinaryOperandAst
+                                            valueGenericNameNode.start < existingBinaryOperandAst.start
+                                                -> if {
+                                                    valueGenericOperandRepair!.operand0 => valueGenericOperandRepair!.operand1
+                                                    valueGenericParameterSearch! => valueGenericOperandRepair!.operand0
+                                                } else {
+                                                    valueGenericParameterSearch! => valueGenericOperandRepair!.operand1
+                                                }
+                                            valueGenericOperandRepair! => nodes[valueGenericOperandRepairIndex!]
+                                        }
+                                    }
+                                valueGenericParameterSearch! + 1 => valueGenericParameterSearch!
+                            }
+                    }
+                }
+            valueGenericOperandRepairIndex! + 1 => valueGenericOperandRepairIndex!
+        }
+
