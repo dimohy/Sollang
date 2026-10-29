@@ -1,0 +1,47 @@
+diff --git a/docs/SPEC.md b/docs/SPEC.md
+index dbb9fcb28..3e60c2032 100644
+--- a/docs/SPEC.md
++++ b/docs/SPEC.md
+@@ -3600,7 +3600,11 @@ removed. A `CodePoint` literal outside `0..1114111` reports the range; a value
+ inside the Unicode surrogate interval `55296..57343` reports the surrogate
+ restriction separately. The same distinction applies to enum payload literals
+ and explicit numeric conversions of literals. Computed conversions retain
+-runtime range checks. An integer-shaped literal in an explicit integer
++runtime range checks. On Windows and the browser target, a failed computed
++integer conversion reports its source function declaration identity (or `main`)
++and `numeric_conversion_lower`, `numeric_conversion_upper`, or
++`numeric_conversion_surrogate` before trapping. The diagnostic code does not
++depend on generated LLVM block names. An integer-shaped literal in an explicit integer
+ conversion is checked and emitted at the destination width, even when it
+ exceeds the default `Int` range. A computed same-width integer conversion
+ checks its destination range and then preserves the original value.
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+index 8b4838894..d889f2c3f 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+@@ -1100,14 +1100,14 @@ internal sealed partial class LlvmEmitter
+             var lower = NextTemp("numeric_lower_bound");
+             EmitCompare(lower, signed ? "sge" : "uge", llvmType, source.ValueName,
+                 targetMin.ToString(CultureInfo.InvariantCulture));
+-            EmitTrapUnless(lower, "numeric_conversion_lower");
++            EmitTrapUnless(lower, "numeric_conversion_lower", "numeric_conversion_lower");
+         }
+         if (sourceMax > targetMax)
+         {
+             var upper = NextTemp("numeric_upper_bound");
+             EmitCompare(upper, signed ? "sle" : "ule", llvmType, source.ValueName,
+                 targetMax.ToString(CultureInfo.InvariantCulture));
+-            EmitTrapUnless(upper, "numeric_conversion_upper");
++            EmitTrapUnless(upper, "numeric_conversion_upper", "numeric_conversion_upper");
+         }
+         if (targetType == BoundType.CodePoint && sourceMax >= 0xD800 && sourceMin <= 0xDFFF)
+         {
+@@ -1117,7 +1117,7 @@ internal sealed partial class LlvmEmitter
+             EmitCompare(below, signed ? "slt" : "ult", llvmType, source.ValueName, "55296");
+             EmitCompare(above, signed ? "sgt" : "ugt", llvmType, source.ValueName, "57343");
+             EmitInstruction($"{valid} = or i1 {below}, {above}");
+-            EmitTrapUnless(valid, "numeric_conversion_surrogate");
++            EmitTrapUnless(valid, "numeric_conversion_surrogate", "numeric_conversion_surrogate");
+         }
+     }
+ 

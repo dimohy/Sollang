@@ -3600,7 +3600,11 @@ removed. A `CodePoint` literal outside `0..1114111` reports the range; a value
 inside the Unicode surrogate interval `55296..57343` reports the surrogate
 restriction separately. The same distinction applies to enum payload literals
 and explicit numeric conversions of literals. Computed conversions retain
-runtime range checks. An integer-shaped literal in an explicit integer
+runtime range checks. On Windows and the browser target, a failed computed
+integer conversion reports its source function declaration identity (or `main`)
+and `numeric_conversion_lower`, `numeric_conversion_upper`, or
+`numeric_conversion_surrogate` before trapping. The diagnostic code does not
+depend on generated LLVM block names. An integer-shaped literal in an explicit integer
 conversion is checked and emitted at the destination width, even when it
 exceeds the default `Int` range. A computed same-width integer conversion
 checks its destination range and then preserves the original value.

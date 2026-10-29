@@ -1100,14 +1100,14 @@ internal sealed partial class LlvmEmitter
             var lower = NextTemp("numeric_lower_bound");
             EmitCompare(lower, signed ? "sge" : "uge", llvmType, source.ValueName,
                 targetMin.ToString(CultureInfo.InvariantCulture));
-            EmitTrapUnless(lower, "numeric_conversion_lower");
+            EmitTrapUnless(lower, "numeric_conversion_lower", "numeric_conversion_lower");
         }
         if (sourceMax > targetMax)
         {
             var upper = NextTemp("numeric_upper_bound");
             EmitCompare(upper, signed ? "sle" : "ule", llvmType, source.ValueName,
                 targetMax.ToString(CultureInfo.InvariantCulture));
-            EmitTrapUnless(upper, "numeric_conversion_upper");
+            EmitTrapUnless(upper, "numeric_conversion_upper", "numeric_conversion_upper");
         }
         if (targetType == BoundType.CodePoint && sourceMax >= 0xD800 && sourceMin <= 0xDFFF)
         {
@@ -1117,7 +1117,7 @@ internal sealed partial class LlvmEmitter
             EmitCompare(below, signed ? "slt" : "ult", llvmType, source.ValueName, "55296");
             EmitCompare(above, signed ? "sgt" : "ugt", llvmType, source.ValueName, "57343");
             EmitInstruction($"{valid} = or i1 {below}, {above}");
-            EmitTrapUnless(valid, "numeric_conversion_surrogate");
+            EmitTrapUnless(valid, "numeric_conversion_surrogate", "numeric_conversion_surrogate");
         }
     }
 
