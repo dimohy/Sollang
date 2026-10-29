@@ -479,6 +479,22 @@ function Get-NativeExactPhaseExpectedStage {
     return $value
 }
 
+function Assert-NativeExactPhaseGenerationLink {
+    param([string]$RepositoryRoot, $ExpectedReference, $Comparison)
+    if ($null -eq $Comparison.PSObject.Properties['generationRecord']) {
+        throw 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_MISSING'
+    }
+    $reference=$Comparison.generationRecord
+    if ($null -eq $reference) { throw 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER' }
+    $fields=if ($reference -is [Collections.IDictionary]) { @($reference.Keys) } else { @($reference.PSObject.Properties.Name) }
+    if ('path' -cnotin $fields -or 'sha256' -cnotin $fields -or
+        $reference.path -cne $ExpectedReference.path -or $reference.sha256 -ine $ExpectedReference.sha256) {
+        throw 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER'
+    }
+    $actual=Get-NativeExactPhaseReference $RepositoryRoot $reference.path
+    if ($actual.sha256 -ine $ExpectedReference.sha256) { throw 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER' }
+}
+
 function Get-NativeExactPhaseContext {
     param([string]$RepositoryRoot, [string]$ContractPath, [ValidateSet('managed', 'selfhost')][string]$CompilerSide,
         [string]$CompilerPath, [string]$RunnerPath, [string[]]$WholeFixturePlan=@())
@@ -570,6 +586,10 @@ function Get-NativeExactPhaseContext {
     } else { $contract.sourceComparisonRecord }
     $comparison = Read-NativeExactPhaseReference $root $comparisonReference
     if ($comparison.status -cne 'compared' -or $comparison.phase -cne $contract.phase) { throw 'PHASE_EXECUTION_COMPARISON_MISSING' }
+    if ($contract.phase -ceq 'parsing') {
+        if ($contract.generationRecord.path -cne $inventory.generationRecord) { throw 'PHASE_EXECUTION_GENERATION_INVENTORY_DIFFER' }
+        Assert-NativeExactPhaseGenerationLink $root $contract.generationRecord $comparison
+    }
     $comparisonHashes = $comparison.sourceHashes
     foreach ($name in $sourceHashes.Keys) {
         $hash = if ($name -cin $expectedShared) { $comparison.sharedDependencyHashes.$name } else { $comparisonHashes.$name }

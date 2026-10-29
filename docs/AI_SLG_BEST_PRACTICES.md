@@ -134,6 +134,11 @@ borrow, readonly-reference handle, or immutable SSA value. `peek` does not
 require writable storage. Preserve that distinction for primary and additional
 parameters; do not invent a mutable slot for an immutable owner. Empty `peek`
 and `pop` share the source-owned `binary_heap_empty` diagnostic contract.
+For `push` through a product field, keep one field directly under a named
+mutable owner and store the resized heap handle through that field's place.
+A readonly root fails before emission; a nested field chain retains the named
+mutable binding diagnostic. Check the final flow target, writable owner, and
+argument count in that order. Projected `pop` does not share this support.
 Inside interpolation, resolve a method for the canonical receiver before a
 same-named free function, and a declared function before a spelling-based
 collection intrinsic. Commit one declaration before result and argument type

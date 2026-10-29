@@ -1304,7 +1304,8 @@ mutableInputTypeAdmitted prepared: ref semanticContext.SemanticSnapshot, typeId:
     prepared.semantic.types[typeId] => inputType
     inputType.kind == 1 and inputType.origin == 3
         -> if { true -> return }
-    inputType.kind == 3 or inputType.kind == 4 or inputType.kind == 5
+    # C# interns products in its struct table, so they own mutable storage too.
+    inputType.kind == 3 or inputType.kind == 4 or inputType.kind == 5 or inputType.kind == 10
         or inputType.kind == 12 or inputType.kind == 13 or inputType.kind == 14
         -> if { true -> return }
     # C# stores Set as a dictionary and Deque/BinaryHeap as dynamic arrays.
@@ -6064,6 +6065,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     nextChildByAst![flowChild!] => flowChild!
                 }
                 prepared -> taskFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, taskValueByAst!, taskFlowSources, firstChildByAst!, nextChildByAst!, selected!) => selected!
+                prepared -> heapPushFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, sourceAstByExpression, resolvedSymbolByAst!, firstChildByAst!, nextChildByAst!, selected!) => selected!
                 # Raw Arena calls share canonical receiver, argument and symbol
                 # indexes with materialize. Declared functions retain precedence.
                 # Ordinary value flows use their indexed direct Path child;
@@ -7158,6 +7160,103 @@ taskFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref e
     }
     violation! == 0 -> if { previous -> return }
     ExpressionOperandDiagnostic { code: 73, sourceModule: sourceModule, astNode: flowAst, operandAst: targetPath! - range.astStart, operatorKind: violation!, locationOffset: offset!, operandTypeSymbol: -1, operandTypeId: sourceType, firstTypeId: -1 } => diagnostic
+    prepared.package -> expressionDiagnosticPrecedes(resolved.fields, diagnostic, previous)
+        -> if { diagnostic } else { previous }
+}
+
+# Match C# push ordering: final target, writable source, then argument count.
+# Anonymous heap temporaries retain their earlier owned-storage diagnostic.
+heapPushFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, sourceModule: Int, flowAst: Int, flowSource: Int, typesByAst: ref [Int; ~], sourceAsts: ref [Int; ~], symbolsByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], previous: ExpressionOperandDiagnostic -> ExpressionOperandDiagnostic {
+    flowSource < 0 -> if { previous -> return }
+    resolved.types -> typeIds.materializedReadTypeId(typesByAst[flowSource]) => receiverTypeId
+    receiverTypeId < 0 or receiverTypeId >= (resolved.types -> len)
+        -> if { previous -> return }
+    resolved.types[receiverTypeId] => receiverType
+    not (receiverType.kind == 7 and receiverType.origin == 4 and receiverType.symbol == 7)
+        -> if { previous -> return }
+    prepared.package.ranges[sourceModule] => range
+    range.astStart + flowAst => globalFlow
+    prepared.callIndexByAst[globalFlow] => callIndex
+    callIndex >= 0 and prepared.calls[callIndex].functionSymbol >= 0
+        -> if { previous -> return }
+    -1 => targetPath!
+    -1 => targetCall!
+    firstChild[globalFlow] => child!
+    child! >= 0 -> while {
+        child! != flowSource -> if {
+            prepared.package.nodes[child!] => candidate
+            candidate.kind == 16 -> if { child! => targetPath! }
+            candidate.kind == 11 -> if {
+                child! => targetCall!
+                firstChild[child!] => nested!
+                nested! >= 0 -> while {
+                    prepared.package.nodes[nested!] => path
+                    path.kind == 16 and path.start == candidate.start
+                        -> if { nested! => targetPath! }
+                    nextChild[nested!] => nested!
+                }
+            }
+        }
+        nextChild[child!] => child!
+    }
+    targetPath! < 0 -> if { previous -> return }
+    prepared.package.nodes[targetPath!] => target
+    target.tokenCount != 1 or target.payloadToken < 0
+        -> if { previous -> return }
+    prepared.package.tokens[range.tokenStart + target.payloadToken] => token
+    prepared.package.sources[sourceModule] -> slice(token.span.start, token.span.length) => name
+    name != "push" -> if { previous -> return }
+    prepared.package.nodes[flowSource] => receiver
+    flowSource => root!
+    receiver.kind != 15 and receiver.kind != 36 -> if { previous -> return }
+    receiver.kind == 36 -> if {
+        sourceAsts[flowSource] => receiverSource
+        receiverSource >= 0 -> if { range.astStart + receiverSource => root! } else { -1 => root! }
+    }
+    0 => failure!
+    0 => failureKind!
+    receiver.start => offset!
+    receiver.kind == 36 -> if {
+        prepared.package -> ordinaryFieldDiagnosticOffset(sourceAsts, sourceModule, flowSource - range.astStart) => offset!
+    }
+    prepared.package.nodes[globalFlow] => flow
+    flow.parent >= 0 -> if {
+        prepared.package.nodes[range.astStart + flow.parent] => parent
+        parent.kind == 10 and parent.start == flow.start
+            -> if {
+                60 => failure!
+                1 => failureKind!
+                target.start => offset!
+            }
+    }
+    failure! == 0 and (root! < 0 or prepared.package.nodes[root!].kind != 15)
+        -> if { 62 => failure! }
+    failure! == 0 and root! >= 0 and symbolsByAst[root!] >= 0
+        -> if {
+            not (prepared.package -> mutableBorrowOwnerSymbol(sourceModule, prepared.package.symbols[symbolsByAst[root!]]))
+                -> if { 61 => failure! }
+        }
+    failure! == 0 -> if {
+        0 => argumentCount!
+        targetCall! >= 0 -> if {
+            firstChild[targetCall!] => argument!
+            argument! >= 0 -> while {
+                argument! != targetPath! -> if { argumentCount! + 1 => argumentCount! }
+                nextChild[argument!] => argument!
+            }
+        }
+        argumentCount! != 1 -> if {
+            60 => failure!
+            target.start => offset!
+        }
+    }
+    failure! == 0 -> if { previous -> return }
+    ExpressionOperandDiagnostic {
+        code: failure!, sourceModule: sourceModule,
+        astNode: flowSource - range.astStart, operandAst: root! - range.astStart,
+        operatorKind: -252, locationOffset: offset!,
+        operandTypeSymbol: failureKind!, operandTypeId: receiverTypeId, firstTypeId: -1
+    } => diagnostic
     prepared.package -> expressionDiagnosticPrecedes(resolved.fields, diagnostic, previous)
         -> if { diagnostic } else { previous }
 }

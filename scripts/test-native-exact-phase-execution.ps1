@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$GenerationLinkOnly)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1')
@@ -15,6 +15,35 @@ function Assert-Rejected([string]$Id, [scriptblock]$Action, [string]$Expected) {
 }
 function Save-Json([string]$Path, $Value) {
     [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+}
+$generationPath=Join-Path $root 'generation-link-control.json'
+Save-Json $generationPath @{status='passed';scope='synthetic-link-control-only'}
+$generationReference=Get-NativeExactPhaseReference $repository $generationPath
+$generationComparison=[pscustomobject]@{generationRecord=$generationReference}
+Assert-NativeExactPhaseGenerationLink $repository $generationReference $generationComparison
+$passed.Add('generation-link-present')
+Assert-Rejected 'generation-link-missing' {
+    Assert-NativeExactPhaseGenerationLink $repository $generationReference ([pscustomobject]@{})
+} 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_MISSING'
+Assert-Rejected 'generation-link-null' {
+    Assert-NativeExactPhaseGenerationLink $repository $generationReference ([pscustomobject]@{generationRecord=$null})
+} 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER'
+$staleGeneration=[pscustomobject]@{generationRecord=[pscustomobject]@{path=$generationReference.path;sha256=('0'*64)}}
+Assert-Rejected 'generation-link-stale' {
+    Assert-NativeExactPhaseGenerationLink $repository $generationReference $staleGeneration
+} 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER'
+$otherGeneration=[pscustomobject]@{generationRecord=[pscustomobject]@{path='other-generation.json';sha256=$generationReference.sha256}}
+Assert-Rejected 'generation-link-wrong-file' {
+    Assert-NativeExactPhaseGenerationLink $repository $generationReference $otherGeneration
+} 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER'
+if ($GenerationLinkOnly) {
+    Save-Json (Join-Path $root 'test-result.json') @{status='passed';completed=$passed.Count;total=$passed.Count;
+        cases=@($passed);scope='generation-link-only; no compiler/405 execution';
+        inputHashes=(Get-NativeExactPhaseHashes $repository @($PSCommandPath,
+            (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1'),
+            (Join-Path $PSScriptRoot 'contracts/native-exact-phase-execution-acceptance.json')))}
+    Write-Host "[native exact generation link] PASS $($passed.Count)/$($passed.Count); $root/test-result.json"
+    return
 }
 $llvmContractsRoot = Join-Path $root 'producer-contracts'
 [void][IO.Directory]::CreateDirectory($llvmContractsRoot)
