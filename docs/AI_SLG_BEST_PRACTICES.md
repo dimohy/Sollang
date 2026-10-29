@@ -1850,7 +1850,11 @@ incomplete result.
 10. affected Windows, Linux, and browser target closure.
 
 For an LLVM emission or call ABI repair, verify the C# behavior and compare the
-sources first. Then execute a checked production SLG emitter fixture with the
+sources first. Runtime helper admission shares the frozen function reachability
+and transitive owned-type drop roots used by emission. Keep ABI type admission
+separate: unused struct declarations can still reference runtime value types.
+Check those layout dependencies before compiling an emitter fixture, then
+execute a checked production SLG emitter fixture with the
 managed compiler before rebuilding the native self-host compiler. Pass the
 current assembly, link, and execution record through
 `scripts/build-focused-selfhost-compiler.ps1 -SlgEmissionProofRecord`.

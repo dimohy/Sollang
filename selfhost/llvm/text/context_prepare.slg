@@ -1097,15 +1097,16 @@ prepareNative request: ref PrepareRequest -> emitterContext.EmitContext {
 
 emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
+    context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesStandardError => usesStandardError
-    context -> diagnostics.usesProcessRuntime => needsProcessRuntime
-    context -> diagnostics.usesProcessCapture => needsProcessCapture
-    context -> diagnostics.usesEnvironmentRuntime => needsEnvironmentRuntime
-    context -> diagnostics.usesArgumentsRuntime => needsArgumentsRuntime
-    context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
-    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> usesReachableProcessRuntime(state) => needsProcessRuntime
+    context -> diagnostics.usesProcessCaptureWithReachability(state.frozenReachableFunctions) => needsProcessCapture
+    context -> diagnostics.usesEnvironmentRuntimeWithReachability(state.frozenReachableFunctions) => needsEnvironmentRuntime
+    context -> diagnostics.usesArgumentsRuntimeWithReachability(state.frozenReachableFunctions) => needsArgumentsRuntime
+    context -> diagnostics.usesDirectoryRuntimeWithReachability(state.frozenReachableFunctions) => needsDirectoryRuntime
+    context -> usesReachableOwnedFileRuntime(state) => needsOwnedFileRuntime
     context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions) => needsSocketRuntime
     context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => needsSocketCompletionRuntime
     context -> diagnostics.usesDnsRuntimeWithReachability(state.frozenReachableFunctions) => needsDnsRuntime
@@ -1129,9 +1130,9 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
         -> if { numberFormat.emitIntStandardErrorRuntime() }
     usesStandardError and usesBoolOutput
         -> if { numberFormat.emitBoolStandardErrorRuntime() }
-    context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    context -> diagnostics.usesSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => needsSourceTextRuntime
     context -> diagnostics.usesMappedBytesRuntime => needsMappedBytesRuntime
-    context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
+    context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => needsStandardInputSourceTextRuntime
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
     runtimeModuleSearch! < (context.modules -> len)
@@ -1267,7 +1268,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
         llvmRuntime.emitGlobalBinaryFileRuntime(true, context -> diagnostics.usesTextRuntime)
     }
     runtimeModule! >= 0 -> if {
-        runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
+        runtimeModule! -> runtimeFunctionSymbolsForEmission(context, state) => runtimeSymbols
         runtimeSymbols -> llvmRuntime.emitWindows(not needsOwnedFileRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime, not usesTextOutput and not capturesParallelOutput, not needsMappedBytesRuntime)
         needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitWindowsRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
     } else {
@@ -1290,16 +1291,17 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
 
 emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
+    context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesStandardError => usesStandardError
-    context -> diagnostics.usesProcessRuntime => needsProcessRuntime
-    context -> diagnostics.usesProcessCapture => needsProcessCapture
-    context -> diagnostics.usesEnvironmentRuntime => needsEnvironmentRuntime
-    context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
-    context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
-    context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
-    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> usesReachableProcessRuntime(state) => needsProcessRuntime
+    context -> diagnostics.usesProcessCaptureWithReachability(state.frozenReachableFunctions) => needsProcessCapture
+    context -> diagnostics.usesEnvironmentRuntimeWithReachability(state.frozenReachableFunctions) => needsEnvironmentRuntime
+    context -> diagnostics.usesSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => needsSourceTextRuntime
+    context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => needsStandardInputSourceTextRuntime
+    context -> diagnostics.usesDirectoryRuntimeWithReachability(state.frozenReachableFunctions) => needsDirectoryRuntime
+    context -> usesReachableOwnedFileRuntime(state) => needsOwnedFileRuntime
     context -> diagnostics.usesMappedBytesRuntime => needsMappedBytesRuntime
     context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions) => needsSocketRuntime
     context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => needsSocketCompletionRuntime
@@ -1388,7 +1390,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
         llvmRuntime.emitGlobalBinaryFileRuntime(false, context -> diagnostics.usesTextRuntime)
     }
     runtimeModule! >= 0 -> if {
-        runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
+        runtimeModule! -> runtimeFunctionSymbolsForEmission(context, state) => runtimeSymbols
         runtimeSymbols -> llvmRuntime.emitLinux(not (hasReadDeclaration or needsMouseEventsRuntime or needsProcessCapture or needsStandardInputSourceTextRuntime or needsIoCompletionRuntime), not (usesTextOutput or capturesParallelOutput or needsMouseEventsRuntime or needsIoCompletionRuntime), not (needsSourceTextRuntime or needsMappedBytesRuntime), not (needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime), not (hasCloseDeclaration or needsMouseEventsRuntime or needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime))
         needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitLinuxRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
     } else {
@@ -1411,8 +1413,9 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
 
 emitPreparedWasmContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
+    context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
     context -> diagnostics.usesStandardError => usesStandardError
-    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> usesReachableOwnedFileRuntime(state) => needsOwnedFileRuntime
     context -> diagnostics.usesTextRuntime
         -> if { usesStandardError -> textOutputRuntime.emitWasmTextRuntime }
     context -> diagnostics.usesIntMaterialization

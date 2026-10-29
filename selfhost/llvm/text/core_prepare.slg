@@ -643,21 +643,7 @@ interpolationLiteralReachable nodeIndex: Int, sourceModule: Int, context: ref em
     false
 }
 
-emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console, Process {
-    profile -> if { "preamble start" -> runtime.eprintln }
-    """
-    @sollang_bool_true_bytes = private constant [4 x i8] c"true"
-    @sollang_bool_false_bytes = private constant [5 x i8] c"false"
-    """ -> println
-    context -> diagnostics.usesParallelRuntime => usesComputePool
-    context -> usesReachableAsyncRuntime(state) => usesAsyncRuntime
-    context -> usesReachableAsyncDiagnostics(state)
-        -> if {
-            asyncRuntime.emitDiagnosticSessionRuntime()
-            context -> emitAsyncDiagnosticConstants(state)
-        }
-    context -> usesReachableAsyncFileRuntime(state) => usesAsyncFileRuntime
-    context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => usesSocketCompletionRuntime
+activeSemanticDropTypes context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
     [Int; ~] => dropTypeActive!
     0 => dropTypeActiveIndex!
     dropTypeActiveIndex! < (context.types -> len)
@@ -758,25 +744,47 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                 dropTypeClosureIndex! + 1 => dropTypeClosureIndex!
             }
     }
+    dropTypeActive!
+}
+
+emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console, Process {
+    profile -> if { "preamble start" -> runtime.eprintln }
+    """
+    @sollang_bool_true_bytes = private constant [4 x i8] c"true"
+    @sollang_bool_false_bytes = private constant [5 x i8] c"false"
+    """ -> println
+    context -> diagnostics.usesParallelRuntime => usesComputePool
+    context -> usesReachableAsyncRuntime(state) => usesAsyncRuntime
+    context -> usesReachableAsyncDiagnostics(state)
+        -> if {
+            asyncRuntime.emitDiagnosticSessionRuntime()
+            context -> emitAsyncDiagnosticConstants(state)
+        }
+    context -> usesReachableAsyncFileRuntime(state) => usesAsyncFileRuntime
+    context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => usesSocketCompletionRuntime
+    context -> activeSemanticDropTypes(state) => dropTypeActive
     profile -> if { "preamble drop closure" -> runtime.eprintln }
     false => usesOwnedDropRuntime!
     0 => ownedDropRuntimeIndex!
     ownedDropRuntimeIndex! < (context.types -> len)
         -> while {
-            dropTypeActive![ownedDropRuntimeIndex!] == 1 and (context.typeTraits[ownedDropRuntimeIndex!] / 2) % 2 == 1
+            dropTypeActive[ownedDropRuntimeIndex!] == 1 and (context.typeTraits[ownedDropRuntimeIndex!] / 2) % 2 == 1
                 -> if { true => usesOwnedDropRuntime! }
             ownedDropRuntimeIndex! + 1 => ownedDropRuntimeIndex!
         }
-    false => usesSourceText!
-    context -> diagnostics.usesStandardInputSourceTextRuntime => usesStandardInputSourceText
+    context -> diagnostics.usesSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => usesSourceText
+    context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => usesStandardInputSourceText
+    # Declared struct layouts can retain this ABI type without a reachable
+    # SourceText operation. Keep type admission separate from helper bodies.
+    false => hasSourceTextType!
     0 => sourceTextTypeSearch!
     sourceTextTypeSearch! < (context.ir -> len) -> while {
         context.ir[sourceTextTypeSearch!] -> typeQueries.isSourceText
-            -> if { true => usesSourceText! }
+            -> if { true => hasSourceTextType! }
         sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
     }
-    usesSourceText! -> if { "%sollang.source_text = type { ptr, i64, ptr, i64 }" -> println }
-    context -> diagnostics.usesOwnedFileRuntime => usesOwnedFile
+    hasSourceTextType! or usesSourceText -> if { "%sollang.source_text = type { ptr, i64, ptr, i64 }" -> println }
+    context -> usesReachableOwnedFileRuntime(state) => usesOwnedFile
     usesOwnedFile -> if {
         "%sollang.file_handle_result = type { i64, i32 }" -> println
         "%sollang.file_count_result = type { i64, i32 }" -> println
@@ -787,7 +795,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
         @sollang_file_error_invalid = private constant [7 x i8] c"invalid"
         """ -> println
     }
-    context -> diagnostics.usesDirectoryRuntime => usesDirectoryTraversal
+    context -> diagnostics.usesDirectoryRuntimeWithReachability(state.frozenReachableFunctions) => usesDirectoryTraversal
     usesDirectoryTraversal -> if {
         "%sollang.directory_result = type { ptr, i64, i64, i32 }" -> println
         "%sollang.path_query_result = type { ptr, i64, i8, i64, i64, i32 }" -> println
@@ -827,7 +835,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
         context.ir[textTypeSearch!].typeSymbol == 1 -> if { true => usesText! }
         textTypeSearch! + 1 => textTypeSearch!
     }
-    usesSourceText! or usesOwnedFile -> if { true => usesText! }
+    usesSourceText or usesOwnedFile -> if { true => usesText! }
     false => requiresEarlyTextType!
     0 => earlyTextFieldIndex!
     earlyTextFieldIndex! < (context.fields -> len)
@@ -1056,7 +1064,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
         "  unreachable" -> println
         "}" -> println
     }
-    usesStreamType! -> if {
+    context -> usesReachableRangeRuntime(state) -> if {
         """
         define internal i1 @sollang_range_stream_next(ptr %context, ptr %output) {
         entry:
@@ -1265,7 +1273,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
     }
     profile -> if { "preamble after product declarations" -> runtime.eprintln }
     profile -> if { "preamble before runtime" -> runtime.eprintln }
-    dropTypeActive! -> emitCoreRuntimePreamble(state.intrinsicRuntimeModule, requiresEarlyTextType!, usesComputePool, usesAsyncRuntime, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText!, usesStandardInputSourceText, usesText!, context, state) => runtimePreamble
+    dropTypeActive -> emitCoreRuntimePreamble(state.intrinsicRuntimeModule, requiresEarlyTextType!, usesComputePool, usesAsyncRuntime, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText, usesStandardInputSourceText, usesText!, context, state) => runtimePreamble
     profile -> if { "preamble after runtime" -> runtime.eprintln }
     runtimePreamble.usesArguments => usesArguments
     runtimePreamble.usesNativeInterop => usesNativeInterop

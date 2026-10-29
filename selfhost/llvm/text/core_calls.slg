@@ -581,6 +581,58 @@ irNodeReachable nodeIndex: Int, context: ref emitterContext.EmitContext, state: 
         }
     ownerIndex! -> nativeFunctionReachable(state)
 }
+# Runtime admission shares the exact function and implicit-drop roots of emission.
+usesReachableProcessRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context -> diagnostics.usesProcessRuntimeWithReachability(state.frozenReachableFunctions)
+        -> if { true -> return }
+    context -> activeSemanticDropTypes(state) => active
+    0 => typeIndex!
+    typeIndex! < (active -> len) -> while {
+        active[typeIndex!] == 1 and (typeIndex! -> isOwnedProcessChildType(context, state))
+            -> if { true -> return }
+        typeIndex! + 1 => typeIndex!
+    }
+    false
+}
+
+usesReachableOwnedFileRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context -> diagnostics.usesOwnedFileRuntimeWithReachability(state.frozenReachableFunctions)
+        -> if { true -> return }
+    context -> activeSemanticDropTypes(state) => active
+    0 => typeIndex!
+    typeIndex! < (active -> len) -> while {
+        active[typeIndex!] == 1 and (typeIndex! -> isOwnedFileType(context, state))
+            -> if { true -> return }
+        typeIndex! + 1 => typeIndex!
+    }
+    false
+}
+
+usesReachableResizeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions)
+        -> if { true -> return }
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        (nodeIndex! -> irNodeReachable(context, state))
+            and (node.opcode == -271 or (node.opcode == -229 and node.operand0 >= 0 and node.operand1 >= 0))
+            -> if { true -> return }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    false
+}
+
+usesReachableRangeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        (nodeIndex! -> irNodeReachable(context, state))
+            and (nodeIndex! -> isRangeDeferCall(context, state))
+            -> if { true -> return }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    false
+}
+
 # Runtime admission follows the same frozen function reachability as emission.
 usesReachableAsyncFileRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     0 => nodeIndex!

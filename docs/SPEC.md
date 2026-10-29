@@ -5896,6 +5896,14 @@ They must not silently fall back to another backend.
 
 ## LLVM Lowering Direction
 
+Runtime helper bodies follow reachable functions and calls, including runtime
+operations required by the transitive owned-type drop closure. An unused
+standard-library declaration or semantic type alone does not require its
+runtime helper bodies. Preserve ABI type definitions referenced by declared
+struct layouts even when their operations are unreachable. Runtime declaration
+diagnostics remain independent of helper selection, and every emitted call
+must retain its matching declaration or definition in the LLVM module.
+
 Internal function symbols must preserve canonical function identity, including
 the distinction between namespace separators and identifier underscores.
 Replacing both with the same character is not a valid encoding. The managed

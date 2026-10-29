@@ -631,7 +631,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             -> if { true => usesComInterop! }
         nativeInteropSearch! + 1 => nativeInteropSearch!
     }
-    usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> diagnostics.usesOwnedFileRuntime)
+    usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> usesReachableOwnedFileRuntime(state))
         -> if { "declare void @llvm.trap()" -> println }
     emitRawArenaRuntime(usesRawArenaAllocation!, usesRawArenaAccess!, usesArenaConstruction!)
     usesDictionary! -> if { "declare i16 @llvm.cttz.i16(i16, i1)" -> println }
@@ -648,8 +648,8 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         }
         emitNativeRuntime(context, state)
     }
-    context -> diagnostics.usesProcessExit => needsProcessExit
-    needsProcessExit or (context.pointerBitWidth != 32 and (intrinsicRuntimeModule >= 0 or (context -> diagnostics.usesOwnedFileRuntime)))
+    context -> diagnostics.usesProcessExitWithReachability(state.frozenReachableFunctions) => needsProcessExit
+    needsProcessExit or (context.pointerBitWidth != 32 and (intrinsicRuntimeModule >= 0 or (context -> usesReachableOwnedFileRuntime(state))))
         -> if {
             context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
         }
@@ -657,12 +657,12 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     usesMappedBytes and context.pointerBitWidth != 32
         -> if {
             context.expectedPathStyle == 1 -> if {
-                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> diagnostics.usesOwnedFileRuntime) or (context -> diagnostics.usesDirectoryRuntime) or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesProcessCapture) or (context -> diagnostics.usesMouseEventsRuntime) or context.usesConcurrentStreamJoins) => declareMappedCloseHandle
+                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> usesReachableOwnedFileRuntime(state)) or (context -> diagnostics.usesDirectoryRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesParallelRuntime) or (context -> usesReachableProcessRuntime(state)) or (context -> diagnostics.usesProcessCaptureWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or context.usesConcurrentStreamJoins) => declareMappedCloseHandle
                 intrinsicRuntimeModule < 0 and not usesSourceText => declareMappedMapping
                 llvmRuntime.emitWindowsMappedBytes(declareMappedCloseHandle, declareMappedMapping)
             } else {
-                not (usesSourceText or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedOpen
-                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedClose
+                not (usesSourceText or (context -> usesReachableProcessRuntime(state)) or (context -> usesReachableOwnedFileRuntime(state))) => declareMappedOpen
+                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> usesReachableProcessRuntime(state)) or (context -> usesReachableOwnedFileRuntime(state))) => declareMappedClose
                 not usesSourceText => declareMappedPosixMapping
                 llvmRuntime.emitLinuxMappedBytes(declareMappedOpen, declareMappedClose, declareMappedPosixMapping)
             }
