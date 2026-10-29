@@ -1,0 +1,27 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "phase=source-preparation" -> println
+    paths! -> semanticContext.prepareFiles => initial!
+    144 => initial!.standardLibrarySourceCount
+    initial! -> semanticContext.freeze => initial
+    "phase=call-context" -> println
+    initial -> expressionTypeIds.profileResolveCallContext -> when {
+        Err(error) {
+            "call-context profile clock failure" -> println
+            process.exit(1)
+        }
+        Ok(value) {
+            "sources=$(value.resolved.prepared.package.sources -> len) initial=$(value.initialCoreMilliseconds) completion=$(value.completionMilliseconds) types=$(value.resolved.types.types -> len) expressions=$(value.resolved.types.expressions -> len) arguments=$(value.resolved.types.callArguments -> len)" -> println
+        }
+    }
+}
