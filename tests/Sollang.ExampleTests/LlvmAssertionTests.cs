@@ -54,16 +54,16 @@ internal static class LlvmAssertionTests
             else
             {
                 Verify("missing-specialization", ReplaceFirst(@"(?ms)^define i32 @sollang_m144_s5_g\d+\([^\r\n]+\r?\n.*?^\}\r?\n", ""), false);
-                var calls = Regex.Matches(original, @"call i32 (?<target>@sollang_m144_s5_g\d+)\(\{ ptr, i64 \} (?<argument>%v\d+)\)");
+                var calls = Regex.Matches(original, @"call i32 (?<target>@sollang_m144_s5_g\d+)\(%sollang\.int_slice (?<argument>%v\d+)\)");
                 if (calls.Count != 5) throw new InvalidOperationException("Expected five pinned specialization calls.");
                 var second = calls[1].Groups["target"];
                 Verify("duplicate-target", original[..second.Index] + calls[0].Groups["target"].Value + original[(second.Index + second.Length)..], false);
                 var firstArgument = calls[0].Groups["argument"];
                 Verify("wrong-type-binding", original[..firstArgument.Index] + calls[2].Groups["argument"].Value + original[(firstArgument.Index + firstArgument.Length)..], false);
-                Verify("unspecialized-template", original + "\ndeclare i32 @sollang_m144_s5({ ptr, i64 })\n", false);
+                Verify("unspecialized-template", original + "\ndeclare i32 @sollang_m144_s5(%sollang.int_slice)\n", false);
                 Verify("wrong-first-load", ReplaceFirst(@"(?s)(define %sollang\.text @sollang_m144_s9_g\d+\([^\n]+\n(?:(?!\n\}).)*?load )%sollang\.text", "${1}i32"), false);
-                Verify("wrong-length-binding", ReplaceFirst(@"(= insertvalue \{ ptr, i64 \} %v\d+_0, i64 )3(, 1)", "${1}4${2}"), false);
-                Verify("wrong-fixed-length-result", ReplaceFirst(@"(?s)(define i32 @sollang_m144_s5_g\d+\([^}]+\} %arg\) \{.*?ret i32 )%v\d+", "${1}999"), false);
+                Verify("wrong-length-binding", ReplaceFirst(@"(= insertvalue %sollang\.int_slice %v\d+_0, i64 )3(, 1)", "${1}4${2}"), false);
+                Verify("wrong-fixed-length-result", ReplaceFirst(@"(?s)(define i32 @sollang_m144_s5_g\d+\(%sollang\.int_slice %arg\) \{.*?ret i32 )%v\d+", "${1}999"), false);
             }
         }
         catch (Exception error) { failure = error.ToString(); }
