@@ -1,0 +1,16 @@
+from pathlib import Path
+base = Path('artifacts/scratch/resume-20261006-owner-continuation22')
+s = (base/'runtime18178-reused3.py').read_text(encoding='utf-8')
+s = s.replace('import importlib.util,json,hashlib,sys', 'import importlib.util,json,hashlib,sys,time')
+s = s.replace("output=b/'runtime18178-reused3'", "output=b/'runtime18215-reused7'")
+s = s.replace("source=b/'runtime18169-source12/result.json'", "source=b/'runtime18208-source16/result.json'")
+s = s.replace("contractPath=b/'runtime18167-source12.json'", "contractPath=b/'runtime18203-source16.json'")
+s = s.replace("selected=[c for c in contract['cases'] if c['id'] in ['reachable-text-materialize','reachable-process-capture','original42']];assert len(selected)==3", "selected=[c for c in contract['cases'] if c['id'] not in {x['id'] for x in previous['cases']}];assert len(selected)==7")
+s = s.replace('Remaining3 independent consumers of the same retained checked producer after unrelated original859 rejection; no rebuild, no changed compiler/source/expected input. Parent common39 failure remains.', 'Remaining7 independent consumers of the retained input-stable producer after original859 S002 mismatch. No rebuild or changed producer inputs. Parent859 remains failed; original38-41 common LLVM4 passed.')
+s = s.replace("'total':3", "'total':7")
+s = s.replace(' def run(command,prefix):return execution.run(command,prefix,timeout=180)', ' def run(command,prefix):\n  remaining=current_deadline-time.monotonic()\n  if remaining<=0:raise TimeoutError("CASE_180_SECOND_BUDGET_EXHAUSTED")\n  return execution.run(command,prefix,timeout=min(180,remaining))')
+s = s.replace('  for case in selected:\n   assert stable();', '  for case in selected:\n   current_deadline=time.monotonic()+180\n   assert stable();')
+s = s.replace("   llvm=folder/'emitted.ll';", "   if not case.get('emittedLlvm'):\n    row.update(nativeRunExit=result.returncode,nativeRunStdout=result.stdout.strip(),rejectedBeforeLlvm='selection-emission-rejected' in result.stdout)\n    if result.stdout.strip()!=case['stdout'].strip() or not row['rejectedBeforeLlvm']:row.update(status='failed',failureId='EXPECTED_REJECTION_MISMATCH');execution.save();continue\n    row.update(status='passed',passed=True);record['completed']+=1;execution.save();print(case['id']+': PASS',flush=True);continue\n   llvm=folder/'emitted.ll';")
+s = s.replace("case['stdout'],run);row.update(audit)", "case['stdout'],lambda command,prefix:run(command,prefix).returncode);row.update(audit)")
+assert 'timeout=min(180,remaining)' in s and 'lambda command,prefix' in s
+(base/'runtime18215-reused7.py').write_text(s, encoding='utf-8')
