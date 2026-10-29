@@ -129,6 +129,11 @@ explicit matching method. Retain exact nominal dispatch for nominal fields.
 Keep a committed full receiver type authoritative. Fields referenced inside a
 constructed receiver's initializer do not replace that receiver, and an earlier
 lexical impl-method candidate still requires exact receiver-owner validation.
+Read a `BinaryHeap` through its canonical handle: a mutable local slot, mutable
+borrow, readonly-reference handle, or immutable SSA value. `peek` does not
+require writable storage. Preserve that distinction for primary and additional
+parameters; do not invent a mutable slot for an immutable owner. Empty `peek`
+and `pop` share the source-owned `binary_heap_empty` diagnostic contract.
 Inside interpolation, resolve a method for the canonical receiver before a
 same-named free function, and a declared function before a spelling-based
 collection intrinsic. Commit one declaration before result and argument type
