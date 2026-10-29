@@ -1,0 +1,840 @@
+diff --git a/26dc26b0ff32c210479475cf32ba2694a890c2aa b/selfhost/llvm/text/core_calls.slg
+index 26dc26b0f..a35cab4b8 100644
+--- a/26dc26b0ff32c210479475cf32ba2694a890c2aa
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -37,6 +37,7 @@ import sys.process as process
+ # Entry and ordinary scheduling share the same resolved await identity used
+ # by value emission. A blocking join remains observable without a resume point.
+ isResolvedAwaitNode node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
++    node -> typedIr.isAsyncExpressionRead -> if { false -> return }
+     node.kind == 5 and node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len) and node.astNode >= 0
+         -> if {
+             context.ranges[node.sourceModule] => range
+@@ -423,10 +424,14 @@ emitAwaitTaskValue nodeIndex: Int, context: ref emitterContext.EmitContext, stat
+             "v$(nodeIndex)" -> emitJoinedTaskResultCompletion
+             not (awaited.typeOrigin == 1 and awaited.typeSymbol == 0)
+                 -> if {
+-                    "  %v$(nodeIndex) = load " -> print
++                    "  " -> print
++                    nodeIndex -> writeMemberStorageValueName(context, state)
++                    " = load " -> print
+                     awaited.typeId -> writeSemanticTypeId(context, state)
+                     ", ptr %v$(nodeIndex)_task_context, align " -> print
+                     awaited -> storageAlign(context, state) -> writeDecimalLine
++                    awaited -> boundedArrayValueTypeId(context, state) => awaitedBoundedType
++                    "v$(nodeIndex)" -> emitStoredBoundedValueHandle(awaitedBoundedType, context, state)
+                 }
+             "  %v$(nodeIndex)_task_released = call i1 @sollang_task_release(ptr %v$(nodeIndex)_task_handle)" -> println
+             "  br i1 %v$(nodeIndex)_task_released, label %await$(nodeIndex)_released, label %await$(nodeIndex)_release_failed" -> println
+@@ -457,7 +462,7 @@ emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterConte
+         "  %v$(nodeIndex)_sleep_finite_deadline = add i64 %v$(nodeIndex)_sleep_now, %v$(nodeIndex)_sleep_normalized" -> println
+         "  %v$(nodeIndex)_sleep_deadline = select i1 %v$(nodeIndex)_sleep_too_large, i64 9223372036854775807, i64 %v$(nodeIndex)_sleep_finite_deadline" -> println
+         context -> usesReachableAsyncDiagnostics(state) => diagnosticSleep
+-        "  %v$(nodeIndex)_sleep_context = call ptr @malloc(i64 " -> print
++        "  %v$(nodeIndex)_sleep_context = call ptr @sollang_alloc(i64 " -> print
+         diagnosticSleep -> if { "56" -> print } else { "1" -> print }
+         ")" -> println
+         "  %v$(nodeIndex)_sleep_allocated = icmp ne ptr %v$(nodeIndex)_sleep_context, null" -> println
+@@ -472,12 +477,12 @@ emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterConte
+             "  store { ptr, ptr, i64, i64, ptr, ptr } zeroinitializer, ptr %v$(nodeIndex)_sleep_header, align 8" -> println
+             "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_diagnostic_sleep_worker, ptr @sollang_diagnostic_sleep_destroy, ptr @sollang_diagnostic_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
+         } else {
+-            "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_sleep_worker, ptr @free, ptr @sollang_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
++            "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_sleep_worker, ptr @sollang_free, ptr @sollang_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
+         }
+         "  %v$(nodeIndex)_sleep_started = icmp ne ptr %v$(nodeIndex)_sleep_handle, null" -> println
+         "  br i1 %v$(nodeIndex)_sleep_started, label %sleep$(nodeIndex)_ready, label %sleep$(nodeIndex)_start_failed" -> println
+         "sleep$(nodeIndex)_start_failed:" -> println
+-        "  call void @free(ptr %v$(nodeIndex)_sleep_context)" -> println
++        "  call void @sollang_free(ptr %v$(nodeIndex)_sleep_context)" -> println
+         "  call void @llvm.trap()" -> println
+         "  unreachable" -> println
+         "sleep$(nodeIndex)_ready:" -> println
+@@ -576,6 +581,58 @@ irNodeReachable nodeIndex: Int, context: ref emitterContext.EmitContext, state:
+         }
+     ownerIndex! -> nativeFunctionReachable(state)
+ }
++# Runtime admission shares the exact function and implicit-drop roots of emission.
++usesReachableProcessRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
++    context -> diagnostics.usesProcessRuntimeWithReachability(state.frozenReachableFunctions)
++        -> if { true -> return }
++    context -> activeSemanticDropTypes(state) => active
++    0 => typeIndex!
++    typeIndex! < (active -> len) -> while {
++        active[typeIndex!] == 1 and (typeIndex! -> isOwnedProcessChildType(context, state))
++            -> if { true -> return }
++        typeIndex! + 1 => typeIndex!
++    }
++    false
++}
++
++usesReachableOwnedFileRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
++    context -> diagnostics.usesOwnedFileRuntimeWithReachability(state.frozenReachableFunctions)
++        -> if { true -> return }
++    context -> activeSemanticDropTypes(state) => active
++    0 => typeIndex!
++    typeIndex! < (active -> len) -> while {
++        active[typeIndex!] == 1 and (typeIndex! -> isOwnedFileType(context, state))
++            -> if { true -> return }
++        typeIndex! + 1 => typeIndex!
++    }
++    false
++}
++
++usesReachableResizeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions)
++        -> if { true -> return }
++    0 => nodeIndex!
++    nodeIndex! < (context.ir -> len) -> while {
++        context.ir[nodeIndex!] => node
++        (nodeIndex! -> irNodeReachable(context, state))
++            and (node.opcode == -271 or (node.opcode == -229 and node.operand0 >= 0 and node.operand1 >= 0))
++            -> if { true -> return }
++        nodeIndex! + 1 => nodeIndex!
++    }
++    false
++}
++
++usesReachableRangeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    0 => nodeIndex!
++    nodeIndex! < (context.ir -> len) -> while {
++        (nodeIndex! -> irNodeReachable(context, state))
++            and (nodeIndex! -> isRangeDeferCall(context, state))
++            -> if { true -> return }
++        nodeIndex! + 1 => nodeIndex!
++    }
++    false
++}
++
+ # Runtime admission follows the same frozen function reachability as emission.
+ usesReachableAsyncFileRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+     0 => nodeIndex!
+@@ -1586,16 +1643,28 @@ writeParallelBranchArgumentType argumentIndex: Int, context: ref emitterContext.
+     context.ir[argumentIndex].parent => callIndex
+     argumentIndex -> parallelBranchArgumentOrdinal(context) => ordinal
+     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+-    parameterIndex >= 0 -> if { context.ir[parameterIndex] -> writeIrType(context, state) } else { context.ir[argumentIndex] -> writeIrType(context, state) }
++    parameterIndex >= 0 -> if { context.ir[parameterIndex] -> writeFunctionValueAbiType(context, state) } else { context.ir[argumentIndex] -> writeFunctionValueAbiType(context, state) }
+ }
++
++parallelBranchSourceUsesPointer source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    (source -> referenceValueTypeId(context, state)) >= 0 or (source -> captureUsesBorrowAbi(context, state))
++}
++
++writeParallelBranchSourceType source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    source -> parallelBranchSourceUsesPointer(context, state)
++        -> if { "ptr" -> print } else {
++            source -> writeFunctionValueAbiType(context, state)
++        }
++}
++
+ writeParallelBranchEnvironmentType branchIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     "{ " -> print
+-    context.ir[context.ir[branchIndex].operand1] -> writeIrType(context, state)
++    context.ir[context.ir[branchIndex].operand1] -> writeParallelBranchSourceType(context, state)
+     0 => captureIndex!
+     captureIndex! < (captures -> len) -> while {
+         ", " -> print
+         context.ir[captures[captureIndex!]] => capture
+-        capture -> ownsType -> if { "ptr" -> print } else { capture -> writeIrType(context, state) }
++        capture -> writeCaptureAbiType(context, state)
+         captureIndex! + 1 => captureIndex!
+     }
+     branchIndex -> parallelBranchArguments(context) => arguments
+@@ -2035,17 +2104,165 @@ parallelUsesComputePool expressionIndex: Int, context: ref emitterContext.EmitCo
+         }
+     supported!
+ }
+-emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++# Capture signatures and all environment fields share the canonical value ABI.
++captureUsesBorrowAbi binding: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    binding -> boundedArrayValueTypeId(context, state) => boundedType
++    boundedType >= 0 -> if { boundedType -> semanticTypeOwns(context, state) -> return }
++    binding -> ownsType
++}
++
++writeCaptureAbiType binding: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    binding -> captureUsesBorrowAbi(context, state)
++        -> if { "ptr" -> print } else {
++            binding -> writeFunctionValueAbiType(context, state)
++        }
++}
++
++captureBindingIsLocal request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+     request.callerIndex -> functionEnd(context, state) => callerEnd
+-    context.ir[request.bindingIndex] => binding
+     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
++}
++
++captureTransportPrefix request: CaptureValueRequest, storage: mut Arena -> Text {
++    request.interpolationIndex >= 0 -> if {
++        "interpolation$(request.callIndex)_expression$(request.interpolationIndex)_capture$(request.captureIndex)" -> materialize(storage) -> return
++    }
++    "callenv$(request.callIndex)_capture$(request.captureIndex)" -> materialize(storage)
++}
++
++captureParameterOrdinal request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    context.ir[request.bindingIndex] => binding
++    context.ir[request.callerIndex].operand1 => primary
++    primary >= 0 and context.ir[primary].symbol == binding.symbol
++        -> if { 0 -> return }
++    request.callerIndex -> additionalParameterOrdinal(binding.symbol, context, state)
++}
++
++emitBoundedCaptureTransport request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    request -> captureBindingIsLocal(context, state)
++        -> unless { return }
++    context.ir[request.bindingIndex] => binding
++    binding -> boundedArrayValueTypeId(context, state) => boundedType
++    boundedType < 0 -> if { return }
++    Arena(0) => prefixStorage!
++    request -> captureTransportPrefix(prefixStorage!) => prefix
++    binding.kind == 10 and binding.flags / 2 % 2 == 1
+         -> if {
+-            binding.kind != 10 and binding.flags == 1 -> if {
++            request -> captureParameterOrdinal(context, state) => ordinal
++            ordinal < 0 -> if {
++                "; sollang compiler error S019: bounded capture has no mutable parameter ordinal" -> println
++                process.exit(1)
++            }
++            Arena(0) => sourcePrefixStorage!
++            "$(prefix)_source" -> materialize(sourcePrefixStorage!) => sourcePrefix
++            sourcePrefix -> emitCurrentMutableParameterValueAt(request.bindingIndex, ordinal, request.callerIndex, context, state)
++        } else { binding.kind != 10 and binding.flags == 1 -> if {
+                 request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
+-                "%slot$(bindingRoot)" -> print
++                "  %$(prefix)_source = load %sollang.array.i32, ptr %slot$(bindingRoot), align 8" -> println
+             } else {
+-                "%capture_borrow_binding$(request.bindingIndex)" -> print
++                "  %$(prefix)_source = freeze %sollang.array.i32 " -> print
++                request -> emitCaptureValue(context, state)
++                "" -> println
++            }
++        }
++    Arena(0) => valuePrefixStorage!
++    "$(prefix)_bounded" -> materialize(valuePrefixStorage!) => valuePrefix
++    Arena(0) => sourceStorage!
++    "%$(prefix)_source" -> materialize(sourceStorage!) => source
++    valuePrefix -> emitBoundedArrayValueFromHandle(source, boundedType, context, state)
++    binding -> captureUsesBorrowAbi(context, state)
++        -> if {
++            "  %$(prefix)_bounded_ref = alloca " -> print
++            boundedType -> writeValueAbiTypeId(context, state)
++            ", align $(context.typeAligns[boundedType])" -> println
++            "  store " -> print
++            boundedType -> writeValueAbiTypeId(context, state)
++            " %$(prefix)_bounded, ptr %$(prefix)_bounded_ref, align $(context.typeAligns[boundedType])" -> println
++        }
++}
++
++emitCaptureTransport request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    context.ir[request.bindingIndex] => binding
++    (binding -> boundedArrayValueTypeId(context, state)) >= 0
++        -> if {
++            request -> emitBoundedCaptureTransport(context, state)
++            return
++        }
++    request -> captureBindingIsLocal(context, state)
++        -> unless { return }
++    Arena(0) => prefixStorage!
++    request -> captureTransportPrefix(prefixStorage!) => prefix
++    binding.kind == 10 and binding.flags / 2 % 2 == 1
++        -> if {
++            request -> captureParameterOrdinal(context, state) => ordinal
++            ordinal < 0 -> if {
++                "; sollang compiler error S019: capture has no mutable parameter ordinal" -> println
++                process.exit(1)
++            }
++            prefix -> emitCurrentMutableParameterValueAt(request.bindingIndex, ordinal, request.callerIndex, context, state)
++        } else {
++            binding.kind != 10 and binding.flags == 1 and not (binding -> captureUsesBorrowAbi(context, state))
++                -> if {
++                    request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
++                    "  %$(prefix) = load " -> print
++                    binding -> writeIrType(context, state)
++                    ", ptr %slot$(bindingRoot), align " -> print
++                    binding -> storageAlign(context, state) -> writeDecimalLine
++                }
++        }
++    (binding -> captureUsesBorrowAbi(context, state)) and not (binding.kind != 10 and binding.flags == 1)
++        -> if {
++            request.interpolationIndex >= 0 -> if {
++                "  %$(prefix)_ref = alloca " -> print
++                binding -> writeIrType(context, state)
++                ", align " -> print
++                binding -> storageAlign(context, state) -> writeDecimalLine
+             }
++            "  store " -> print
++            binding -> writeIrType(context, state)
++            " " -> print
++            request -> emitCaptureValue(context, state)
++            ", ptr " -> print
++            request -> emitCapturePointer(context, state)
++            ", align " -> print
++            binding -> storageAlign(context, state) -> writeDecimalLine
++        }
++}
++
++writeCaptureArgumentValue request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    Arena(0) => prefixStorage!
++    request -> captureTransportPrefix(prefixStorage!) => prefix
++    context.ir[request.bindingIndex] => binding
++    binding -> captureUsesBorrowAbi(context, state)
++        -> if {
++            request -> emitCapturePointer(context, state)
++        } else {
++            (binding -> boundedArrayValueTypeId(context, state)) >= 0
++                and (request -> captureBindingIsLocal(context, state))
++                -> if {
++                    "%$(prefix)_bounded" -> print
++                } else { request -> emitCaptureValue(context, state) }
++        }
++}
++
++emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    Arena(0) => prefixStorage!
++    request -> captureTransportPrefix(prefixStorage!) => prefix
++    request.callerIndex -> functionEnd(context, state) => callerEnd
++    context.ir[request.bindingIndex] => binding
++    request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
++        -> if {
++            (binding -> boundedArrayValueTypeId(context, state)) >= 0
++                -> if {
++                    "%$(prefix)_bounded_ref" -> print
++                } else { binding.kind != 10 and binding.flags == 1 -> if {
++                        request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
++                        "%slot$(bindingRoot)" -> print
++                    } else { request.interpolationIndex >= 0 -> if {
++                            "%$(prefix)_ref" -> print
++                        } else {
++                            "%capture_borrow_binding$(request.bindingIndex)" -> print
++                } } }
+         } else {
+             request.callerIndex -> functionCaptures(context, state) => callerCaptures
+             -1 => capturePosition!
+@@ -2060,23 +2277,24 @@ emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.Emi
+         }
+ }
+ emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    Arena(0) => prefixStorage!
++    request -> captureTransportPrefix(prefixStorage!) => prefix
+     context.ir[request.callerIndex] => caller
+     context.ir[request.bindingIndex] => binding
+     request.callerIndex -> functionEnd(context, state) => callerEnd
+     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
+         -> if {
+             binding.kind == 10 -> if {
+-                -1 => captureParameterOrdinal!
+-                context.ir[request.callerIndex].kind == 0 and context.ir[request.callerIndex].operand1 >= 0
+-                    -> if {
+-                        binding.symbol == context.ir[context.ir[request.callerIndex].operand1].symbol
+-                            -> if { 0 => captureParameterOrdinal! } else {
+-                                request.callerIndex -> additionalParameterOrdinal(binding.symbol, context, state) => captureParameterOrdinal!
+-                            }
+-                    }
+-                captureParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(captureParameterOrdinal!)" -> print }
++                request -> captureParameterOrdinal(context, state) => ordinal
++                ordinal < 0 -> if {
++                    "; sollang compiler error S019: capture has no parameter ordinal" -> println
++                    process.exit(1)
++                }
++                binding.flags / 2 % 2 == 1 -> if {
++                    "%$(prefix)" -> print
++                } else { ordinal == 0 -> if { "%arg" -> print } else { "%arg$(ordinal)" -> print } }
+             } else {
+-                binding.flags == 1 -> if { "%callenv$(request.callIndex)_capture$(request.captureIndex)" -> print } else {
++                binding.flags == 1 -> if { "%$(prefix)" -> print } else {
+                     binding.operand0 -> writeValue(request.callerIndex, context, state)
+                 }
+             }
+@@ -2268,7 +2486,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex:
+                                 or (referenceNeedsTemporaryRoot and referenceRootBinding >= 0))
+                                 -> if {
+                                     "  %callref$(callIndex!)_arg$(ordinal!) = alloca " -> print
+-                                    referenceStorageType! -> writeAggregateFieldTypeId(context, state)
++                                    referenceStorageType! -> writeValueAbiTypeId(context, state)
+                                     ", align " -> print
+                                     referenceStorageType! -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
+                                 }
+@@ -2277,6 +2495,12 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex:
+                     ordinal! + 1 => ordinal!
+                 }
+             callIndex! -> callArgumentIndex(context, state) => interpolationArgumentIndex!
++            # Materialize consumes deferred Text through its flow source;
++            # its ordinary argument is the Arena. Use the same scratch planner
++            # and consumer label for that source as for other Text consumers.
++            call.opcode == -229 and call.operand0 >= 0 and call.operand1 >= 0
++                => materializedInterpolationSource
++            materializedInterpolationSource -> if { call.operand0 => interpolationArgumentIndex! }
+             [Int; ~] => interpolationTextIndices!
+             interpolationArgumentIndex! >= 0 -> while {
+                 interpolationArgumentIndex! -> aggregateValueIndex(context, state) => interpolationArgumentValueIndex
+@@ -2334,7 +2558,9 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex:
+                                 }
+                         }
+                     }
+-                context.ir[interpolationArgumentIndex!].nextOperand => interpolationArgumentIndex!
++                materializedInterpolationSource -> if {
++                    -1 => interpolationArgumentIndex!
++                } else { context.ir[interpolationArgumentIndex!].nextOperand => interpolationArgumentIndex! }
+             }
+         }
+         callIndex! -> emitFormattingCallAllocas(ownerIndex, context, state)
+@@ -2387,14 +2613,20 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
+                             -> if {
+                                 referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, -1, referenceNeedsTemporaryRoot, context, state) => emittedReferenceProjectionDepth!
+                             } else {
++                                context.types[referenceOwnerType].kind == 12 => boundedReferenceValue
++                                boundedReferenceValue -> if {
++                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(referenceArgumentIndex, ownerIndex, referenceOwnerType, context, state)
++                                }
+                                 "  store " -> print
+-                                referenceOwnerType -> writeAggregateFieldTypeId(context, state)
++                                referenceOwnerType -> writeValueAbiTypeId(context, state)
+                                 " " -> print
+-                                referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
+-                                liveReferenceParameterOrdinal >= 0 -> if {
+-                                    "%v$(referenceArgumentIndex)" -> print
+-                                } else {
+-                                    referenceArgumentIndex -> writeValue(ownerIndex, context, state)
++                                boundedReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
++                                    referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
++                                    liveReferenceParameterOrdinal >= 0 -> if {
++                                        "%v$(referenceArgumentIndex)" -> print
++                                    } else {
++                                        referenceArgumentIndex -> writeValue(ownerIndex, context, state)
++                                    }
+                                 }
+                                 ", ptr %callref" -> print
+                                 callIndex -> writeDecimal
+@@ -2479,13 +2711,24 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
+                                     referenceOwnerType -> writeAggregateFieldTypeId(context, state)
+                                     " %callref$(callIndex)_arg$(ordinal)_live1, i64 %callref$(callIndex)_arg$(ordinal)_live_capacity, 2" -> println
+                                 }
++                                context.types[referenceOwnerType].kind == 12 => boundedWhileReferenceValue
++                                boundedWhileReferenceValue -> if {
++                                    "  %callref$(callIndex)_arg$(ordinal)_handle = freeze %sollang.array.i32 " -> print
++                                    liveWhileReferenceOrdinal >= 0 -> if { "%callref$(callIndex)_arg$(ordinal)_live" -> print } else {
++                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
++                                    }
++                                    "" -> println
++                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValueFromHandle("%callref$(callIndex)_arg$(ordinal)_handle", referenceOwnerType, context, state)
++                                }
+                                 "  store " -> print
+-                                referenceOwnerType -> writeAggregateFieldTypeId(context, state)
++                                referenceOwnerType -> writeValueAbiTypeId(context, state)
+                                 " " -> print
+-                                liveWhileReferenceOrdinal >= 0 -> if {
+-                                    "%callref$(callIndex)_arg$(ordinal)_live" -> print
+-                                } else {
+-                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
++                                boundedWhileReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
++                                    liveWhileReferenceOrdinal >= 0 -> if {
++                                        "%callref$(callIndex)_arg$(ordinal)_live" -> print
++                                    } else {
++                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
++                                    }
+                                 }
+                                 ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
+                                 referenceOwnerType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
+@@ -2546,8 +2789,8 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
+             ", i32 0, i32 " -> print
+             context.ir[mutableValueIndex].symbol -> writeDecimalLine
+             projectedFixedMember -> if {
+-                "  %$(label)_carrier = load { ptr, i64 }, ptr %$(label)_field, align 8" -> println
+-                "  %$(label) = extractvalue { ptr, i64 } %$(label)_carrier, 0" -> println
++                "  %$(label)_carrier = load %sollang.int_slice, ptr %$(label)_field, align 8" -> println
++                "  %$(label) = extractvalue %sollang.int_slice %$(label)_carrier, 0" -> println
+             }
+         } else {
+             context.ir[mutableParameterIndex] -> effectiveTypeId(context, state) => mutableTargetTypeId
+@@ -2556,9 +2799,9 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
+                 and context.types[mutableTargetTypeId].length >= 0
+                 and forwardedOrdinal < 0 -> if {
+                     mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
+-                    "  %$(label)_fixed = load { ptr, i64 }, ptr %slot$(mutableRoot), align " -> print
++                    "  %$(label)_fixed = load %sollang.int_slice, ptr %slot$(mutableRoot), align " -> print
+                     context.ir[mutableRoot] -> storageAlign(context, state) -> writeDecimalLine
+-                    "  %$(label) = extractvalue { ptr, i64 } %$(label)_fixed, 0" -> println
++                    "  %$(label) = extractvalue %sollang.int_slice %$(label)_fixed, 0" -> println
+                 } else {
+                     "  %$(label) = getelementptr i8, ptr " -> print
+                     forwardedOrdinal >= 0 -> if {
+@@ -2587,15 +2830,29 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
+             }
+             ", i32 0, i32 " -> print
+             context.ir[mutableValueIndex].symbol -> writeDecimalLine
+-            "  %$(label)_ptr = getelementptr inbounds " -> print
+-            context.ir[mutableValueIndex] -> writeIrType(context, state)
+-            ", ptr %$(label)_storage, i32 0, i32 0" -> println
+-            "  %$(label)_len = getelementptr inbounds " -> print
+-            context.ir[mutableValueIndex] -> writeIrType(context, state)
+-            ", ptr %$(label)_storage, i32 0, i32 1" -> println
+-            "  %$(label)_capacity = getelementptr inbounds " -> print
+-            context.ir[mutableValueIndex] -> writeIrType(context, state)
+-            ", ptr %$(label)_storage, i32 0, i32 2" -> println
++            context.ir[mutableValueIndex] -> boundedArrayValueTypeId(context, state) => boundedMutableFieldTypeId
++            boundedMutableFieldTypeId >= 0 -> if {
++                "  %$(label)_len = getelementptr inbounds " -> print
++                boundedMutableFieldTypeId -> writeValueAbiTypeId(context, state)
++                ", ptr %$(label)_storage, i32 0, i32 0" -> println
++                "  %$(label)_data = getelementptr inbounds " -> print
++                boundedMutableFieldTypeId -> writeValueAbiTypeId(context, state)
++                ", ptr %$(label)_storage, i32 0, i32 1, i64 0" -> println
++                "  %$(label)_ptr = alloca ptr, align 8" -> println
++                "  store ptr %$(label)_data, ptr %$(label)_ptr, align 8" -> println
++                "  %$(label)_capacity = alloca i64, align 8" -> println
++                "  store i64 $(context.types[boundedMutableFieldTypeId].length), ptr %$(label)_capacity, align 8" -> println
++            } else {
++                "  %$(label)_ptr = getelementptr inbounds " -> print
++                context.ir[mutableValueIndex] -> writeIrType(context, state)
++                ", ptr %$(label)_storage, i32 0, i32 0" -> println
++                "  %$(label)_len = getelementptr inbounds " -> print
++                context.ir[mutableValueIndex] -> writeIrType(context, state)
++                ", ptr %$(label)_storage, i32 0, i32 1" -> println
++                "  %$(label)_capacity = getelementptr inbounds " -> print
++                context.ir[mutableValueIndex] -> writeIrType(context, state)
++                ", ptr %$(label)_storage, i32 0, i32 2" -> println
++            }
+             "  %$(label)_0 = insertvalue %sollang.mutable_container poison, ptr %$(label)_ptr, 0" -> println
+             "  %$(label)_1 = insertvalue %sollang.mutable_container %$(label)_0, ptr %$(label)_len, 1" -> println
+             "  %$(label) = insertvalue %sollang.mutable_container %$(label)_1, ptr %$(label)_capacity, 2" -> println
+@@ -2648,7 +2905,7 @@ emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex:
+             context.ir[argumentIndex].nextOperand -> emitMutableBorrowArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+         }
+ }
+-emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++emitCurrentMutableParameterValueAt prefix: Text, valueIndex: Int, parameterOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.ir[valueIndex] => value
+     context -> parameterIndexAtOrdinal(ownerIndex, parameterOrdinal) => parameterIndex
+     parameterIndex >= 0 and (context.ir[parameterIndex] -> mutableBorrowUsesStructPointer(context))
+@@ -2658,11 +2915,11 @@ emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIn
+                 and context.types[mutableParameterTypeId].kind == 4
+                 and context.types[mutableParameterTypeId].length >= 0
+                 -> if {
+-                    "  %v$(valueIndex) = insertvalue { ptr, i64 } " -> print
++                    "  %$(prefix) = insertvalue %sollang.int_slice " -> print
+                     parameterOrdinal == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal)" -> print }
+                     ", i64 $(context.types[mutableParameterTypeId].length), 1" -> println
+                 } else {
+-                    "  %v$(valueIndex) = load " -> print
++                    "  %$(prefix) = load " -> print
+                     value -> writeIrType(context, state)
+                     ", ptr " -> print
+                     parameterOrdinal -> writeMutableStructParameterPointer
+@@ -2670,26 +2927,32 @@ emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIn
+                     value -> storageAlign(context, state) -> writeDecimalLine
+                 }
+         } else {
+-            "  %v$(valueIndex)_current_ptr = load ptr, ptr " -> print
++            "  %$(prefix)_current_ptr = load ptr, ptr " -> print
+             parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
+             ", align 8" -> println
+-            "  %v$(valueIndex)_current_len = load i64, ptr " -> print
++            "  %$(prefix)_current_len = load i64, ptr " -> print
+             parameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(parameterOrdinal)_mut_len_addr" -> print }
+             ", align 8" -> println
+-            "  %v$(valueIndex)_current_capacity = load i64, ptr " -> print
++            "  %$(prefix)_current_capacity = load i64, ptr " -> print
+             parameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(parameterOrdinal)_mut_capacity_addr" -> print }
+             ", align 8" -> println
+-            "  %v$(valueIndex)_current0 = insertvalue " -> print
++            "  %$(prefix)_current0 = insertvalue " -> print
+             value -> writeIrType(context, state)
+-            " poison, ptr %v$(valueIndex)_current_ptr, 0" -> println
+-            "  %v$(valueIndex)_current1 = insertvalue " -> print
++            " poison, ptr %$(prefix)_current_ptr, 0" -> println
++            "  %$(prefix)_current1 = insertvalue " -> print
+             value -> writeIrType(context, state)
+-            " %v$(valueIndex)_current0, i64 %v$(valueIndex)_current_len, 1" -> println
+-            "  %v$(valueIndex) = insertvalue " -> print
++            " %$(prefix)_current0, i64 %$(prefix)_current_len, 1" -> println
++            "  %$(prefix) = insertvalue " -> print
+             value -> writeIrType(context, state)
+-            " %v$(valueIndex)_current1, i64 %v$(valueIndex)_current_capacity, 2" -> println
++            " %$(prefix)_current1, i64 %$(prefix)_current_capacity, 2" -> println
+         }
+ }
++
++emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    Arena(0) => prefixStorage!
++    "v$(valueIndex)" -> materialize(prefixStorage!) => prefix
++    prefix -> emitCurrentMutableParameterValueAt(valueIndex, parameterOrdinal, ownerIndex, context, state)
++}
+ interpolatedTextRoots textIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
+     [Int; ~] => roots!
+     context.ir[textIndex] => textNode
+@@ -3151,31 +3414,13 @@ emitCallCaptureEnvironmentValues request: CallEnvironmentRequest, context: ref e
+                 resolvedCaptureIndex! + 1 => resolvedCaptureIndex!
+             }
+     }
+-    request.callerIndex -> functionEnd(context, state) => callerEnd
+     0 => captureIndex!
+     captureIndex! < (callCaptures! -> len) -> while {
+-        callCaptures![captureIndex!] => bindingIndex
+-        context.ir[bindingIndex] => binding
+-        bindingIndex > request.callerIndex and bindingIndex < callerEnd and binding.kind != 10 and binding.flags == 1 and not (binding -> ownsType)
+-            -> if {
+-                bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
+-                "  %callenv$(request.callIndex)_capture$(captureIndex!) = load " -> print
+-                binding -> writeIrType(context, state)
+-                ", ptr %slot$(bindingRoot), align " -> print
+-                binding -> storageAlign(context, state) -> writeDecimalLine
+-            }
+-        (binding -> ownsType) and bindingIndex > request.callerIndex and bindingIndex < callerEnd and not (binding.kind != 10 and binding.flags == 1)
+-            -> if {
+-                "  store " -> print
+-                binding -> writeIrType(context, state)
+-                " " -> print
+-                CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> emitCaptureValue(context, state)
+-                ", ptr %capture_borrow_binding$(bindingIndex), align " -> print
+-                binding -> storageAlign(context, state) -> writeDecimalLine
+-            }
++        CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, interpolationIndex: -1, bindingIndex: callCaptures![captureIndex!], captureIndex: captureIndex! } -> emitCaptureTransport(context, state)
+         captureIndex! + 1 => captureIndex!
+     }
+ }
++
+ emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+     request -> targetFunctionIndex(context, state) => targetFunctionIr
+     [Int; ~] => callCaptures!
+@@ -3199,35 +3444,9 @@ emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext
+     0 => captureIndex!
+     captureIndex! < (callCaptures! -> len) -> while {
+         callCaptures![captureIndex!] => bindingIndex
+-        context.ir[bindingIndex] => binding
+-        binding -> ownsType -> if {
+-            "ptr " -> print
+-            request.callerIndex -> functionEnd(context, state) => callerEnd
+-            bindingIndex > request.callerIndex and bindingIndex < callerEnd
+-                -> if {
+-                    binding.kind != 10 and binding.flags == 1 -> if {
+-                        bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
+-                        "%slot$(bindingRoot)" -> print
+-                    } else {
+-                        "%capture_borrow_binding$(bindingIndex)" -> print
+-                    }
+-                } else {
+-                    request.callerIndex -> functionCaptures(context, state) => callerCaptures
+-                    -1 => capturePosition!
+-                    0 => callerCaptureIndex!
+-                    callerCaptureIndex! < (callerCaptures -> len)
+-                        -> while {
+-                            context.ir[callerCaptures[callerCaptureIndex!]].symbol == binding.symbol
+-                                -> if { callerCaptureIndex! => capturePosition! }
+-                            callerCaptureIndex! + 1 => callerCaptureIndex!
+-                        }
+-                    capturePosition! >= 0 -> if { "%capture_$(capturePosition!)" -> print } else { "null" -> print }
+-                }
+-        } else {
+-            binding -> writeIrType(context, state)
+-            " " -> print
+-            CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> emitCaptureValue(context, state)
+-        }
++        context.ir[bindingIndex] -> writeCaptureAbiType(context, state)
++        " " -> print
++        CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, interpolationIndex: -1, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> writeCaptureArgumentValue(context, state)
+         captureIndex! + 1 < (callCaptures! -> len) or request.hasArgument
+             -> if { ", " -> print }
+         captureIndex! + 1 => captureIndex!
+@@ -3240,6 +3459,10 @@ sourceToken node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext,
+     context.tokens[tokenIndex]
+ }
+ writeIntegerLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    node -> typedIr.isSpecializedIntegerConstant -> if {
++        "$(node.opcode)" -> print
++        return
++    }
+     node.typeKind == 1 and node.typeOrigin == 1
+         and node.typeSymbol >= 19 and node.typeSymbol <= 22
+         -> if {
+@@ -3503,7 +3726,8 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
+                 "%v$(value.operand0)" -> print
+             } else {
+                 -1 => parameterOrdinal!
+-                ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and value.kind == 5
++                ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0
++                    and (value.kind == 5 or (value.kind == 10 and value.parent == ownerIndex))
+                     -> if {
+                         value.symbol == context.ir[context.ir[ownerIndex].operand1].symbol
+                             -> if { 0 => parameterOrdinal! } else {
+@@ -3516,11 +3740,13 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
+                         "%v$(nodeIndex)" -> print
+                     } else {
+                         value -> scalarReferenceValueTypeId(context, state) => referenceValueTypeId
+-                        referenceValueTypeId >= 0 -> if {
+-                            "%v$(nodeIndex)" -> print
+-                        } else {
+-                            parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
+-                        }
++                        value -> referenceValueTypeId(context, state) => referencedValueTypeId
++                        referenceValueTypeId >= 0 or (referencedValueTypeId >= 0 and context.types[referencedValueTypeId].kind == 12)
++                            -> if {
++                                "%v$(nodeIndex)" -> print
++                            } else {
++                                parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
++                            }
+                     }
+                 } else { "%v$(nodeIndex)" -> print }
+             }
+@@ -3583,12 +3809,12 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
+     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableLengthParameterOrdinal
+     mutableLengthParameterOrdinal >= 0 -> if {
+         base -> isDictionaryType -> if {
+-            "  %v$(callIndex)_length_source = load %sollang.dict, ptr " -> print
++            "  %v$(callIndex)_length_source = load %sollang.int_dictionary, ptr " -> print
+             mutableLengthParameterOrdinal -> writeMutableStructParameterPointer
+             ", align 8" -> println
+             "  %v$(callIndex)" -> print
+             resultWidth == 32 -> if { "_raw" -> print }
+-            " = extractvalue %sollang.dict %v$(callIndex)_length_source, 1" -> println
++            " = extractvalue %sollang.int_dictionary %v$(callIndex)_length_source, 1" -> println
+         } else {
+             "  %v$(callIndex)" -> print
+             resultWidth == 32 -> if { "_raw" -> print }
+@@ -3611,6 +3837,16 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
+                     context.types[valueTypeId!].first => valueTypeId!
+                     true => readonlyReference!
+                 }
++            readonlyReference! and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 12
++                -> if {
++                    "  %v$(callIndex)" -> print
++                    resultWidth == 32 -> if { "_raw" -> print }
++                    " = load i64, ptr " -> print
++                    ownerIndex -> writeForwardedReferenceValue(call.operand0, context, state)
++                    ", align 8" -> println
++                    resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
++                    return
++                }
+             -1 => mutableRoot!
+             not readonlyReference! and (base -> isDictionaryType)
+                 -> if {
+@@ -3681,6 +3917,19 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
+         "; sollang compiler error S044: capacity receiver resolves to scalar i$capacityReceiverIntegerWidth at ir $callIndex (receiver $(call.operand0), source $(call.sourceModule), ast $(call.astNode))" -> println
+     }
+     call -> integerNodeWidth(context, state) => resultWidth
++    base -> effectiveTypeId(context, state) => boundedArrayTypeId!
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 8
++        -> if {
++            context.types[boundedArrayTypeId!].first => boundedArrayTypeId!
++        }
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12
++        -> if {
++            "  %v$(callIndex)" -> print
++            resultWidth == 32 -> if { "_raw" -> print }
++            " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
++            resultWidth == 32 -> if { callIndex -> emitCapacityIntNarrowing(-1) }
++            return
++        }
+     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
+     boundedTypeId >= 0 -> if {
+         "  %v$(callIndex)" -> print
+@@ -3692,12 +3941,12 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
+     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableCapacityParameterOrdinal
+     mutableCapacityParameterOrdinal >= 0 -> if {
+         base -> isDictionaryType -> if {
+-            "  %v$(callIndex)_capacity_source = load %sollang.dict, ptr " -> print
++            "  %v$(callIndex)_capacity_source = load %sollang.int_dictionary, ptr " -> print
+             mutableCapacityParameterOrdinal -> writeMutableStructParameterPointer
+             ", align 8" -> println
+             "  %v$(callIndex)" -> print
+             resultWidth == 32 -> if { "_raw" -> print }
+-            " = extractvalue %sollang.dict %v$(callIndex)_capacity_source, 2" -> println
++            " = extractvalue %sollang.int_dictionary %v$(callIndex)_capacity_source, 2" -> println
+         } else {
+             "  %v$(callIndex)" -> print
+             resultWidth == 32 -> if { "_raw" -> print }
+@@ -3747,6 +3996,56 @@ emitWhileCollectionSizeIntrinsic request: WhileValueRequest, context: ref emitte
+     context.ir[call.operand0] => base
+     call.opcode == -236 => capacity
+     call -> integerNodeWidth(context, state) => resultWidth
++    # A member projection carries its canonical inline field value.
++    # Its length is the first inline field, not a runtime handle slot.
++    call.operand0 -> canonicalMemberValueTypeId(context, state) => memberTypeId
++    memberTypeId >= 0 and context.types[memberTypeId].kind == 12
++        -> if {
++            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
++            resultWidth == 32 -> if { "_raw" -> print }
++            capacity -> if {
++                " = add i64 0, $(context.types[memberTypeId].length)" -> println
++            } else {
++                " = extractvalue " -> print
++                memberTypeId -> writeValueAbiTypeId(context, state)
++                " " -> print
++                WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
++                ", 0" -> println
++            }
++            resultWidth == 32 -> if {
++                capacity -> if {
++                    request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex)
++                } else {
++                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
++                }
++            }
++            return
++        }
++    base -> effectiveTypeId(context, state) => boundedArrayTypeId!
++    false => boundedArrayReference!
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 8
++        -> if {
++            context.types[boundedArrayTypeId!].first => boundedArrayTypeId!
++            true => boundedArrayReference!
++        }
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12 and (capacity or boundedArrayReference!)
++        -> if {
++            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
++            resultWidth == 32 -> if { "_raw" -> print }
++            capacity -> if {
++                " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
++            } else {
++                " = load i64, ptr " -> print
++                request.ownerIndex -> writeForwardedReferenceValue(call.operand0, context, state)
++                ", align 8" -> println
++            }
++            resultWidth == 32 -> if {
++                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex) } else {
++                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
++                }
++            }
++            return
++        }
+     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
+     boundedTypeId >= 0 -> if {
+         capacity -> if {
+@@ -3801,15 +4100,15 @@ emitWhileCollectionSizeIntrinsic request: WhileValueRequest, context: ref emitte
+     call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => mutableLengthParameterOrdinal
+     mutableLengthParameterOrdinal >= 0 -> if {
+         base -> isDictionaryType -> if {
+-            "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load %sollang.dict, ptr " -> print
++            "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load %sollang.int_dictionary, ptr " -> print
+             mutableLengthParameterOrdinal -> writeMutableStructParameterPointer
+             ", align 8" -> println
+             "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+             resultWidth == 32 -> if { "_raw" -> print }
+             capacity -> if {
+-                " = extractvalue %sollang.dict %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 2" -> println
++                " = extractvalue %sollang.int_dictionary %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 2" -> println
+             } else {
+-                " = extractvalue %sollang.dict %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 1" -> println
++                " = extractvalue %sollang.int_dictionary %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 1" -> println
+             }
+         } else {
+             "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+@@ -4303,13 +4602,13 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex:
+                     (branchOrdinal == 0 -> if { resultNode.operand1 } else { resultNode.nextOperand }) => branchRegion
+                     valueIndex -> fixedBranchTransferredBacking(branchRegion, context, state) => transferredBacking
+                     transferredBacking < 0 -> if {
+-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_source = extractvalue { ptr, i64 } " -> print
++                        "  %if$(ifIndex)_fixed$(branchOrdinal)_source = extractvalue %sollang.int_slice " -> print
+                         valueIndex -> writeValue(ownerIndex, context, state)
+                         ", 0" -> println
+-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_data = call ptr @malloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
++                        "  %if$(ifIndex)_fixed$(branchOrdinal)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
+                         "  call void @llvm.memcpy.p0.p0.i64(ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, ptr %if$(ifIndex)_fixed$(branchOrdinal)_source, i64 $(context.typeSizes[resultNode.typeId]), i1 false)" -> println
+-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_0 = insertvalue { ptr, i64 } poison, ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, 0" -> println
+-                        "  %if$(ifIndex)_fixed$(branchOrdinal) = insertvalue { ptr, i64 } %if$(ifIndex)_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println
++                        "  %if$(ifIndex)_fixed$(branchOrdinal)_0 = insertvalue %sollang.int_slice poison, ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, 0" -> println
++                        "  %if$(ifIndex)_fixed$(branchOrdinal) = insertvalue %sollang.int_slice %if$(ifIndex)_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println
+                         true => fixedBranchCopied!
+                     }
+                 }
