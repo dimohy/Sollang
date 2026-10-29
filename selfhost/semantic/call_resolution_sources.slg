@@ -1238,7 +1238,7 @@ struct ReceiverRecoveryIndex {
     propagates: [Bool; ~]
 }
 
-appendReceiverResultAncestors first: mut [Int; ~], rows: mut [Int; ~], nextEdges: mut [Int; ~], last: mut [Int; ~], nodes: ref [ast.AstNode; ~], astStart: Int, node: Int, row: Int -> Unit {
+appendAncestorRow first: mut [Int; ~], rows: mut [Int; ~], nextEdges: mut [Int; ~], last: mut [Int; ~], nodes: ref [ast.AstNode; ~], astStart: Int, node: Int, row: Int -> Unit {
     node => ancestor!
     ancestor! >= 0 -> while {
         rows -> len => edge
@@ -1281,24 +1281,50 @@ indexReceiverRecovery nodes: ref [ast.AstNode; ~], astStart: Int, astCount: Int,
     row! < (existing -> len) -> while {
         existing[row!] => current
         current.sourceModule == sourceIndex and current.callAst >= 0 and current.callAst < astCount
-            -> if { appendReceiverResultAncestors(first!, rows!, nextEdges!, last!, nodes, astStart, current.callAst, row!) }
+            -> if { appendAncestorRow(first!, rows!, nextEdges!, last!, nodes, astStart, current.callAst, row!) }
         row! + 1 => row!
     }
     0 => localIndex!
     localIndex! < (localCalls -> len) -> while {
         (existing -> len) + localIndex! => resultRow
-        appendReceiverResultAncestors(first!, rows!, nextEdges!, last!, nodes, astStart, localCalls[localIndex!].callAst, resultRow)
+        appendAncestorRow(first!, rows!, nextEdges!, last!, nodes, astStart, localCalls[localIndex!].callAst, resultRow)
         qualifiedTargets[localIndex!] => qualifiedIndex
         qualifiedIndex >= 0 and qualifiedIndex < (qualifiedResults -> len)
             -> if {
                 qualifiedResults[qualifiedIndex].pathAst => path
                 path >= 0 and path < astCount -> if {
-                    appendReceiverResultAncestors(first!, rows!, nextEdges!, last!, nodes, astStart, path, resultRow)
+                    appendAncestorRow(first!, rows!, nextEdges!, last!, nodes, astStart, path, resultRow)
                 }
             }
         localIndex! + 1 => localIndex!
     }
     ReceiverRecoveryIndex { first: first!, rows: rows!, next: nextEdges!, propagates: propagates! }
+}
+
+struct BindingReceiverNameIndex {
+    first: [Int; ~]
+    rows: [Int; ~]
+    next: [Int; ~]
+}
+
+indexBindingReceiverNames sourceIndex: Int, package: ref analysis.PackageAnalysis -> BindingReceiverNameIndex {
+    package.ranges[sourceIndex] => range
+    [Int; ~] => first!
+    [Int; ~] => last!
+    [Int; ~] => rows!
+    [Int; ~] => next!
+    0..<range.astCount -> each {
+        first! -> push(-1)
+        last! -> push(-1)
+    }
+    0..<range.nameCount -> each nameIndex {
+        package.names[range.nameStart + nameIndex] => name
+        name.symbol >= 0 and name.astNode >= 0 and name.astNode < range.astCount
+            -> if {
+                appendAncestorRow(first!, rows!, next!, last!, package.nodes, range.astStart, name.astNode, nameIndex)
+            }
+    }
+    BindingReceiverNameIndex { first: first!, rows: rows!, next: next! }
 }
 
 resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], declaredIntrinsicNames: ref [DeclaredIntrinsicCallableName; ~], receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], declarations: ref TypedMethodDeclarationFacts, referenceIndex: ref TypedMethodReferenceIndex -> [ModuleCallResolution; ~] {
@@ -1676,6 +1702,7 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
         propertySelections! -> push(false)
         propertySeed! + 1 => propertySeed!
     }
+    sourceIndex -> indexBindingReceiverNames(package) => bindingReceiverNames
     0 => typedResolutionPass!
     typedResolutionPass! < 2 -> while {
         0 => localIndex!
@@ -2660,10 +2687,12 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                             -1 => bindingProjectionRootSymbol!
                                             -1 => bindingProjectionRootNameToken!
                                             UIntSize(0) => bindingProjectionEnd!
-                                            0 => bindingProjectionNameIndex!
-                                            bindingProjectionNameIndex! < sourceRange.nameCount
+                                            # Preserve source-name order within this exact binding owner.
+                                            bindingReceiverNames.first[receiverBinding.astNode] => bindingProjectionNameEdge!
+                                            bindingProjectionNameEdge! >= 0
                                                 -> while {
-                                                    package.names[sourceRange.nameStart + bindingProjectionNameIndex!]
+                                                    bindingReceiverNames.rows[bindingProjectionNameEdge!] => bindingProjectionNameIndex
+                                                    package.names[sourceRange.nameStart + bindingProjectionNameIndex]
                                                         => bindingProjectionName
                                                     package.tokens[sourceRange.tokenStart + bindingProjectionName.nameToken]
                                                         => bindingProjectionNameToken
@@ -2721,8 +2750,7 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                                                         }
                                                                 }
                                                         }
-                                                    bindingProjectionNameIndex! + 1
-                                                        => bindingProjectionNameIndex!
+                                                    bindingReceiverNames.next[bindingProjectionNameEdge!] => bindingProjectionNameEdge!
                                                 }
                                             bindingProjectionPathAst! >= 0
                                                 and bindingProjectionRootSymbol! >= 0
@@ -2896,10 +2924,12 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                         -1 => indexedBindingRootSymbol!
                                         0 => indexedBindingDepth!
                                         UIntSize(0) => indexedBindingRootStart!
-                                        0 => indexedBindingNameIndex!
-                                        indexedBindingNameIndex! < sourceRange.nameCount
+                                        # Preserve source-name order within this exact binding owner.
+                                        bindingReceiverNames.first[receiverBinding.astNode] => indexedBindingNameEdge!
+                                        indexedBindingNameEdge! >= 0
                                             -> while {
-                                                package.names[sourceRange.nameStart + indexedBindingNameIndex!]
+                                                bindingReceiverNames.rows[indexedBindingNameEdge!] => indexedBindingNameIndex
+                                                package.names[sourceRange.nameStart + indexedBindingNameIndex]
                                                     => indexedBindingName
                                                 package.tokens[sourceRange.tokenStart + indexedBindingName.nameToken]
                                                     => indexedBindingNameToken
@@ -2940,7 +2970,7 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                                                 }
                                                         }
                                                     }
-                                                indexedBindingNameIndex! + 1 => indexedBindingNameIndex!
+                                                bindingReceiverNames.next[indexedBindingNameEdge!] => indexedBindingNameEdge!
                                             }
                                         indexedBindingRootSymbol! >= 0 and indexedBindingDepth! > 0
                                             -> if {
