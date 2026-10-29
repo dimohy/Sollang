@@ -25,6 +25,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.numeric_literal_range as numericLiteralRange
 import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
@@ -3541,8 +3542,8 @@ emitBuiltinNumericConversion nodeIndex: Int, ownerIndex: Int, context: ref emitt
     conversion -> integerNodeWidth(context, state) => targetWidth
     argument -> integerReadNodeWidth(context, state) => inputWidth
     argument.typeSymbol >= 19 and argument.typeSymbol <= 22 => sourceIsFloat
-    "  %v$(nodeIndex) = " -> print
     argument.kind == 3 -> if {
+        "  %v$(nodeIndex) = " -> print
         "add " -> print
         conversion -> writeIrType(context, state)
         " " -> print
@@ -3550,6 +3551,10 @@ emitBuiltinNumericConversion nodeIndex: Int, ownerIndex: Int, context: ref emitt
         ", 0" -> println
         return
     }
+    not sourceIsFloat -> if {
+        nodeIndex -> emitIntegerConversionChecks(argumentIndex, ownerIndex, context, state)
+    }
+    "  %v$(nodeIndex) = " -> print
     sourceIsFloat -> if {
         conversion -> builtinFloatToIntegerOpcode(context, state) -> print
     } else {
@@ -3568,6 +3573,70 @@ emitBuiltinNumericConversion nodeIndex: Int, ownerIndex: Int, context: ref emitt
             " to " -> print
             conversion -> writeIrType(context, state)
             "" -> println
+        }
+}
+
+emitIntegerConversionChecks nodeIndex: Int, argumentIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[nodeIndex] => conversion
+    context.ir[argumentIndex] => argument
+    argument -> integerReadNodeWidth(context, state) => sourceWidth
+    conversion -> integerNodeWidth(context, state) => targetWidth
+    argument -> integerNodeSigned(context, state) => sourceSigned
+    conversion -> integerNodeSigned(context, state) => targetSigned
+    argument.typeSymbol => sourceSymbol!
+    argument -> effectiveTypeId(context, state) => declaredTypeId
+    context.types -> typeIds.materializedReadTypeId(declaredTypeId) => sourceTypeId
+    sourceTypeId >= 0 and sourceTypeId < (context.types -> len)
+        -> if {
+            context.types[sourceTypeId].symbol => sourceSymbol!
+        }
+    sourceSymbol! -> typeIds.canonicalBuiltinSymbol => sourceBuiltin
+    conversion.typeSymbol -> typeIds.canonicalBuiltinSymbol => targetBuiltin
+    sourceWidth => sourceUpperBits!
+    sourceSigned -> if { sourceWidth - 1 => sourceUpperBits! }
+    sourceBuiltin == 14 -> if { 21 => sourceUpperBits! }
+    targetWidth => targetUpperBits!
+    targetSigned -> if { targetWidth - 1 => targetUpperBits! }
+    targetBuiltin == 14 -> if { 21 => targetUpperBits! }
+    Arena(0) => diagnosticNames!
+    "v$(nodeIndex)_conversion" -> materialize(diagnosticNames!) => diagnosticPrefix
+    sourceSigned and (not targetSigned or sourceWidth > targetWidth)
+        -> if {
+            conversion.typeSymbol -> numericLiteralRange.minimumText(context.pointerBitWidth) => lowerBound
+            "  %v$(nodeIndex)_conversion_lower_valid = icmp sge " -> print
+            argumentIndex -> writeReadOperand(ownerIndex, context, state)
+            ", $lowerBound" -> println
+            "  br i1 %v$(nodeIndex)_conversion_lower_valid, label %v$(nodeIndex)_conversion_lower_ok, label %v$(nodeIndex)_conversion_lower_fail" -> println
+            "v$(nodeIndex)_conversion_lower_fail:" -> println
+            ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "lower", "numeric_conversion_lower", context, state)
+            "v$(nodeIndex)_conversion_lower_ok:" -> println
+        }
+    sourceUpperBits! > targetUpperBits! -> if {
+        conversion.typeSymbol -> numericLiteralRange.maximumText(context.pointerBitWidth) => upperBound
+        "  %v$(nodeIndex)_conversion_upper_valid = icmp " -> print
+        sourceSigned -> if { "sle " -> print } else { "ule " -> print }
+        argumentIndex -> writeReadOperand(ownerIndex, context, state)
+        ", $upperBound" -> println
+        "  br i1 %v$(nodeIndex)_conversion_upper_valid, label %v$(nodeIndex)_conversion_upper_ok, label %v$(nodeIndex)_conversion_upper_fail" -> println
+        "v$(nodeIndex)_conversion_upper_fail:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "upper", "numeric_conversion_upper", context, state)
+        "v$(nodeIndex)_conversion_upper_ok:" -> println
+    }
+    targetBuiltin == 14 and sourceUpperBits! >= 16
+        -> if {
+            "  %v$(nodeIndex)_conversion_below_surrogate = icmp " -> print
+            sourceSigned -> if { "slt " -> print } else { "ult " -> print }
+            argumentIndex -> writeReadOperand(ownerIndex, context, state)
+            ", 55296" -> println
+            "  %v$(nodeIndex)_conversion_above_surrogate = icmp " -> print
+            sourceSigned -> if { "sgt " -> print } else { "ugt " -> print }
+            argumentIndex -> writeReadOperand(ownerIndex, context, state)
+            ", 57343" -> println
+            "  %v$(nodeIndex)_conversion_valid_scalar = or i1 %v$(nodeIndex)_conversion_below_surrogate, %v$(nodeIndex)_conversion_above_surrogate" -> println
+            "  br i1 %v$(nodeIndex)_conversion_valid_scalar, label %v$(nodeIndex)_conversion_scalar_ok, label %v$(nodeIndex)_conversion_scalar_fail" -> println
+            "v$(nodeIndex)_conversion_scalar_fail:" -> println
+            ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "scalar", "numeric_conversion_surrogate", context, state)
+            "v$(nodeIndex)_conversion_scalar_ok:" -> println
         }
 }
 
