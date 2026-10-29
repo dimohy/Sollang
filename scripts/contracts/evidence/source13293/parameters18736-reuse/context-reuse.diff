@@ -1,0 +1,44 @@
+diff --git a/selfhost/semantic/context.slg b/selfhost/semantic/context.slg
+index a3c7c9780..8ce1569ba 100644
+--- a/selfhost/semantic/context.slg
++++ b/selfhost/semantic/context.slg
+@@ -510,6 +510,13 @@ collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.Modul
+ 
+ public resolveCallArgumentBindings package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> [CallArgumentBinding; ~] {
+     [CallArgumentBinding; ~] => bindings!
++    [Int; ~] => parameterStartBySymbol!
++    [Int; ~] => parameterCountBySymbol!
++    [Int; ~] => orderedParameters!
++    package.symbols -> each symbol {
++        parameterStartBySymbol! -> push(-1)
++        parameterCountBySymbol! -> push(0)
++    }
+     [Int; ~] => firstChildByAst!
+     [Int; ~] => nextSiblingByAst!
+     package.nodes -> each node {
+@@ -545,11 +552,22 @@ public resolveCallArgumentBindings package: ref analysis.PackageAnalysis, resolv
+                     or package.nodes[sourceRange.astStart + call.callAst].kind == 77)
+                     -> if {
+                         package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true) => argumentAsts
+-                        package -> functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => parameterSymbols
++                        # Repeated calls borrow the same declaration order, like
++                        # C# BoundFunction. The key includes the source owner.
++                        targetRange.symbolStart + call.functionSymbol => targetGlobalSymbol
++                        parameterStartBySymbol![targetGlobalSymbol] < 0
++                            -> if {
++                                package -> functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => parameterSymbols
++                                Int(orderedParameters! -> len) => parameterStartBySymbol![targetGlobalSymbol]
++                                Int(parameterSymbols -> len) => parameterCountBySymbol![targetGlobalSymbol]
++                                parameterSymbols -> each parameter { orderedParameters! -> push(parameter) }
++                            }
++                        parameterStartBySymbol![targetGlobalSymbol] => parameterStart
++                        parameterCountBySymbol![targetGlobalSymbol] => parameterCount
+                         0 => parameterOrdinal!
+-                        parameterOrdinal! < (parameterSymbols -> len) and parameterOrdinal! < (argumentAsts -> len)
++                        parameterOrdinal! < parameterCount and parameterOrdinal! < (argumentAsts -> len)
+                             -> while {
+-                                parameterSymbols[parameterOrdinal!] => selectedParam
++                                orderedParameters![parameterStart + parameterOrdinal!] => selectedParam
+                                 argumentAsts[parameterOrdinal!] => argumentAst
+                                 bindings! -> push(CallArgumentBinding {
+                                     sourceModule: call.sourceModule

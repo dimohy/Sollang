@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.context as semanticContext
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [arguments[1],; ~] => paths
+    paths -> semanticContext.prepareFiles => prepared
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    prepared.calls[0].functionSymbol => firstTarget
+    -1 => secondTarget!
+    prepared.calls -> each call {
+        call.functionSymbol != firstTarget -> if { call.functionSymbol => secondTarget! }
+    }
+    prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(0, firstTarget) => firstParameters
+    prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(0, secondTarget!) => secondParameters
+    (prepared.calls -> len) == 2048 and (bindings -> len) == 23552 => ordered!
+    bindings -> each binding {
+        binding.sourceModule == 0 and binding.targetSourceModule == 0 => sameSource
+        binding.functionSymbol == firstTarget -> if {
+            ordered! and sameSource and binding.parameterOrdinal >= 0
+                and binding.parameterOrdinal < Int(firstParameters -> len)
+                and binding.parameterSymbol == firstParameters[binding.parameterOrdinal] => ordered!
+        } else {
+            ordered! and sameSource and binding.functionSymbol == secondTarget!
+                and binding.parameterOrdinal >= 0 and binding.parameterOrdinal < Int(secondParameters -> len)
+                and binding.parameterSymbol == secondParameters[binding.parameterOrdinal] => ordered!
+        }
+    }
+    "calls=$(prepared.calls -> len) bindings=$(bindings -> len) ordered=$(ordered!)" -> println
+}

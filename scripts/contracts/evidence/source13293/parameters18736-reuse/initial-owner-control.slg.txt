@@ -1,0 +1,44 @@
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    [
+    """namespace first
+public apply value: Int, extra: Int -> Int => value + extra
+""",
+    """namespace second
+public apply value: Int -> Int => value
+public empty: -> Int => 7
+""",
+    """import first as a
+import second as b
+main {
+    1 -> a.apply(2) => first
+    b.apply(3) => second
+    4 -> a.apply(5) => third
+    b.apply(6) => fourth
+    b.empty() => fifth
+    b.empty() => sixth
+}
+"""; ~
+    ] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    (prepared.calls -> len) == 6 and (bindings -> len) == 6 => valid!
+    0 => firstCount!
+    0 => secondCount!
+    bindings -> each binding {
+        valid! and binding.sourceModule == 2 => valid!
+        binding.targetSourceModule == 0 -> if {
+            firstCount! + 1 => firstCount!
+            valid! and binding.parameterOrdinal == (firstCount! - 1) % 2 => valid!
+        } else {
+            secondCount! + 1 => secondCount!
+            valid! and binding.targetSourceModule == 1 and binding.parameterOrdinal == 0 => valid!
+        }
+        prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(binding.targetSourceModule, binding.functionSymbol) => declared
+        valid! and binding.parameterOrdinal < Int(declared -> len)
+            and binding.parameterSymbol == declared[binding.parameterOrdinal] => valid!
+    }
+    valid! and firstCount! == 4 and secondCount! == 2 => valid!
+    "calls=$(prepared.calls -> len) bindings=$(bindings -> len) owners=$(valid!)" -> println
+}
