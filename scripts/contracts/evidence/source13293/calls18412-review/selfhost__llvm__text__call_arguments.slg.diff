@@ -1,0 +1,400 @@
+diff --git a/8f2988636dea8d8c87b710357197b5430a0445a4 b/selfhost/llvm/text/call_arguments.slg
+index 8f2988636..a9f5fad0b 100644
+--- a/8f2988636dea8d8c87b710357197b5430a0445a4
++++ b/selfhost/llvm/text/call_arguments.slg
+@@ -233,6 +233,10 @@ referenceRootHasAddress rootBinding: Int, ownerIndex: Int, context: ref emitterC
+             and ((root -> ownsType)
+             or (root.typeId >= 0 and context.types[root.typeId].kind == 8))
+             -> if { true => addressable! }
++        # A mutable bounded local stores a runtime descriptor. A readonly
++        # reference requires its current inline value, as in the C# emitter.
++        root.kind == 17 and root.typeId >= 0 and context.types[root.typeId].kind == 12
++            -> if { false => addressable! }
+     }
+     addressable!
+ }
+@@ -400,10 +404,10 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
+         } else {
+             referenceRootIsSliceParameter and indexedBaseProjectionDepth! == 0
+                 -> if {
+-                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = extractvalue { ptr, i64 } " -> print
++                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = extractvalue %sollang.int_slice " -> print
+                     rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
+                     ", 0" -> println
+-                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = extractvalue { ptr, i64 } " -> print
++                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = extractvalue %sollang.int_slice " -> print
+                     rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
+                     ", 1" -> println
+                 } else {
+@@ -700,7 +704,8 @@ writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitt
+         and context.ir[referenceValue.operand0].typeId >= 0
+         and context.types[context.ir[referenceValue.operand0].typeId].kind == 8
+         -> if {
+-            "%v$(valueIndex)_address" -> print
++            valueIndex -> writeMemberStorageValueName(context, state)
++            "_address" -> print
+             true => wroteParameter!
+         }
+     not wroteParameter! -> if {
+@@ -795,7 +800,21 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+         or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+         and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
+         -> if {
+-            argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
++            callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => boundedArgumentTypeId
++            boundedArgumentTypeId >= 0 -> if {
++                argumentIndex -> aggregateValueIndex(context, state) => boundedValueIndex
++                argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
++                    -> if {
++                        "  %call$(callIndex)_arg$(ordinal)_bounded = load " -> print
++                        boundedArgumentTypeId -> writeValueAbiTypeId(context, state)
++                        ", ptr " -> print
++                        ownerIndex -> writeReferencePlaceValue(boundedValueIndex, context, state)
++                        ", align $(context.typeAligns[boundedArgumentTypeId])" -> println
++                    } else {
++                        "call$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(boundedValueIndex, ownerIndex, boundedArgumentTypeId, context, state)
++                    }
++            }
++            boundedArgumentTypeId < 0 and (argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state))
+                 -> if {
+                     argumentIndex -> aggregateValueIndex(context, state) => referenceValueIndex
+                     callIndex -> callTargetParameter(ordinal, context, state) => referenceParameterIndex
+@@ -837,8 +856,8 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+                         " " -> print
+                         sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
+                         ", ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId])" -> println
+-                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+-                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
++                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
++                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
+                     } else {
+                         "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
+                         sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
+@@ -846,13 +865,25 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+                         "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
+                         sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
+                         ", 1" -> println
+-                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_data, 0" -> println
+-                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
++                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr " -> print
++                        sliceValueIndex -> writeCallSliceDataPointer("%call$(callIndex)_arg$(ordinal)_slice_data", context, state)
++                        ", 0" -> println
++                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+                     }
+                 }
+             context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
+         }
+ }
++callBoundedValueParameterTypeId callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    context.ir[callIndex] -> targetsNativeFunction(context, state)
++        -> if { -1 -> return }
++    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
++    parameterIndex < 0 -> if { -1 -> return }
++    context.ir[parameterIndex].flags / 2 % 2 == 1
++        -> if { -1 -> return }
++    context.ir[parameterIndex] -> boundedArrayValueTypeId(context, state)
++}
++
+ callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+     parameterIndex < 0 -> if { false -> return }
+@@ -861,6 +892,12 @@ callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterCo
+ }
+ 
+ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => boundedArgumentTypeId
++    boundedArgumentTypeId >= 0 -> if {
++        boundedArgumentTypeId -> writeValueAbiTypeId(context, state)
++        " %call$(callIndex)_arg$(ordinal)_bounded" -> print
++        return
++    }
+     ownerIndex => callOwnerIndex
+     argumentIndex -> writeCallArgumentTypeAndValue(callIndex, ownerIndex, ordinal, context, state) => nativeArgumentHandled
+     not nativeArgumentHandled -> if {
+@@ -1036,71 +1073,6 @@ branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, st
+         }
+     flowIndex!
+ }
+-emitCompileTimeValueArguments callIndex: Int, hasRuntimeArgument: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+-    context.ir[callIndex] => genericCall
+-    CallEnvironmentRequest { callerIndex: -1, callIndex: callIndex, targetModule: genericCall.targetModule, targetSymbol: genericCall.symbol, hasArgument: genericCall.operand0 >= 0 } -> targetFunctionIndex(context, state) => genericTargetFunction
+-    genericTargetFunction >= 0 -> if {
+-        context.ranges[genericCall.sourceModule] => genericCallRange
+-        context.nodes[genericCallRange.astStart + genericCall.astNode] => genericCallAst
+-        genericCallAst.firstToken => genericTokenIndex!
+-        genericCallAst.firstToken + genericCallAst.tokenCount => genericTokenEnd
+-        false => inGenericArguments!
+-        false => emittedGenericArgument!
+-        context.ir[genericTargetFunction].operand1 => genericParameterIndex!
+-        0 => genericParameterOrdinal!
+-        genericParameterIndex! >= 0 -> while {
+-            context.ir[genericParameterIndex!] => genericParameter
+-            false => valueGenericParameter!
+-            genericParameter.symbol >= 0
+-                and genericParameter.sourceModule >= 0
+-                and genericParameter.sourceModule < (context.ranges -> len)
+-                -> if {
+-                    context.ranges[genericParameter.sourceModule] => genericParameterRange
+-                    genericParameter.symbol < genericParameterRange.symbolCount
+-                        and context.symbols[genericParameterRange.symbolStart + genericParameter.symbol].kind == 32
+-                        -> if {
+-                            true => valueGenericParameter!
+-                        }
+-                }
+-            valueGenericParameter! -> if {
+-                -1 => genericNumberToken!
+-                genericTokenIndex! < genericTokenEnd and genericNumberToken! < 0
+-                    -> while {
+-                        context.tokens[genericCallRange.tokenStart + genericTokenIndex!] => genericToken
+-                        genericToken.kind == grammar.tokenIdLess() -> if { true => inGenericArguments! }
+-                        inGenericArguments! and genericToken.kind == grammar.tokenIdNumber()
+-                            -> if { genericTokenIndex! => genericNumberToken! }
+-                        genericToken.kind == grammar.tokenIdGreater()
+-                            -> if { false => inGenericArguments! }
+-                        genericTokenIndex! + 1 => genericTokenIndex!
+-                    }
+-                genericNumberToken! >= 0 -> if {
+-                    hasRuntimeArgument or emittedGenericArgument!
+-                        -> if { ", " -> print }
+-                    genericParameter -> writeIrType(context, state)
+-                    " " -> print
+-                    context.tokens[genericCallRange.tokenStart + genericNumberToken!] => genericNumber
+-                    genericNumber.span.start => genericNumberByte!
+-                    genericNumber.span.start + genericNumber.span.length => genericNumberEnd
+-                    genericNumberByte! < genericNumberEnd -> while {
+-                        context.sources[genericCall.sourceModule] -> byte(genericNumberByte!) => genericNumberCharacter
+-                        genericNumberCharacter != 95 -> if {
+-                            context.sources[genericCall.sourceModule] -> slice(genericNumberByte!, 1) -> print
+-                        }
+-                        genericNumberByte! + 1 => genericNumberByte!
+-                    }
+-                    true => emittedGenericArgument!
+-                }
+-            }
+-            genericParameterOrdinal! == 0 -> if {
+-                context.ir[genericTargetFunction].nextOperand => genericParameterIndex!
+-            } else {
+-                genericParameter.nextOperand => genericParameterIndex!
+-            }
+-            genericParameterOrdinal! + 1 => genericParameterOrdinal!
+-        }
+-    }
+-}
+ emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[callIndex] => call
+     false => hasLeadingArgument!
+@@ -1119,8 +1091,6 @@ emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
+     } else {
+         call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!, context, state)
+     }
+-    (hasLeadingArgument! or branchFlowIndex >= 0 or call.operand0 >= 0) => hasRuntimeArgument
+-    callIndex -> emitCompileTimeValueArguments(hasRuntimeArgument, context, state)
+     call -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
+     nativeTryOutputType > 0 -> if {
+         (callIndex -> callTargetParameter(0, context, state)) >= 0
+@@ -1152,7 +1122,7 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
+     fieldIndex! < (captures -> len) -> while {
+         fieldIndex! > 0 -> if { ", " -> print }
+         context.ir[captures[fieldIndex!]] => capture
+-        capture -> ownsType -> if { "ptr" -> print } else { capture -> writeIrType(context, state) }
++        capture -> writeCaptureAbiType(context, state)
+         fieldIndex! + 1 => fieldIndex!
+     }
+     callIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!
+@@ -1162,9 +1132,9 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
+             fieldIndex! > 0 -> if { ", " -> print }
+             callIndex -> callTargetParameter(parameterOrdinal!, context, state) => parameterIndex
+             parameterIndex >= 0 -> if {
+-                context.ir[parameterIndex] -> writeIrType(context, state)
++                context.ir[parameterIndex] -> writeFunctionValueAbiType(context, state)
+             } else {
+-                context.ir[argumentIndex!] -> writeIrType(context, state)
++                context.ir[argumentIndex!] -> writeFunctionValueAbiType(context, state)
+             }
+             fieldIndex! + 1 => fieldIndex!
+             parameterOrdinal! + 1 => parameterOrdinal!
+@@ -1172,12 +1142,18 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
+         }
+     " }" -> print
+ }
++emitParallelAdditionalArgumentValues bodyCallIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentIndex
++    argumentIndex -> emitCallIntegerArgumentPromotions(bodyCallIndex, ownerIndex, 1, context, state)
++    argumentIndex -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
++}
++
+ emitParallelCaptureEnvironment parallelIndex: Int, bodyCallIndex: Int, ownerIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+     bodyCallIndex -> parallelAdditionalArgumentCount(context) => additionalCount
+     captures -> len => captureCount
+     captureCount + additionalCount => fieldCount
+     fieldCount > 0 -> if {
+-        bodyCallIndex -> parallelAdditionalArgumentStart(context) -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
++        bodyCallIndex -> emitParallelAdditionalArgumentValues(ownerIndex, context, state)
+         "  %v$(parallelIndex)_capture_environment = alloca " -> print
+         bodyCallIndex -> writeParallelCaptureType(captures, context, state)
+         ", align 8" -> println
+@@ -1189,17 +1165,14 @@ emitParallelCaptureEnvironment parallelIndex: Int, bodyCallIndex: Int, ownerInde
+             captures[captureIndex!] => captureBindingIndex
+             context.ir[captureBindingIndex] => captureBinding
+             "  store " -> print
+-            captureBinding -> ownsType -> if {
+-                "ptr " -> print
+-                CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> emitCapturePointer(context, state)
+-                ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align 8" -> println
+-            } else {
+-                captureBinding -> writeIrType(context, state)
+-                " " -> print
+-                CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> emitCaptureValue(context, state)
+-                ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align " -> print
+-                captureBinding -> storageAlign(context, state) -> writeDecimalLine
+-            }
++            captureBinding -> writeCaptureAbiType(context, state)
++            " " -> print
++            CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, interpolationIndex: -1, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> writeCaptureArgumentValue(context, state)
++            ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align " -> print
++            captureBinding -> captureUsesBorrowAbi(context, state)
++                -> if { 8 -> writeDecimalLine } else {
++                    captureBinding -> storageAlign(context, state) -> writeDecimalLine
++                }
+             captureIndex! + 1 => captureIndex!
+         }
+         bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!
+@@ -1685,6 +1658,13 @@ writeCallArgumentTypeAndValue argumentIndex: Int, callIndex: Int, ownerIndex: In
+ }
+ writeCallResultPrefix callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.ir[callIndex] => call
++    call -> boundedArrayValueTypeId(context, state) => boundedResultTypeId
++    boundedResultTypeId >= 0 and call.flags / 8 % 2 == 0 and not (call -> targetsNativeFunction(context, state))
++        -> if {
++            "  %call_bounded$(callIndex) = call " -> print
++            boundedResultTypeId -> writeValueAbiTypeId(context, state)
++            return
++        }
+     (call.flags / 8) % 2 == 1 -> if {
+         "  %v$(callIndex) = call %sollang.task" -> print
+     } else {
+@@ -1785,36 +1765,47 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
+                 droppedOwners -> each droppedOwner {
+                     droppedOwner == namedBindingIndex -> if { return }
+                 }
+-                "  %named_fixed_call$(callIndex)_$(ordinal) = extractvalue { ptr, i64 } " -> print
++                "  %named_fixed_call$(callIndex)_$(ordinal) = extractvalue %sollang.int_slice " -> print
+                 whileIndex >= 0 -> if {
+                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentIndex } -> writeWhileValue(context, state)
+                 } else { argumentIndex -> writeValue(ownerIndex, context, state) }
+                 ", 0" -> println
+-                "  call void @free(ptr %named_fixed_call$(callIndex)_$(ordinal))" -> println
++                "  call void @sollang_free(ptr %named_fixed_call$(callIndex)_$(ordinal))" -> println
+                 droppedOwners -> push(namedBindingIndex)
+                 return
+             }
+         }
+     argumentIndex -> anonymousProjectionOwnerIndex(context, state) => anonymousProjectionOwner
+-    argument.kind == 5 or (argument.kind == 13 and anonymousProjectionOwner < 0) or argument.kind == 15 or argument.kind == 17
++    # A suspended inline owner is represented by a frame read, rather than a
++    # lexical binding. Classify ownership from its producer, but discharge the
++    # resumed value so cleanup never references a pre-suspension SSA register.
++    (argument -> typedIr.isAsyncExpressionRead)
++        and argument.operand0 >= 0
++        and not (context.ir[argument.operand0] -> typedIr.isBorrowedAsyncExpressionBinding)
++        => suspendedOwner
++    (argument.kind == 5 and not suspendedOwner) or (argument.kind == 13 and anonymousProjectionOwner < 0) or argument.kind == 15 or argument.kind == 17
+         -> if { return }
+     (anonymousProjectionOwner >= 0 -> if { anonymousProjectionOwner } else {
+         argumentIndex -> aggregateValueIndex(context, state)
+     }) => valueIndex
+-    context.ir[valueIndex] => value
++    (suspendedOwner -> if {
++        context.ir[argument.operand0].operand0
++    } else { valueIndex }) => producerIndex
++    context.ir[producerIndex] => value
+     value.kind == 6 or value.kind == 12 or value.kind == 14
+         or value.kind == 16 or value.kind == 26 or value.kind == 30
+-        or (value.kind == 9 and value.opcode == -27) => owningProducer
++        or (value.kind == 9 and value.opcode == -27)
++        or (suspendedOwner and (value -> isResolvedAwaitNode(context))) => owningProducer
+     not owningProducer or value.typeId < 0 or value.typeId >= (context.types -> len)
+         -> if { return }
+     value.kind == 6 -> if {
+         (value -> targetsNativeFunction(context, state))
+-            or not (valueIndex -> callHasResolvedFunctionTarget(context, state))
++            or not (producerIndex -> callHasResolvedFunctionTarget(context, state))
+             -> if { return }
+     }
+-    (valueIndex -> freshEmptyArrayCallParameter(context, state)) >= 0 => dropEmptyArrayBacking
++    (producerIndex -> freshEmptyArrayCallParameter(context, state)) >= 0 => dropEmptyArrayBacking
+     dropEmptyArrayBacking => dropFixedBacking!
+-    (value.kind == 6 or (value.kind == 14 and (valueIndex -> fixedArrayLiteralNeedsHeap(context, state))))
++    (value.kind == 6 or (value.kind == 14 and (producerIndex -> fixedArrayLiteralNeedsHeap(context, state))))
+         and context.types[value.typeId].kind == 4
+         and parameter.typeId >= 0 and parameter.typeId < (context.types -> len)
+         -> if {
+@@ -1838,7 +1829,7 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
+         "%call$(callIndex)_temporary$(ordinal)" -> materialize(temporaryStorage!) => temporaryName!
+     }
+     dropFixedBacking! -> if {
+-        "  $(temporaryName!) = extractvalue { ptr, i64 } " -> print
++        "  $(temporaryName!) = extractvalue %sollang.int_slice " -> print
+         whileIndex >= 0
+             -> if {
+                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
+@@ -1856,17 +1847,39 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
+                 value.typeId -> writeSemanticTypeId(context, state)
+                 " $(temporaryName!)_value)" -> println
+             }
+-        "  call void @free(ptr $(temporaryName!))" -> println
++        "  call void @sollang_free(ptr $(temporaryName!))" -> println
+     } else {
++        context.types[value.typeId].kind == 12 => boundedDrop
++        Arena(0) => boundedPrefixStorage!
++        "" => boundedPrefix!
++        boundedDrop -> if {
++            whileIndex >= 0 -> if {
++                "while$(whileIndex)_call$(callIndex)_temporary$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix!
++            } else {
++                "call$(callIndex)_temporary$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix!
++            }
++            "  %$(boundedPrefix!)_handle = freeze %sollang.array.i32 " -> print
++            whileIndex >= 0 -> if {
++                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
++            } else { "%v$(valueIndex)" -> print }
++            "" -> println
++            Arena(0) => boundedHandleStorage!
++            "%$(boundedPrefix!)_handle" -> materialize(boundedHandleStorage!) => boundedHandle
++            boundedPrefix! -> emitBoundedArrayValueFromHandle(boundedHandle, value.typeId, context, state)
++        }
+         "  call void @sollang_drop_t$(value.typeId)(" -> print
+         value.typeId -> writeSemanticTypeId(context, state)
+         " " -> print
+-        whileIndex >= 0
+-            -> if {
+-                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
+-            } else {
+-                "%v$(valueIndex)" -> print
+-            }
++        boundedDrop -> if {
++            "%$(boundedPrefix!)" -> print
++        } else {
++            whileIndex >= 0
++                -> if {
++                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
++                } else {
++                    "%v$(valueIndex)" -> print
++                }
++        }
+         ")" -> println
+     }
+     droppedOwners -> push(valueIndex)
+@@ -1889,6 +1902,12 @@ emitCallTemporaryDrops callIndex: Int, whileIndex: Int, ownerIndex: Int, context
+ }
+ emitCallResultFinish callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[callIndex] => call
++    call -> boundedArrayValueTypeId(context, state) => boundedResultTypeId
++    boundedResultTypeId >= 0 and call.flags / 8 % 2 == 0 and not (call -> targetsNativeFunction(context, state))
++        -> if {
++            "v$(callIndex)" -> emitBoundedArrayHandle("%call_bounded$(callIndex)", boundedResultTypeId, context, state)
++            return
++        }
+     call -> targetsNativeTry(context, state) => nativeTryCall
+     nativeTryCall -> if {
+         call -> nativeTrySuccessTypeId(context, state) => nativeTrySuccessType

@@ -1,0 +1,459 @@
+diff --git a/cb6c9ce25adeaa382a7e7320948d4e52c18247f8 b/selfhost/llvm/text/core_prepare.slg
+index cb6c9ce25..8b8835b5e 100644
+--- a/cb6c9ce25adeaa382a7e7320948d4e52c18247f8
++++ b/selfhost/llvm/text/core_prepare.slg
+@@ -29,6 +29,7 @@ import sollang.compiler.semantic.ownership_check as ownershipCheck
+ import sollang.compiler.semantic.symbols as symbols
+ import sollang.compiler.semantic.type_ids as typeIds
+ import sollang.compiler.syntax as syntax
++import sys.process as process
+ import syntax.generated.slg as grammar
+ import sys.file as file
+ import sys.runtime as runtime
+@@ -387,6 +388,7 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
+                         -> while {
+                             context.ir[bindingIndex!] => bindingIndexNode
+                             bindingIndexNode.kind == 17
++                                and not (bindingIndexNode -> typedIr.isAsyncExpressionBinding)
+                                 and bindingIndexNode.operand0 > bindingOwnerIndex!
+                                 and bindingIndexNode.operand0 < bindingOwnerEnd
+                                 -> if {
+@@ -544,7 +546,41 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
+                 -> if { intrinsicModuleIdentity.sourceIndex => intrinsicRuntimeModule! }
+             intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
+         }
++    [Int; ~] => canonicalRootByAst!
++    0 => canonicalAstIndex!
++    canonicalAstIndex! < (context.nodes -> len) -> while {
++        canonicalRootByAst! -> push(-1)
++        canonicalAstIndex! + 1 => canonicalAstIndex!
++    }
++    context.interpolationRanges -> each interpolationRange {
++        interpolationRange.nodeStart => fragmentIndex!
++        fragmentIndex! < interpolationRange.nodeStart + interpolationRange.nodeCount
++            -> while {
++                context.interpolations[fragmentIndex!] => fragment
++                fragment.kind == 17 and fragment.valueAst >= 0
++                    -> if {
++                        context.ranges[interpolationRange.sourceModule].astStart + fragment.valueAst => globalRoot
++                        fragment.valueAst => canonicalRootByAst![globalRoot]
++                    }
++                fragmentIndex! + 1 => fragmentIndex!
++            }
++    }
++    [Int; ~] => canonicalRootByIr!
++    context.ir -> each value {
++        -1 => root!
++        value.astNode >= 0 and value.kind != 0 and value.kind != 11
++            -> if {
++                context.ranges[value.sourceModule] => range
++                value.astNode => ancestor!
++                ancestor! >= 0 and root! < 0 -> while {
++                    canonicalRootByAst![range.astStart + ancestor!] => root!
++                    context.nodes[range.astStart + ancestor!].parent => ancestor!
++                }
++            }
++        canonicalRootByIr! -> push(root!)
++    }
+     CoreEmitterState {
++        frozenCanonicalInterpolationRootByIr: canonicalRootByIr!
+         frozenDeferredTextValues: [Bool; ~]
+         frozenDeferredTextCaptureLeaves: [Bool; ~]
+         coroutine: coroutine
+@@ -607,21 +643,7 @@ interpolationLiteralReachable nodeIndex: Int, sourceModule: Int, context: ref em
+     false
+ }
+ 
+-emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console {
+-    profile -> if { "preamble start" -> runtime.eprintln }
+-    """
+-    @sollang_bool_true_bytes = private constant [4 x i8] c"true"
+-    @sollang_bool_false_bytes = private constant [5 x i8] c"false"
+-    """ -> println
+-    context -> diagnostics.usesParallelRuntime => usesComputePool
+-    context -> usesReachableAsyncRuntime(state) => usesAsyncRuntime
+-    context -> usesReachableAsyncDiagnostics(state)
+-        -> if {
+-            asyncRuntime.emitDiagnosticSessionRuntime()
+-            context -> emitAsyncDiagnosticConstants(state)
+-        }
+-    context -> usesReachableAsyncFileRuntime(state) => usesAsyncFileRuntime
+-    context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => usesSocketCompletionRuntime
++activeSemanticDropTypes context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] uses Console, Process {
+     [Int; ~] => dropTypeActive!
+     0 => dropTypeActiveIndex!
+     dropTypeActiveIndex! < (context.types -> len)
+@@ -636,6 +658,8 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+             and dropTypeSeed.typeId < (dropTypeActive! -> len)
+             and (dropTypeSeedIndex! -> irNodeReachable(context, state))
+             and (dropTypeSeed.typeId -> semanticTypeOwns(context, state))
++            and not (dropTypeSeedIndex! -> borrowedFlatContainerRoot(context, state))
++            and not (dropTypeSeedIndex! -> isPlannedContainerPayload(context, state))
+             -> if {
+                 1 => dropTypeActive![dropTypeSeed.typeId]
+             }
+@@ -722,25 +746,47 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                 dropTypeClosureIndex! + 1 => dropTypeClosureIndex!
+             }
+     }
++    dropTypeActive!
++}
++
++emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console, Process {
++    profile -> if { "preamble start" -> runtime.eprintln }
++    """
++    @sollang_bool_true_bytes = private constant [4 x i8] c"true"
++    @sollang_bool_false_bytes = private constant [5 x i8] c"false"
++    """ -> println
++    context -> diagnostics.usesParallelRuntime => usesComputePool
++    context -> usesReachableAsyncRuntime(state) => usesAsyncRuntime
++    context -> usesReachableAsyncDiagnostics(state)
++        -> if {
++            asyncRuntime.emitDiagnosticSessionRuntime()
++            context -> emitAsyncDiagnosticConstants(state)
++        }
++    context -> usesReachableAsyncFileRuntime(state) => usesAsyncFileRuntime
++    context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => usesSocketCompletionRuntime
++    context -> activeSemanticDropTypes(state) => dropTypeActive
+     profile -> if { "preamble drop closure" -> runtime.eprintln }
+     false => usesOwnedDropRuntime!
+     0 => ownedDropRuntimeIndex!
+     ownedDropRuntimeIndex! < (context.types -> len)
+         -> while {
+-            dropTypeActive![ownedDropRuntimeIndex!] == 1 and (context.typeTraits[ownedDropRuntimeIndex!] / 2) % 2 == 1
++            dropTypeActive[ownedDropRuntimeIndex!] == 1 and (context.typeTraits[ownedDropRuntimeIndex!] / 2) % 2 == 1
+                 -> if { true => usesOwnedDropRuntime! }
+             ownedDropRuntimeIndex! + 1 => ownedDropRuntimeIndex!
+         }
+-    false => usesSourceText!
+-    context -> diagnostics.usesStandardInputSourceTextRuntime => usesStandardInputSourceText
++    context -> diagnostics.usesSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => usesSourceText
++    context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => usesStandardInputSourceText
++    # Declared struct layouts can retain this ABI type without a reachable
++    # SourceText operation. Keep type admission separate from helper bodies.
++    false => hasSourceTextType!
+     0 => sourceTextTypeSearch!
+     sourceTextTypeSearch! < (context.ir -> len) -> while {
+         context.ir[sourceTextTypeSearch!] -> typeQueries.isSourceText
+-            -> if { true => usesSourceText! }
++            -> if { true => hasSourceTextType! }
+         sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
+     }
+-    usesSourceText! -> if { "%sollang.source_text = type { ptr, i64, ptr, i64 }" -> println }
+-    context -> diagnostics.usesOwnedFileRuntime => usesOwnedFile
++    hasSourceTextType! or usesSourceText -> if { "%sollang.source_text = type { ptr, i64, ptr, i64 }" -> println }
++    context -> usesReachableOwnedFileRuntime(state) => usesOwnedFile
+     usesOwnedFile -> if {
+         "%sollang.file_handle_result = type { i64, i32 }" -> println
+         "%sollang.file_count_result = type { i64, i32 }" -> println
+@@ -751,7 +797,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+         @sollang_file_error_invalid = private constant [7 x i8] c"invalid"
+         """ -> println
+     }
+-    context -> diagnostics.usesDirectoryRuntime => usesDirectoryTraversal
++    context -> diagnostics.usesDirectoryRuntimeWithReachability(state.frozenReachableFunctions) => usesDirectoryTraversal
+     usesDirectoryTraversal -> if {
+         "%sollang.directory_result = type { ptr, i64, i64, i32 }" -> println
+         "%sollang.path_query_result = type { ptr, i64, i8, i64, i64, i32 }" -> println
+@@ -791,7 +837,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+         context.ir[textTypeSearch!].typeSymbol == 1 -> if { true => usesText! }
+         textTypeSearch! + 1 => textTypeSearch!
+     }
+-    usesSourceText! or usesOwnedFile -> if { true => usesText! }
++    usesSourceText or usesOwnedFile -> if { true => usesText! }
+     false => requiresEarlyTextType!
+     0 => earlyTextFieldIndex!
+     earlyTextFieldIndex! < (context.fields -> len)
+@@ -1020,7 +1066,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+         "  unreachable" -> println
+         "}" -> println
+     }
+-    usesStreamType! -> if {
++    context -> usesReachableRangeRuntime(state) -> if {
+         """
+         define internal i1 @sollang_range_stream_next(ptr %context, ptr %output) {
+         entry:
+@@ -1054,14 +1100,14 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+         entry:
+           br i1 %destroy, label %release, label %done
+         release:
+-          call void @free(ptr %context)
++          call void @sollang_free(ptr %context)
+           br label %done
+         done:
+           ret void
+         }
+         define internal %sollang.stream @sollang_range_stream_create({ i32, i32 } %range) {
+         entry:
+-          %context = call ptr @malloc(i64 12)
++          %context = call ptr @sollang_alloc(i64 12)
+           %start = extractvalue { i32, i32 } %range, 0
+           %end = extractvalue { i32, i32 } %range, 1
+           store i32 %start, ptr %context, align 4
+@@ -1229,7 +1275,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+     }
+     profile -> if { "preamble after product declarations" -> runtime.eprintln }
+     profile -> if { "preamble before runtime" -> runtime.eprintln }
+-    dropTypeActive! -> emitCoreRuntimePreamble(state.intrinsicRuntimeModule, requiresEarlyTextType!, usesComputePool, usesAsyncRuntime, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText!, usesStandardInputSourceText, usesText!, context, state) => runtimePreamble
++    dropTypeActive -> emitCoreRuntimePreamble(state.intrinsicRuntimeModule, requiresEarlyTextType!, usesComputePool, usesAsyncRuntime, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText, usesStandardInputSourceText, usesText!, context, state) => runtimePreamble
+     profile -> if { "preamble after runtime" -> runtime.eprintln }
+     runtimePreamble.usesArguments => usesArguments
+     runtimePreamble.usesNativeInterop => usesNativeInterop
+@@ -1305,9 +1351,10 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                                 ", ptr %capture_environment, i32 0, i32 $(parallelCallbackCaptureIndex!)" -> println
+                                 context.ir[parallelCallbackCaptures[parallelCallbackCaptureIndex!]] => parallelCallbackCapture
+                                 "  %capture_value_$(parallelCallbackCaptureIndex!) = load " -> print
+-                                parallelCallbackCapture -> ownsType -> if { "ptr" -> print } else { parallelCallbackCapture -> writeIrType(context, state) }
++                                parallelCallbackCapture -> writeCaptureAbiType(context, state)
+                                 ", ptr %capture_address_$(parallelCallbackCaptureIndex!), align " -> print
+-                                parallelCallbackCapture -> ownsType -> if { 8 -> writeDecimalLine } else { parallelCallbackCapture -> storageAlign(context, state) -> writeDecimalLine }
++                                parallelCallbackCapture -> captureUsesBorrowAbi(context, state)
++                                    -> if { 8 -> writeDecimalLine } else { parallelCallbackCapture -> storageAlign(context, state) -> writeDecimalLine }
+                                 parallelCallbackCaptureIndex! + 1 => parallelCallbackCaptureIndex!
+                             }
+                         parallelExpression.operand1 -> parallelAdditionalArgumentStart(context) => parallelCallbackAdditionalIndex!
+@@ -1321,9 +1368,9 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                                 ", ptr %capture_environment, i32 0, i32 $(parallelCallbackEnvironmentIndex)" -> println
+                                 "  %capture_value_$(parallelCallbackEnvironmentIndex) = load " -> print
+                                 parallelCallbackParameterIndex >= 0 -> if {
+-                                    context.ir[parallelCallbackParameterIndex] -> writeIrType(context, state)
++                                    context.ir[parallelCallbackParameterIndex] -> writeFunctionValueAbiType(context, state)
+                                 } else {
+-                                    context.ir[parallelCallbackAdditionalIndex!] -> writeIrType(context, state)
++                                    context.ir[parallelCallbackAdditionalIndex!] -> writeFunctionValueAbiType(context, state)
+                                 }
+                                 ", ptr %capture_address_$(parallelCallbackEnvironmentIndex), align " -> print
+                                 parallelCallbackParameterIndex >= 0 -> if {
+@@ -1336,13 +1383,13 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                             }
+                     }
+                     "  %mapped = call " -> print
+-                    parallelBodyCall -> writeIrType(context, state)
++                    parallelBodyCall -> writeFunctionValueAbiType(context, state)
+                     " @sollang_m$(parallelBodyCall.targetModule)_s$(parallelBodyCall.symbol)(" -> print
+                     0 => parallelCallbackArgumentIndex!
+                     parallelCallbackArgumentIndex! < parallelCallbackCaptureCount
+                         -> while {
+                             context.ir[parallelCallbackCaptures[parallelCallbackArgumentIndex!]] => parallelCallbackArgument
+-                            parallelCallbackArgument -> ownsType -> if { "ptr" -> print } else { parallelCallbackArgument -> writeIrType(context, state) }
++                            parallelCallbackArgument -> writeCaptureAbiType(context, state)
+                             " %capture_value_$(parallelCallbackArgumentIndex!), " -> print
+                             parallelCallbackArgumentIndex! + 1 => parallelCallbackArgumentIndex!
+                         }
+@@ -1356,9 +1403,9 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                             parallelCallbackCaptureCount + parallelCallbackAdditionalOrdinal! => parallelCallbackEnvironmentIndex
+                             ", " -> print
+                             parallelCallbackParameterIndex >= 0 -> if {
+-                                context.ir[parallelCallbackParameterIndex] -> writeIrType(context, state)
++                                context.ir[parallelCallbackParameterIndex] -> writeFunctionValueAbiType(context, state)
+                             } else {
+-                                context.ir[parallelCallbackAdditionalIndex!] -> writeIrType(context, state)
++                                context.ir[parallelCallbackAdditionalIndex!] -> writeFunctionValueAbiType(context, state)
+                             }
+                             " %capture_value_$(parallelCallbackEnvironmentIndex)" -> print
+                             context.ir[parallelCallbackAdditionalIndex!].nextOperand => parallelCallbackAdditionalIndex!
+@@ -1373,7 +1420,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                         parallelBodyResultSize -> writeDecimalLine
+                         "  %output_address = getelementptr i8, ptr %output, i64 %output_offset" -> println
+                         "  store " -> print
+-                        parallelBodyCall -> writeIrType(context, state)
++                        parallelBodyCall -> writeFunctionValueAbiType(context, state)
+                         " %mapped, ptr %output_address, align " -> print
+                         parallelBodyCall -> storageAlign(context, state) -> writeDecimalLine
+                         "  %initialized_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 12" -> println
+@@ -1381,7 +1428,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                         "  %initialized_address = getelementptr i8, ptr %initialized, i64 %index" -> println
+                         "  store atomic i8 1, ptr %initialized_address release, align 1" -> println
+                         "  %result_tag = extractvalue " -> print
+-                        parallelBodyCall -> writeIrType(context, state)
++                        parallelBodyCall -> writeFunctionValueAbiType(context, state)
+                         " %mapped, 0" -> println
+                         "  %is_error = icmp eq i32 %result_tag, 1" -> println
+                         "  br i1 %is_error, label %publish_error, label %done" -> println
+@@ -1439,9 +1486,12 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                         parallelBranchCallbackIndex! -> writeParallelBranchEnvironmentType(parallelBranchCaptures, context, state)
+                         ", ptr %environment, i32 0, i32 0" -> println
+                         "  %parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!) = load " -> print
+-                        parallelBranchSource -> writeIrType(context, state)
++                        parallelBranchSource -> writeParallelBranchSourceType(context, state)
+                         ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_source_address$(parallelBranchArmOrdinal!), align " -> print
+-                        parallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
++                        parallelBranchSource -> parallelBranchSourceUsesPointer(context, state)
++                            -> if { 8 -> writeDecimalLine } else {
++                                parallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
++                            }
+                         0 => parallelBranchCaptureLoadIndex!
+                         parallelBranchCaptureLoadIndex! < (parallelBranchCaptures -> len)
+                             -> while {
+@@ -1451,9 +1501,10 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                                 parallelBranchCaptureLoadIndex! + 1 -> writeDecimalLine
+                                 context.ir[parallelBranchCaptures[parallelBranchCaptureLoadIndex!]] => parallelBranchCaptureLoad
+                                 "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture$(parallelBranchCaptureLoadIndex!) = load " -> print
+-                                parallelBranchCaptureLoad -> ownsType -> if { "ptr" -> print } else { parallelBranchCaptureLoad -> writeIrType(context, state) }
++                                parallelBranchCaptureLoad -> writeCaptureAbiType(context, state)
+                                 ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture_address$(parallelBranchCaptureLoadIndex!), align " -> print
+-                                parallelBranchCaptureLoad -> ownsType -> if { "8" -> println } else { parallelBranchCaptureLoad -> storageAlign(context, state) -> writeDecimalLine }
++                                parallelBranchCaptureLoad -> captureUsesBorrowAbi(context, state)
++                                    -> if { "8" -> println } else { parallelBranchCaptureLoad -> storageAlign(context, state) -> writeDecimalLine }
+                                 parallelBranchCaptureLoadIndex! + 1 => parallelBranchCaptureLoadIndex!
+                             }
+                         0 => parallelBranchArgumentLoadIndex!
+@@ -1478,10 +1529,35 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                         parallelBranchExpression.operand1 => parallelBranchStageFlowIndex!
+                         parallelBranchStageIndex! >= 0 -> while {
+                             context.ir[parallelBranchStageIndex!] => parallelBranchStage
++                            CallEnvironmentRequest { callerIndex: -1, callIndex: parallelBranchStageIndex!, targetModule: parallelBranchStage.targetModule, targetSymbol: parallelBranchStage.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => parallelBranchStageTarget
++                            parallelBranchStageIndex! -> callTargetParameter(0, context, state) => parallelBranchPrimaryParameter
++                            parallelBranchStageTarget < 0 or parallelBranchPrimaryParameter < 0
++                                -> if {
++                                    "; sollang compiler error S019: parallel branch stage has no resolved primary parameter" -> println
++                                    process.exit(1)
++                                }
++                            context.ir[parallelBranchPrimaryParameter] -> referenceValueTypeId(context, state) => parallelBranchBorrowType
++                            context.ir[parallelBranchStageFlowIndex!] -> effectiveTypeId(context, state) => parallelBranchFlowType
++                            parallelBranchBorrowType >= 0 and parallelBranchBorrowType == parallelBranchFlowType
++                                and not (parallelBranchStageOrdinal! == 0 and (parallelBranchSource -> parallelBranchSourceUsesPointer(context, state))) => parallelBranchBorrowValue
++                            parallelBranchBorrowValue -> if {
++                                "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_input$(parallelBranchStageOrdinal!) = alloca " -> print
++                                context.ir[parallelBranchStageFlowIndex!] -> writeFunctionValueAbiType(context, state)
++                                ", align $(context.typeAligns[parallelBranchFlowType])" -> println
++                                "  store " -> print
++                                context.ir[parallelBranchStageFlowIndex!] -> writeFunctionValueAbiType(context, state)
++                                " " -> print
++                                parallelBranchStageOrdinal! == 0 -> if {
++                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
++                                } else {
++                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
++                                    parallelBranchStageOrdinal! - 1 -> writeDecimal
++                                }
++                                ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_input$(parallelBranchStageOrdinal!), align $(context.typeAligns[parallelBranchFlowType])" -> println
++                            }
+                             "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage$(parallelBranchStageOrdinal!) = call " -> print
+-                            parallelBranchStage -> writeIrType(context, state)
++                            parallelBranchStage -> writeFunctionValueAbiType(context, state)
+                             " @sollang_m$(parallelBranchStage.targetModule)_s$(parallelBranchStage.symbol)(" -> print
+-                            CallEnvironmentRequest { callerIndex: -1, callIndex: parallelBranchStageIndex!, targetModule: parallelBranchStage.targetModule, targetSymbol: parallelBranchStage.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => parallelBranchStageTarget
+                             parallelBranchStageTarget >= 0 -> if {
+                                 parallelBranchStageTarget -> functionCaptures(context, state) => parallelBranchStageCaptures
+                                 0 => parallelBranchStageCaptureIndex!
+@@ -1496,19 +1572,21 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                                                 parallelBranchCapturePositionSearch! + 1 => parallelBranchCapturePositionSearch!
+                                             }
+                                         context.ir[parallelBranchStageCaptures[parallelBranchStageCaptureIndex!]] => parallelBranchStageCapture
+-                                        parallelBranchStageCapture -> ownsType -> if { "ptr" -> print } else { parallelBranchStageCapture -> writeIrType(context, state) }
++                                        parallelBranchStageCapture -> writeCaptureAbiType(context, state)
+                                         " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture$(parallelBranchStageCapturePosition!), " -> print
+                                         parallelBranchStageCaptureIndex! + 1 => parallelBranchStageCaptureIndex!
+                                     }
+                             }
+-                            context.ir[parallelBranchStageFlowIndex!] -> writeIrType(context, state)
++                            context.ir[parallelBranchPrimaryParameter] -> writeFunctionValueAbiType(context, state)
+                             " " -> print
+-                            parallelBranchStageOrdinal! == 0 -> if {
+-                                "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
+-                            } else {
+-                                "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
+-                                parallelBranchStageOrdinal! - 1 -> writeDecimal
+-                            }
++                            parallelBranchBorrowValue -> if {
++                                "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_input$(parallelBranchStageOrdinal!)" -> print
++                            } else { parallelBranchStageOrdinal! == 0 -> if {
++                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
++                                } else {
++                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
++                                    parallelBranchStageOrdinal! - 1 -> writeDecimal
++                            } }
+                             parallelBranchStage.operand0 => parallelBranchStageArgumentIndex!
+                             parallelBranchStageArgumentIndex! >= 0 and context.ir[parallelBranchStageArgumentIndex!].parent == parallelBranchStageIndex!
+                                 -> while {
+@@ -1534,7 +1612,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
+                         parallelBranchExpression -> writeIrType(context, state)
+                         ", ptr %output, i32 0, i32 $(parallelBranchArmOrdinal!)" -> println
+                         "  store " -> print
+-                        parallelBranchArm -> writeIrType(context, state)
++                        parallelBranchArm -> writeFunctionValueAbiType(context, state)
+                         " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
+                         parallelBranchStageOrdinal! - 1 -> writeDecimal
+                         ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_output$(parallelBranchArmOrdinal!), align " -> print
+@@ -1623,6 +1701,12 @@ emitBodyScheduleDiagnostics state: ref CoreEmitterState -> Unit uses Console {
+ 
+ # Keep prepared-emitter failures ahead of target headers and LLVM output.
+ preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
++    context -> unboundArrayRepeatDiagnosticCount(state) => repeatCount
++    repeatCount > 0 -> if { repeatCount -> return }
++    context -> placementPreparationDiagnosticCount => placementCount
++    placementCount > 0 -> if { placementCount -> return }
++    context -> asyncArenaFrameDiagnosticCount(state) => arenaCount
++    arenaCount > 0 -> if { arenaCount -> return }
+     context -> deferredTextCaptureDiagnosticCount(state) => captureCount
+     captureCount > 0 -> if { captureCount -> return }
+     state -> bodyScheduleDiagnosticCount => scheduleCount
+@@ -1632,3 +1716,68 @@ preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: r
+     }
+     context -> consumedEnumSubjectReadDiagnostics(state)
+ }
++
++# A source error must be reported before LLVM text and parallel callbacks.
++# Those callbacks own output sinks; terminating inside one is not a diagnostic.
++unboundArrayRepeatDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
++    0 => index!
++    index! < (context.ir -> len) -> while {
++        context.ir[index!] => node
++        node.kind == 14 and node.operand0 >= 0 and node.sourceModule >= 0
++            and not (context -> isUnspecializedTemplateBody(index!))
++            -> if {
++                context -> irFunctionOwner(index!) => owner
++                false => emittedBody!
++                owner >= 0 -> if {
++                    context.ir[owner] => function
++                    function.kind == 11 -> if { true => emittedBody! }
++                    function.kind == 0 and (owner -> nativeFunctionReachable(state))
++                        and not (function -> isIntrinsicDeclaration)
++                        and not (function -> isComFunction(context, state))
++                        and not (owner -> isStreamFunctionIr(context, state))
++                        -> if { true => emittedBody! }
++                }
++                emittedBody! -> if {
++                    false => concreteCount!
++                    node.typeId >= 0 and node.typeId < (context.types -> len)
++                        and context.types[node.typeId].kind == 4 and context.types[node.typeId].length >= 0
++                        -> if { true => concreteCount! }
++                    not concreteCount! -> if {
++                        context.ranges[node.sourceModule] => range
++                        context.nodes[range.astStart + node.astNode] => literal
++                        context.sources[node.sourceModule] -> typeIds.arrayStorageSyntaxFromTokens(context.tokens, range.tokenStart, literal) => storage
++                        storage.isRepeat and storage.length < 0 -> if {
++                            context.tokens -> typeIds.symbolicArrayRepeatCountToken(range.tokenStart, literal) => countToken
++                            countToken >= 0 -> if {
++                                context.tokens[range.tokenStart + countToken] => countName
++                                context.sources[node.sourceModule] -> slice(countName.span.start, countName.span.length) => name
++                                "sollang: array repeat count '$name' was not specialized" -> println
++                                1 -> return
++                            }
++                        }
++                    }
++                }
++            }
++        index! + 1 => index!
++    }
++    0
++}
++
++# Checked source diagnostics have already won before this prepared-emitter
++# gate is called. A failed plan blocks LLVM output as a compiler integrity error.
++placementPreparationDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
++    context.storagePlacement -> when {
++        Ok(_) { 0 }
++        Err(failure) {
++            failure -> when {
++                InvalidOwner(owner) { "; sollang compiler error S052: PLACEMENT_INVALID_OWNER $owner" -> println }
++                InvalidSourceIndex(source) { "; sollang compiler error S052: PLACEMENT_INVALID_SOURCE_INDEX $source" -> println }
++                InvalidUnits(source) { "; sollang compiler error S052: PLACEMENT_INVALID_UNITS $source" -> println }
++                InvalidCaller(owner) { "; sollang compiler error S052: PLACEMENT_INVALID_CALLER $owner" -> println }
++                InvalidLookup { "; sollang compiler error S052: PLACEMENT_INVALID_LOOKUP" -> println }
++                InvalidInlinePool { "; sollang compiler error S052: PLACEMENT_INVALID_INLINE_POOL" -> println }
++            }
++            1
++        }
++    }
++}
