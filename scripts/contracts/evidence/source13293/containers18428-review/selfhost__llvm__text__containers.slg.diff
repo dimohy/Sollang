@@ -1,0 +1,685 @@
+diff --git a/35b2073ffd391e7661c43f7efd9f036a23d71416 b/selfhost/llvm/text/containers.slg
+index 35b2073ff..c7db5f2af 100644
+--- a/35b2073ffd391e7661c43f7efd9f036a23d71416
++++ b/selfhost/llvm/text/containers.slg
+@@ -37,7 +37,7 @@ emitBoxIntrinsic boxIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
+     context.ir[boxIndex] => boxNode
+     context.types[boxNode.typeId].first => boxElementType
+     boxNode.operand0 -> aggregateValueIndex(context, state) => boxValueIndex
+-    "  %v$(boxIndex) = call ptr @malloc(i64 $(context.typeSizes[boxElementType]))" -> println
++    "  %v$(boxIndex) = call ptr @sollang_alloc(i64 $(context.typeSizes[boxElementType]))" -> println
+     "  store " -> print
+     boxElementType -> writeSemanticTypeId(context, state)
+     " " -> print
+@@ -255,7 +255,7 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
+         entry:
+           br i1 %size_valid, label %allocate, label %fail
+         allocate:
+-          %data = call ptr @malloc(i64 %bytes)
++          %data = call ptr @sollang_alloc(i64 %bytes)
+           %allocated = icmp ne ptr %data, null
+           br i1 %allocated, label %done, label %fail
+         done:
+@@ -296,13 +296,13 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
+           %doubled = shl i64 %old_capacity, 1
+           %doubled_enough = icmp uge i64 %doubled, %end
+           %new_capacity = select i1 %doubled_enough, i64 %doubled, i64 %end
+-          %new_data = call ptr @malloc(i64 %new_capacity)
++          %new_data = call ptr @sollang_alloc(i64 %new_capacity)
+           %allocated = icmp ne ptr %new_data, null
+           br i1 %allocated, label %copy, label %fail
+         copy:
+           %old_data = load ptr, ptr %data_addr, align 1
+           call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %used, i1 false)
+-          call void @free(ptr %old_data)
++          call void @sollang_free(ptr %old_data)
+           store ptr %new_data, ptr %data_addr, align 1
+           store i64 %new_capacity, ptr %capacity_addr, align 8
+           br label %done
+@@ -502,7 +502,7 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
+             "  %v$(collectionIndex)_bytes = mul i64 %v$(collectionIndex)_requested, $heapElementSize" -> println
+             "  %v$(collectionIndex)_has_bytes = icmp ugt i64 %v$(collectionIndex)_bytes, 0" -> println
+             "  %v$(collectionIndex)_allocation = select i1 %v$(collectionIndex)_has_bytes, i64 %v$(collectionIndex)_bytes, i64 1" -> println
+-            "  %v$(collectionIndex)_data = call ptr @malloc(i64 %v$(collectionIndex)_allocation)" -> println
++            "  %v$(collectionIndex)_data = call ptr @sollang_alloc(i64 %v$(collectionIndex)_allocation)" -> println
+             "  %v$(collectionIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex)_data, 0" -> println
+             "  %v$(collectionIndex)_1 = insertvalue %sollang.array.i32 %v$(collectionIndex)_0, i64 0, 1" -> println
+             "  %v$(collectionIndex) = insertvalue %sollang.array.i32 %v$(collectionIndex)_1, i64 %v$(collectionIndex)_requested, 2" -> println
+@@ -528,7 +528,7 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
+             "  %v$(collectionIndex)_capacity = add i64 %v$(collectionIndex)_round32, 1" -> println
+             "  %v$(collectionIndex)_payload_bytes = mul i64 %v$(collectionIndex)_capacity, $dequeElementSize" -> println
+             "  %v$(collectionIndex)_bytes = add i64 %v$(collectionIndex)_payload_bytes, 8" -> println
+-            "  %v$(collectionIndex)_data = call ptr @malloc(i64 %v$(collectionIndex)_bytes)" -> println
++            "  %v$(collectionIndex)_data = call ptr @sollang_alloc(i64 %v$(collectionIndex)_bytes)" -> println
+             "  store i64 0, ptr %v$(collectionIndex)_data, align 8" -> println
+             "  %v$(collectionIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex)_data, 0" -> println
+             "  %v$(collectionIndex)_1 = insertvalue %sollang.array.i32 %v$(collectionIndex)_0, i64 0, 1" -> println
+@@ -750,7 +750,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
+         "  %deque$(callIndex)_grown_capacity = mul i64 %deque$(callIndex)_capacity, 2" -> println
+         "  %deque$(callIndex)_grown_payload_bytes = mul i64 %deque$(callIndex)_grown_capacity, $elementSize" -> println
+         "  %deque$(callIndex)_grown_bytes = add i64 %deque$(callIndex)_grown_payload_bytes, 8" -> println
+-        "  %deque$(callIndex)_grown_data = call ptr @malloc(i64 %deque$(callIndex)_grown_bytes)" -> println
++        "  %deque$(callIndex)_grown_data = call ptr @sollang_alloc(i64 %deque$(callIndex)_grown_bytes)" -> println
+         "  store i64 0, ptr %deque$(callIndex)_grown_data, align 8" -> println
+         "  %deque$(callIndex)_old_payload = getelementptr i8, ptr %deque$(callIndex)_data, i64 8" -> println
+         "  %deque$(callIndex)_grown_payload = getelementptr i8, ptr %deque$(callIndex)_grown_data, i64 8" -> println
+@@ -778,7 +778,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
+         "  %deque$(callIndex)_copy_next = add i64 %deque$(callIndex)_copy_index, 1" -> println
+         "  br label %deque$(callIndex)_copy" -> println
+         "deque$(callIndex)_copy_done:" -> println
+-        "  call void @free(ptr %deque$(callIndex)_data)" -> println
++        "  call void @sollang_free(ptr %deque$(callIndex)_data)" -> println
+         "  br label %deque$(callIndex)_ready" -> println
+         "deque$(callIndex)_ready:" -> println
+         "  %deque$(callIndex)_active_data = phi ptr [ %deque$(callIndex)_data, %deque$(callIndex)_keep ], [ %deque$(callIndex)_grown_data, %deque$(callIndex)_copy_done ]" -> println
+@@ -908,10 +908,10 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
+         "  %heap$(callIndex)_doubled = mul i64 %heap$(callIndex)_capacity, 2" -> println
+         "  %heap$(callIndex)_grown_capacity = select i1 %heap$(callIndex)_capacity_zero, i64 1, i64 %heap$(callIndex)_doubled" -> println
+         "  %heap$(callIndex)_grown_bytes = mul i64 %heap$(callIndex)_grown_capacity, $elementSize" -> println
+-        "  %heap$(callIndex)_grown_data = call ptr @malloc(i64 %heap$(callIndex)_grown_bytes)" -> println
++        "  %heap$(callIndex)_grown_data = call ptr @sollang_alloc(i64 %heap$(callIndex)_grown_bytes)" -> println
+         "  %heap$(callIndex)_copy_bytes = mul i64 %heap$(callIndex)_length, $elementSize" -> println
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %heap$(callIndex)_grown_data, ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_copy_bytes, i1 false)" -> println
+-        "  call void @free(ptr %heap$(callIndex)_data)" -> println
++        "  call void @sollang_free(ptr %heap$(callIndex)_data)" -> println
+         "  br label %heap$(callIndex)_ready" -> println
+         "heap$(callIndex)_ready:" -> println
+         "  %heap$(callIndex)_active_data = phi ptr [ %heap$(callIndex)_data, %heap$(callIndex)_keep ], [ %heap$(callIndex)_grown_data, %heap$(callIndex)_grow ]" -> println
+@@ -1209,7 +1209,7 @@ emitSetRehash prefix: Text, oldKeysName: Text, oldControlsName: Text, oldCapacit
+     "  %$(prefix)_next_index = add i64 %$(prefix)_index, 1" -> println
+     "  br label %$(prefix)_loop" -> println
+     "$(prefix)_done:" -> println
+-    "  call void @free(ptr $(oldControlsName))" -> println
++    "  call void @sollang_free(ptr $(oldControlsName))" -> println
+     "$(prefix)_result" -> emitGrowableDictionaryOwner("%$(prefix)_storage", lengthName, newCapacityName)
+ }
+ 
+@@ -1279,12 +1279,12 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
+     keyType.symbol -> integerSigned(context, state) => hashSigned
+     call.operand0 -> mutableStorageRoot(context, state) => setRoot
+     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => setBorrow
+-    "  %set$(callIndex)_source = load %sollang.dict, ptr " -> print
++    "  %set$(callIndex)_source = load %sollang.int_dictionary, ptr " -> print
+     setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+     ", align 8" -> println
+-    "  %set$(callIndex)_storage = extractvalue %sollang.dict %set$(callIndex)_source, 0" -> println
+-    "  %set$(callIndex)_length = extractvalue %sollang.dict %set$(callIndex)_source, 1" -> println
+-    "  %set$(callIndex)_capacity = extractvalue %sollang.dict %set$(callIndex)_source, 2" -> println
++    "  %set$(callIndex)_storage = extractvalue %sollang.int_dictionary %set$(callIndex)_source, 0" -> println
++    "  %set$(callIndex)_length = extractvalue %sollang.int_dictionary %set$(callIndex)_source, 1" -> println
++    "  %set$(callIndex)_capacity = extractvalue %sollang.int_dictionary %set$(callIndex)_source, 2" -> println
+     keySize -> dictionaryEntryLayout(keyAlign, 0, 1) => setEntryLayout
+     "set$(callIndex)" -> emitGrowableDictionaryPointers("%set$(callIndex)_storage", "%set$(callIndex)_capacity", setEntryLayout)
+     call.operand1 -> aggregateValueIndex(context, state) => keyValueIndex
+@@ -1319,8 +1319,8 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
+         " %set$(callIndex)_query, ptr %set$(callIndex)_insert_key_ptr, align $(keyAlign)" -> println
+         "  %set$(callIndex)_insert_control_ptr = getelementptr i8, ptr %set$(callIndex)_controls, i64 %set$(callIndex)_insert_slot" -> println
+         "set$(callIndex)_insert_control" -> emitDictionaryControlStore("%set$(callIndex)_controls", "%set$(callIndex)_insert_slot", "%set$(callIndex)_h2", "%set$(callIndex)_capacity")
+-        "  %set$(callIndex)_current_result = insertvalue %sollang.dict %set$(callIndex)_source, i64 %set$(callIndex)_next_length, 1" -> println
+-        "  store %sollang.dict %set$(callIndex)_current_result, ptr " -> print
++        "  %set$(callIndex)_current_result = insertvalue %sollang.int_dictionary %set$(callIndex)_source, i64 %set$(callIndex)_next_length, 1" -> println
++        "  store %sollang.int_dictionary %set$(callIndex)_current_result, ptr " -> print
+         setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+         ", align 8" -> println
+         "  br label %set$(callIndex)_inserted" -> println
+@@ -1368,8 +1368,8 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
+         keyTypeId -> writeSemanticTypeId(context, state)
+         " %set$(callIndex)_query, ptr %set$(callIndex)_grown_key_ptr, align $(keyAlign)" -> println
+         "set$(callIndex)_grown_store_control" -> emitDictionaryControlStore("%set$(callIndex)_grow_rehash_controls", "%set$(callIndex)_grown_slot", "%set$(callIndex)_h2", "%set$(callIndex)_grown_capacity")
+-        "  %set$(callIndex)_grown_result = insertvalue %sollang.dict %set$(callIndex)_grow_rehash_result, i64 %set$(callIndex)_next_length, 1" -> println
+-        "  store %sollang.dict %set$(callIndex)_grown_result, ptr " -> print
++        "  %set$(callIndex)_grown_result = insertvalue %sollang.int_dictionary %set$(callIndex)_grow_rehash_result, i64 %set$(callIndex)_next_length, 1" -> println
++        "  store %sollang.int_dictionary %set$(callIndex)_grown_result, ptr " -> print
+         setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+         ", align 8" -> println
+         "  br label %set$(callIndex)_inserted" -> println
+@@ -1410,8 +1410,8 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
+             "  %set$(callIndex)_should_compact = icmp eq i64 %set$(callIndex)_next_length, %set$(callIndex)_compact_threshold" -> println
+             "  br i1 %set$(callIndex)_should_compact, label %set$(callIndex)_compact, label %set$(callIndex)_keep" -> println
+             "set$(callIndex)_keep:" -> println
+-            "  %set$(callIndex)_keep_result = insertvalue %sollang.dict %set$(callIndex)_source, i64 %set$(callIndex)_next_length, 1" -> println
+-            "  store %sollang.dict %set$(callIndex)_keep_result, ptr " -> print
++            "  %set$(callIndex)_keep_result = insertvalue %sollang.int_dictionary %set$(callIndex)_source, i64 %set$(callIndex)_next_length, 1" -> println
++            "  store %sollang.int_dictionary %set$(callIndex)_keep_result, ptr " -> print
+             setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+             ", align 8" -> println
+             "  br label %set$(callIndex)_removed" -> println
+@@ -1419,7 +1419,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
+             "  br label %set$(callIndex)_compact_rehash_entry" -> println
+             "set$(callIndex)_compact_rehash_entry:" -> println
+             "set$(callIndex)_compact_rehash" -> emitSetRehash("%set$(callIndex)_keys", "%set$(callIndex)_controls", "%set$(callIndex)_capacity", "%set$(callIndex)_capacity", "%set$(callIndex)_next_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
+-            "  store %sollang.dict %set$(callIndex)_compact_rehash_result, ptr " -> print
++            "  store %sollang.int_dictionary %set$(callIndex)_compact_rehash_result, ptr " -> print
+             setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+             ", align 8" -> println
+             "  br label %set$(callIndex)_removed" -> println
+@@ -1635,11 +1635,14 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
+     "  %materialize$(materializeIndex)_doubled = shl i64 %materialize$(materializeIndex)_capacity, 1" -> println
+     "  %materialize$(materializeIndex)_doubled_enough = icmp uge i64 %materialize$(materializeIndex)_doubled, %materialize$(materializeIndex)_end" -> println
+     "  %materialize$(materializeIndex)_new_capacity = select i1 %materialize$(materializeIndex)_doubled_enough, i64 %materialize$(materializeIndex)_doubled, i64 %materialize$(materializeIndex)_end" -> println
+-    "  %materialize$(materializeIndex)_grown = call ptr @realloc(ptr %materialize$(materializeIndex)_data, i64 %materialize$(materializeIndex)_new_capacity)" -> println
++    "  %materialize$(materializeIndex)_grown = call ptr @sollang_resize(ptr %materialize$(materializeIndex)_data, i64 %materialize$(materializeIndex)_used, i64 %materialize$(materializeIndex)_new_capacity)" -> println
++    Arena(0) => materializeGuardNames!
++    "materialize$(materializeIndex)" -> materialize(materializeGuardNames!) => materializeGuardPrefix
++    materializeGuardPrefix -> emitAllocationGuard("_grown", request.ownerIndex, context, state)
+     "  br label %materialize$(materializeIndex)_ready" -> println
+     "materialize$(materializeIndex)_ready:" -> println
+-    "  %materialize$(materializeIndex)_pointer = phi ptr [ %materialize$(materializeIndex)_data, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_grown, %materialize$(materializeIndex)_grow ]" -> println
+-    "  %materialize$(materializeIndex)_final_capacity = phi i64 [ %materialize$(materializeIndex)_capacity, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_new_capacity, %materialize$(materializeIndex)_grow ]" -> println
++    "  %materialize$(materializeIndex)_pointer = phi ptr [ %materialize$(materializeIndex)_data, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_grown, %materialize$(materializeIndex)_allocation_ready ]" -> println
++    "  %materialize$(materializeIndex)_final_capacity = phi i64 [ %materialize$(materializeIndex)_capacity, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_new_capacity, %materialize$(materializeIndex)_allocation_ready ]" -> println
+     "  %materialize$(materializeIndex)_target = getelementptr i8, ptr %materialize$(materializeIndex)_pointer, i64 %materialize$(materializeIndex)_used" -> println
+     materializeRootCount > 0 -> if {
+         "  %materialize$(materializeIndex)_copy_offset0 = add i64 0, 0" -> println
+@@ -1698,7 +1701,170 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
+     ", 1" -> println
+ }
+ 
+-emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++# Same bit spreading and minimum as the managed reserve capacity helpers.
++emitReservePowerOfTwo prefix: Text, value: Text -> Unit uses Console {
++    "  %$(prefix)_positive = icmp ugt i64 $value, 0" -> println
++    "  %$(prefix)_at_least_one = select i1 %$(prefix)_positive, i64 $value, i64 1" -> println
++    "  %$(prefix)_spread0 = sub i64 %$(prefix)_at_least_one, 1" -> println
++    0 => stage!
++    [1, 2, 4, 8, 16, 32] -> each shift {
++        "  %$(prefix)_shifted$(stage!) = lshr i64 %$(prefix)_spread$(stage!), $shift" -> println
++        "  %$(prefix)_spread$(stage! + 1) = or i64 %$(prefix)_spread$(stage!), %$(prefix)_shifted$(stage!)" -> println
++        stage! + 1 => stage!
++    }
++    "  %$(prefix)_power = add i64 %$(prefix)_spread6, 1" -> println
++}
++
++emitDequeReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    request.nodeIndex => index
++    context.ir[index] => call
++    context.ir[call.operand0] => receiver
++    context.types -> typeIds.materializedReadTypeId(receiver.typeId) => collectionTypeId
++    context.types[collectionTypeId].first => elementTypeId
++    context.typeSizes[elementTypeId] => elementSize
++    context.typeAligns[elementTypeId] => elementAlign
++    call.operand0 -> mutableStorageRoot(context, state) => root
++    call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => borrow
++    Arena(0) => names!
++    "reserve$(index)_deque" -> materialize(names!) => prefix
++    "$(prefix)_round" -> emitReservePowerOfTwo("%reserve$(index)_requested")
++    borrow >= 0 -> if {
++        "  %$(prefix)_data = load ptr, ptr " -> print
++        borrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(borrow)_mut_ptr_addr" -> print }
++        ", align 8" -> println
++        "  %$(prefix)_length = load i64, ptr " -> print
++        borrow == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(borrow)_mut_len_addr" -> print }
++        ", align 8" -> println
++        "  %$(prefix)_capacity = load i64, ptr " -> print
++        borrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(borrow)_mut_capacity_addr" -> print }
++        ", align 8" -> println
++    } else {
++        "  %$(prefix)_owner = load %sollang.array.i32, ptr %slot$(root), align 8" -> println
++        "  %$(prefix)_data = extractvalue %sollang.array.i32 %$(prefix)_owner, 0" -> println
++        "  %$(prefix)_length = extractvalue %sollang.array.i32 %$(prefix)_owner, 1" -> println
++        "  %$(prefix)_capacity = extractvalue %sollang.array.i32 %$(prefix)_owner, 2" -> println
++    }
++    "  %$(prefix)_grow = icmp ugt i64 %$(prefix)_round_power, %$(prefix)_capacity" -> println
++    "  br i1 %$(prefix)_grow, label %$(prefix)_allocate, label %$(prefix)_keep" -> println
++    "$(prefix)_allocate:" -> println
++    "  %$(prefix)_payload_bytes = mul i64 %$(prefix)_round_power, $elementSize" -> println
++    "  %$(prefix)_bytes = add i64 %$(prefix)_payload_bytes, 8" -> println
++    "  %$(prefix)_allocated = call ptr @sollang_alloc(i64 %$(prefix)_bytes)" -> println
++    prefix -> emitAllocationGuard("_allocated", request.ownerIndex, context, state)
++    "  store i64 0, ptr %$(prefix)_allocated, align 8" -> println
++    "  %$(prefix)_head = load i64, ptr %$(prefix)_data, align 8" -> println
++    "  %$(prefix)_old_payload = getelementptr i8, ptr %$(prefix)_data, i64 8" -> println
++    "  %$(prefix)_new_payload = getelementptr i8, ptr %$(prefix)_allocated, i64 8" -> println
++    "  %$(prefix)_old_mask = sub i64 %$(prefix)_capacity, 1" -> println
++    "  br label %$(prefix)_copy" -> println
++    "$(prefix)_copy:" -> println
++    "  %$(prefix)_index = phi i64 [ 0, %$(prefix)_allocation_ready ], [ %$(prefix)_next, %$(prefix)_copy_body ]" -> println
++    "  %$(prefix)_active = icmp ult i64 %$(prefix)_index, %$(prefix)_length" -> println
++    "  br i1 %$(prefix)_active, label %$(prefix)_copy_body, label %$(prefix)_copied" -> println
++    "$(prefix)_copy_body:" -> println
++    "  %$(prefix)_unwrapped = add i64 %$(prefix)_head, %$(prefix)_index" -> println
++    "  %$(prefix)_physical = and i64 %$(prefix)_unwrapped, %$(prefix)_old_mask" -> println
++    "  %$(prefix)_source = getelementptr " -> print
++    elementTypeId -> writeSemanticTypeId(context, state)
++    ", ptr %$(prefix)_old_payload, i64 %$(prefix)_physical" -> println
++    "  %$(prefix)_item = load " -> print
++    elementTypeId -> writeSemanticTypeId(context, state)
++    ", ptr %$(prefix)_source, align $elementAlign" -> println
++    "  %$(prefix)_target = getelementptr " -> print
++    elementTypeId -> writeSemanticTypeId(context, state)
++    ", ptr %$(prefix)_new_payload, i64 %$(prefix)_index" -> println
++    "  store " -> print
++    elementTypeId -> writeSemanticTypeId(context, state)
++    " %$(prefix)_item, ptr %$(prefix)_target, align $elementAlign" -> println
++    "  %$(prefix)_next = add i64 %$(prefix)_index, 1" -> println
++    "  br label %$(prefix)_copy" -> println
++    "$(prefix)_copied:" -> println
++    "  call void @sollang_free(ptr %$(prefix)_data)" -> println
++    "  br label %$(prefix)_done" -> println
++    "$(prefix)_keep:" -> println
++    "  br label %$(prefix)_done" -> println
++    "$(prefix)_done:" -> println
++    "  %$(prefix)_final_data = phi ptr [ %$(prefix)_allocated, %$(prefix)_copied ], [ %$(prefix)_data, %$(prefix)_keep ]" -> println
++    "  %$(prefix)_final_capacity = phi i64 [ %$(prefix)_round_power, %$(prefix)_copied ], [ %$(prefix)_capacity, %$(prefix)_keep ]" -> println
++    borrow >= 0 -> if {
++        "  store ptr %$(prefix)_final_data, ptr " -> print
++        borrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(borrow)_mut_ptr_addr" -> print }
++        ", align 8" -> println
++        "  store i64 %$(prefix)_final_capacity, ptr " -> print
++        borrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(borrow)_mut_capacity_addr" -> print }
++        ", align 8" -> println
++    } else {
++        "  %$(prefix)_result0 = insertvalue %sollang.array.i32 poison, ptr %$(prefix)_final_data, 0" -> println
++        "  %$(prefix)_result1 = insertvalue %sollang.array.i32 %$(prefix)_result0, i64 %$(prefix)_length, 1" -> println
++        "  %$(prefix)_result2 = insertvalue %sollang.array.i32 %$(prefix)_result1, i64 %$(prefix)_final_capacity, 2" -> println
++        "  store %sollang.array.i32 %$(prefix)_result2, ptr %slot$(root), align 8" -> println
++    }
++}
++
++emitDictionaryReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    request.nodeIndex => index
++    context.ir[index] => call
++    context.ir[call.operand0] => receiver
++    context.types -> typeIds.materializedReadTypeId(receiver.typeId) => collectionTypeId
++    context.types[collectionTypeId] => collectionType
++    collectionType.kind == 7 and collectionType.origin == 4 and collectionType.symbol == 5 => isSet
++    collectionType.first => keyTypeId
++    context.types[keyTypeId] => keyType
++    context.typeSizes[keyTypeId] => keySize
++    context.typeAligns[keyTypeId] => keyAlign
++    keyType.kind == 1 and keyType.origin == 1 and keyType.symbol == 1 => keyIsText
++    keyTypeId -> traitMethodSymbol("Hash", "hash", context, state) => hashMethod
++    keyTypeId -> traitMethodSymbol("Eq", "eq", context, state) => eqMethod
++    hashMethod >= 0 and eqMethod >= 0 => keyIsNominal
++    keyType.symbol -> integerWidth(context, state) => hashWidth
++    keyType.symbol -> integerSigned(context, state) => hashSigned
++    isSet -> if { keySize -> dictionaryEntryLayout(keyAlign, 0, 1) } else {
++        keyTypeId -> dictionaryEntryLayoutForTypeIds(collectionType.second, keyType.symbol, context.types[collectionType.second].symbol, context, state)
++    } => layout
++    call.operand0 -> mutableStorageRoot(context, state) => root
++    call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => borrow
++    Arena(0) => names!
++    "reserve$(index)_dict" -> materialize(names!) => prefix
++    "  %$(prefix)_entries_scaled = mul i64 %reserve$(index)_requested, 8" -> println
++    "  %$(prefix)_entries_rounded = add i64 %$(prefix)_entries_scaled, 6" -> println
++    "  %$(prefix)_required = udiv i64 %$(prefix)_entries_rounded, 7" -> println
++    "$(prefix)_buckets" -> emitReservePowerOfTwo("%$(prefix)_required")
++    "  %$(prefix)_below_minimum = icmp ult i64 %$(prefix)_buckets_power, 16" -> println
++    "  %$(prefix)_capacity = select i1 %$(prefix)_below_minimum, i64 16, i64 %$(prefix)_buckets_power" -> println
++    "  %$(prefix)_owner = load %sollang.int_dictionary, ptr " -> print
++    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root)" -> print }
++    ", align 8" -> println
++    "  %$(prefix)_old_storage = extractvalue %sollang.int_dictionary %$(prefix)_owner, 0" -> println
++    "  %$(prefix)_old_length = extractvalue %sollang.int_dictionary %$(prefix)_owner, 1" -> println
++    "  %$(prefix)_old_capacity = extractvalue %sollang.int_dictionary %$(prefix)_owner, 2" -> println
++    "$(prefix)_old" -> emitGrowableDictionaryPointers("%$(prefix)_old_storage", "%$(prefix)_old_capacity", layout)
++    "  %$(prefix)_grow = icmp ugt i64 %$(prefix)_capacity, %$(prefix)_old_capacity" -> println
++    "  br i1 %$(prefix)_grow, label %$(prefix)_allocate, label %$(prefix)_keep" -> println
++    "$(prefix)_allocate:" -> println
++    isSet -> if {
++        "$(prefix)_set" -> emitSetRehash("%$(prefix)_old_keys", "%$(prefix)_old_controls", "%$(prefix)_old_capacity", "%$(prefix)_capacity", "%$(prefix)_old_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
++        "  %$(prefix)_new_storage = extractvalue %sollang.int_dictionary %$(prefix)_set_result, 0" -> println
++    } else {
++        prefix -> emitGrowableDictionaryAllocation("%$(prefix)_capacity", layout)
++        prefix -> emitDictionaryRehashEntries(layout, keyTypeId, collectionType.second, keyType.symbol, context.types[collectionType.second].symbol, keyIsText, keyIsNominal, hashMethod, hashWidth, hashSigned, "", context, state)
++        "  call void @sollang_free(ptr %$(prefix)_old_storage)" -> println
++        "  %$(prefix)_new_storage = getelementptr i8, ptr %$(prefix)_storage, i64 0" -> println
++    }
++    "  br label %$(prefix)_grow_complete" -> println
++    "$(prefix)_grow_complete:" -> println
++    "  br label %$(prefix)_done" -> println
++    "$(prefix)_keep:" -> println
++    "  br label %$(prefix)_done" -> println
++    "$(prefix)_done:" -> println
++    "  %$(prefix)_final_storage = phi ptr [ %$(prefix)_new_storage, %$(prefix)_grow_complete ], [ %$(prefix)_old_storage, %$(prefix)_keep ]" -> println
++    "  %$(prefix)_final_capacity = phi i64 [ %$(prefix)_capacity, %$(prefix)_grow_complete ], [ %$(prefix)_old_capacity, %$(prefix)_keep ]" -> println
++    "$(prefix)_result" -> emitGrowableDictionaryOwner("%$(prefix)_final_storage", "%$(prefix)_old_length", "%$(prefix)_final_capacity")
++    "  store %sollang.int_dictionary %$(prefix)_result, ptr " -> print
++    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root)" -> print }
++    ", align 8" -> println
++}
++
++emitCollectionReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     request.nodeIndex => reserveIndex
+     context.ir[reserveIndex] => reserveNode
+     context.ir[reserveNode.operand0] => reserveSource
+@@ -1737,6 +1903,18 @@ emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
+     }
+     reserveValueWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+ 
++    context.types -> typeIds.materializedReadTypeId(reserveSource.typeId) => reserveTypeId
++    context.types[reserveTypeId] => reserveType
++    reserveType -> typeIds.isDictionaryFamily -> if {
++        request -> emitDictionaryReserve(context, state)
++        return
++    }
++    reserveType.kind == 7 and reserveType.origin == 4 and reserveType.symbol == 6
++        -> if {
++            request -> emitDequeReserve(context, state)
++            return
++        }
++
+     reserveBorrowOrdinal >= 0 -> if {
+         "  %reserve$(reserveIndex)_data = load ptr, ptr " -> print
+         reserveBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(reserveBorrowOrdinal)_mut_ptr_addr" -> print }
+@@ -1758,13 +1936,17 @@ emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
+     "reserve$(reserveIndex)_allocate:" -> println
+     reserveSource -> arrayElementSize(context, state) => reserveElementSize
+     "  %reserve$(reserveIndex)_bytes = mul i64 %reserve$(reserveIndex)_requested, $reserveElementSize" -> println
+-    "  %reserve$(reserveIndex)_allocated = call ptr @realloc(ptr %reserve$(reserveIndex)_data, i64 %reserve$(reserveIndex)_bytes)" -> println
++    "  %reserve$(reserveIndex)_used_bytes = mul i64 %reserve$(reserveIndex)_length, $reserveElementSize" -> println
++    "  %reserve$(reserveIndex)_allocated = call ptr @sollang_resize(ptr %reserve$(reserveIndex)_data, i64 %reserve$(reserveIndex)_used_bytes, i64 %reserve$(reserveIndex)_bytes)" -> println
++    Arena(0) => reserveGuardNames!
++    "reserve$(reserveIndex)" -> materialize(reserveGuardNames!) => reserveGuardPrefix
++    reserveGuardPrefix -> emitAllocationGuard("_allocated", request.ownerIndex, context, state)
+     "  br label %reserve$(reserveIndex)_done" -> println
+     "reserve$(reserveIndex)_keep:" -> println
+     "  br label %reserve$(reserveIndex)_done" -> println
+     "reserve$(reserveIndex)_done:" -> println
+-    "  %reserve$(reserveIndex)_final_data = phi ptr [ %reserve$(reserveIndex)_allocated, %reserve$(reserveIndex)_allocate ], [ %reserve$(reserveIndex)_data, %reserve$(reserveIndex)_keep ]" -> println
+-    "  %reserve$(reserveIndex)_final_capacity = phi i64 [ %reserve$(reserveIndex)_requested, %reserve$(reserveIndex)_allocate ], [ %reserve$(reserveIndex)_capacity, %reserve$(reserveIndex)_keep ]" -> println
++    "  %reserve$(reserveIndex)_final_data = phi ptr [ %reserve$(reserveIndex)_allocated, %reserve$(reserveIndex)_allocation_ready ], [ %reserve$(reserveIndex)_data, %reserve$(reserveIndex)_keep ]" -> println
++    "  %reserve$(reserveIndex)_final_capacity = phi i64 [ %reserve$(reserveIndex)_requested, %reserve$(reserveIndex)_allocation_ready ], [ %reserve$(reserveIndex)_capacity, %reserve$(reserveIndex)_keep ]" -> println
+     reserveBorrowOrdinal >= 0 -> if {
+         "  store ptr %reserve$(reserveIndex)_final_data, ptr " -> print
+         reserveBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(reserveBorrowOrdinal)_mut_ptr_addr" -> print }
+@@ -1910,7 +2092,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
+         "push$(pushIndex)_keep:" -> println
+         "  br label %push$(pushIndex)_ready" -> println
+         "push$(pushIndex)_grow:" -> println
+-        "  %push$(pushIndex)_grown_data = call ptr @malloc(i64 %push$(pushIndex)_append_bytes)" -> println
++        "  %push$(pushIndex)_grown_data = call ptr @sollang_alloc(i64 %push$(pushIndex)_append_bytes)" -> println
+         "  %push$(pushIndex)_allocated = icmp ne ptr %push$(pushIndex)_grown_data, null" -> println
+         "  br i1 %push$(pushIndex)_allocated, label %push$(pushIndex)_copy, label %push$(pushIndex)_allocation_failed" -> println
+         "push$(pushIndex)_allocation_failed:" -> println
+@@ -1919,7 +2101,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
+         "push$(pushIndex)_copy:" -> println
+         "  %push$(pushIndex)_copy_bytes = mul i64 %push$(pushIndex)_length, $pushElementSize" -> println
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %push$(pushIndex)_grown_data, ptr %push$(pushIndex)_data, i64 %push$(pushIndex)_copy_bytes, i1 false)" -> println
+-        "  call void @free(ptr %push$(pushIndex)_data)" -> println
++        "  call void @sollang_free(ptr %push$(pushIndex)_data)" -> println
+         "  br label %push$(pushIndex)_ready" -> println
+         "push$(pushIndex)_ready:" -> println
+         "  %push$(pushIndex)_append_data = phi ptr [ %push$(pushIndex)_data, %push$(pushIndex)_keep ], [ %push$(pushIndex)_grown_data, %push$(pushIndex)_copy ]" -> println
+@@ -1963,20 +2145,27 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
+         pushSource -> writeArrayElementType(context, state)
+         "" -> println
+     }
++    pushSource -> arrayElementTypeId(context, state) => pushElementType
++    pushElementType >= 0 and context.types[pushElementType].kind == 12 => pushBoundedElement
++    pushBoundedElement -> if {
++        "push$(pushIndex)_bounded_value" -> emitBoundedArrayValue(pushValueNameIndex!, request.ownerIndex, pushElementType, context, state)
++    }
+     "  store " -> print
+     pushSource -> writeArrayElementType(context, state)
+     " " -> print
+-    pushValue.kind == 3 or pushValue.kind == 4 -> if {
+-        pushValue -> sourceToken(context, state) => pushValueToken
+-        pushValue.kind == 3 -> if { pushValue -> writeIntegerLiteral(context, state) } else {
+-            (context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == 116
+-                -> if { "1" -> print } else { "0" -> print }
+-        }
+-    } else {
+-        castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
+-            pushValueParameterOrdinal! >= 0 -> if {
+-                pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
+-            } else { "%v$(pushValueIndex)" -> print }
++    pushBoundedElement -> if { "%push$(pushIndex)_bounded_value" -> print } else {
++        pushValue.kind == 3 or pushValue.kind == 4 -> if {
++            pushValue -> sourceToken(context, state) => pushValueToken
++            pushValue.kind == 3 -> if { pushValue -> writeIntegerLiteral(context, state) } else {
++                (context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == 116
++                    -> if { "1" -> print } else { "0" -> print }
++            }
++        } else {
++            castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
++                pushValueParameterOrdinal! >= 0 -> if {
++                    pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
++                } else { "%v$(pushValueIndex)" -> print }
++            }
+         }
+     }
+     pushSource -> arrayElementAlign(context, state) => pushElementAlign
+@@ -2144,6 +2333,15 @@ emitDictionaryRehashEntries prefix: Text, entryLayout: DictionaryEntryLayout, ke
+     "$(prefix)_rehash_done:" -> println
+ }
+ 
++# Every put store consumes the same materialized value, regardless of whether
++# the entry is replaced, inserted in place, or inserted after growth.
++writeDictionaryPutStoredValue putIndex: Int, valueIndex: Int, ownerIndex: Int, valueTypeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    valueTypeId >= 0 and context.types[valueTypeId].kind == 12
++        -> if { "%put$(putIndex)_bounded_value" -> print } else {
++            valueIndex -> writeValue(ownerIndex, context, state)
++        }
++}
++
+ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     request.whileIndex => putIndex
+     context.ir[putIndex] => putNode
+@@ -2203,17 +2401,17 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+             false => putHashSigned!
+             putKeyTypeId! >= 0 -> if { context.types[putKeyTypeId!].symbol -> integerSigned(context, state) => putHashSigned! }
+             putReturnsOwner -> unless {
+-                "  %put$(putIndex)_dictionary = load %sollang.dict, ptr " -> print
++                "  %put$(putIndex)_dictionary = load %sollang.int_dictionary, ptr " -> print
+                 putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+                 ", align 8" -> println
+             }
+-            "  %put$(putIndex)_old_storage = extractvalue %sollang.dict " -> print
++            "  %put$(putIndex)_old_storage = extractvalue %sollang.int_dictionary " -> print
+             putReturnsOwner -> if { putNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%put$(putIndex)_dictionary" -> print }
+             ", 0" -> println
+-            "  %put$(putIndex)_old_length = extractvalue %sollang.dict " -> print
++            "  %put$(putIndex)_old_length = extractvalue %sollang.int_dictionary " -> print
+             putReturnsOwner -> if { putNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%put$(putIndex)_dictionary" -> print }
+             ", 1" -> println
+-            "  %put$(putIndex)_old_capacity = extractvalue %sollang.dict " -> print
++            "  %put$(putIndex)_old_capacity = extractvalue %sollang.int_dictionary " -> print
+             putReturnsOwner -> if { putNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%put$(putIndex)_dictionary" -> print }
+             ", 2" -> println
+             putKeyIsText! -> if {
+@@ -2253,6 +2451,12 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+             "  %put$(putIndex)_h2_value = select i1 %put$(putIndex)_h2_zero, i64 1, i64 %put$(putIndex)_h2_raw" -> println
+             "  %put$(putIndex)_h2 = trunc i64 %put$(putIndex)_h2_value to i8" -> println
+             putKeyTypeId! -> dictionaryEntryLayoutForTypeIds(putValueTypeId!, putSource.typeModule, putSource.typeSymbol, context, state) => putEntryLayout
++            putValueTypeId! >= 0 and context.types[putValueTypeId!].kind == 12
++                -> if {
++                    Arena(0) => boundedPrefixStorage!
++                    "put$(putIndex)_bounded_value" -> materialize(boundedPrefixStorage!) => boundedPrefix
++                    boundedPrefix -> emitBoundedArrayValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
++                }
+             "put$(putIndex)_old" -> emitGrowableDictionaryPointers("%put$(putIndex)_old_storage", "%put$(putIndex)_old_capacity", putEntryLayout)
+             "  %put$(putIndex)_probe_query = freeze " -> print
+             putKeyTypeId! >= 0 -> if { putKeyTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeModule -> llvmType(context, state) -> print }
+@@ -2311,10 +2515,14 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+                         "  call void @sollang_drop_t$(putValueTypeId!)(" -> print
+                         putValueTypeId! -> writeSemanticTypeId(context, state)
+                         " " -> print
+-                        request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0
+-                            and context.ir[request.ownerIndex].operand1 >= 0 and putValue.kind == 5
+-                            and putValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
+-                            -> if { "%arg" -> print } else { "%v$(putValueIndex)" -> print }
++                        context.types[putValueTypeId!].kind == 12 -> if {
++                            putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
++                        } else {
++                            request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0
++                                and context.ir[request.ownerIndex].operand1 >= 0 and putValue.kind == 5
++                                and putValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
++                                -> if { "%arg" -> print } else { "%v$(putValueIndex)" -> print }
++                        }
+                         ")" -> println
+                     }
+             } else {
+@@ -2334,7 +2542,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+                 "  store " -> print
+                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeSymbol -> llvmType(context, state) -> print }
+                 " " -> print
+-                putValueIndex -> writeValue(request.ownerIndex, context, state)
++                putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
+                 ", ptr %put$(putIndex)_update_in_place_ptr, align " -> print
+                 putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
+             }
+@@ -2366,16 +2574,16 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+             "  store " -> print
+             putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeSymbol -> llvmType(context, state) -> print }
+             " " -> print
+-            putValueIndex -> writeValue(request.ownerIndex, context, state)
++            putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
+             ", ptr %put$(putIndex)_insert_in_place_value_ptr, align " -> print
+             putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
+             "  %put$(putIndex)_insert_in_place_control_ptr = getelementptr i8, ptr %put$(putIndex)_old_controls, i64 %put$(putIndex)_new_key_slot" -> println
+             "put$(putIndex)_insert_control" -> emitDictionaryControlStore("%put$(putIndex)_old_controls", "%put$(putIndex)_new_key_slot", "%put$(putIndex)_h2", "%put$(putIndex)_old_capacity")
+-            "  %put$(putIndex)_in_place_result = insertvalue %sollang.dict " -> print
++            "  %put$(putIndex)_in_place_result = insertvalue %sollang.int_dictionary " -> print
+             putReturnsOwner -> if { putNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%put$(putIndex)_dictionary" -> print }
+             ", i64 %put$(putIndex)_candidate_length, 1" -> println
+             putReturnsOwner -> unless {
+-                "  store %sollang.dict %put$(putIndex)_in_place_result, ptr " -> print
++                "  store %sollang.int_dictionary %put$(putIndex)_in_place_result, ptr " -> print
+                 putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+                 ", align 8" -> println
+             }
+@@ -2390,7 +2598,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+                 "  %put$(putIndex)_capacity = select i1 %put$(putIndex)_capacity_small, i64 4, i64 %put$(putIndex)_capacity_double" -> println
+                 "put$(putIndex)" -> emitGrowableDictionaryAllocation("%put$(putIndex)_capacity", putEntryLayout)
+                 "put$(putIndex)" -> emitDictionaryRehashEntries(putEntryLayout, putKeyTypeId!, putValueTypeId!, putSource.typeModule, putSource.typeSymbol, putKeyIsText!, putKeyIsNominal, putHashMethod!, putHashWidth, putHashSigned!, "", context, state)
+-                "  call void @free(ptr %put$(putIndex)_old_storage)" -> println
++                "  call void @sollang_free(ptr %put$(putIndex)_old_storage)" -> println
+                 Arena(0) => grownProbePrefixStorage!
+                 "put$(putIndex)_grown_probe" -> materialize(grownProbePrefixStorage!) => grownProbePrefix
+                 Arena(0) => grownProbeControlsStorage!
+@@ -2440,14 +2648,14 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+                 "  store " -> print
+                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeSymbol -> llvmType(context, state) -> print }
+                 " " -> print
+-                putValueIndex -> writeValue(request.ownerIndex, context, state)
++                putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
+                 ", ptr %put$(putIndex)_insert_value_ptr, align " -> print
+                 putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
+                 "put$(putIndex)_store_control" -> emitDictionaryControlStore("%put$(putIndex)_controls", "%put$(putIndex)_slot", "%put$(putIndex)_h2", "%put$(putIndex)_capacity")
+                 "  %put$(putIndex)_new_length = add i64 %put$(putIndex)_old_length, 1" -> println
+                 "put$(putIndex)_result3" -> emitGrowableDictionaryOwner("%put$(putIndex)_storage", "%put$(putIndex)_new_length", "%put$(putIndex)_capacity")
+                 putReturnsOwner -> unless {
+-                    "  store %sollang.dict %put$(putIndex)_result3, ptr " -> print
++                    "  store %sollang.int_dictionary %put$(putIndex)_result3, ptr " -> print
+                     putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+                     ", align 8" -> println
+                 }
+@@ -2455,7 +2663,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
+             }
+             "put$(putIndex)_complete:" -> println
+             putReturnsOwner -> if {
+-                "  %v$(putIndex) = phi %sollang.dict [ " -> print
++                "  %v$(putIndex) = phi %sollang.int_dictionary [ " -> print
+                 putNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state)
+                 ", %put$(putIndex)_update_in_place ], [ %put$(putIndex)_in_place_result, %put$(putIndex)_insert_in_place ], [ %put$(putIndex)_result3, %put$(putIndex)_insert ]" -> println
+             }
+@@ -2495,11 +2703,17 @@ emitBoundedDictionaryPut request: WhileValueRequest, context: ref emitterContext
+     " " -> print
+     keyIndex -> writeValue(request.ownerIndex, context, state)
+     "" -> println
+-    "  %$(prefix)_new_value = freeze " -> print
+-    valueTypeId -> writeAggregateFieldTypeId(context, state)
+-    " " -> print
+-    valueIndex -> writeValue(request.ownerIndex, context, state)
+-    "" -> println
++    context.types[valueTypeId].kind == 12 -> if {
++        Arena(0) => boundedPrefixStorage!
++        "$(prefix)_new_value" -> materialize(boundedPrefixStorage!) => boundedPrefix
++        boundedPrefix -> emitBoundedArrayValue(valueIndex, request.ownerIndex, valueTypeId, context, state)
++    } else {
++        "  %$(prefix)_new_value = freeze " -> print
++        valueTypeId -> writeAggregateFieldTypeId(context, state)
++        " " -> print
++        valueIndex -> writeValue(request.ownerIndex, context, state)
++        "" -> println
++    }
+     false => textKey!
+     keyType.kind == 1 and keyType.origin == 1 and keyType.symbol == 1
+         -> if { true => textKey! }
+@@ -2745,9 +2959,14 @@ emitBoundedDictionaryTake request: WhileValueRequest, context: ref emitterContex
+     "" -> println
+     "$(prefix)_find" -> emitBoundedDictionaryFindRequiredSlot("%$(prefix)_storage", "%$(prefix)_query", dictionaryTypeId, false, context, state)
+     "$(prefix)_value" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_find_slot", layout.valueOffset, layout)
+-    "  %v$(takeIndex) = load " -> print
++    "  %v$(takeIndex)" -> print
++    context.types[valueTypeId].kind == 12 -> if { "_bounded_value" -> print }
++    " = load " -> print
+     valueTypeId -> writeAggregateFieldTypeId(context, state)
+     ", ptr %$(prefix)_value_ptr, align $(layout.valueAlign)" -> println
++    Arena(0) => takenPrefixStorage!
++    "v$(takeIndex)" -> materialize(takenPrefixStorage!) => takenPrefix
++    takenPrefix -> emitStoredBoundedValueHandle(valueTypeId, context, state)
+     keyTypeId -> semanticTypeOwns(context, state)
+         -> if {
+             "$(prefix)_key" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_find_slot", 0, layout)
+@@ -2808,16 +3027,16 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
+             context,
+             state) => takeDictionaryMemberDepth!
+         }
+-        "  %take$(takeIndex)_dictionary = load %sollang.dict, ptr " -> print
++        "  %take$(takeIndex)_dictionary = load %sollang.int_dictionary, ptr " -> print
+         takeStructMember -> if {
+             "%callref$(takeIndex)_arg0_place$(takeDictionaryMemberDepth! - 1)" -> print
+         } else {
+             takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot)" -> print }
+         }
+         ", align 8" -> println
+-        "  %take$(takeIndex)_storage = extractvalue %sollang.dict %take$(takeIndex)_dictionary, 0" -> println
+-        "  %take$(takeIndex)_length = extractvalue %sollang.dict %take$(takeIndex)_dictionary, 1" -> println
+-        "  %take$(takeIndex)_capacity = extractvalue %sollang.dict %take$(takeIndex)_dictionary, 2" -> println
++        "  %take$(takeIndex)_storage = extractvalue %sollang.int_dictionary %take$(takeIndex)_dictionary, 0" -> println
++        "  %take$(takeIndex)_length = extractvalue %sollang.int_dictionary %take$(takeIndex)_dictionary, 1" -> println
++        "  %take$(takeIndex)_capacity = extractvalue %sollang.int_dictionary %take$(takeIndex)_dictionary, 2" -> println
+         -1 => takeKeyStorageSize!
+         takeKeyTypeId! >= 0 -> if { context.typeSizes[takeKeyTypeId!] => takeKeyStorageSize! }
+         takeKeyStorageSize! < 0 -> if { takeSource.typeModule -> storageSize(context, state) => takeKeyStorageSize! }
+@@ -2904,10 +3123,19 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
+         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
+         takeEntryLayout -> writeDictionaryEntryStorageType
+         ", ptr %take$(takeIndex)_values, i64 %take$(takeIndex)_find_index" -> println
+-        "  %v$(takeIndex) = load " -> print
++        "  %v$(takeIndex)" -> print
++        takeValueTypeId! >= 0 and context.types[takeValueTypeId!].kind == 12
++            -> if { "_bounded_value" -> print }
++        " = load " -> print
+         takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId(context, state) } else { takeSource.typeSymbol -> llvmType(context, state) -> print }
+         ", ptr %take$(takeIndex)_value_ptr, align " -> print
+         takeValueTypeId! >= 0 -> if { context.typeAligns[takeValueTypeId!] -> writeDecimalLine } else { takeSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
++        takeValueTypeId! >= 0 and context.types[takeValueTypeId!].kind == 12
++            -> if {
++                Arena(0) => takenPrefixStorage!
++                "v$(takeIndex)" -> materialize(takenPrefixStorage!) => takenPrefix
++                takenPrefix -> emitStoredBoundedValueHandle(takeValueTypeId!, context, state)
++            }
+         takeKeyTypeId! >= 0 and (takeKeyTypeId! -> semanticTypeOwns(context, state))
+             -> if {
+                 "  call void @sollang_drop_t$(takeKeyTypeId!)(" -> print
+@@ -2922,9 +3150,9 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
+         "  %take$(takeIndex)_rebuild_old_values = getelementptr i8, ptr %take$(takeIndex)_values, i64 0" -> println
+         "take$(takeIndex)_rebuild" -> emitGrowableDictionaryAllocation("%take$(takeIndex)_rebuild_capacity", takeEntryLayout)
+         "take$(takeIndex)_rebuild" -> emitDictionaryRehashEntries(takeEntryLayout, takeKeyTypeId!, takeValueTypeId!, takeSource.typeModule, takeSource.typeSymbol, takeKeyIsText!, takeKeyIsNominal, takeHashMethod!, takeHashWidth, takeHashSigned!, "%take$(takeIndex)_find_index", context, state)
+-        "  call void @free(ptr %take$(takeIndex)_storage)" -> println
++        "  call void @sollang_free(ptr %take$(takeIndex)_storage)" -> println
+         "take$(takeIndex)_result" -> emitGrowableDictionaryOwner("%take$(takeIndex)_rebuild_storage", "%take$(takeIndex)_new_length", "%take$(takeIndex)_capacity")
+-        "  store %sollang.dict %take$(takeIndex)_result, ptr " -> print
++        "  store %sollang.int_dictionary %take$(takeIndex)_result, ptr " -> print
+         takeStructMember -> if {
+             "%callref$(takeIndex)_arg0_place$(takeDictionaryMemberDepth! - 1)" -> print
+         } else {
+@@ -2983,10 +3211,14 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
+         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
+         takeSource -> writeArrayElementType(context, state)
+         ", ptr %take$(takeIndex)_data, i64 %take$(takeIndex)_selected" -> println
+-        "  %v$(takeIndex) = load " -> print
++        "  " -> print
++        takeIndex -> writeMemberStorageValueName(context, state)
++        " = load " -> print
+         takeSource -> writeArrayElementType(context, state)
+         ", ptr %take$(takeIndex)_value_ptr, align " -> print
+         takeSource -> arrayElementAlign(context, state) -> writeDecimalLine
++        takeNode -> boundedArrayValueTypeId(context, state) => takeBoundedElementType
++        "v$(takeIndex)" -> emitStoredBoundedValueHandle(takeBoundedElementType, context, state)
+         "  %take$(takeIndex)_new_length = sub i64 %take$(takeIndex)_length, 1" -> println
+         "  br label %take$(takeIndex)_shift" -> println
+         "take$(takeIndex)_shift:" -> println
