@@ -1,0 +1,762 @@
+diff --git a/5e933c263455c5a5a1d61bd2ff3cc0c6da9dc81a b/selfhost/llvm/text/entry_expressions.slg
+index 5e933c263..09c352eb1 100644
+--- a/5e933c263455c5a5a1d61bd2ff3cc0c6da9dc81a
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -48,7 +48,7 @@ isEntrySchedulingControl node: typedIr.TypedIrNode -> Bool {
+     (node -> isSchedulingControlEffect) or node.kind == 33
+ }
+ 
+-emitScheduledMutableSlots functionIndex: Int, entryEnd: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++emitScheduledMutableSlots functionIndex: Int, entryEnd: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     functionIndex + 1 => entryMutableSlotIndex!
+     entryMutableSlotIndex! < entryEnd -> while {
+         context.ir[entryMutableSlotIndex!] => entryMutableSlotCandidate
+@@ -58,12 +58,30 @@ emitScheduledMutableSlots functionIndex: Int, entryEnd: Int, context: ref emitte
+                 entryMutableSlotRoot == entryMutableSlotIndex!
+                     and (entryMutableSlotIndex! -> asyncFrameBindingRoot(functionIndex, context, state)) < 0
+                     -> if {
+-                        "  %slot$(entryMutableSlotRoot) = alloca " -> print
+-                        entryMutableSlotCandidate -> writeIrType(context, state)
+-                        ", align " -> print
+-                        entryMutableSlotCandidate -> storageAlign(context, state) -> writeDecimalLine
++                        entryMutableSlotRoot -> emitMutableStorageSlot(context, state)
+                     }
+             }
++        entryMutableSlotIndex! -> whileInlineValueIndexTypeId(context, state) => inlineIndexType
++        inlineIndexType >= 0 -> if {
++            false => usedByWhileCondition!
++            functionIndex + 1 => inlineIndexLoopSearch!
++            inlineIndexLoopSearch! < entryEnd and not usedByWhileCondition!
++                -> while {
++                    context.ir[inlineIndexLoopSearch!] => inlineIndexLoop
++                    inlineIndexLoop.kind == 20 and inlineIndexLoop.operand0 >= 0
++                        -> if {
++                            inlineIndexLoop.operand0 == entryMutableSlotIndex!
++                                or (NodeAncestorRequest { nodeIndex: entryMutableSlotIndex!, ownerIndex: inlineIndexLoop.operand0 } -> nodeDescendsFrom(context, state))
++                                -> if { true => usedByWhileCondition! }
++                        }
++                    inlineIndexLoopSearch! + 1 => inlineIndexLoopSearch!
++                }
++            usedByWhileCondition! -> if {
++                "  %while_index$(entryMutableSlotIndex!)_storage = alloca " -> print
++                inlineIndexType -> writeValueAbiTypeId(context, state)
++                ", align $(context.typeAligns[inlineIndexType])" -> println
++            }
++        }
+         entryMutableSlotIndex! + 1 => entryMutableSlotIndex!
+     }
+ }
+@@ -1412,18 +1430,22 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+                                 "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(entryEmittedFieldIndex)", entryTargetFieldTypeId!, context, state)
+                             } else {
+                                 true => copyEntryFixedArrayField!
+-                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_source = extractvalue { ptr, i64 } %v$(entryEmittedFieldIndex), 0" -> println
+-                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_length = extractvalue { ptr, i64 } %v$(entryEmittedFieldIndex), 1" -> println
++                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_source = extractvalue %sollang.int_slice %v$(entryEmittedFieldIndex), 0" -> println
++                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_length = extractvalue %sollang.int_slice %v$(entryEmittedFieldIndex), 1" -> println
+                                 context.typeSizes[entryTargetFieldTypeId!] => entryFieldAllocationBytes!
+                                 entryFieldAllocationBytes! == 0 -> if {
+                                     context.typeSizes[context.types[entryTargetFieldTypeId!].first] => entryFieldAllocationBytes!
+                                 }
+-                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned = call ptr @malloc(i64 $(entryFieldAllocationBytes!))" -> println
++                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned = call ptr @sollang_alloc(i64 $(entryFieldAllocationBytes!))" -> println
+                                 "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned, ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_source, i64 $(context.typeSizes[entryTargetFieldTypeId!]), i1 false)" -> println
+-                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0 = insertvalue { ptr, i64 } poison, ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned, 0" -> println
+-                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy = insertvalue { ptr, i64 } %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0, i64 %v$(entryExpressionIndex)_field$(entryFieldPosition!)_length, 1" -> println
++                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(entryExpressionIndex)_field$(entryFieldPosition!)_owned, 0" -> println
++                                "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy = insertvalue %sollang.int_slice %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0, i64 %v$(entryExpressionIndex)_field$(entryFieldPosition!)_length, 1" -> println
+                             }
+                     }
++                entryTargetFieldTypeId! >= 0 and context.types[entryTargetFieldTypeId!].kind == 12 => entryBoundedField
++                entryBoundedField -> if {
++                    "v$(entryExpressionIndex)_field$(entryFieldPosition!)_bounded" -> emitBoundedArrayValue(entryEmittedFieldIndex, functionIndex, entryTargetFieldTypeId!, context, state)
++                }
+                 "  " -> print
+                 entryFieldValue.nextOperand < 0 -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_f$(entryFieldPosition!)" -> print }
+                 " = insertvalue " -> print
+@@ -1436,30 +1458,31 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+                 ", " -> print
+                 entryTargetFieldTypeId! >= 0 -> if { entryTargetFieldTypeId! -> writeAggregateFieldTypeId(context, state) } else { entryEmittedFieldValue -> writeIrType(context, state) }
+                 " " -> print
+-                copyEntryFixedStructField! -> if {
+-                    "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_struct_copy" -> print
+-                } else { copyEntryFixedArrayField! -> if {
+-                        "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy" -> print
+-                    } else {                 entryEmittedFieldValue.kind == 2
+-                            -> if {
+-                                entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
+-                                Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
+-                                "{ ptr @sollang_str_$(entryEmittedFieldIndex), i64 $entryFieldTextLength }" -> print
+-                            } else {
+-                                entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
+-                                    -> if {
+-                                        entryEmittedFieldValue -> sourceToken(context, state) => entryFieldToken
+-                                        entryEmittedFieldValue.kind == 3 -> if {
+-                                            entryEmittedFieldValue -> writeIntegerLiteral(context, state)
++                entryBoundedField -> if { "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_bounded" -> print } else { copyEntryFixedStructField! -> if {
++                        "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_struct_copy" -> print
++                    } else { copyEntryFixedArrayField! -> if {
++                            "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy" -> print
++                        } else {                 entryEmittedFieldValue.kind == 2
++                                -> if {
++                                    entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
++                                    Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
++                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex), i64 $entryFieldTextLength }" -> print
++                                } else {
++                                    entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
++                                        -> if {
++                                            entryEmittedFieldValue -> sourceToken(context, state) => entryFieldToken
++                                            entryEmittedFieldValue.kind == 3 -> if {
++                                                entryEmittedFieldValue -> writeIntegerLiteral(context, state)
++                                            } else {
++                                                (context.sources[entryEmittedFieldValue.sourceModule] -> byte(entryFieldToken.span.start)) == 116
++                                                    -> if { "1" -> print } else { "0" -> print }
++                                            }
+                                         } else {
+-                                            (context.sources[entryEmittedFieldValue.sourceModule] -> byte(entryFieldToken.span.start)) == 116
+-                                                -> if { "1" -> print } else { "0" -> print }
++                                            castEntryStructField -> if { "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_cast" -> print } else { "%v$(entryEmittedFieldIndex)" -> print }
+                                         }
+-                                    } else {
+-                                        castEntryStructField -> if { "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_cast" -> print } else { "%v$(entryEmittedFieldIndex)" -> print }
+-                                    }
+-                            }
+-                } }
++                                }
++                    } }
++                }
+                 ", $(entryFieldPosition!)" -> println
+                 entryFieldValue.nextOperand => entryFieldValueIndex!
+                 entryFieldPosition! + 1 => entryFieldPosition!
+@@ -1471,7 +1494,9 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+         context.ir[entryExpression.operand0] => entrySyntheticProductBase
+         entrySyntheticProductBase.typeKind == 10 and entrySyntheticProductBase.typeId >= (context.types -> len) and entryExpression.symbol >= 0
+             -> if {
+-                "  %v$(entryExpressionIndex) = extractvalue %sollang.product.t$(entrySyntheticProductBase.typeId) %v$(entryExpression.operand0), $(entryExpression.symbol)" -> println
++                "  " -> print
++                entryExpressionIndex -> writeMemberStorageValueName(context, state)
++                " = extractvalue %sollang.product.t$(entrySyntheticProductBase.typeId) %v$(entryExpression.operand0), $(entryExpression.symbol)" -> println
+             } else {
+                 entryExpressionIndex -> canonicalMemberPathAvailable(context, state)
+                     -> if {
+@@ -1520,21 +1545,26 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+                                         context.fields[entryCanonicalMemberResolvedField] => entryCanonicalMemberField
+                                         "  " -> print
+                                         entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+-                                            -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
++                                            -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                         entryCanonicalMemberReference! -> if {
+                                             "_address = getelementptr inbounds " -> print
+                                             entryCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                                             ", ptr " -> print
+-                                            entryCanonicalMemberOrdinal! == 0 -> if { "%v$(entryExpression.operand0)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal! - 1)" -> print }
++                                            entryCanonicalMemberOrdinal! == 0 -> if {
++                                                entryExpression.operand0 -> isLocalReadonlyReferenceName(functionIndex, context, state)
++                                                    -> if { functionIndex -> writeForwardedReferenceValue(entryExpression.operand0, context, state) } else {
++                                                        "%v$(entryExpression.operand0)" -> print
++                                                    }
++                                            } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal! - 1)" -> print }
+                                             ", i32 0, i32 $(entryCanonicalMemberField.ordinal)" -> println
+                                             "  " -> print
+                                             entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+-                                                -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
++                                                -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                             " = load " -> print
+                                             entryCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                             ", ptr " -> print
+                                             entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+-                                                -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
++                                                -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                             "_address, align $(context.typeAligns[entryCanonicalMemberField.fieldType])" -> println
+                                         } else {
+                                             context.types[entryCanonicalMemberField.fieldType] => entryCanonicalMemberFieldType
+@@ -1644,7 +1674,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+                                                                     }
+                                                                     "  " -> print
+                                                                     entryMemberIdentifierOrdinal! == entryMemberIdentifierCount! - 1
+-                                                                        -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryMemberProjectionOrdinal!)" -> print }
++                                                                        -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryMemberProjectionOrdinal!)" -> print }
+                                                                     " = extractvalue %sollang.struct.m$(entryMemberOwnerSourceModule!)_s$(entryMemberCurrentSymbol!) " -> print
+                                                                     entryMemberProjectionOrdinal! == 0 -> if { "%v$(entryExpression.operand0)" -> print } else {
+                                                                         "%v$(entryExpressionIndex)_m" -> print
+@@ -1673,6 +1703,10 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+         bindingCopyTypeId >= 0 -> if {
+             "%v$(entryExpressionIndex)_binding_copy" -> emitCopyableFixedStorageValue("%v$(entryExpressionIndex)", bindingCopyTypeId, context, state)
+         }
++        context.ir[entryExpressionIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
++        boundedMemberTypeId >= 0 -> if {
++            "v$(entryExpressionIndex)" -> emitBoundedArrayHandle("%v$(entryExpressionIndex)_bounded_value", boundedMemberTypeId, context, state)
++        }
+     }
+ }
+ 
+@@ -1748,7 +1782,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+         and entryExpression.operand1 >= 0
+         -> if {
+             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryExpressionIndex }
+-                -> emitArrayReserve(context, state)
++                -> emitCollectionReserve(context, state)
+         }
+     (entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -202 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0
+         -> if {
+@@ -1915,57 +1949,48 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+             }
+             entryArrayLength! => entryArrayOperandCount
+             entryExpression -> arrayLiteralLength(entryArrayOperandCount, context) => entryArrayLength!
+-            entryArrayLength! => entryArrayCapacity!
+-            entryExpression.opcode >= 1_000_000 -> if {
+-                entryExpression.opcode - 1_000_000 => entryArrayCapacity!
+-            }
+-            entryArrayCapacity! * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
+-            (not (entryExpression -> isFixedArrayType)) or (entryExpressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
++            entryExpression -> arrayLiteralCapacity(entryArrayLength!, context) => entryArrayCapacity
++            entryArrayCapacity * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
++            entryExpressionIndex -> emitFixedStorageLifetimeStart(context, state)
++            entryExpressionIndex -> isPlannedDynamicIntPayload(context, state) => plannedDynamicPayload
++            plannedDynamicPayload -> if { entryExpressionIndex -> emitDynamicIntStorageStart(context) }
++            ((not (entryExpression -> isFixedArrayType)) or (entryExpressionIndex -> fixedArrayLiteralNeedsHeap(context, state))) and not plannedDynamicPayload
+                 -> if {
+-                    entryExpression.typeKind == 12 -> if {
+-                        entryExpression.opcode * (entryExpression -> arrayElementSize(context, state)) => entryBoundedArrayByteLength
+-                        "  %v$(entryExpressionIndex)_data = alloca [$entryBoundedArrayByteLength x i8], align " -> print
+-                        entryExpression -> arrayElementAlign(context, state) -> writeDecimalLine
+-                    } else {
+-                        entryArrayByteLength == 0 -> if {
+-                            entryExpressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+-                            emptyCallParameter >= 0 or (entryExpression -> isFixedArrayType)
+-                                -> if {
+-                                    (emptyCallParameter >= 0 -> if {
+-                                        context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+-                                    } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
+-                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes)
+-                                } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
++                    entryExpression.typeId >= 0 and context.types[entryExpression.typeId].kind == 12
++                        -> if {
++                            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 }
++                                -> emitArrayStackBacking(entryArrayByteLength, entryExpression -> arrayElementAlign(context, state))
+                         } else {
+-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength)
++                            entryArrayByteLength == 0 -> if {
++                                entryExpressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
++                                emptyCallParameter >= 0 or (entryExpression -> isFixedArrayType)
++                                    -> if {
++                                        (emptyCallParameter >= 0 -> if {
++                                            context.ir[emptyCallParameter] -> arrayElementSize(context, state)
++                                        } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
++                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes, functionIndex, context, state)
++                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0, functionIndex, context, state) }
++                            } else {
++                                ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength, functionIndex, context, state)
++                            }
+                         }
+-                    }
+                 }
+             entryExpression.operand0 => entryArrayElementIndex!
+             0 => entryArrayElementPosition!
+             entryArrayElementIndex! >= 0 and entryArrayElementPosition! < entryArrayLength!
+                 -> while {
+                     context.ir[entryArrayElementIndex!] => entryArrayElement
+-                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayElementStorePrefix(entryArrayElementPosition!, entryExpression -> arrayElementTypeId(context, state), entryExpression.typeSymbol, context, state)
+-                    entryArrayElement.kind == 3 or entryArrayElement.kind == 4
+-                        -> if {
+-                            entryArrayElement -> sourceToken(context, state) => entryArrayElementToken
+-                            entryArrayElement.kind == 3 -> if { entryArrayElement -> writeIntegerLiteral(context, state) } else {
+-                                (context.sources[entryArrayElement.sourceModule] -> byte(entryArrayElementToken.span.start)) == 116
+-                                    -> if { "1" -> print } else { "0" -> print }
+-                            }
+-                        } else { "%v$(entryArrayElementIndex!)" -> print }
+-                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayElementStoreSuffix(entryArrayElementPosition!, entryExpression -> arrayElementAlign(context, state))
++                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 }
++                        -> emitArrayValueElementStore(entryArrayElementPosition!, entryExpression -> arrayElementTypeId(context, state), entryExpression.typeSymbol, entryArrayElementIndex!, functionIndex, context, state)
+                     entryArrayOperandCount > 1 -> if { entryArrayElement.nextOperand => entryArrayElementIndex! }
+                     entryArrayElementPosition! + 1 => entryArrayElementPosition!
+                 }
+-            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(entryArrayLength!, (entryExpression.typeKind == 12
+-                -> if { entryExpression.opcode } else { entryArrayCapacity! }), (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
++            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(entryArrayLength!, entryArrayCapacity, (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
+         }
+     entryExpression -> isEmptyBoundedDictionaryLiteral(context)
+         -> if { entryExpressionIndex -> emitEmptyBoundedDictionaryLiteral(context) }
+     entryExpression -> isPopulatedBoundedDictionaryLiteral(context)
+-        -> if { entryExpressionIndex -> emitPopulatedBoundedDictionaryLiteral(context, state) }
++        -> if { entryExpressionIndex -> emitPopulatedBoundedDictionaryLiteral(functionIndex, context, state) }
+     entryExpression.kind == 16 and (entryExpression.typeOrigin == 15 or entryExpression.typeKind == 13)
+         and not (entryExpression -> isEmptyBoundedDictionaryLiteral(context))
+         and not (entryExpression -> isPopulatedBoundedDictionaryLiteral(context))
+@@ -2018,7 +2043,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+                 "  %v$(entryExpressionIndex)_storage = getelementptr i8, ptr null, i64 0" -> println
+                 "v$(entryExpressionIndex)" -> emitGrowableDictionaryPointers("%v$(entryExpressionIndex)_storage", "0", entryDictionaryEntryLayout)
+             } else {
+-                "v$(entryExpressionIndex)" -> emitGrowableDictionaryAllocation("$(entryDictionaryCapacity)", entryDictionaryEntryLayout)
++                entryExpressionIndex -> emitDictionaryLiteralStorage(entryDictionaryCapacity, entryDictionaryEntryLayout, context, state)
+             }
+             entryDictionaryItemStart => entryDictionaryItemIndex!
+             0 => entryDictionaryItemPosition!
+@@ -2057,6 +2082,12 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+                 entryDictionaryItemPosition! % 2 == 0 -> if {
+                     DictionaryLiteralSlotRequest { dictionaryIndex: entryExpressionIndex, ownerIndex: functionIndex, entryPosition: entryDictionaryEntryPosition, keyIndex: entryDictionaryItemIndex!, keyTypeId: entryDictionaryKeyTypeId!, hashWidth: entryDictionaryControlHashWidth!, hashMethod: entryDictionaryControlHashMethod!, capacity: entryDictionaryCapacity, valueTypeId: entryDictionaryValueTypeId!, valueSymbol: entryExpression.typeSymbol, entryLayout: entryDictionaryEntryLayout } -> emitDictionaryLiteralSlot(context, state)
+                 }
++                entryDictionaryItemTypeId >= 0 and context.types[entryDictionaryItemTypeId].kind == 12
++                    -> if {
++                        Arena(0) => boundedPrefixStorage!
++                        "v$(entryExpressionIndex)_$(entryDictionarySide)_bounded$(entryDictionaryEntryPosition)" -> materialize(boundedPrefixStorage!) => boundedPrefix
++                        boundedPrefix -> emitBoundedArrayValue(entryDictionaryItemIndex!, functionIndex, entryDictionaryItemTypeId, context, state)
++                    }
+                 "  %v$(entryExpressionIndex)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition) = getelementptr " -> print
+                 entryDictionaryEntryLayout -> writeDictionaryEntryStorageType
+                 ", ptr %v$(entryExpressionIndex)_$(entryDictionarySide), i64 %v$(entryExpressionIndex)_literal$(entryDictionaryEntryPosition)_slot" -> println
+@@ -2065,7 +2096,10 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+                     -> if { "ptr" -> print } else { entryDictionaryItemTypeId >= 0
+                             -> if { entryDictionaryItemTypeId -> writeSemanticTypeId(context, state) } else { entryDictionaryItemSymbol -> llvmType(context, state) -> print } }
+                 " " -> print
+-                entryDictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
++                entryDictionaryItemTypeId >= 0 and context.types[entryDictionaryItemTypeId].kind == 12
++                    -> if { "%v$(entryExpressionIndex)_$(entryDictionarySide)_bounded$(entryDictionaryEntryPosition)" -> print } else {
++                        entryDictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
++                    }
+                 ", ptr %v$(entryExpressionIndex)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
+                 entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)
+                     -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { entryDictionaryItemTypeId >= 0
+@@ -2076,12 +2110,13 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+                 entryDictionaryItem.nextOperand => entryDictionaryItemIndex!
+                 entryDictionaryItemPosition! + 1 => entryDictionaryItemPosition!
+             }
+-            "v$(entryExpressionIndex)" -> emitGrowableDictionaryOwner("%v$(entryExpressionIndex)_storage", "$(entryDictionaryLength)", "$(entryDictionaryCapacity)")
++            entryExpressionIndex -> emitDictionaryLiteralOwner(entryDictionaryLength, entryDictionaryCapacity, context, state)
+         }
+     entryExpression.kind == 17 and entryExpression.flags == 1
+         -> if {
+             entryExpressionIndex -> mutableBindingRoot(context, state) => entryMutableRoot
+             context.ir[entryMutableRoot] => entryMutableBinding
++            entryExpressionIndex -> emitMutableHeaderStart(context)
+             context.ir[entryExpression.operand0] => entryMutableValue
+             entryMutableBinding -> integerNodeWidth(context, state) => entryMutableTargetWidth
+             entryMutableValue -> integerNodeWidth(context, state) => entryMutableSourceWidth
+@@ -2315,11 +2350,11 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+             "  %v$(entryExpressionIndex)_length = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 1" -> println
+             "  %v$(entryExpressionIndex)_bytes = mul i64 %v$(entryExpressionIndex)_length, " -> print
+             entryTryParallelOkStride -> writeDecimalLine
+-            "  %v$(entryExpressionIndex)_data = call ptr @malloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
++            "  %v$(entryExpressionIndex)_data = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
+             "  %v$(entryExpressionIndex)_callback_bytes = mul i64 %v$(entryExpressionIndex)_length, " -> print
+             entryTryParallelCallbackStride -> writeDecimalLine
+-            "  %v$(entryExpressionIndex)_callback_results = call ptr @malloc(i64 %v$(entryExpressionIndex)_callback_bytes)" -> println
+-            "  %v$(entryExpressionIndex)_initialized = call ptr @malloc(i64 %v$(entryExpressionIndex)_length)" -> println
++            "  %v$(entryExpressionIndex)_callback_results = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_callback_bytes)" -> println
++            "  %v$(entryExpressionIndex)_initialized = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_length)" -> println
+             "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_initialized, i8 0, i64 %v$(entryExpressionIndex)_length, i1 false)" -> println
+             entryExpressionIndex -> parallelUsesComputePool(context, state)
+                 -> if {
+@@ -2344,7 +2379,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                         "  store ptr null, ptr %v$(entryExpressionIndex)_capture_slot, align 8" -> println
+                     }
+                     "  %v$(entryExpressionIndex)_sink_bytes = mul i64 %v$(entryExpressionIndex)_length, 24" -> println
+-                    "  %v$(entryExpressionIndex)_sinks = call ptr @malloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
++                    "  %v$(entryExpressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
+                     "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_sinks, i8 0, i64 %v$(entryExpressionIndex)_sink_bytes, i1 false)" -> println
+                     "  %v$(entryExpressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 5" -> println
+                     "  store ptr %v$(entryExpressionIndex)_sinks, ptr %v$(entryExpressionIndex)_sinks_slot, align 8" -> println
+@@ -2360,7 +2395,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                     "  store ptr %v$(entryExpressionIndex)_initialized, ptr %v$(entryExpressionIndex)_initialized_slot, align 8" -> println
+                     "  call void @sollang_compute_execute(ptr %v$(entryExpressionIndex)_group)" -> println
+                     entryTryParallelSource.kind == 14 -> if {
+-                        "  call void @free(ptr %v$(entryExpressionIndex)_input)" -> println
++                        "  call void @sollang_free(ptr %v$(entryExpressionIndex)_input)" -> println
+                     }
+                     TryParallelCollectRequest { expressionIndex: entryExpressionIndex, outerTypeId: entryExpression.typeId, callbackTypeId: entryTryParallelBodyCall.typeId } -> emitTryParallelCollect(context, state)
+                 } else {
+@@ -2375,7 +2410,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+             "  %v$(entryExpressionIndex)_length = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 1" -> println
+             "  %v$(entryExpressionIndex)_bytes = mul i64 %v$(entryExpressionIndex)_length, " -> print
+             entryExpression -> arrayElementSize(context, state) -> writeDecimalLine
+-            "  %v$(entryExpressionIndex)_data = call ptr @malloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
++            "  %v$(entryExpressionIndex)_data = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_bytes)" -> println
+             entryExpressionIndex -> parallelUsesComputePool(context, state)
+                 -> if {
+                     CallEnvironmentRequest { callerIndex: functionIndex, callIndex: entryExpressionIndex, targetModule: entryParallelBodyCall.targetModule, targetSymbol: entryParallelBodyCall.symbol, hasArgument: true } => entryParallelEnvironmentRequest
+@@ -2399,7 +2434,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                         "  store ptr null, ptr %v$(entryExpressionIndex)_capture_slot, align 8" -> println
+                     }
+                     "  %v$(entryExpressionIndex)_sink_bytes = mul i64 %v$(entryExpressionIndex)_length, 24" -> println
+-                    "  %v$(entryExpressionIndex)_sinks = call ptr @malloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
++                    "  %v$(entryExpressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(entryExpressionIndex)_sink_bytes)" -> println
+                     "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_sinks, i8 0, i64 %v$(entryExpressionIndex)_sink_bytes, i1 false)" -> println
+                     "  %v$(entryExpressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 5" -> println
+                     "  store ptr %v$(entryExpressionIndex)_sinks, ptr %v$(entryExpressionIndex)_sinks_slot, align 8" -> println
+@@ -2535,7 +2570,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+         -> if {
+             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: 0 } -> emitTextMaterialize(context, state)
+         }
+-    (entryExpression.kind == 6 or (entryExpression -> typedIr.isConsoleRuntimeCall)) and not (entryExpression -> isMappedBytesFlush(context)) and not (entryExpression -> typedIr.isSetIntrinsicCall) and not (entryExpression.opcode -> typedIr.isRawArenaOpcode) and (entryExpressionIndex -> plannedStreamStage(context, state)) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.opcode -> typedIr.isWorkerRuntimeOpcode) and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and not (entryExpression -> typedIr.isArenaConstructorCall) and entryExpression.opcode != -325 and entryExpression.opcode != -324 and entryExpression.opcode != -327 and entryExpression.opcode != -326 and entryExpression.opcode != -113 and entryExpression.opcode != -205 and entryExpression.opcode != -206 and entryExpression.opcode != -207 and not (entryExpression.opcode -> typedIr.isDirectIterationOpcode) and entryExpression.opcode != -209 and not (entryExpression.opcode -> typedIr.isProcessExecutionOpcode) and entryExpression.opcode != -212 and entryExpression.opcode != -214 and entryExpression.opcode != -215 and entryExpression.opcode != typedIr.pathAbsoluteOpcode() and entryExpression.opcode != -222 and entryExpression.opcode != -229 and entryExpression.opcode != -230 and entryExpression.opcode != -233 and entryExpression.opcode != -235 and not (entryExpression.opcode -> typedIr.isProcessProjectionOpcode) and (entryExpression.opcode > -237 or entryExpression.opcode < -240) and not (entryExpression -> isSourceTextFileIntrinsic) and not (entryExpression.opcode -> typedIr.isFileRuntimeOpcode) and not (entryExpression.opcode -> typedIr.isSocketRuntimeOpcode) and not (entryExpressionIndex -> isDirectParallelBodyCall(context, state))
++    (entryExpression.kind == 6 or (entryExpression -> typedIr.isConsoleRuntimeCall)) and not (entryExpression -> isMappedBytesFlush(context)) and not (entryExpression -> typedIr.isSetIntrinsicCall) and not (entryExpression -> typedIr.isArrayExchangeIntrinsicCall) and not (entryExpression.opcode -> typedIr.isRawArenaOpcode) and (entryExpressionIndex -> plannedStreamStage(context, state)) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.opcode -> typedIr.isWorkerRuntimeOpcode) and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and not (entryExpression -> typedIr.isArenaConstructorCall) and entryExpression.opcode != -325 and entryExpression.opcode != -324 and entryExpression.opcode != -327 and entryExpression.opcode != -326 and entryExpression.opcode != -113 and entryExpression.opcode != -205 and entryExpression.opcode != -206 and entryExpression.opcode != -207 and not (entryExpression.opcode -> typedIr.isDirectIterationOpcode) and entryExpression.opcode != -209 and not (entryExpression.opcode -> typedIr.isProcessExecutionOpcode) and entryExpression.opcode != -212 and entryExpression.opcode != -214 and entryExpression.opcode != -215 and entryExpression.opcode != typedIr.pathAbsoluteOpcode() and entryExpression.opcode != -222 and entryExpression.opcode != -229 and entryExpression.opcode != -230 and entryExpression.opcode != -233 and entryExpression.opcode != -235 and not (entryExpression.opcode -> typedIr.isProcessProjectionOpcode) and (entryExpression.opcode > -237 or entryExpression.opcode < -240) and not (entryExpression -> isSourceTextFileIntrinsic) and not (entryExpression.opcode -> typedIr.isFileRuntimeOpcode) and not (entryExpression.opcode -> typedIr.isSocketRuntimeOpcode) and not (entryExpressionIndex -> isDirectParallelBodyCall(context, state))
+         -> if {
+             entryExpression.symbol == -101 or entryExpression.symbol == -102 or entryExpression.symbol == -116 or entryExpression.symbol == -117
+                 -> if {
+@@ -2723,7 +2758,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                                         }
+                                                     entryExpressionRoot.typeSymbol => entryExpressionRootTypeSymbol!
+                                                     -1 => entryExpressionRootTypeId!
+-                                                    entryExpressionRoot.kind == 1 or entryExpressionRoot.kind == 5 or entryExpressionRoot.kind == 7 or entryExpressionRoot.kind == 8 or entryExpressionRoot.kind == 10 or entryExpressionRoot.kind == 11
++                                                    entryExpressionRoot.kind == 1 or entryExpressionRoot.kind == 5 or entryExpressionRoot.kind == 7 or entryExpressionRoot.kind == 8 or entryExpressionRoot.kind == 10 or entryExpressionRoot.kind == 17 or entryExpressionRoot.kind == 11
+                                                         -> if {
+                                                             entryExpressionRootSearch! -> interpolationNodeTypeId(entryExpressionInterpolation, runtimeArgument.sourceModule, functionIndex, entryExpressionIndex, context, state) => entryExpressionRootTypeId!
+                                                             entryExpressionRootTypeId! >= 0 -> if { context.types[entryExpressionRootTypeId!].symbol => entryExpressionRootTypeSymbol! }
+@@ -3274,53 +3309,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd: Int, entryOrder: ref [Int; ~], entryActiveStreams: mut [Int; ~], entryStreamCurrentValues: mut [Int; ~], entryStreamStops: mut [Int; ~], activeStreamSize: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
+     context.ir[entryExpressionIndex] => entryExpression
+     entryExpression.kind == 18 -> if {
+-        entryExpression.operand0 -> aggregateValueIndex(context, state) => entryIfConditionIndex
+-        context.ir[entryIfConditionIndex] => entryIfCondition
+-        entryExpressionIndex -> irValueUsed(functionIndex, context, state) => entryIfValueUsed
+-        (entryIfCondition.kind == 8 and (entryIfCondition.opcode == -25 or entryIfCondition.opcode == -24) or (entryIfCondition.kind == 7 and entryIfCondition.opcode == -26)) => entryIfShortCircuit
+-        entryIfShortCircuit -> if {
+-            WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, conditionIndex: entryIfConditionIndex } -> emitWhileBranch(entryOrder, context, state)
+-            "while$(entryExpressionIndex)_body:" -> println
+-            entryExpression -> writeIfShortCircuitBodyTarget(entryExpressionIndex)
+-            "while$(entryExpressionIndex)_exit:" -> println
+-            entryExpression -> writeIfShortCircuitExitTarget(entryExpressionIndex)
+-        } else {
+-            "  br i1 " -> print
+-            entryIfCondition.kind == 4 -> if {
+-                entryIfCondition -> sourceToken(context, state) => entryIfConditionToken
+-                (context.sources[entryIfCondition.sourceModule] -> byte(entryIfConditionToken.span.start)) == 116
+-                    -> if { "1" -> print } else { "0" -> print }
+-            } else { "%v$entryIfConditionIndex" -> print }
+-            entryExpression -> writeIfDirectBranchTargets(entryExpressionIndex)
+-        }
+-        "if$(entryExpressionIndex)_then:" -> println
+-        entryExpression.operand1 -> emitRegion(entryOrder, context, state)
+-        entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0
+-            -> if {
+-                entryExpression.operand1 -> regionResultValueIndex(context, state) => entryThenStoreIndex
+-                entryExpression -> emitIfResultStore(entryThenStoreIndex, functionIndex, entryExpressionIndex, 0, context, state)
+-            }
+-        OwnedDropRequest { regionIndex: entryExpression.operand1, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+-        "  br label %if$(entryExpressionIndex)_merge" -> println
+-        entryExpression.nextOperand >= 0 -> if {
+-            "if$(entryExpressionIndex)_else:" -> println
+-            entryExpression.nextOperand -> emitRegion(entryOrder, context, state)
+-            entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0)
+-                -> if {
+-                    entryExpression.nextOperand -> regionResultValueIndex(context, state) => entryElseStoreIndex
+-                    entryExpression -> emitIfResultStore(entryElseStoreIndex, functionIndex, entryExpressionIndex, 1, context, state)
+-                }
+-            OwnedDropRequest { regionIndex: entryExpression.nextOperand, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+-            "  br label %if$(entryExpressionIndex)_merge" -> println
+-        }
+-        "if$(entryExpressionIndex)_merge:" -> println
+-        entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0
+-            -> if {
+-                "  %v$(entryExpressionIndex) = load " -> print
+-                entryExpression -> writeIrType(context, state)
+-                ", ptr %if$(entryExpressionIndex)_result, align " -> print
+-                entryExpression -> storageAlign(context, state) -> writeDecimalLine
+-            }
++        entryExpressionIndex -> emitConditionalValue(functionIndex, entryOrder, context, state)
+     }
+     entryExpression.kind == 33 -> if { entryExpressionIndex -> emitBooleanWhen(entryOrder, context, state) }
+     entryExpression.kind == 20 -> if {
+@@ -3665,154 +3654,165 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
+     0 => entryOrderIndex!
+     entryOrderIndex! < (plan.order -> len) -> while {
+         plan.order[entryOrderIndex!] => entryExpressionIndex
+-        context.ir[entryExpressionIndex] => entryExpression
+-        entryExpressionIndex -> emitEntryOpeningStreamExpression(functionIndex, entryEnd, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+-        entryExpressionIndex -> emitEntryControlExpression(functionIndex, plan.order, context, state)
+-        entryExpressionIndex -> emitEntryValueExpression(functionIndex, entryEnd, entryPointerAlignment, plan.order, entryActiveEach!, entryActiveEachSize!, context, state) => entryActiveEachSize!
+-        entryExpressionIndex -> emitEntryOperationExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+-        entryExpressionIndex -> emitEntryTerminalExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+-        -1 => entryNextExpressionIndex!
+-        entryOrderIndex! + 1 < (plan.order -> len) -> if { plan.order[entryOrderIndex! + 1] => entryNextExpressionIndex! }
+-        true => entryCloseEachProgress!
+-        entryActiveEachSize! > 0 and entryCloseEachProgress!
+-            -> while {
+-                entryActiveEach![entryActiveEachSize! - 1] => entryCloseEachIndex
+-                false => entryNextInsideEach!
+-                entryNextExpressionIndex! >= 0 -> if {
+-                    NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseEachIndex } => entryCloseEachAncestorRequest
+-                    entryCloseEachAncestorRequest -> irDescendsFrom(context, state) => entryNextInsideEach!
+-                }
+-                entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
+-                    entryCloseEachIndex -> emitDirectEachEnd(false, context)
+-                    entryActiveEachSize! - 1 => entryActiveEachSize!
+-                }
+-            }
+-        true => entryCloseStreamProgress!
+-        entryActiveStreamSize! > 0 and entryCloseStreamProgress!
+-            -> while {
+-                entryActiveStreams![entryActiveStreamSize! - 1] => entryCloseStreamPipelineIndex
+-                context.streamPlan.pipelines[entryCloseStreamPipelineIndex] => entryCloseStreamPipeline
+-                false => entryNextInsideStream!
+-                entryNextExpressionIndex! >= 0 -> if {
+-                    NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseStreamPipeline.terminalIr } -> irDescendsFrom(context, state) => entryNextInsideStream!
+-                    not entryNextInsideStream! -> if { entryNextExpressionIndex! -> streamPipelineOwnsCallback(entryCloseStreamPipelineIndex, context, state) => entryNextInsideStream! }
+-                    not entryNextInsideStream! -> if {
+-                        entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryCloseCandidatePartitionRoute
+-                        entryNextExpressionIndex! -> plannedPartitionPredicateRoute(context, state) => entryCloseCandidatePredicateRoute
+-                        entryCloseCandidatePartitionRoute >= 0 and entryCloseCandidatePredicateRoute >= 0
+-                            -> if {
+-                                entryCloseCandidatePartitionRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePartitionJunction
+-                                entryCloseCandidatePredicateRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePredicateJunction
+-                                entryCloseCandidatePartitionJunction == entryCloseCandidatePredicateJunction and entryCloseStreamPipeline.terminalIr == (entryCloseCandidatePartitionJunction -> partitionFirstTerminal(context, state))
+-                                    -> if { true => entryNextInsideStream! }
+-                            }
++        state.frozenCanonicalInterpolationRootByIr[entryExpressionIndex] < 0
++            -> if {
++                context.ir[entryExpressionIndex] => entryExpression
++                entryExpressionIndex -> emitEntryOpeningStreamExpression(functionIndex, entryEnd, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
++                entryExpressionIndex -> emitEntryControlExpression(functionIndex, plan.order, context, state)
++                entryExpressionIndex -> emitEntryValueExpression(functionIndex, entryEnd, entryPointerAlignment, plan.order, entryActiveEach!, entryActiveEachSize!, context, state) => entryActiveEachSize!
++                entryExpressionIndex -> emitEntryOperationExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
++                entryExpressionIndex -> emitEntryTerminalExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
++                not (entryExpressionIndex -> isDirectEachEmission(context, state))
++                    and (entryExpressionIndex -> plannedStreamStage(context, state)) < 0
++                    -> if {
++                        entryExpression.kind == 23 or (entryExpressionIndex -> terminatingControlReturns(context, state)) => completedTerminated
++                        entryExpressionIndex -> emitStorageLifetimeEndsAfter(completedTerminated, context)
+                     }
+-                }
+-                entryNextInsideStream! -> if { false => entryCloseStreamProgress! } else {
+-                    entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryClosePartitionRoute
+-                    entryClosePartitionRoute >= 0 -> if {
+-                        entryClosePartitionRoute -> plannedPartitionJunction(context, state) => entryClosePartitionJunction
+-                        context.streamPlan.junctions[entryClosePartitionJunction] => entryClosePartition
+-                        entryClosePartitionJunction -> partitionFirstTerminal(context, state) => entryClosePartitionFirstTerminal
+-                        entryStreamStops![entryActiveStreamSize! - 1] == 1
+-                            -> if {
+-                                "  br label %stream$(entryClosePartitionFirstTerminal)_exit" -> println
+-                            } else {
+-                                "  br label %stream$(entryClosePartitionFirstTerminal)_continue" -> println
+-                            }
+-                        entryCloseStreamPipeline.terminalIr == entryClosePartitionFirstTerminal
+-                            -> if {
+-                                "stream$(entryClosePartitionFirstTerminal)_continue:" -> println
+-                                "  br label %stream$(entryClosePartitionFirstTerminal)_header" -> println
+-                                "stream$(entryClosePartitionFirstTerminal)_exit:" -> println
+-                                "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
+-                                "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+-                                "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
+-                                "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
+-                                "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+-                                "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
+-                                "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
+-                            }
+-                        entryClosePartitionRoute == entryClosePartition.routeStart + entryClosePartition.routeCount - 1
+-                            -> if {
+-                                "partition$(entryClosePartition.junctionIr)_done:" -> println
+-                            }
+-                    } else {
+-                        -1 => entryCloseTakeStage!
+-                        -1 => entryCloseFlatMapStage!
+-                        -1 => entryCloseAfterEachStage!
+-                        entryCloseStreamPipeline.stageStart => entryCloseStageSearch!
+-                        entryCloseStageSearch! < entryCloseStreamPipeline.stageStart + entryCloseStreamPipeline.stageCount
+-                            -> while {
+-                                context.streamPlan.stages[entryCloseStageSearch!].flags == 1
+-                                    -> if { entryCloseStageSearch! => entryCloseTakeStage! }
+-                                context.streamPlan.stages[entryCloseStageSearch!].flags == 3
+-                                    -> if { entryCloseStageSearch! => entryCloseFlatMapStage! }
+-                                context.streamPlan.stages[entryCloseStageSearch!].flags == 5 and context.streamPlan.stages[entryCloseStageSearch!].callbackRoot >= 0
+-                                    -> if { entryCloseStageSearch! => entryCloseAfterEachStage! }
+-                                entryCloseStageSearch! + 1 => entryCloseStageSearch!
+-                            }
+-                        entryStreamStops![entryActiveStreamSize! - 1] == 1
+-                            -> if {
+-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
+-                            } else {
+-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_continue" -> println
++                -1 => entryNextExpressionIndex!
++                entryOrderIndex! + 1 < (plan.order -> len) -> if { plan.order[entryOrderIndex! + 1] => entryNextExpressionIndex! }
++                true => entryCloseEachProgress!
++                entryActiveEachSize! > 0 and entryCloseEachProgress!
++                    -> while {
++                        entryActiveEach![entryActiveEachSize! - 1] => entryCloseEachIndex
++                        false => entryNextInsideEach!
++                        entryNextExpressionIndex! >= 0 -> if {
++                            NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseEachIndex } => entryCloseEachAncestorRequest
++                            entryCloseEachAncestorRequest -> irDescendsFrom(context, state) => entryNextInsideEach!
++                        }
++                        entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
++                            entryCloseEachIndex -> emitDirectEachEnd(false, context)
++                            entryCloseEachIndex -> emitStorageLifetimeEndsAfter(false, context)
++                            entryActiveEachSize! - 1 => entryActiveEachSize!
++                        }
++                    }
++                true => entryCloseStreamProgress!
++                entryActiveStreamSize! > 0 and entryCloseStreamProgress!
++                    -> while {
++                        entryActiveStreams![entryActiveStreamSize! - 1] => entryCloseStreamPipelineIndex
++                        context.streamPlan.pipelines[entryCloseStreamPipelineIndex] => entryCloseStreamPipeline
++                        false => entryNextInsideStream!
++                        entryNextExpressionIndex! >= 0 -> if {
++                            NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseStreamPipeline.terminalIr } -> irDescendsFrom(context, state) => entryNextInsideStream!
++                            not entryNextInsideStream! -> if { entryNextExpressionIndex! -> streamPipelineOwnsCallback(entryCloseStreamPipelineIndex, context, state) => entryNextInsideStream! }
++                            not entryNextInsideStream! -> if {
++                                entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryCloseCandidatePartitionRoute
++                                entryNextExpressionIndex! -> plannedPartitionPredicateRoute(context, state) => entryCloseCandidatePredicateRoute
++                                entryCloseCandidatePartitionRoute >= 0 and entryCloseCandidatePredicateRoute >= 0
++                                    -> if {
++                                        entryCloseCandidatePartitionRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePartitionJunction
++                                        entryCloseCandidatePredicateRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePredicateJunction
++                                        entryCloseCandidatePartitionJunction == entryCloseCandidatePredicateJunction and entryCloseStreamPipeline.terminalIr == (entryCloseCandidatePartitionJunction -> partitionFirstTerminal(context, state))
++                                            -> if { true => entryNextInsideStream! }
++                                    }
+                             }
+-                        "stream$(entryCloseStreamPipeline.terminalIr)_continue:" -> println
+-                        entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
+-                            -> if {
+-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
++                        }
++                        entryNextInsideStream! -> if { false => entryCloseStreamProgress! } else {
++                            entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryClosePartitionRoute
++                            entryClosePartitionRoute >= 0 -> if {
++                                entryClosePartitionRoute -> plannedPartitionJunction(context, state) => entryClosePartitionJunction
++                                context.streamPlan.junctions[entryClosePartitionJunction] => entryClosePartition
++                                entryClosePartitionJunction -> partitionFirstTerminal(context, state) => entryClosePartitionFirstTerminal
++                                entryStreamStops![entryActiveStreamSize! - 1] == 1
++                                    -> if {
++                                        "  br label %stream$(entryClosePartitionFirstTerminal)_exit" -> println
++                                    } else {
++                                        "  br label %stream$(entryClosePartitionFirstTerminal)_continue" -> println
++                                    }
++                                entryCloseStreamPipeline.terminalIr == entryClosePartitionFirstTerminal
++                                    -> if {
++                                        "stream$(entryClosePartitionFirstTerminal)_continue:" -> println
++                                        "  br label %stream$(entryClosePartitionFirstTerminal)_header" -> println
++                                        "stream$(entryClosePartitionFirstTerminal)_exit:" -> println
++                                        "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
++                                        "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
++                                        "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
++                                        "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
++                                        "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
++                                        "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
++                                        "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
++                                    }
++                                entryClosePartitionRoute == entryClosePartition.routeStart + entryClosePartition.routeCount - 1
++                                    -> if {
++                                        "partition$(entryClosePartition.junctionIr)_done:" -> println
++                                    }
+                             } else {
+-                                entryCloseFlatMapStage! >= 0 -> if {
+-                                    entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true)
+-                                    entryCloseTakeStage! >= 0 -> if {
+-                                        context.streamPlan.stages[entryCloseTakeStage!] => entryCloseInnerTake
+-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
+-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
+-                                        WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseInnerTake.argument0 } -> writeWhileValue(context, state)
+-                                        "" -> println
+-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue" -> println
+-                                        "stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue:" -> println
++                                -1 => entryCloseTakeStage!
++                                -1 => entryCloseFlatMapStage!
++                                -1 => entryCloseAfterEachStage!
++                                entryCloseStreamPipeline.stageStart => entryCloseStageSearch!
++                                entryCloseStageSearch! < entryCloseStreamPipeline.stageStart + entryCloseStreamPipeline.stageCount
++                                    -> while {
++                                        context.streamPlan.stages[entryCloseStageSearch!].flags == 1
++                                            -> if { entryCloseStageSearch! => entryCloseTakeStage! }
++                                        context.streamPlan.stages[entryCloseStageSearch!].flags == 3
++                                            -> if { entryCloseStageSearch! => entryCloseFlatMapStage! }
++                                        context.streamPlan.stages[entryCloseStageSearch!].flags == 5 and context.streamPlan.stages[entryCloseStageSearch!].callbackRoot >= 0
++                                            -> if { entryCloseStageSearch! => entryCloseAfterEachStage! }
++                                        entryCloseStageSearch! + 1 => entryCloseStageSearch!
+                                     }
+-                                    "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr)_" -> print
+-                                    entryCloseAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
+-                                    ", label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
+-                                    "stream$(entryCloseStreamPipeline.terminalIr)_inner_exit:" -> println
+-                                    "  br label %stream$(entryCloseStreamPipeline.terminalIr)_outer_continue" -> println
+-                                    "stream$(entryCloseStreamPipeline.terminalIr)_outer_continue:" -> println
+-                                    entryCloseStreamPipeline.status == 3 -> if {
++                                entryStreamStops![entryActiveStreamSize! - 1] == 1
++                                    -> if {
+                                         "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
+                                     } else {
+-                                        entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
+-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
++                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_continue" -> println
+                                     }
+-                                } else {
+-                                    entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
+-                                    entryCloseTakeStage! >= 0 -> if {
+-                                        context.streamPlan.stages[entryCloseTakeStage!] => entryCloseTake
+-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
+-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
+-                                        WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseTake.argument0 } -> writeWhileValue(context, state)
+-                                        "" -> println
+-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_range_continue" -> println
+-                                        "stream$(entryCloseStreamPipeline.terminalIr)_range_continue:" -> println
++                                "stream$(entryCloseStreamPipeline.terminalIr)_continue:" -> println
++                                entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
++                                    -> if {
++                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
++                                    } else {
++                                        entryCloseFlatMapStage! >= 0 -> if {
++                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true)
++                                            entryCloseTakeStage! >= 0 -> if {
++                                                context.streamPlan.stages[entryCloseTakeStage!] => entryCloseInnerTake
++                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
++                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
++                                                WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseInnerTake.argument0 } -> writeWhileValue(context, state)
++                                                "" -> println
++                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue" -> println
++                                                "stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue:" -> println
++                                            }
++                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr)_" -> print
++                                            entryCloseAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
++                                            ", label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
++                                            "stream$(entryCloseStreamPipeline.terminalIr)_inner_exit:" -> println
++                                            "  br label %stream$(entryCloseStreamPipeline.terminalIr)_outer_continue" -> println
++                                            "stream$(entryCloseStreamPipeline.terminalIr)_outer_continue:" -> println
++                                            entryCloseStreamPipeline.status == 3 -> if {
++                                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
++                                            } else {
++                                                entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
++                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
++                                            }
++                                        } else {
++                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
++                                            entryCloseTakeStage! >= 0 -> if {
++                                                context.streamPlan.stages[entryCloseTakeStage!] => entryCloseTake
++                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
++                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
++                                                WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseTake.argument0 } -> writeWhileValue(context, state)
++                                                "" -> println
++                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_range_continue" -> println
++                                                "stream$(entryCloseStreamPipeline.terminalIr)_range_continue:" -> println
++                                            }
++                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
++                                        }
++                                    }
++                                "stream$(entryCloseStreamPipeline.terminalIr)_exit:" -> println
++                                entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
++                                    -> if {
++                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
++                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
++                                        "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
++                                        "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
++                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
++                                        "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
+                                     }
+-                                    "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+-                                }
+-                            }
+-                        "stream$(entryCloseStreamPipeline.terminalIr)_exit:" -> println
+-                        entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
+-                            -> if {
+-                                "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
+-                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
+-                                "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
+-                                "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
+-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
+-                                "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
+                             }
++                            entryCloseStreamPipeline.terminalIr -> emitStorageLifetimeEndsAfter(false, context)
++                            entryActiveStreamSize! - 1 => entryActiveStreamSize!
++                        }
+                     }
+-                    entryActiveStreamSize! - 1 => entryActiveStreamSize!
+-                }
+             }
+         entryOrderIndex! + 1 => entryOrderIndex!
+     }
