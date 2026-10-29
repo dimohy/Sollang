@@ -1,0 +1,650 @@
+diff --git a/57794a77a8dae803b0b009ccb34a12182cb572e7 b/selfhost/llvm/text/function_expressions.slg
+index 57794a77a..c7149c997 100644
+--- a/57794a77a8dae803b0b009ccb34a12182cb572e7
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -8,6 +8,7 @@ import sollang.compiler.syntax as syntax
+ import sollang.compiler.semantic.type_ids as typeIds
+ import syntax.generated.slg as grammar
+ import sys.process as process
++import sys.runtime as runtime
+ 
+ appendDiagnosticText bytes: mut [UInt8; ~], value: Text -> Unit {
+     UIntSize(0) => index!
+@@ -193,34 +194,39 @@ emitTextSliceSize request: WhileValueRequest, operandIndex: Int, prefix: Text, s
+     }
+ }
+ 
+-emitTextSliceTrap request: WhileValueRequest, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+-    context.expectedPathStyle == 1 -> if {
+-        [UInt8; ~] => diagnostic!
+-        request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].symbol >= 0
+-            -> if {
+-                context.ir[request.ownerIndex] => owner
+-                diagnostic! -> appendDeclarationModule(owner.sourceModule, context)
+-                context.modules[owner.sourceModule].pathLength == 0
+-                    -> if { diagnostic! -> push(46) }
+-                diagnostic! -> appendFunctionDeclarationIdentity(request.ownerIndex, context)
++emitRuntimeTrap request: WhileValueRequest, prefix: Text, suffix: Text, diagnosticCode: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    context.expectedPathStyle == 1 or context.pointerBitWidth == 32
++        -> if {
++            [UInt8; ~] => diagnostic!
++            request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].symbol >= 0
++                -> if {
++                    context.ir[request.ownerIndex] => owner
++                    diagnostic! -> appendDeclarationModule(owner.sourceModule, context)
++                    context.modules[owner.sourceModule].pathLength == 0
++                        -> if { diagnostic! -> push(46) }
++                    diagnostic! -> appendFunctionDeclarationIdentity(request.ownerIndex, context)
++                } else {
++                    diagnostic! -> appendDiagnosticText("main")
++                }
++            diagnostic! -> push(58)
++            diagnostic! -> appendDiagnosticText(diagnosticCode)
++            diagnostic! -> len => diagnosticLength
++            "  %$(prefix)_$(suffix)_diagnostic = alloca [$(diagnosticLength) x i8], align 1" -> println
++            "  store [$(diagnosticLength) x i8] c" -> print
++            """ " """ -> slice(1, 1) -> print
++            0 => byteIndex!
++            byteIndex! < diagnosticLength -> while {
++                diagnostic![byteIndex!] -> literalEmitEscapedByte
++                byteIndex! + 1 => byteIndex!
++            }
++            """ " """ -> slice(1, 1) -> print
++            ", ptr %$(prefix)_$(suffix)_diagnostic, align 1" -> println
++            context.pointerBitWidth == 32 -> if {
++                "  call void @sollang_browser_panic(ptr %$(prefix)_$(suffix)_diagnostic, i32 $(diagnosticLength))" -> println
+             } else {
+-                diagnostic! -> appendDiagnosticText("main")
++                "  call void @sollang_runtime_eprint(ptr %$(prefix)_$(suffix)_diagnostic, i64 $(diagnosticLength), i1 false)" -> println
+             }
+-        diagnostic! -> push(58)
+-        diagnostic! -> appendDiagnosticText(diagnosticCode)
+-        diagnostic! -> len => diagnosticLength
+-        "  %$(prefix)_$(suffix)_diagnostic = alloca [$(diagnosticLength) x i8], align 1" -> println
+-        "  store [$(diagnosticLength) x i8] c" -> print
+-        """ " """ -> slice(1, 1) -> print
+-        0 => byteIndex!
+-        byteIndex! < diagnosticLength -> while {
+-            diagnostic![byteIndex!] -> literalEmitEscapedByte
+-            byteIndex! + 1 => byteIndex!
+         }
+-        """ " """ -> slice(1, 1) -> print
+-        ", ptr %$(prefix)_$(suffix)_diagnostic, align 1" -> println
+-        "  call void @sollang_runtime_eprint(ptr %$(prefix)_$(suffix)_diagnostic, i64 $(diagnosticLength), i1 false)" -> println
+-    }
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+ }
+@@ -235,7 +241,7 @@ emitTextSliceBoundary request: WhileValueRequest, prefix: Text, boundary: Text,
+     "  %$(prefix)_$(boundary)_continuation = icmp eq i8 %$(prefix)_$(boundary)_prefix, -128" -> println
+     "  br i1 %$(prefix)_$(boundary)_continuation, label %$(prefix)_$(boundary)_fail, label %$(prefix)_$(boundary)_valid" -> println
+     "$(prefix)_$(boundary)_fail:" -> println
+-    request -> emitTextSliceTrap(prefix, boundary, diagnosticCode, context, state)
++    request -> emitRuntimeTrap(prefix, boundary, diagnosticCode, context, state)
+     "$(prefix)_$(boundary)_valid:" -> println
+ }
+ 
+@@ -284,13 +290,13 @@ emitCheckedTextSliceResult request: WhileValueRequest, prefix: Text, context: re
+     "  %$(prefix)_start_in_bounds = icmp ule i64 %$(prefix)_index, %$(prefix)_source_length" -> println
+     "  br i1 %$(prefix)_start_in_bounds, label %$(prefix)_start_ok, label %$(prefix)_start_fail" -> println
+     "$(prefix)_start_fail:" -> println
+-    request -> emitTextSliceTrap(prefix, "start", "text_slice_start_bounds", context, state)
++    request -> emitRuntimeTrap(prefix, "start", "text_slice_start_bounds", context, state)
+     "$(prefix)_start_ok:" -> println
+     "  %$(prefix)_remaining = sub i64 %$(prefix)_source_length, %$(prefix)_index" -> println
+     "  %$(prefix)_length_in_bounds = icmp ule i64 %$(prefix)_length, %$(prefix)_remaining" -> println
+     "  br i1 %$(prefix)_length_in_bounds, label %$(prefix)_length_ok, label %$(prefix)_length_fail" -> println
+     "$(prefix)_length_fail:" -> println
+-    request -> emitTextSliceTrap(prefix, "length", "text_slice_length_bounds", context, state)
++    request -> emitRuntimeTrap(prefix, "length", "text_slice_length_bounds", context, state)
+     "$(prefix)_length_ok:" -> println
+     "  %$(prefix)_end = add i64 %$(prefix)_index, %$(prefix)_length" -> println
+     request -> emitTextSliceBoundary(prefix, "index", "text_slice_start_utf8_boundary", context, state)
+@@ -360,11 +366,36 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
+     context.ir[functionIndex] => function
+     expression.kind == 5 and not (expressionIndex -> isAwaitSourceNode(context))
+         -> if {
++            expression -> typedIr.isAsyncExpressionRead -> if {
++                expression.operand0 -> asyncFrameBindingRoot(functionIndex, context, state) => carrier
++                carrier < 0 -> if {
++                    "sollang compiler error S053: pending expression has no continuation frame slot" -> runtime.eprintln
++                    process.exit(1)
++                }
++                "  %v$(expressionIndex) = load " -> print
++                expression -> writeIrType(context, state)
++                ", ptr " -> print
++                carrier -> writeAsyncLocalAddress(context)
++                ", align " -> print
++                expression -> storageAlign(context, state) -> writeDecimalLine
++                return
++            }
+             expressionIndex -> asyncIntIteratorForRole(expression.sourceModule, expression.symbol, context, state) => roleIterator
+             roleIterator >= 0 -> if {
+                 "  %v$(expressionIndex) = freeze i32 %each_role_m$(expression.sourceModule)_s$(expression.symbol)_at$(expressionIndex)" -> println
+                 return
+             }
++            expression -> referenceValueTypeId(context, state) => boundedReferenceTypeId
++            boundedReferenceTypeId >= 0 and context.types[boundedReferenceTypeId].kind == 12
++                -> if {
++                    "  %bounded_ref$(expressionIndex) = load " -> print
++                    boundedReferenceTypeId -> writeValueAbiTypeId(context, state)
++                    ", ptr " -> print
++                    functionIndex -> writeForwardedReferenceValue(expressionIndex, context, state)
++                    ", align $(context.typeAligns[boundedReferenceTypeId])" -> println
++                    "v$(expressionIndex)" -> emitBoundedArrayHandle("%bounded_ref$(expressionIndex)", boundedReferenceTypeId, context, state)
++                    return
++                }
+             expressionIndex -> emitComparisonReferenceNameRead(functionIndex, -1, context, state)
+             expressionIndex -> isLocalReadonlyReferenceName(functionIndex, context, state)
+                 -> if {
+@@ -482,7 +513,7 @@ emitDynExpression index: Int, ownerIndex: Int, context: ref emitterContext.EmitC
+     expression.opcode == -224 -> if {
+         context.ir[expression.operand0] => concrete
+         concrete -> effectiveTypeId(context, state) => concreteType
+-        "  %v$(index)_data = call ptr @malloc(i64 $(context.typeSizes[concreteType]))" -> println
++        "  %v$(index)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[concreteType]))" -> println
+         "  store " -> print
+         concrete -> writeIrType(context, state)
+         " " -> print
+@@ -560,7 +591,7 @@ emitFunctionIntrinsicExpressions expressionIndex: Int, functionIndex: Int, funct
+         and expression.operand1 >= 0
+         -> if {
+             WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex }
+-                -> emitArrayReserve(context, state)
++                -> emitCollectionReserve(context, state)
+         }
+     (expression.kind == 9 or expression.kind == 6) and expression.opcode == -202 and expression.operand0 >= 0 and expression.operand1 >= 0
+         -> if {
+@@ -830,20 +861,24 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
+                     and (emittedFieldValue.kind == 5 or copyProjectedFixedField)
+                     -> if {
+                         true => copyNamedFixedField!
+-                        "  %v$(expressionIndex)_field$(fieldPosition!)_source = extractvalue { ptr, i64 } " -> print
++                        "  %v$(expressionIndex)_field$(fieldPosition!)_source = extractvalue %sollang.int_slice " -> print
+                         emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
+                         ", 0" -> println
+-                        "  %v$(expressionIndex)_field$(fieldPosition!)_length = extractvalue { ptr, i64 } " -> print
++                        "  %v$(expressionIndex)_field$(fieldPosition!)_length = extractvalue %sollang.int_slice " -> print
+                         emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
+                         ", 1" -> println
+                         context.typeSizes[targetFieldTypeId!] => fieldAllocationBytes!
+                         fieldAllocationBytes! == 0
+                             -> if { context.typeSizes[context.types[targetFieldTypeId!].first] => fieldAllocationBytes! }
+-                        "  %v$(expressionIndex)_field$(fieldPosition!)_owned = call ptr @malloc(i64 $(fieldAllocationBytes!))" -> println
++                        "  %v$(expressionIndex)_field$(fieldPosition!)_owned = call ptr @sollang_alloc(i64 $(fieldAllocationBytes!))" -> println
+                         "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, ptr %v$(expressionIndex)_field$(fieldPosition!)_source, i64 $(context.typeSizes[targetFieldTypeId!]), i1 false)" -> println
+-                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy0 = insertvalue { ptr, i64 } poison, ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, 0" -> println
+-                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy = insertvalue { ptr, i64 } %v$(expressionIndex)_field$(fieldPosition!)_copy0, i64 %v$(expressionIndex)_field$(fieldPosition!)_length, 1" -> println
++                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, 0" -> println
++                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy = insertvalue %sollang.int_slice %v$(expressionIndex)_field$(fieldPosition!)_copy0, i64 %v$(expressionIndex)_field$(fieldPosition!)_length, 1" -> println
+                     }
++                targetFieldTypeId! >= 0 and context.types[targetFieldTypeId!].kind == 12 => boundedField
++                boundedField -> if {
++                    "v$(expressionIndex)_field$(fieldPosition!)_bounded" -> emitBoundedArrayValue(emittedFieldIndex, functionIndex, targetFieldTypeId!, context, state)
++                }
+                 "  " -> print
+                 fieldValue.nextOperand < 0 -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_f$(fieldPosition!)" -> print }
+                 " = insertvalue " -> print
+@@ -856,30 +891,31 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
+                 ", " -> print
+                 targetFieldTypeId! >= 0 -> if { targetFieldTypeId! -> writeAggregateFieldTypeId(context, state) } else { emittedFieldValue -> writeIrType(context, state) }
+                 " " -> print
+-                copyNamedFixedStructField! -> if {
+-                    "%v$(expressionIndex)_field$(fieldPosition!)_struct_copy" -> print
+-                } else { copyNamedFixedField! -> if {
+-                        "%v$(expressionIndex)_field$(fieldPosition!)_copy" -> print
+-                    } else { emittedFieldValue.kind == 2 -> if {
+-                            emittedFieldValue -> sourceToken(context, state) => fieldTextToken
+-                            Int(TextLiteralRequest { sourceModule: emittedFieldValue.sourceModule, token: fieldTextToken } -> textLiteralLength(context, state)) => fieldTextLength
+-                            "{ ptr @sollang_str_$(emittedFieldIndex), i64 $fieldTextLength }" -> print
+-                        } else {
+-                            emittedFieldValue.kind == 3 or emittedFieldValue.kind == 4
+-                                -> if {
+-                                    emittedFieldValue -> sourceToken(context, state) => fieldToken
+-                                    emittedFieldValue.kind == 3 -> if {
+-                                        emittedFieldValue -> writeIntegerLiteral(context, state)
++                boundedField -> if { "%v$(expressionIndex)_field$(fieldPosition!)_bounded" -> print } else { copyNamedFixedStructField! -> if {
++                        "%v$(expressionIndex)_field$(fieldPosition!)_struct_copy" -> print
++                    } else { copyNamedFixedField! -> if {
++                            "%v$(expressionIndex)_field$(fieldPosition!)_copy" -> print
++                        } else { emittedFieldValue.kind == 2 -> if {
++                                emittedFieldValue -> sourceToken(context, state) => fieldTextToken
++                                Int(TextLiteralRequest { sourceModule: emittedFieldValue.sourceModule, token: fieldTextToken } -> textLiteralLength(context, state)) => fieldTextLength
++                                "{ ptr @sollang_str_$(emittedFieldIndex), i64 $fieldTextLength }" -> print
++                            } else {
++                                emittedFieldValue.kind == 3 or emittedFieldValue.kind == 4
++                                    -> if {
++                                        emittedFieldValue -> sourceToken(context, state) => fieldToken
++                                        emittedFieldValue.kind == 3 -> if {
++                                            emittedFieldValue -> writeIntegerLiteral(context, state)
++                                        } else {
++                                            (context.sources[emittedFieldValue.sourceModule] -> byte(fieldToken.span.start)) == 116
++                                                -> if { "1" -> print } else { "0" -> print }
++                                        }
+                                     } else {
+-                                        (context.sources[emittedFieldValue.sourceModule] -> byte(fieldToken.span.start)) == 116
+-                                            -> if { "1" -> print } else { "0" -> print }
+-                                    }
+-                                } else {
+-                                    castStructField -> if { "%v$(expressionIndex)_field$(fieldPosition!)_cast" -> print } else {
+-                                        emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
++                                        castStructField -> if { "%v$(expressionIndex)_field$(fieldPosition!)_cast" -> print } else {
++                                            emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
++                                        }
+                                     }
+-                                }
+-                } } }
++                    } } }
++                }
+                 ", $(fieldPosition!)" -> println
+                 fieldValue.nextOperand => fieldValueIndex!
+                 fieldPosition! + 1 => fieldPosition!
+@@ -902,7 +938,9 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
+         context.ir[expression.operand0] => syntheticProductBase
+         syntheticProductBase.typeKind == 10 and syntheticProductBase.typeId >= (context.types -> len) and expression.symbol >= 0
+             -> if {
+-                "  %v$(expressionIndex) = extractvalue %sollang.product.t$(syntheticProductBase.typeId) " -> print
++                "  " -> print
++                expressionIndex -> writeMemberStorageValueName(context, state)
++                " = extractvalue %sollang.product.t$(syntheticProductBase.typeId) " -> print
+                 expression.operand0 -> writeValue(functionIndex, context, state)
+                 ", $(expression.symbol)" -> println
+             } else {
+@@ -966,23 +1004,28 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                                             }
+                                         "  " -> print
+                                         canonicalMemberOrdinal! == canonicalMemberCount! - 1
+-                                            -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
++                                            -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
+                                         canonicalMemberReference! -> if {
+                                             "_address = getelementptr inbounds " -> print
+                                             canonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                                             ", ptr " -> print
+-                                            canonicalMemberOrdinal! == 0 -> if { expression.operand0 -> writeValue(functionIndex, context, state) } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal! - 1)" -> print }
++                                            canonicalMemberOrdinal! == 0 -> if {
++                                                expression.operand0 -> isLocalReadonlyReferenceName(functionIndex, context, state)
++                                                    -> if { functionIndex -> writeForwardedReferenceValue(expression.operand0, context, state) } else {
++                                                        expression.operand0 -> writeValue(functionIndex, context, state)
++                                                    }
++                                            } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal! - 1)" -> print }
+                                             ", i32 0, i32 $(canonicalMemberField.ordinal)" -> println
+                                             "  " -> print
+                                             canonicalMemberOrdinal! == canonicalMemberCount! - 1
+-                                                -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
++                                                -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
+                                             " = load " -> print
+-                                            canonicalMemberFieldType.kind == 4 -> if { "{ ptr, i64 }" -> print } else {
++                                            canonicalMemberFieldType.kind == 4 -> if { "%sollang.int_slice" -> print } else {
+                                                 canonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                             }
+                                             ", ptr " -> print
+                                             canonicalMemberOrdinal! == canonicalMemberCount! - 1
+-                                                -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
++                                                -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
+                                             "_address, align $(context.typeAligns[canonicalMemberField.fieldType])" -> println
+                                         } else {
+                                             " = extractvalue " -> print
+@@ -1167,7 +1210,7 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                                                                 "; member-legacy type=$(memberNextTypeId!),fixed=$(memberNextFixedLength!),element=$(memberNextFixedElementSymbol!),fieldType=$(memberField.typeNode)" -> println
+                                                                 "  " -> print
+                                                                 memberIdentifierOrdinal! == memberIdentifierCount! - 1
+-                                                                    -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
++                                                                    -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
+                                                                 memberNextTypeId! < 0 and memberNextFixedLength! >= 0
+                                                                     -> if { "_inline" -> print }
+                                                                 " = extractvalue %sollang.struct.m$(ownerSourceModule!)_s$(memberCurrentSymbol!) " -> print
+@@ -1214,14 +1257,14 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                                                                         "  " -> print
+                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                                             -> if { "%v$(expressionIndex)_0" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_0" -> print }
+-                                                                        " = insertvalue { ptr, i64 } poison, ptr " -> print
++                                                                        " = insertvalue %sollang.int_slice poison, ptr " -> print
+                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                                             -> if { "%v$(expressionIndex)_slot" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_slot" -> print }
+                                                                         ", 0" -> println
+                                                                         "  " -> print
+                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
+-                                                                            -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
+-                                                                        " = insertvalue { ptr, i64 } " -> print
++                                                                            -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
++                                                                        " = insertvalue %sollang.int_slice " -> print
+                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                                             -> if { "%v$(expressionIndex)_0" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_0" -> print }
+                                                                         ", i64 " -> print
+@@ -1249,6 +1292,10 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
+         bindingCopyTypeId >= 0 -> if {
+             "%v$(expressionIndex)_binding_copy" -> emitCopyableFixedStorageValue("%v$(expressionIndex)", bindingCopyTypeId, context, state)
+         }
++        context.ir[expressionIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
++        boundedMemberTypeId >= 0 -> if {
++            "v$(expressionIndex)" -> emitBoundedArrayHandle("%v$(expressionIndex)_bounded_value", boundedMemberTypeId, context, state)
++        }
+     }
+ }
+ 
+@@ -1271,11 +1318,8 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
+                 context.ir[arrayCountIndex!].nextOperand => arrayCountIndex!
+             }
+             expression -> arrayLiteralLength(arrayOperandCount!, context) => arrayLength
+-            arrayLength => arrayCapacity!
+-            expression.opcode >= 1_000_000 -> if {
+-                expression.opcode - 1_000_000 => arrayCapacity!
+-            }
+-            arrayCapacity! * (expression -> arrayElementSize(context, state)) => arrayByteLength
++            expression -> arrayLiteralCapacity(arrayLength, context) => arrayCapacity
++            arrayCapacity * (expression -> arrayElementSize(context, state)) => arrayByteLength
+             (expressionIndex -> staticReadonlyArrayReturnFunction(context)) == functionIndex
+                 -> if {
+                     "  %v$(expressionIndex)_data = getelementptr [$(arrayLength) x " -> print
+@@ -1284,46 +1328,40 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
+                     functionIndex -> writeStaticReadonlyArraySymbol(expressionIndex, context)
+                     ", i64 0, i64 0" -> println
+                 } else {
+-                    (not (expression -> isFixedArrayType)) or (expressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
++                    expressionIndex -> emitFixedStorageLifetimeStart(context, state)
++                    expressionIndex -> isPlannedDynamicIntPayload(context, state) => plannedDynamicPayload
++                    plannedDynamicPayload -> if { expressionIndex -> emitDynamicIntStorageStart(context) }
++                    ((not (expression -> isFixedArrayType)) or (expressionIndex -> fixedArrayLiteralNeedsHeap(context, state))) and not plannedDynamicPayload
+                         -> if {
+-                            arrayByteLength == 0 -> if {
+-                                expressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+-                                emptyCallParameter >= 0 or (expression -> isFixedArrayType)
+-                                    -> if {
+-                                        (emptyCallParameter >= 0 -> if {
+-                                            context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+-                                        } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
+-                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes)
+-                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+-                            } else {
+-                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength)
+-                            }
++                            expression.typeId >= 0 and context.types[expression.typeId].kind == 12
++                                -> if {
++                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 }
++                                        -> emitArrayStackBacking(arrayByteLength, expression -> arrayElementAlign(context, state))
++                                } else { arrayByteLength == 0 -> if {
++                                        expressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
++                                        emptyCallParameter >= 0 or (expression -> isFixedArrayType)
++                                            -> if {
++                                                (emptyCallParameter >= 0 -> if {
++                                                    context.ir[emptyCallParameter] -> arrayElementSize(context, state)
++                                                } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
++                                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes, functionIndex, context, state)
++                                            } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0, functionIndex, context, state) }
++                                    } else {
++                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength, functionIndex, context, state)
++                                } }
+                         }
+                     expression.operand0 => arrayElementIndex!
+                     0 => arrayElementPosition!
+                     arrayElementIndex! >= 0 and arrayElementPosition! < arrayLength
+                         -> while {
+                             context.ir[arrayElementIndex!] => arrayElement
+-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayElementStorePrefix(arrayElementPosition!, expression -> arrayElementTypeId(context, state), expression.typeSymbol, context, state)
+-                            arrayElement.kind == 3 or arrayElement.kind == 4
+-                                -> if {
+-                                    arrayElement -> sourceToken(context, state) => arrayElementToken
+-                                    arrayElement.kind == 3 -> if {
+-                                        arrayElement -> writeIntegerLiteral(context, state)
+-                                    } else {
+-                                        (context.sources[arrayElement.sourceModule] -> byte(arrayElementToken.span.start)) == 116
+-                                            -> if { "1" -> print } else { "0" -> print }
+-                                    }
+-                                } else {
+-                                    arrayElement.kind == 5 and function.operand1 >= 0 and arrayElement.symbol == context.ir[function.operand1].symbol
+-                                        -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
+-                                }
+-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayElementStoreSuffix(arrayElementPosition!, expression -> arrayElementAlign(context, state))
++                            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 }
++                                -> emitArrayValueElementStore(arrayElementPosition!, expression -> arrayElementTypeId(context, state), expression.typeSymbol, arrayElementIndex!, functionIndex, context, state)
+                             arrayOperandCount! > 1 -> if { arrayElement.nextOperand => arrayElementIndex! }
+                             arrayElementPosition! + 1 => arrayElementPosition!
+                         }
+                 }
+-            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(arrayLength, arrayCapacity!, (expression -> isFixedArrayType) or (expression -> isSliceArrayType) or expressionContextualSlice!)
++            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(arrayLength, arrayCapacity, (expression -> isFixedArrayType) or (expression -> isSliceArrayType) or expressionContextualSlice!)
+             expressionIndex -> emitAggregatePartialMoveCleanup(functionIndex, context, state)
+         }
+     expression.kind == 14 and expression.operand0 < 0 and not (expression -> isDynamicArrayType) and not (expression -> isFixedArrayType) and not (expression -> isSliceArrayType) and not expressionContextualSlice!
+@@ -1338,7 +1376,7 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
+     expression -> isEmptyBoundedDictionaryLiteral(context)
+         -> if { expressionIndex -> emitEmptyBoundedDictionaryLiteral(context) }
+     expression -> isPopulatedBoundedDictionaryLiteral(context)
+-        -> if { expressionIndex -> emitPopulatedBoundedDictionaryLiteral(context, state) }
++        -> if { expressionIndex -> emitPopulatedBoundedDictionaryLiteral(functionIndex, context, state) }
+     expression.kind == 16 and expression.typeOrigin == 15
+         and not (expression -> isEmptyBoundedDictionaryLiteral(context))
+         and not (expression -> isPopulatedBoundedDictionaryLiteral(context))
+@@ -1388,7 +1426,7 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                 "  %v$(expressionIndex)_storage = getelementptr i8, ptr null, i64 0" -> println
+                 "v$(expressionIndex)" -> emitGrowableDictionaryPointers("%v$(expressionIndex)_storage", "0", dictionaryEntryLayout)
+             } else {
+-                "v$(expressionIndex)" -> emitGrowableDictionaryAllocation("$(dictionaryCapacity)", dictionaryEntryLayout)
++                expressionIndex -> emitDictionaryLiteralStorage(dictionaryCapacity, dictionaryEntryLayout, context, state)
+             }
+             dictionaryItemStart => dictionaryItemIndex!
+             0 => dictionaryItemPosition!
+@@ -1427,6 +1465,12 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                 dictionaryItemPosition! % 2 == 0 -> if {
+                     DictionaryLiteralSlotRequest { dictionaryIndex: expressionIndex, ownerIndex: functionIndex, entryPosition: dictionaryEntryPosition, keyIndex: dictionaryItemIndex!, keyTypeId: dictionaryKeyTypeId!, hashWidth: dictionaryControlHashWidth!, hashMethod: dictionaryControlHashMethod!, capacity: dictionaryCapacity, valueTypeId: dictionaryValueTypeId!, valueSymbol: expression.typeSymbol, entryLayout: dictionaryEntryLayout } -> emitDictionaryLiteralSlot(context, state)
+                 }
++                dictionaryItemTypeId >= 0 and context.types[dictionaryItemTypeId].kind == 12
++                    -> if {
++                        Arena(0) => boundedPrefixStorage!
++                        "v$(expressionIndex)_$(dictionarySide)_bounded$(dictionaryEntryPosition)" -> materialize(boundedPrefixStorage!) => boundedPrefix
++                        boundedPrefix -> emitBoundedArrayValue(dictionaryItemIndex!, functionIndex, dictionaryItemTypeId, context, state)
++                    }
+                 "  %v$(expressionIndex)_$(dictionarySide)_ptr$(dictionaryEntryPosition) = getelementptr " -> print
+                 dictionaryEntryLayout -> writeDictionaryEntryStorageType
+                 ", ptr %v$(expressionIndex)_$(dictionarySide), i64 %v$(expressionIndex)_literal$(dictionaryEntryPosition)_slot" -> println
+@@ -1435,7 +1479,10 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                     -> if { "ptr" -> print } else { dictionaryItemTypeId >= 0
+                             -> if { dictionaryItemTypeId -> writeSemanticTypeId(context, state) } else { dictionaryItemSymbol -> llvmType(context, state) -> print } }
+                 " " -> print
+-                dictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
++                dictionaryItemTypeId >= 0 and context.types[dictionaryItemTypeId].kind == 12
++                    -> if { "%v$(expressionIndex)_$(dictionarySide)_bounded$(dictionaryEntryPosition)" -> print } else {
++                        dictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
++                    }
+                 ", ptr %v$(expressionIndex)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
+                 dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)
+                     -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { dictionaryItemTypeId >= 0
+@@ -1446,7 +1493,7 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
+                 dictionaryItem.nextOperand => dictionaryItemIndex!
+                 dictionaryItemPosition! + 1 => dictionaryItemPosition!
+             }
+-            "v$(expressionIndex)" -> emitGrowableDictionaryOwner("%v$(expressionIndex)_storage", "$(dictionaryLength)", "$(dictionaryCapacity)")
++            expressionIndex -> emitDictionaryLiteralOwner(dictionaryLength, dictionaryCapacity, context, state)
+         }
+ }
+ 
+@@ -1466,7 +1513,7 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
+         "v$(expressionIndex)" -> materialize(nameStorage!)
+     } => prefix
+     expression.operand0 -> mutableStorageRoot(context, state) => indexedMutableRoot
+-    indexedMutableRoot >= 0 -> if { "  %$(prefix)_dictionary = load %sollang.dict, ptr %slot$(indexedMutableRoot), align 8" -> println }
++    indexedMutableRoot >= 0 -> if { "  %$(prefix)_dictionary = load %sollang.int_dictionary, ptr %slot$(indexedMutableRoot), align 8" -> println }
+     -1 => indexedDictionaryKeyTypeId!
+     -1 => indexedDictionaryValueTypeId!
+     dictionaryTypeId >= 0 -> if {
+@@ -1477,15 +1524,15 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
+                 indexedDictionaryType.second => indexedDictionaryValueTypeId!
+             }
+     }
+-    "  %$(prefix)_storage = extractvalue %sollang.dict " -> print
++    "  %$(prefix)_storage = extractvalue %sollang.int_dictionary " -> print
+     indexedMutableRoot >= 0 -> if { "%$(prefix)_dictionary" -> print } else { readonlySource
+             -> if { "%$(prefix)_indexed_source" -> print } else { expression.operand0 -> writeAggregateOperand(functionIndex, whileIndex, context, state) } }
+     ", 0" -> println
+-    "  %$(prefix)_length = extractvalue %sollang.dict " -> print
++    "  %$(prefix)_length = extractvalue %sollang.int_dictionary " -> print
+     indexedMutableRoot >= 0 -> if { "%$(prefix)_dictionary" -> print } else { readonlySource
+             -> if { "%$(prefix)_indexed_source" -> print } else { expression.operand0 -> writeAggregateOperand(functionIndex, whileIndex, context, state) } }
+     ", 1" -> println
+-    "  %$(prefix)_capacity = extractvalue %sollang.dict " -> print
++    "  %$(prefix)_capacity = extractvalue %sollang.int_dictionary " -> print
+     indexedMutableRoot >= 0 -> if { "%$(prefix)_dictionary" -> print } else { readonlySource
+             -> if { "%$(prefix)_indexed_source" -> print } else { expression.operand0 -> writeAggregateOperand(functionIndex, whileIndex, context, state) } }
+     ", 2" -> println
+@@ -1626,10 +1673,14 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
+     "  %$(prefix)_value_ptr = getelementptr " -> print
+     indexedDictionaryEntryLayout -> writeDictionaryEntryStorageType
+     ", ptr %$(prefix)_values, i64 %$(prefix)_group_candidate_slot" -> println
+-    "  %$(prefix) = load " -> print
++    "  %$(prefix)" -> print
++    indexedDictionaryValueTypeId! >= 0 and context.types[indexedDictionaryValueTypeId!].kind == 12
++        -> if { "_bounded_value" -> print }
++    " = load " -> print
+     indexedDictionaryValueTypeId! >= 0 -> if { indexedDictionaryValueTypeId! -> writeSemanticTypeId(context, state) } else { indexedArray.typeSymbol -> llvmType(context, state) -> print }
+     ", ptr %$(prefix)_value_ptr, align " -> print
+     indexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[indexedDictionaryValueTypeId!] -> writeDecimalLine } else { indexedArray.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
++    prefix -> emitStoredBoundedValueHandle(indexedDictionaryValueTypeId!, context, state)
+ }
+ 
+ emitFunctionMemberExpressions expressionIndex: Int, functionIndex: Int, functionEnd: Int, expressionStart: Int, expressionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+@@ -1649,12 +1700,7 @@ emitFunctionMemberExpressions expressionIndex: Int, functionIndex: Int, function
+             -> if {
+                 context.types[indexedContainerTypeId!].first => indexedContainerTypeId!
+                 true => indexedReadonlyReference!
+-                "  %v$(expressionIndex)_indexed_source = load " -> print
+-                indexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
+-                ", ptr " -> print
+-                expression.operand0 -> writeValue(functionIndex, context, state)
+-                ", align " -> print
+-                context.typeAligns[indexedContainerTypeId!] -> writeDecimalLine
++                "v$(expressionIndex)_indexed_source" -> emitIndexedReadonlySource(expression.operand0, functionIndex, indexedContainerTypeId!, context, state)
+             }
+         expression.operand0 -> mutableBorrowParameterOrdinal(functionIndex, context, state) => indexedMutableParameterOrdinal
+         -1 => indexedMutableParameterIndex!
+@@ -1702,7 +1748,7 @@ emitFunctionMemberExpressions expressionIndex: Int, functionIndex: Int, function
+                     } else {
+                         "  %v$(expressionIndex)_data = extractvalue " -> print
+                         indexedReadonlyReference! -> if {
+-                            indexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
++                            indexedContainerTypeId! -> writeIndexedSourceType(context, state)
+                         } else {
+                             indexedArray -> writeIrType(context, state)
+                         }
+@@ -1711,7 +1757,7 @@ emitFunctionMemberExpressions expressionIndex: Int, functionIndex: Int, function
+                         ", 0" -> println
+                         "  %v$(expressionIndex)_length = extractvalue " -> print
+                         indexedReadonlyReference! -> if {
+-                            indexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
++                            indexedContainerTypeId! -> writeIndexedSourceType(context, state)
+                         } else {
+                             indexedArray -> writeIrType(context, state)
+                         }
+@@ -1745,7 +1791,7 @@ emitFunctionMemberExpressions expressionIndex: Int, functionIndex: Int, function
+                 "  unreachable" -> println
+                 "v$(expressionIndex)_index_ok:" -> println
+                 "  %v$(expressionIndex)_ptr = getelementptr " -> print
+-                expression -> writeIrType(context, state)
++                expression.typeId >= 0 -> if { expression.typeId -> writeAggregateFieldTypeId(context, state) } else { expression -> writeIrType(context, state) }
+                 ", ptr %v$(expressionIndex)_data, i64 " -> print
+                 arrayIndex.kind == 3 -> if {
+                     arrayIndex -> writeIntegerLiteral(context, state)
+@@ -1757,12 +1803,19 @@ emitFunctionMemberExpressions expressionIndex: Int, functionIndex: Int, function
+                             "" -> println
+                         }
+                 }
+-                "  %v$(expressionIndex) = load " -> print
+-                expression -> writeIrType(context, state)
++                "  " -> print
++                expressionIndex -> writeMemberStorageValueName(context, state)
++                " = load " -> print
++                expression.typeId >= 0 -> if { expression.typeId -> writeAggregateFieldTypeId(context, state) } else { expression -> writeIrType(context, state) }
+                 ", ptr %v$(expressionIndex)_ptr, align " -> print
+                 expression -> storageAlign(context, state) -> writeDecimalLine
+             }
+         }
++        expression -> boundedArrayValueTypeId(context, state) => indexedBoundedTypeId
++        indexedBoundedTypeId >= 0 and not indexedIsDictionary
++            -> if {
++                "v$(expressionIndex)" -> emitStoredBoundedValueHandle(indexedBoundedTypeId, context, state)
++            }
+     }
+ }
+ 
+@@ -1940,11 +1993,11 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+             ", 1" -> println
+             "  %v$(expressionIndex)_bytes = mul i64 %v$(expressionIndex)_length, " -> print
+             tryParallelOkStride -> writeDecimalLine
+-            "  %v$(expressionIndex)_data = call ptr @malloc(i64 %v$(expressionIndex)_bytes)" -> println
++            "  %v$(expressionIndex)_data = call ptr @sollang_alloc(i64 %v$(expressionIndex)_bytes)" -> println
+             "  %v$(expressionIndex)_callback_bytes = mul i64 %v$(expressionIndex)_length, " -> print
+             tryParallelCallbackStride -> writeDecimalLine
+-            "  %v$(expressionIndex)_callback_results = call ptr @malloc(i64 %v$(expressionIndex)_callback_bytes)" -> println
+-            "  %v$(expressionIndex)_initialized = call ptr @malloc(i64 %v$(expressionIndex)_length)" -> println
++            "  %v$(expressionIndex)_callback_results = call ptr @sollang_alloc(i64 %v$(expressionIndex)_callback_bytes)" -> println
++            "  %v$(expressionIndex)_initialized = call ptr @sollang_alloc(i64 %v$(expressionIndex)_length)" -> println
+             "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_initialized, i8 0, i64 %v$(expressionIndex)_length, i1 false)" -> println
+             expressionIndex -> parallelUsesComputePool(context, state)
+                 -> if {
+@@ -1969,7 +2022,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+                         "  store ptr null, ptr %v$(expressionIndex)_capture_slot, align 8" -> println
+                     }
+                     "  %v$(expressionIndex)_sink_bytes = mul i64 %v$(expressionIndex)_length, 24" -> println
+-                    "  %v$(expressionIndex)_sinks = call ptr @malloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
++                    "  %v$(expressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
+                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_sinks, i8 0, i64 %v$(expressionIndex)_sink_bytes, i1 false)" -> println
+                     "  %v$(expressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 5" -> println
+                     "  store ptr %v$(expressionIndex)_sinks, ptr %v$(expressionIndex)_sinks_slot, align 8" -> println
+@@ -1985,7 +2038,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+                     "  store ptr %v$(expressionIndex)_initialized, ptr %v$(expressionIndex)_initialized_slot, align 8" -> println
+                     "  call void @sollang_compute_execute(ptr %v$(expressionIndex)_group)" -> println
+                     tryParallelSource.kind == 14 -> if {
+-                        "  call void @free(ptr %v$(expressionIndex)_input)" -> println
++                        "  call void @sollang_free(ptr %v$(expressionIndex)_input)" -> println
+                     }
+                     TryParallelCollectRequest { expressionIndex: expressionIndex, outerTypeId: expression.typeId, callbackTypeId: tryParallelBodyCall.typeId } -> emitTryParallelCollect(context, state)
+                 } else {
+@@ -2006,7 +2059,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+             ", 1" -> println
+             "  %v$(expressionIndex)_bytes = mul i64 %v$(expressionIndex)_length, " -> print
+             expression -> arrayElementSize(context, state) -> writeDecimalLine
+-            "  %v$(expressionIndex)_data = call ptr @malloc(i64 %v$(expressionIndex)_bytes)" -> println
++            "  %v$(expressionIndex)_data = call ptr @sollang_alloc(i64 %v$(expressionIndex)_bytes)" -> println
+             expressionIndex -> parallelUsesComputePool(context, state)
+                 -> if {
+                     CallEnvironmentRequest { callerIndex: functionIndex, callIndex: expressionIndex, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } => parallelEnvironmentRequest
+@@ -2030,7 +2083,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+                         "  store ptr null, ptr %v$(expressionIndex)_capture_slot, align 8" -> println
+                     }
+                     "  %v$(expressionIndex)_sink_bytes = mul i64 %v$(expressionIndex)_length, 24" -> println
+-                    "  %v$(expressionIndex)_sinks = call ptr @malloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
++                    "  %v$(expressionIndex)_sinks = call ptr @sollang_alloc(i64 %v$(expressionIndex)_sink_bytes)" -> println
+                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_sinks, i8 0, i64 %v$(expressionIndex)_sink_bytes, i1 false)" -> println
+                     "  %v$(expressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 5" -> println
+                     "  store ptr %v$(expressionIndex)_sinks, ptr %v$(expressionIndex)_sinks_slot, align 8" -> println
+@@ -2064,9 +2117,9 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+                     expressionIndex -> parallelHasDirectBodyCall(context, state)
+                         -> if {
+                             CallEnvironmentRequest { callerIndex: functionIndex, callIndex: expressionIndex, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
+-                            context.ir[parallelBodyCall.operand0].nextOperand -> emitReferenceArgumentValues(expression.operand1, functionIndex, 1, context, state)
++                            expression.operand1 -> emitParallelAdditionalArgumentValues(functionIndex, context, state)
+                             "  %v$(expressionIndex)_mapped = call " -> print
+-                            parallelBodyCall -> writeIrType(context, state)
++                            parallelBodyCall -> writeFunctionValueAbiType(context, state)
+                             " @sollang_m$(parallelBodyCall.targetModule)_s$(parallelBodyCall.symbol)(" -> print
+                             CallEnvironmentRequest { callerIndex: functionIndex, callIndex: expressionIndex, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironment(context, state) => parallelCallCaptures
+                             parallelSource -> writeArrayElementType(context, state)
+@@ -2076,9 +2129,16 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
+                         } else {
+                             expressionIndex -> emitStructuredParallelRoleValues(context, state)
+                             context.ir[expression.operand1].parent -> emitRegion(expressionOrder, context, state)
+-                            "  %v$(expressionIndex)_mapped = freeze " -> print
+-                            parallelBodyCall -> writeIrType(context, state)
+-                            " %v$(expression.operand1)" -> println
++                            parallelBodyCall -> boundedArrayValueTypeId(context, state) => boundedMappedType
++                            boundedMappedType >= 0 -> if {
++                                Arena(0) => mappedPrefixStorage!
++                                "v$(expressionIndex)_mapped" -> materialize(mappedPrefixStorage!) => mappedPrefix
++                                mappedPrefix -> emitBoundedArrayValue(expression.operand1, functionIndex, boundedMappedType, context, state)
++                            } else {
++                                "  %v$(expressionIndex)_mapped = freeze " -> print
++                                parallelBodyCall -> writeIrType(context, state)
++                                " %v$(expression.operand1)" -> println
++                            }
+                         }
+                     "  %v$(expressionIndex)_output_ptr = getelementptr " -> print
+                     expression -> writeArrayElementType(context, state)
