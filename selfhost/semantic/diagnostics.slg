@@ -6043,6 +6043,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                 -1 => materializeTarget!
                 -1 => materializeCall!
                 -1 => arenaTargetAst!
+                -1 => capacityTargetAst!
                 firstChildByAst![flowGlobal] => flowChild!
                 flowChild! >= 0 -> while {
                     package.nodes[flowChild!] => child
@@ -6053,6 +6054,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                         sourceText -> slice(nameToken.span.start, nameToken.span.length)
                             => targetName
                         targetName == "materialize" -> if { flowChild! => materializeTarget! }
+                        targetName == "capacity" -> if { flowChild! => capacityTargetAst! }
                         (targetName -> calls.rawArenaIntrinsic).operation > 0
                             -> if {
                                 flowChild! - range.astStart => arenaTargetAst!
@@ -6074,6 +6076,26 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     selectedCall.status == 0 and selectedCall.targetSourceModule >= 0
                         and selectedCall.functionSymbol >= 0 -> if { true => declaredArenaTarget! }
                 }
+                # Like the managed capacity branch, builtin spelling alone does
+                # not admit a receiver. Declared functions keep call precedence.
+                flowSource! >= 0 and capacityTargetAst! >= 0 and not declaredArenaTarget!
+                    -> if {
+                        resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![flowSource!])
+                            => capacityReceiverTypeId
+                        capacityReceiverTypeId >= 0
+                            and (-236 -> typeIds.collectionFlowResultBuiltinSymbol(resolved.types[capacityReceiverTypeId])) < 0
+                            -> if {
+                                package.nodes[capacityTargetAst!] => capacityTarget
+                                ExpressionOperandDiagnostic {
+                                    code: 67, sourceModule: sourceIndex!, astNode: astIndex!
+                                    operandAst: capacityTargetAst! - range.astStart, operatorKind: -236
+                                    locationOffset: capacityTarget.start
+                                    operandTypeSymbol: -1, operandTypeId: capacityReceiverTypeId, firstTypeId: -1
+                                } => candidate
+                                package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                    -> if { candidate => selected! }
+                            }
+                    }
                 flowSource! >= 0 and arenaTargetAst >= 0 and not declaredArenaTarget!
                     -> if {
                         package.nodes[range.astStart + arenaTargetAst] => arenaTarget

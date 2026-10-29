@@ -1701,7 +1701,170 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
     ", 1" -> println
 }
 
-emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+# Same bit spreading and minimum as the managed reserve capacity helpers.
+emitReservePowerOfTwo prefix: Text, value: Text -> Unit uses Console {
+    "  %$(prefix)_positive = icmp ugt i64 $value, 0" -> println
+    "  %$(prefix)_at_least_one = select i1 %$(prefix)_positive, i64 $value, i64 1" -> println
+    "  %$(prefix)_spread0 = sub i64 %$(prefix)_at_least_one, 1" -> println
+    0 => stage!
+    [1, 2, 4, 8, 16, 32] -> each shift {
+        "  %$(prefix)_shifted$(stage!) = lshr i64 %$(prefix)_spread$(stage!), $shift" -> println
+        "  %$(prefix)_spread$(stage! + 1) = or i64 %$(prefix)_spread$(stage!), %$(prefix)_shifted$(stage!)" -> println
+        stage! + 1 => stage!
+    }
+    "  %$(prefix)_power = add i64 %$(prefix)_spread6, 1" -> println
+}
+
+emitDequeReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    request.nodeIndex => index
+    context.ir[index] => call
+    context.ir[call.operand0] => receiver
+    context.types -> typeIds.materializedReadTypeId(receiver.typeId) => collectionTypeId
+    context.types[collectionTypeId].first => elementTypeId
+    context.typeSizes[elementTypeId] => elementSize
+    context.typeAligns[elementTypeId] => elementAlign
+    call.operand0 -> mutableStorageRoot(context, state) => root
+    call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => borrow
+    Arena(0) => names!
+    "reserve$(index)_deque" -> materialize(names!) => prefix
+    "$(prefix)_round" -> emitReservePowerOfTwo("%reserve$(index)_requested")
+    borrow >= 0 -> if {
+        "  %$(prefix)_data = load ptr, ptr " -> print
+        borrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(borrow)_mut_ptr_addr" -> print }
+        ", align 8" -> println
+        "  %$(prefix)_length = load i64, ptr " -> print
+        borrow == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(borrow)_mut_len_addr" -> print }
+        ", align 8" -> println
+        "  %$(prefix)_capacity = load i64, ptr " -> print
+        borrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(borrow)_mut_capacity_addr" -> print }
+        ", align 8" -> println
+    } else {
+        "  %$(prefix)_owner = load %sollang.array.i32, ptr %slot$(root), align 8" -> println
+        "  %$(prefix)_data = extractvalue %sollang.array.i32 %$(prefix)_owner, 0" -> println
+        "  %$(prefix)_length = extractvalue %sollang.array.i32 %$(prefix)_owner, 1" -> println
+        "  %$(prefix)_capacity = extractvalue %sollang.array.i32 %$(prefix)_owner, 2" -> println
+    }
+    "  %$(prefix)_grow = icmp ugt i64 %$(prefix)_round_power, %$(prefix)_capacity" -> println
+    "  br i1 %$(prefix)_grow, label %$(prefix)_allocate, label %$(prefix)_keep" -> println
+    "$(prefix)_allocate:" -> println
+    "  %$(prefix)_payload_bytes = mul i64 %$(prefix)_round_power, $elementSize" -> println
+    "  %$(prefix)_bytes = add i64 %$(prefix)_payload_bytes, 8" -> println
+    "  %$(prefix)_allocated = call ptr @sollang_alloc(i64 %$(prefix)_bytes)" -> println
+    prefix -> emitAllocationGuard("_allocated", request.ownerIndex, context, state)
+    "  store i64 0, ptr %$(prefix)_allocated, align 8" -> println
+    "  %$(prefix)_head = load i64, ptr %$(prefix)_data, align 8" -> println
+    "  %$(prefix)_old_payload = getelementptr i8, ptr %$(prefix)_data, i64 8" -> println
+    "  %$(prefix)_new_payload = getelementptr i8, ptr %$(prefix)_allocated, i64 8" -> println
+    "  %$(prefix)_old_mask = sub i64 %$(prefix)_capacity, 1" -> println
+    "  br label %$(prefix)_copy" -> println
+    "$(prefix)_copy:" -> println
+    "  %$(prefix)_index = phi i64 [ 0, %$(prefix)_allocation_ready ], [ %$(prefix)_next, %$(prefix)_copy_body ]" -> println
+    "  %$(prefix)_active = icmp ult i64 %$(prefix)_index, %$(prefix)_length" -> println
+    "  br i1 %$(prefix)_active, label %$(prefix)_copy_body, label %$(prefix)_copied" -> println
+    "$(prefix)_copy_body:" -> println
+    "  %$(prefix)_unwrapped = add i64 %$(prefix)_head, %$(prefix)_index" -> println
+    "  %$(prefix)_physical = and i64 %$(prefix)_unwrapped, %$(prefix)_old_mask" -> println
+    "  %$(prefix)_source = getelementptr " -> print
+    elementTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %$(prefix)_old_payload, i64 %$(prefix)_physical" -> println
+    "  %$(prefix)_item = load " -> print
+    elementTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %$(prefix)_source, align $elementAlign" -> println
+    "  %$(prefix)_target = getelementptr " -> print
+    elementTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %$(prefix)_new_payload, i64 %$(prefix)_index" -> println
+    "  store " -> print
+    elementTypeId -> writeSemanticTypeId(context, state)
+    " %$(prefix)_item, ptr %$(prefix)_target, align $elementAlign" -> println
+    "  %$(prefix)_next = add i64 %$(prefix)_index, 1" -> println
+    "  br label %$(prefix)_copy" -> println
+    "$(prefix)_copied:" -> println
+    "  call void @sollang_free(ptr %$(prefix)_data)" -> println
+    "  br label %$(prefix)_done" -> println
+    "$(prefix)_keep:" -> println
+    "  br label %$(prefix)_done" -> println
+    "$(prefix)_done:" -> println
+    "  %$(prefix)_final_data = phi ptr [ %$(prefix)_allocated, %$(prefix)_copied ], [ %$(prefix)_data, %$(prefix)_keep ]" -> println
+    "  %$(prefix)_final_capacity = phi i64 [ %$(prefix)_round_power, %$(prefix)_copied ], [ %$(prefix)_capacity, %$(prefix)_keep ]" -> println
+    borrow >= 0 -> if {
+        "  store ptr %$(prefix)_final_data, ptr " -> print
+        borrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(borrow)_mut_ptr_addr" -> print }
+        ", align 8" -> println
+        "  store i64 %$(prefix)_final_capacity, ptr " -> print
+        borrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(borrow)_mut_capacity_addr" -> print }
+        ", align 8" -> println
+    } else {
+        "  %$(prefix)_result0 = insertvalue %sollang.array.i32 poison, ptr %$(prefix)_final_data, 0" -> println
+        "  %$(prefix)_result1 = insertvalue %sollang.array.i32 %$(prefix)_result0, i64 %$(prefix)_length, 1" -> println
+        "  %$(prefix)_result2 = insertvalue %sollang.array.i32 %$(prefix)_result1, i64 %$(prefix)_final_capacity, 2" -> println
+        "  store %sollang.array.i32 %$(prefix)_result2, ptr %slot$(root), align 8" -> println
+    }
+}
+
+emitDictionaryReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    request.nodeIndex => index
+    context.ir[index] => call
+    context.ir[call.operand0] => receiver
+    context.types -> typeIds.materializedReadTypeId(receiver.typeId) => collectionTypeId
+    context.types[collectionTypeId] => collectionType
+    collectionType.kind == 7 and collectionType.origin == 4 and collectionType.symbol == 5 => isSet
+    collectionType.first => keyTypeId
+    context.types[keyTypeId] => keyType
+    context.typeSizes[keyTypeId] => keySize
+    context.typeAligns[keyTypeId] => keyAlign
+    keyType.kind == 1 and keyType.origin == 1 and keyType.symbol == 1 => keyIsText
+    keyTypeId -> traitMethodSymbol("Hash", "hash", context, state) => hashMethod
+    keyTypeId -> traitMethodSymbol("Eq", "eq", context, state) => eqMethod
+    hashMethod >= 0 and eqMethod >= 0 => keyIsNominal
+    keyType.symbol -> integerWidth(context, state) => hashWidth
+    keyType.symbol -> integerSigned(context, state) => hashSigned
+    isSet -> if { keySize -> dictionaryEntryLayout(keyAlign, 0, 1) } else {
+        keyTypeId -> dictionaryEntryLayoutForTypeIds(collectionType.second, keyType.symbol, context.types[collectionType.second].symbol, context, state)
+    } => layout
+    call.operand0 -> mutableStorageRoot(context, state) => root
+    call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => borrow
+    Arena(0) => names!
+    "reserve$(index)_dict" -> materialize(names!) => prefix
+    "  %$(prefix)_entries_scaled = mul i64 %reserve$(index)_requested, 8" -> println
+    "  %$(prefix)_entries_rounded = add i64 %$(prefix)_entries_scaled, 6" -> println
+    "  %$(prefix)_required = udiv i64 %$(prefix)_entries_rounded, 7" -> println
+    "$(prefix)_buckets" -> emitReservePowerOfTwo("%$(prefix)_required")
+    "  %$(prefix)_below_minimum = icmp ult i64 %$(prefix)_buckets_power, 16" -> println
+    "  %$(prefix)_capacity = select i1 %$(prefix)_below_minimum, i64 16, i64 %$(prefix)_buckets_power" -> println
+    "  %$(prefix)_owner = load %sollang.int_dictionary, ptr " -> print
+    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root)" -> print }
+    ", align 8" -> println
+    "  %$(prefix)_old_storage = extractvalue %sollang.int_dictionary %$(prefix)_owner, 0" -> println
+    "  %$(prefix)_old_length = extractvalue %sollang.int_dictionary %$(prefix)_owner, 1" -> println
+    "  %$(prefix)_old_capacity = extractvalue %sollang.int_dictionary %$(prefix)_owner, 2" -> println
+    "$(prefix)_old" -> emitGrowableDictionaryPointers("%$(prefix)_old_storage", "%$(prefix)_old_capacity", layout)
+    "  %$(prefix)_grow = icmp ugt i64 %$(prefix)_capacity, %$(prefix)_old_capacity" -> println
+    "  br i1 %$(prefix)_grow, label %$(prefix)_allocate, label %$(prefix)_keep" -> println
+    "$(prefix)_allocate:" -> println
+    isSet -> if {
+        "$(prefix)_set" -> emitSetRehash("%$(prefix)_old_keys", "%$(prefix)_old_controls", "%$(prefix)_old_capacity", "%$(prefix)_capacity", "%$(prefix)_old_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
+        "  %$(prefix)_new_storage = extractvalue %sollang.int_dictionary %$(prefix)_set_result, 0" -> println
+    } else {
+        prefix -> emitGrowableDictionaryAllocation("%$(prefix)_capacity", layout)
+        prefix -> emitDictionaryRehashEntries(layout, keyTypeId, collectionType.second, keyType.symbol, context.types[collectionType.second].symbol, keyIsText, keyIsNominal, hashMethod, hashWidth, hashSigned, "", context, state)
+        "  call void @sollang_free(ptr %$(prefix)_old_storage)" -> println
+        "  %$(prefix)_new_storage = getelementptr i8, ptr %$(prefix)_storage, i64 0" -> println
+    }
+    "  br label %$(prefix)_allocated" -> println
+    "$(prefix)_allocated:" -> println
+    "  br label %$(prefix)_done" -> println
+    "$(prefix)_keep:" -> println
+    "  br label %$(prefix)_done" -> println
+    "$(prefix)_done:" -> println
+    "  %$(prefix)_final_storage = phi ptr [ %$(prefix)_new_storage, %$(prefix)_allocated ], [ %$(prefix)_old_storage, %$(prefix)_keep ]" -> println
+    "  %$(prefix)_final_capacity = phi i64 [ %$(prefix)_capacity, %$(prefix)_allocated ], [ %$(prefix)_old_capacity, %$(prefix)_keep ]" -> println
+    "$(prefix)_result" -> emitGrowableDictionaryOwner("%$(prefix)_final_storage", "%$(prefix)_old_length", "%$(prefix)_final_capacity")
+    "  store %sollang.int_dictionary %$(prefix)_result, ptr " -> print
+    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root)" -> print }
+    ", align 8" -> println
+}
+
+emitCollectionReserve request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request.nodeIndex => reserveIndex
     context.ir[reserveIndex] => reserveNode
     context.ir[reserveNode.operand0] => reserveSource
@@ -1739,6 +1902,18 @@ emitArrayReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
         reserveValueIndex -> writeValue(request.ownerIndex, context, state)
     }
     reserveValueWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+
+    context.types -> typeIds.materializedReadTypeId(reserveSource.typeId) => reserveTypeId
+    context.types[reserveTypeId] => reserveType
+    reserveType -> typeIds.isDictionaryFamily -> if {
+        request -> emitDictionaryReserve(context, state)
+        return
+    }
+    reserveType.kind == 7 and reserveType.origin == 4 and reserveType.symbol == 6
+        -> if {
+            request -> emitDequeReserve(context, state)
+            return
+        }
 
     reserveBorrowOrdinal >= 0 -> if {
         "  %reserve$(reserveIndex)_data = load ptr, ptr " -> print
