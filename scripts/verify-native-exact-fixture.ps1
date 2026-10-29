@@ -10,7 +10,7 @@ param(
     [Parameter(Mandatory)][string]$RepositoryRoot,
     [Parameter(Mandatory)][string]$OutputDirectory,
     [ValidateRange(1, 64)][int]$Jobs = 1,
-    [ValidateRange(1000, 3600000)][int]$TimeoutMilliseconds = 3600000,
+    [ValidateRange(1000, 180000)][int]$TimeoutMilliseconds = 180000,
     [ValidateRange(0, 2147483647)][long]$ExpectedStdoutLength = 0,
     [AllowEmptyString()][string]$CommonInputFingerprint = "",
     [ValidateSet("", "windows", "linux")][string]$CompilerHost = "",
@@ -22,6 +22,13 @@ param(
     [string]$PhaseExecutionContract = "",
     [ValidateSet("", "managed", "selfhost")][string]$CompilerSide = ""
 )
+
+$caseClock = [Diagnostics.Stopwatch]::StartNew()
+function Get-NativeExactRemainingCaseMilliseconds {
+    $remaining = $TimeoutMilliseconds - $caseClock.ElapsedMilliseconds
+    if ($remaining -le 0) { throw 'NATIVE_EXACT_CASE_BUDGET_EXHAUSTED' }
+    [int]$remaining
+}
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -255,7 +262,7 @@ if (-not $reuseVerifiedArtifacts -and $Platform -eq "windows") {
         -ArgumentList ($windowsCompilerArgumentPrefix + $arguments) `
         -Description "$Label exact $Fixture build" `
         -ExecutionRecordPath $phaseBuildRecord `
-        -TimeoutMilliseconds $TimeoutMilliseconds
+        -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
 } elseif (-not $reuseVerifiedArtifacts -and $CompilationMode -eq "raw-llvm") {
     $arguments = @("linux", "--jobs", $jobText) + $sourcePaths
     Invoke-VerificationProcessToFile `
@@ -264,7 +271,7 @@ if (-not $reuseVerifiedArtifacts -and $Platform -eq "windows") {
         -Description "$Label exact $Fixture Linux LLVM emission from Windows" `
         -OutputPath $llvmPath `
         -ErrorPath $emissionErrorPath `
-        -TimeoutMilliseconds $TimeoutMilliseconds
+        -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
     $emissionDiagnostics = [System.IO.File]::ReadAllText($emissionErrorPath)
     $build = [pscustomobject]@{ ExitCode = 0; Stdout = ""; Stderr = $emissionDiagnostics }
 } elseif (-not $reuseVerifiedArtifacts) {
@@ -287,7 +294,7 @@ if (-not $reuseVerifiedArtifacts -and $Platform -eq "windows") {
         -FilePath "wsl.exe" `
         -ArgumentList $arguments `
         -Description "$Label exact $Fixture build" `
-        -TimeoutMilliseconds $TimeoutMilliseconds
+        -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
 }
 
 if (-not $reuseVerifiedArtifacts) {
@@ -312,7 +319,7 @@ if (-not $reuseVerifiedArtifacts) {
         -FilePath $llvmAsPath `
         -ArgumentList @($llvmPath, "-o", $bitcodePath) `
         -Description "$Label exact $Fixture llvm-as" `
-        -TimeoutMilliseconds $TimeoutMilliseconds
+        -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
     if ($assembly.ExitCode -ne 0) {
         throw "$Label exact $Fixture llvm-as failed with exit code $($assembly.ExitCode).`n$($assembly.Stdout)$($assembly.Stderr)"
     }
@@ -322,7 +329,7 @@ if (-not $reuseVerifiedArtifacts) {
             -FilePath $clangPath `
             -ArgumentList @("--target=x86_64-unknown-linux-gnu", "-c", $llvmPath, "-O1", "-o", $objectPath) `
             -Description "$Label exact $Fixture Linux object build" `
-            -TimeoutMilliseconds $TimeoutMilliseconds
+            -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
         if ($objectBuild.ExitCode -ne 0) {
             throw "$Label exact $Fixture Linux object build failed with exit code $($objectBuild.ExitCode).`n$($objectBuild.Stdout)$($objectBuild.Stderr)"
         }
@@ -333,7 +340,7 @@ if (-not $reuseVerifiedArtifacts) {
                 (Convert-ToExactFixtureWslPath $objectPath),
                 "-pthread", "-o", (Convert-ToExactFixtureWslPath $executablePath)) `
             -Description "$Label exact $Fixture Linux link" `
-            -TimeoutMilliseconds $TimeoutMilliseconds
+            -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
         if ($link.ExitCode -ne 0) {
             throw "$Label exact $Fixture Linux link failed with exit code $($link.ExitCode).`n$($link.Stdout)$($link.Stderr)"
         }
@@ -352,13 +359,13 @@ $run = if ($Platform -eq "windows") {
         -ArgumentList $runArguments `
         -Description "$Label exact $Fixture execution" `
         -ExecutionRecordPath $phaseRunRecord `
-        -TimeoutMilliseconds $TimeoutMilliseconds
+        -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
 } else {
     Invoke-VerificationProcessCapture `
         -FilePath "wsl.exe" `
         -ArgumentList (@("-d", $Distribution, "--", (Convert-ToExactFixtureWslPath $executablePath)) + $runArguments) `
         -Description "$Label exact $Fixture execution" `
-        -TimeoutMilliseconds $TimeoutMilliseconds
+        -TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)
 }
 $actual = $run.Stdout.Replace("`r`n", "`n").TrimEnd("`n")
 if ($ExpectedStdoutLength -gt 0) {
@@ -390,6 +397,7 @@ if ($Platform -eq "windows") {
                 -OutputReceiptPath $outputReceiptPath)) {
             throw "$Label exact $Fixture cached artifacts changed during execution"
         }
+        [void](Get-NativeExactRemainingCaseMilliseconds)
         Write-Host "[native exact] PASS $Label $Platform $Fixture cached artifacts authenticated and exact execution revalidated."
         return
     }
@@ -402,4 +410,5 @@ if ($Platform -eq "windows") {
         -OutputReceiptPath $outputReceiptPath
 }
 
+[void](Get-NativeExactRemainingCaseMilliseconds)
 Write-Host "[native exact] PASS $Label $Platform $Fixture direct closure, LLVM contracts, assembly, and execution."

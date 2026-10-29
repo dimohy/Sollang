@@ -1,6 +1,33 @@
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "stage2-artifact-receipt.ps1")
 
+function Invoke-NativeExactBudgetedFixture {
+    param([Parameter(Mandatory)][string]$VerifierPath,
+          [Parameter(Mandatory)][System.Collections.IDictionary]$Parameters)
+    $budget = [int]$Parameters.TimeoutMilliseconds
+    if ($budget -lt 1000 -or $budget -gt 180000) { throw 'NATIVE_EXACT_CASE_BUDGET_INVALID' }
+    $output = [IO.Path]::GetFullPath([string]$Parameters.OutputDirectory)
+    $recordName = '{0}-{1}.case-{2}.execution.json' -f $Parameters.Label, $Parameters.Fixture, [Guid]::NewGuid().ToString('N')
+    $record = [IO.Path]::GetFullPath((Join-Path $output $recordName))
+    if (-not $record.StartsWith([IO.Path]::TrimEndingDirectorySeparator($output) + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) { throw 'NATIVE_EXACT_CASE_OUTPUT_BOUNDARY' }
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($record)) | Out-Null
+    $arguments = [Collections.Generic.List[string]]::new()
+    foreach ($value in @('-NoProfile', '-File', $VerifierPath)) { $arguments.Add($value) }
+    foreach ($name in $Parameters.Keys) {
+        $arguments.Add('-' + [string]$name)
+        $arguments.Add([string]$Parameters[$name])
+    }
+    $capture = Invoke-VerificationProcessCapture -FilePath (Get-Command pwsh -CommandType Application).Source `
+        -ArgumentList $arguments.ToArray() -WorkingDirectory ([string]$Parameters.RepositoryRoot) `
+        -Description ("{0} exact {1} whole case" -f $Parameters.Label, $Parameters.Fixture) `
+        -TimeoutMilliseconds $budget -ExecutionRecordPath $record
+    if ($capture.ExitCode -ne 0) {
+        throw "NATIVE_EXACT_CASE_FAILED: $record`n$($capture.Stdout)`n$($capture.Stderr)"
+    }
+    $capture.Stdout + $capture.Stderr
+}
+
 function Assert-NativeExactCompilerDiagnostics {
     param([AllowEmptyString()][string]$Stdout, [AllowEmptyString()][string]$Stderr,
         [AllowEmptyString()][string]$ExpectedExactPath = '')

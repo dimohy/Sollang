@@ -10,7 +10,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [ValidateRange(1, 64)][int]$Jobs = 4,
     [ValidateRange(1, 64)][int]$MinimumCompilerJobs = 1,
-    [ValidateRange(1000, 3600000)][int]$TimeoutMilliseconds = 3600000,
+    [ValidateRange(1000, 180000)][int]$TimeoutMilliseconds = 180000,
     [switch]$ValidateInputsOnly,
     [string[]]$Fixture = @(
         "1094-io-memory-reader-writer",
@@ -551,6 +551,8 @@ function Write-NativeExactBatchReport {
     [IO.File]::WriteAllText($batchReportPath, ($report | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }
 Write-NativeExactBatchReport -State running
+$fixtureContractHelper = Join-Path $PSScriptRoot "native-exact-fixture-receipt.ps1"
+$processHelper = Join-Path $PSScriptRoot "verification-process.ps1"
 $allocation.Items | ForEach-Object -ThrottleLimit $parallelism -Parallel {
     $fixtureName = $_.Fixture
     $jobsPerFixture = $_.CompilerWorkerJobs
@@ -559,24 +561,22 @@ $allocation.Items | ForEach-Object -ThrottleLimit $parallelism -Parallel {
         if ($using:phaseFixtureNames -ccontains $fixtureName) {
             $workerPhaseContract = $using:PhaseExecutionContract; $workerCompilerSide = $using:CompilerSide
         }
-        $transcript = (& $using:verifierPath `
-            -Compiler $using:compilerPath `
-            -Label $using:Label `
-            -Fixture $fixtureName `
-            -Platform $using:Platform `
-            -Distribution $using:Distribution `
-            -LlvmRoot $using:llvmPath `
-            -StdlibRoot $using:stdlibPath `
-            -RepositoryRoot $using:repositoryPath `
-            -OutputDirectory $using:outputPath `
-            -Jobs $jobsPerFixture `
-            -TimeoutMilliseconds $using:TimeoutMilliseconds `
-            -CommonInputFingerprint $using:commonInputFingerprint `
-            -CancellationRequestPath $using:CancellationRequestPath `
-            -CancellationRunId $using:CancellationRunId `
-            -CancellationAcknowledgementPath $using:CancellationAcknowledgementPath `
-            -PhaseExecutionContract $workerPhaseContract `
-            -CompilerSide $workerCompilerSide 2>&1 | Out-String)
+        . $using:fixtureContractHelper
+        . $using:processHelper
+        if (-not [string]::IsNullOrWhiteSpace($using:CancellationRequestPath)) {
+            Initialize-VerificationCancellation -RequestPath $using:CancellationRequestPath -RunId $using:CancellationRunId -AcknowledgementPath $using:CancellationAcknowledgementPath
+        }
+        $caseParameters = [ordered]@{
+            Compiler=$using:compilerPath; Label=$using:Label; Fixture=$fixtureName
+            Platform=$using:Platform; Distribution=$using:Distribution
+            LlvmRoot=$using:llvmPath; StdlibRoot=$using:stdlibPath; RepositoryRoot=$using:repositoryPath
+            OutputDirectory=$using:outputPath; Jobs=$jobsPerFixture; TimeoutMilliseconds=$using:TimeoutMilliseconds
+            CommonInputFingerprint=$using:commonInputFingerprint
+            CancellationRequestPath=$using:CancellationRequestPath; CancellationRunId=$using:CancellationRunId
+            CancellationAcknowledgementPath=$using:CancellationAcknowledgementPath
+            PhaseExecutionContract=$workerPhaseContract; CompilerSide=$workerCompilerSide
+        }
+        $transcript = Invoke-NativeExactBudgetedFixture -VerifierPath $using:verifierPath -Parameters $caseParameters
         [pscustomobject]@{
             Fixture = $fixtureName
             Success = $true
@@ -634,12 +634,15 @@ Write-Host "[native exact batch] PASS $Label $Platform $($Fixture.Count) fixture
 if ($null -ne $phaseContext) {
     foreach ($fixtureName in $phaseFixtureNames | Where-Object { $_ -cnotin $Fixture }) {
         Assert-VerificationCancellationNotRequested
-        & $verifierPath -Compiler $compilerPath -Label "$Label-phase-extra" -Fixture $fixtureName `
-            -Platform $Platform -LlvmRoot $llvmPath -StdlibRoot $stdlibPath -RepositoryRoot $repositoryPath `
-            -OutputDirectory $outputPath -Jobs $Jobs -TimeoutMilliseconds $TimeoutMilliseconds `
-            -PhaseExecutionContract $PhaseExecutionContract -CompilerSide $CompilerSide `
-            -CancellationRequestPath $CancellationRequestPath -CancellationRunId $CancellationRunId `
-            -CancellationAcknowledgementPath $CancellationAcknowledgementPath
+        $caseParameters = [ordered]@{
+            Compiler=$compilerPath; Label="$Label-phase-extra"; Fixture=$fixtureName
+            Platform=$Platform; Distribution=$Distribution; LlvmRoot=$llvmPath; StdlibRoot=$stdlibPath
+            RepositoryRoot=$repositoryPath; OutputDirectory=$outputPath; Jobs=$Jobs; TimeoutMilliseconds=$TimeoutMilliseconds
+            PhaseExecutionContract=$PhaseExecutionContract; CompilerSide=$CompilerSide
+            CancellationRequestPath=$CancellationRequestPath; CancellationRunId=$CancellationRunId
+            CancellationAcknowledgementPath=$CancellationAcknowledgementPath
+        }
+        Invoke-NativeExactBudgetedFixture -VerifierPath $verifierPath -Parameters $caseParameters
     }
     $closed = Complete-NativeExactPhaseExecution $phaseContext
     if (-not $closed) { Write-Host '[phase execution] INCOMPLETE: compile-only negatives or other contracted outcomes remain pending; outputs retained.' }
