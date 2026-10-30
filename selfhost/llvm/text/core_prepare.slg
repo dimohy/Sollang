@@ -193,6 +193,11 @@ struct CorePreambleFeatures {
 }
 
 prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterState {
+    [Int; ~] => roots
+    context -> prepareCoreEmitterStateWithRoots(roots)
+}
+
+prepareCoreEmitterStateWithRoots context: ref emitterContext.EmitContext, roots: ref [Int; ~] -> CoreEmitterState {
     snapshotIntArray values: [Int; ~] -> [Int; ~] {
         [Int; ~] => snapshot!
         values -> each value {
@@ -510,7 +515,7 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
     functionCaptureCacheOffsets! -> snapshotIntArray => frozenFunctionCaptureOffsets
     functionCaptureCacheCounts! -> snapshotIntArray => frozenFunctionCaptureCounts
     functionCaptureCacheValues! -> snapshotIntArray => frozenFunctionCaptureValues
-    context -> diagnostics.reachableFunctions => reachableFunctions
+    context -> diagnostics.reachableFunctionsWithRoots(roots) => reachableFunctions
     reachableFunctions -> snapshotBoolArray => frozenReachableFunctions
     # Plan only emitted async owners against the final relocated IR. A wholly
     # synchronous compilation returns empty tables before scanning source ASTs.
@@ -1660,7 +1665,12 @@ bodyScheduleIndex functionIndex: Int, state: ref CoreEmitterState -> Int {
 }
 
 prepareScheduledCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterState {
-    context -> prepareCoreEmitterState => state!
+    [Int; ~] => roots
+    context -> prepareScheduledCoreEmitterStateWithRoots(roots)
+}
+
+prepareScheduledCoreEmitterStateWithRoots context: ref emitterContext.EmitContext, roots: ref [Int; ~] -> CoreEmitterState {
+    context -> prepareCoreEmitterStateWithRoots(roots) => state!
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function

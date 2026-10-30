@@ -32,6 +32,10 @@ import syntax.generated.slg as grammar
 import sys.file as file
 
 emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context -> emitCoreWithEntry(state, true)
+}
+
+emitCoreWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool -> Unit uses Console, Process {
     context -> emitCorePreambleFeatures(false, state) => coreFeatures
     context -> emitRuntimeTaskResultCompletionFunctions(state)
     coreFeatures.usesArguments => usesArguments
@@ -75,7 +79,7 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function
-        function.kind == 11 -> if {
+        function.kind == 11 and emitEntry -> if {
             functionIndex! + 1 => entryEnd!
             entryEnd! < (context.ir -> len) and context.ir[entryEnd!].kind != 0 and context.ir[entryEnd!].kind != 11
                 -> while { entryEnd! + 1 => entryEnd! }

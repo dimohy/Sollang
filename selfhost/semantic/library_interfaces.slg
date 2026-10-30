@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.library_interfaces
 import sys.file as file
 import std.crypto.sha256 as sha256
 import std.text.json as json
+import std.text.json.error as jsonErrors
 
 # The shared JSON reader owns decoded UTF-8 strings. Interface fields use spans
 # in one owned string buffer; the catalog retains the original mapped input
@@ -337,6 +338,81 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: 
         signatureIndex! + 1 => signatureIndex!
     }
     0 -> validationIssue(-1, -1)
+}
+
+writeMetadataSpan writer: mut json.Writer, source: Text, span: MetadataSpan -> Result<Unit, json.Error> {
+    span.start <= (source -> len) and span.length <= (source -> len) - span.start
+        -> unless {
+            Result<Unit, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: span.start }) -> return
+        }
+    writer -> string(source -> slice(span.start, span.length))
+}
+
+# The metadata model and JSON writer are shared with the strict reader. The
+# caller supplies its output budget; one byte is reserved for the final LF.
+public serialize document: ref LibraryInterface, maxOutputBytes: Int -> Result<[UInt8; ~], json.Error> {
+    document.status == 0 and document.schema == 1
+        -> unless {
+            Result<[UInt8; ~], json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return
+        }
+    maxOutputBytes >= 1 -> unless {
+        Result<[UInt8; ~], json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidLimit, offset: 0 }) -> return
+    }
+    document.strings -> file.borrowBytes => owner
+    owner -> slice(UIntSize(0), owner -> len) => source
+    (maxOutputBytes - 1) -> json.writer(5)? => writer!
+    writer! -> beginObject?
+    writer! -> name("schema")?
+    writer! -> number("1")?
+    writer! -> name("abi")?
+    writer! -> writeMetadataSpan(source, document.abi)?
+    writer! -> name("target")?
+    writer! -> writeMetadataSpan(source, document.target)?
+    writer! -> name("libraryFile")?
+    writer! -> writeMetadataSpan(source, document.libraryFile)?
+    writer! -> name("abiHash")?
+    writer! -> writeMetadataSpan(source, document.abiHash)?
+    writer! -> name("exports")?
+    writer! -> beginArray?
+    document.exports -> each exported {
+        exported.parameterStart >= 0 and exported.parameterCount >= 0
+            and exported.parameterStart <= (document.parameters -> len)
+            and exported.parameterCount <= (document.parameters -> len) - exported.parameterStart
+            -> unless {
+                Result<[UInt8; ~], json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return
+            }
+        writer! -> beginObject?
+        writer! -> name("name")?
+        writer! -> writeMetadataSpan(source, exported.name)?
+        writer! -> name("qualifiedName")?
+        writer! -> writeMetadataSpan(source, exported.qualifiedName)?
+        writer! -> name("symbol")?
+        writer! -> writeMetadataSpan(source, exported.symbol)?
+        writer! -> name("parameters")?
+        writer! -> beginArray?
+        0 => parameterOrdinal!
+        parameterOrdinal! < exported.parameterCount -> while {
+            document.parameters[exported.parameterStart + parameterOrdinal!] => parameter
+            writer! -> beginObject?
+            writer! -> name("name")?
+            writer! -> writeMetadataSpan(source, parameter.name)?
+            writer! -> name("type")?
+            writer! -> writeMetadataSpan(source, parameter.typeName)?
+            writer! -> endObject?
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+        writer! -> endArray?
+        writer! -> name("result")?
+        writer! -> writeMetadataSpan(source, exported.resultType)?
+        writer! -> name("signatureHash")?
+        writer! -> writeMetadataSpan(source, exported.signatureHash)?
+        writer! -> endObject?
+    }
+    writer! -> endArray?
+    writer! -> endObject?
+    writer! -> intoBytes? => bytes!
+    bytes! -> push(10)
+    Result<[UInt8; ~], json.Error>.Ok(bytes!)
 }
 
 emptyDocument: -> LibraryInterface => LibraryInterface {

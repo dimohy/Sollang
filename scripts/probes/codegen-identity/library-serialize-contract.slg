@@ -1,0 +1,49 @@
+import sollang.compiler.semantic.library_interfaces as interfaces
+import std.text.json.error as errors
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    arguments[1] -> file.mapText => owner
+    owner -> interfaces.parseSourceForTarget("windows-x64") => document
+    document -> interfaces.serialize(Int(owner -> len)) -> when {
+        Ok(bytes) {
+            bytes -> file.borrowBytes => serialized
+            "json=" -> print
+            serialized -> slice(UIntSize(0), serialized -> len) -> print
+            serialized -> interfaces.parseSourceForTarget("windows-x64") => restored
+            "roundtrip=$(restored.status)" -> println
+        }
+        Err(_) { "serialization-failed" -> println }
+    }
+    document -> interfaces.serialize(0) -> when {
+        Ok(_) { "zero=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidLimit { "zero=invalid-limit" -> println }
+                else { "zero=unexpected-error" -> println }
+            }
+        }
+    }
+    document -> interfaces.serialize(1) -> when {
+        Ok(_) { "small=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                OutputLimitExceeded { "small=output-limit" -> println }
+                else { "small=unexpected-error" -> println }
+            }
+        }
+    }
+    owner -> interfaces.parseSourceForTarget("windows-x64") => broken!
+    interfaces.MetadataSpan { start: (owner -> len) + 1, length: 0 } => broken!.abi
+    broken! -> interfaces.serialize(Int(owner -> len)) -> when {
+        Ok(_) { "span=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidModel { "span=invalid-model" -> println }
+                else { "span=unexpected-error" -> println }
+            }
+        }
+    }
+}

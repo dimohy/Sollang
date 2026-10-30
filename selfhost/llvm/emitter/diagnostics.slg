@@ -229,6 +229,13 @@ collectionTraitMethodFunction keyTypeId: Int, traitName: Text, methodName: Text,
 }
 
 public reachableFunctions context: ref emitterContext.EmitContext -> [Bool; ~] {
+    [Int; ~] => roots
+    context -> reachableFunctionsWithRoots(roots)
+}
+
+# Additional roots retain the ordinary main scan, matching the managed
+# shared-library emitter. Public export selection owns the root indexes.
+public reachableFunctionsWithRoots context: ref emitterContext.EmitContext, roots: ref [Int; ~] -> [Bool; ~] {
     [Int; ~] => functionEnds!
     [Int; ~] => functionBySymbol!
     0 => initializeIndex!
@@ -276,6 +283,7 @@ public reachableFunctions context: ref emitterContext.EmitContext -> [Bool; ~] {
             reachable! -> push(reachableCandidateIsRoot)
             reachableInitializeIndex! + 1 => reachableInitializeIndex!
         }
+    roots -> each root { true => reachable![root] }
     [Bool; ~] => seenCollectionKeys!
     0 => keyInitializeIndex!
     keyInitializeIndex! < (context.types -> len)
