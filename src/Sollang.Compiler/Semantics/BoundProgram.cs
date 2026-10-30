@@ -993,9 +993,8 @@ internal sealed partial class TypeDefinitionTable
         {
             var elementSize = InlineSizeOf(shape.ElementType);
             var elementAlignment = AlignmentOf(shape.ElementType);
-            var dataOffset = AlignUp(8, elementAlignment);
-            var alignment = Math.Max(8, elementAlignment);
-            var size = AlignUp(checked(dataOffset + checked(elementSize * shape.Capacity)), alignment);
+            var (dataOffset, size, alignment) = BoundedArrayStorageLayout(
+                elementSize, elementAlignment, shape.Capacity);
             _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
                 id, shape.ElementType, shape.Capacity, elementSize, elementAlignment,
                 dataOffset, size, alignment));
@@ -1050,9 +1049,8 @@ internal sealed partial class TypeDefinitionTable
 
         var elementSize = InlineSizeOf(elementType);
         var elementAlignment = AlignmentOf(elementType);
-        var dataOffset = AlignUp(8, elementAlignment);
-        var alignment = Math.Max(8, elementAlignment);
-        var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
+        var (dataOffset, size, alignment) = BoundedArrayStorageLayout(
+            elementSize, elementAlignment, capacity);
         var id = AllocateParametricTypeId();
         _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
             id, elementType, capacity, elementSize, elementAlignment,
@@ -1060,6 +1058,26 @@ internal sealed partial class TypeDefinitionTable
         RecordTypeGraphMutation();
         _boundedArraysByShape.Add((elementType, capacity), id);
         return id;
+    }
+
+    private static (int DataOffset, int Size, int Alignment) BoundedArrayStorageLayout(
+        int elementSize, int elementAlignment, int capacity)
+    {
+        if (capacity <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(capacity), "bounded array capacity must be positive");
+        }
+        try
+        {
+            var dataOffset = AlignUp(8, elementAlignment);
+            var alignment = Math.Max(8, elementAlignment);
+            var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
+            return (dataOffset, size, alignment);
+        }
+        catch (OverflowException)
+        {
+            throw new SollangException("bounded array storage layout exceeds the Int32 size limit");
+        }
     }
 
     public BoundBoundedArrayDefinition GetBoundedArray(TypeId type) =>

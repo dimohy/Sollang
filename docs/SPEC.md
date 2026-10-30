@@ -1404,6 +1404,10 @@ value by pointer; growable and bounded carriers use the three-address form.
 
 Fixed-array type annotations accept a numeric or generic length: `[T; N]` and
 `[T; Length]`. Bounded inline storage remains the distinct `[T; <= N]` form.
+Bounded-array storage layout uses checked Int32 arithmetic for element bytes,
+the aligned data offset and the final aligned size. An overflowing operation
+rejects the type with `bounded array storage layout exceeds the Int32 size limit`;
+the compiler must not publish a wrapped size or continue LLVM generation.
 The generated grammar must retain the numeric alternative even though array
 expressions have their own repeat and bounded-storage alternatives.
 
