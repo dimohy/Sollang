@@ -348,6 +348,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     prepared -> ownershipCheck.analyzeResolvedLoweredContextWithInterpolationFactsAndPaths(ir!, recursiveTypes!.types, recursiveTypes!.fields, genericBodies.functionsByCall, ownershipInterpolationResultTypes, importedInterpolationCallTargetByNode!, activeOwnershipBodies) => ownershipAnalysis
     ownershipAnalysis.diagnostics => ownershipDiagnostics!
     ownershipAnalysis.referencePaths => readonlyReferencePaths
+    ownershipAnalysis.consumedInterpolationBindingByNode => ordinaryConsumedInterpolationBindingByNode
     prepared -> mutableBindingWarnings.collect(recursiveTypes!, ir!) => unusedMutableBindingWarnings
     [typeIds.SemanticType; ~] => semanticTypes!
     [typeIds.TypeReference; ~] => signatureTypeReferences!
@@ -455,7 +456,14 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     prepared.interpolationRanges -> each range { analysisInterpolationRanges! -> push(range) }
     [Int; ~] => localEnumMemberStatusByNode!
     localEnumMemberDecisionByNode! -> each decision { localEnumMemberStatusByNode! -> push(decision.status) }
-    analysisInterpolations -> semanticDiagnostics.unresolvedInterpolationBindingByNode(uninvokedAssociatedMemberByNode, missingLocalAssociatedMemberByNode, localEnumMemberStatusByNode!) => unresolvedInterpolationBindingByNode
+    analysisInterpolations -> semanticDiagnostics.unresolvedInterpolationBindingByNode(uninvokedAssociatedMemberByNode, missingLocalAssociatedMemberByNode, localEnumMemberStatusByNode!) => unresolvedNames
+    [Bool; ~] => unresolvedInterpolationBindingByNode!
+    0 => nameIndex!
+    unresolvedNames -> each unresolved {
+        unresolved or ordinaryConsumedInterpolationBindingByNode[nameIndex!] => unresolvedName
+        unresolvedInterpolationBindingByNode! -> push(unresolvedName)
+        nameIndex! + 1 => nameIndex!
+    }
     analysisInterpolations -> semanticDiagnostics.uninvokedInterpolationFunctionByNode => uninvokedInterpolationFunctionByNode
     prepared -> interpolationInference.directCallExpectedArityByNode(streamPlan, recursiveTypes!, ir!, semanticTypes!, semanticFields!) => directCallExpectedArityByNode
     prepared -> interpolationInference.indexedResultTypeByNode(streamPlan, recursiveTypes!, ir!, semanticTypes!, semanticFields!) => indexedResultTypeByNode
@@ -972,7 +980,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
         invalidIntrinsicFlowArityByNode: invalidIntrinsicFlowArityByNode
         invalidTextIntrinsicArgumentByNode: invalidTextIntrinsicArgumentByNode
         collectionMembershipDiagnosticByNode: collectionMembershipDiagnosticByNode
-        unresolvedInterpolationBindingByNode: unresolvedInterpolationBindingByNode
+        unresolvedInterpolationBindingByNode: unresolvedInterpolationBindingByNode!
         uninvokedAssociatedMemberByNode: uninvokedAssociatedMemberByNode
         missingLocalAssociatedMemberByNode: missingLocalAssociatedMemberByNode
         localEnumMemberDecisionByNode: localEnumMemberDecisionByNode!

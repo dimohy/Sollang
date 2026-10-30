@@ -191,6 +191,7 @@ public struct OwnershipDiagnostic {
 public struct OwnershipAnalysis {
     public diagnostics: [OwnershipDiagnostic; ~]
     public referencePaths: [ReadonlyReferenceLoan; ~]
+    public consumedInterpolationBindingByNode: [Bool; ~]
 }
 
 public struct EnumPayloadStoragePlace {
@@ -1596,7 +1597,7 @@ borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSna
                                         prepared.interpolations[interpolationIndex!] => interpolated
                                         interpolated.kind == 1 and interpolated.sourceToken == candidate.payloadToken
                                             -> if {
-                                                typed -> borrowedTextInterpolationBinding(prepared, captureIr!, interpolationIndex!) => readBinding
+                                                typed -> interpolationBindingIr(prepared, captureIr!, interpolationIndex!) => readBinding
                                                 typed -> borrowedTextSameScalarSlot(types, replacementIr, readBinding)
                                                     -> if { false -> return }
                                             }
@@ -2120,7 +2121,7 @@ borrowedTextStoredArrayOrigin typed: ref [typedIr.TypedIrNode; ~], prepared: ref
 }
 
 # Interpolation retains the selected literal's lexical scope, not its later sink.
-borrowedTextInterpolationBinding typed: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, literalIr: Int, nodeIndex: Int -> Int {
+interpolationBindingIr typed: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, literalIr: Int, nodeIndex: Int -> Int {
     prepared.interpolations[nodeIndex] => node
     node.kind != 1 or node.symbol < 0 -> if { -1 -> return }
     typed[literalIr] => literal
@@ -2136,9 +2137,16 @@ borrowedTextInterpolationBinding typed: ref [typedIr.TypedIrNode; ~], prepared: 
             -> if {
                 candidate.kind == 10 and candidate.parent == functionIr
                     -> if { candidateIr! -> return }
+                candidate.parent => bindingScope!
+                # A payload pattern and its body are siblings in the case.
+                # Reuse their canonical case/callback ownership region.
+                candidate.kind == 29 -> if {
+                    candidateIr! -> typedIr.moveOwnershipRegion(typed) => bindingScope!
+                }
                 (candidate.kind == 17 or candidate.kind == 29)
                     and candidate.astNode >= 0 and candidate.astNode < range.astCount
-                    and (typed -> borrowedTextNodeBelongsTo(literalIr, candidate.parent))
+                    and bindingScope! >= 0
+                    and (typed -> borrowedTextNodeBelongsTo(literalIr, bindingScope!))
                     -> if {
                         prepared.package.nodes[range.astStart + candidate.astNode].start => start
                         start <= node.payloadStart and (selected! < 0 or start > selectedStart!)
@@ -2177,7 +2185,7 @@ borrowedTextInterpolationOrigin typed: ref [typedIr.TypedIrNode; ~], prepared: r
         -> unless { BorrowedTextOriginFact { status: 3, usesOrigin: false, placeIr: -1 } -> return }
     prepared.interpolations[nodeIndex] => node
     node.kind == 1 -> if {
-        typed -> borrowedTextInterpolationBinding(prepared, literalIr, nodeIndex) => bindingIr
+        typed -> interpolationBindingIr(prepared, literalIr, nodeIndex) => bindingIr
         bindingIr < 0 -> if { BorrowedTextOriginFact { status: 0, usesOrigin: false, placeIr: -1 } -> return }
         concrete -> if {
             typed -> borrowedTextConcreteOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, bindingIr, originIr, active, depth) -> return
@@ -5600,6 +5608,48 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
         }
         repaired!
     }
+    # Ordinary reads and interpolation names use one whole-owner visibility
+    # decision. The containing literal is a real use site, not a synthetic AST.
+    wholeMoveInvalidatesRead moveIndex: Int, useIndex: Int -> Bool {
+        moves![moveIndex] => moved
+        moved.memberIr >= 0 or moved.siteIr < 0 or moved.siteIr >= (typed -> len)
+            or typed[useIndex].sourceModule != moved.sourceModule
+            -> if { false -> return }
+        moved -> moveConsumesWholeBinding -> unless { false -> return }
+        typed[moved.siteIr] => site
+        moved.valueIr => sourceIndex!
+        not moved.awaited and site.kind == 5 and site.typeKind == 4 and site.typeFlags / 2 % 2 == 1
+            -> if { moved.siteIr => sourceIndex! }
+        sourceIndex! < 0 or sourceIndex! >= (typed -> len)
+            -> if { false -> return }
+        typed[sourceIndex!].kind != 5 -> if { false -> return }
+        prepared.package.ranges[moved.sourceModule] => range
+        site.astNode < 0 or site.astNode >= range.astCount
+            or typed[useIndex].astNode < 0 or typed[useIndex].astNode >= range.astCount
+            -> if { false -> return }
+        prepared.package.nodes[range.astStart + site.astNode].start => moveStart
+        prepared.package.nodes[range.astStart + typed[useIndex].astNode].start => useStart
+        useStart <= moveStart or (useIndex -> nodeBelongsTo(moved.siteIr))
+            -> if { false -> return }
+        moved.siteIr -> useReachableAfterMove(useIndex)
+            -> unless { false -> return }
+        moveIndex -> moveReinitializedBefore(useStart)
+            -> if { false -> return }
+        # A branch join owns an inconsistent-state error before a missing name.
+        false => inconsistentJoin!
+        0 => joinIndex!
+        joinIndex! < (diagnostics! -> len) and not inconsistentJoin!
+            -> while {
+                diagnostics![joinIndex!] => diagnostic
+                diagnostic.code == 33 and diagnostic.sourceModule == moved.sourceModule
+                    and diagnostic.actualSymbol >= 0 and diagnostic.actualSymbol < (typed -> len)
+                    and typed[diagnostic.actualSymbol].symbol == moved.symbol
+                    and (moved.siteIr -> nodeBelongsTo(diagnostic.actualOrigin))
+                    -> if { true => inconsistentJoin! }
+                joinIndex! + 1 => joinIndex!
+            }
+        not inconsistentJoin!
+    }
     # BindStatements rejects an invalid partial read before copy admission.
     # Both producers consume the same reachability and repair authority.
     partialMoveReadRemainsInvalid moveIndex: Int, useIndex: Int -> Bool {
@@ -8341,48 +8391,27 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         affineMoveSource.kind == 5
                             -> if {
                                 prepared.package.ranges[partialMove.sourceModule] => affineMoveRange
-                                prepared.package.nodes[affineMoveRange.astStart + affineMoveSite.astNode].start => affineMoveStart
                                 0 => affineReuseIndex!
                                 affineReuseIndex! < (typed -> len) -> while {
                                     typed[affineReuseIndex!] => affineReuse
-                                    affineReuse.kind == 5 and affineReuse.sourceModule == partialMove.sourceModule and affineReuse.symbol == partialMove.symbol and prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].start > affineMoveStart and not (affineReuseIndex! -> nodeBelongsTo(partialMove.siteIr))
+                                    affineReuse.kind == 5 and affineReuse.sourceModule == partialMove.sourceModule
+                                        and affineReuse.symbol == partialMove.symbol
+                                        and (partialMoveIndex! -> wholeMoveInvalidatesRead(affineReuseIndex!))
                                         -> if {
-                                            (partialMove.siteIr -> useReachableAfterMove(affineReuseIndex!))
-                                                and not (partialMoveIndex! -> moveReinitializedBefore(prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].start))
-                                                -> if {
-                                                    # The branch join owns an inconsistent-state error.
-                                                    # Do not also report its later read as a missing name.
-                                                    false => inconsistentJoin!
-                                                    0 => joinDiagnosticIndex!
-                                                    joinDiagnosticIndex! < (diagnostics! -> len) and not inconsistentJoin!
-                                                        -> while {
-                                                            diagnostics![joinDiagnosticIndex!] => joinDiagnostic
-                                                            joinDiagnostic.code == 33
-                                                                and joinDiagnostic.sourceModule == partialMove.sourceModule
-                                                                and joinDiagnostic.actualSymbol >= 0
-                                                                and joinDiagnostic.actualSymbol < (typed -> len)
-                                                                and typed[joinDiagnostic.actualSymbol].symbol == partialMove.symbol
-                                                                and (partialMove.siteIr -> nodeBelongsTo(joinDiagnostic.actualOrigin))
-                                                                -> if { true => inconsistentJoin! }
-                                                            joinDiagnosticIndex! + 1 => joinDiagnosticIndex!
-                                                        }
-                                                    not inconsistentJoin! -> if {
-                                                        diagnostics! -> appendBodyDiagnostic(affineReuseIndex!, OwnershipDiagnostic {
-                                                            code: affineReuseCode!
-                                                            sourceModule: partialMove.sourceModule
-                                                            functionSymbol: -1
-                                                            expectedOrigin: -1
-                                                            expectedModule: -1
-                                                            expectedSymbol: partialMove.siteIr
-                                                            actualOrigin: -1
-                                                            actualModule: -1
-                                                            actualSymbol: affineReuseIndex!
-                                                            actualBuiltin: -1
-                                                            readonlyReferencePath: -1
-                                                            span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].start, length: prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].length }
-                                                        })
-                                                    }
-                                                }
+                                            diagnostics! -> appendBodyDiagnostic(affineReuseIndex!, OwnershipDiagnostic {
+                                                code: affineReuseCode!
+                                                sourceModule: partialMove.sourceModule
+                                                functionSymbol: -1
+                                                expectedOrigin: -1
+                                                expectedModule: -1
+                                                expectedSymbol: partialMove.siteIr
+                                                actualOrigin: -1
+                                                actualModule: -1
+                                                actualSymbol: affineReuseIndex!
+                                                actualBuiltin: -1
+                                                readonlyReferencePath: -1
+                                                span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].start, length: prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].length }
+                                            })
                                         }
                                     affineReuseIndex! + 1 => affineReuseIndex!
                                 }
@@ -9347,5 +9376,61 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             })
         }
     }
-    OwnershipAnalysis { diagnostics: classifiedDiagnostics!, referencePaths: diagnosticReferencePaths! }
+    # Index actual name nodes by their source token. Preserve the canonical
+    # symbol and containing literal, including distinct function instances.
+    {Int: Int} => firstInterpolationNameByToken!
+    [Int; ~] => nextInterpolationName!
+    [Bool; ~] => consumedInterpolationBindingByNode!
+    prepared.interpolations -> each node {
+        nextInterpolationName! -> push(-1)
+        consumedInterpolationBindingByNode! -> push(false)
+    }
+    prepared.interpolationRanges -> each range {
+        prepared.package.ranges[range.sourceModule] => sourceRange
+        range.nodeStart => nameIndex!
+        nameIndex! < range.nodeStart + range.nodeCount
+            -> while {
+                prepared.interpolations[nameIndex!] => name
+                name.kind == 1 and name.symbol >= 0 and name.sourceToken >= 0 and name.sourceToken < sourceRange.tokenCount
+                    -> if {
+                        sourceRange.tokenStart + name.sourceToken => token
+                        firstInterpolationNameByToken! -> putIfAbsent(token, -1) => inserted
+                        firstInterpolationNameByToken![token] => nextInterpolationName![nameIndex!]
+                        nameIndex! => firstInterpolationNameByToken![token]
+                    }
+                nameIndex! + 1 => nameIndex!
+            }
+    }
+    0 => literalIndex!
+    literalIndex! < (typed -> len) -> while {
+        typed[literalIndex!] => literal
+        literal.kind == 2 and literal.sourceModule >= 0 and literal.payloadToken >= 0
+            and activeBodies[literalIndex!]
+            -> if {
+                prepared.package.ranges[literal.sourceModule] => range
+                literal.payloadToken < range.tokenCount -> if {
+                    range.tokenStart + literal.payloadToken => token
+                    firstInterpolationNameByToken! -> putIfAbsent(token, -1) => inserted
+                    firstInterpolationNameByToken![token] => nameIndex!
+                    nameIndex! >= 0 -> while {
+                        typed -> interpolationBindingIr(prepared, literalIndex!, nameIndex!) => bindingIr
+                        bindingIr >= 0 -> if {
+                            0 => moveIndex!
+                            moveIndex! < (moves! -> len) and not consumedInterpolationBindingByNode![nameIndex!]
+                                -> while {
+                                    moves![moveIndex!] => moved
+                                    moved.bindingIr == bindingIr and moved.sourceModule == literal.sourceModule
+                                        and moved.symbol == prepared.interpolations[nameIndex!].symbol
+                                        and (moveIndex! -> wholeMoveInvalidatesRead(literalIndex!))
+                                        -> if { true => consumedInterpolationBindingByNode![nameIndex!] }
+                                    moveIndex! + 1 => moveIndex!
+                                }
+                        }
+                        nextInterpolationName![nameIndex!] => nameIndex!
+                    }
+                }
+            }
+        literalIndex! + 1 => literalIndex!
+    }
+    OwnershipAnalysis { diagnostics: classifiedDiagnostics!, referencePaths: diagnosticReferencePaths!, consumedInterpolationBindingByNode: consumedInterpolationBindingByNode! }
 }

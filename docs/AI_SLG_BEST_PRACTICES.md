@@ -1149,6 +1149,9 @@ The semantic diagnostic for an interpolation expression uses a position inside
 that parsed expression. A `main` error names its executable source's namespace,
 or `<main>` when no namespace is declared; a named function error names its module.
 Render parsed namespace segments without declaration whitespace or comments.
+Resolve interpolation names against the current ownership state, including
+ordinary transfers before the literal. Check visibility before displayability;
+share the ordinary read's reachability, repair, and branch-join decisions.
 For these semantic failures, the CLI relays the diagnostic
 without the LLVM worker note. Compiler diagnostic streams use UTF-8 without a
 byte-order mark on Windows as well as other targets; decode captured stderr
