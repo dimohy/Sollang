@@ -241,6 +241,10 @@ replaceMappedPath paths: mut [Text; ~], index: Int, value: Text -> Unit {
 }
 
 emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    paths -> emitDiscoveredAndExplicitNativeProduct(explicitPaths, cache, true, false, "", "")
+}
+
+emitDiscoveredAndExplicitNativeProduct paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request, windows: Bool, sharedLibrary: Bool, libraryFile: Text, interfaceStage: Text -> Int uses Console, File, Process {
     (paths -> len) == 0 -> if {
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
@@ -275,47 +279,20 @@ emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Tex
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
-        sources! -> llvm.emitCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache)
+        sharedLibrary -> if {
+            sources! -> llvm.emitLibraryCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache, windows, libraryFile, interfaceStage)
+        } else {
+            windows -> if {
+                sources! -> llvm.emitCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache)
+            } else {
+                sources! -> llvm.emitLinuxCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache)
+            }
+        }
     }
 }
 
 emitDiscoveredAndExplicitLinuxChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    (paths -> len) == 0 -> if {
-        "; sollang source root error: source root contains no readable .slg files" -> println
-        1
-    } else {
-        [Text; ~] => mappedPaths!
-        paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
-            Ok(value) { value }
-            Err(error) {
-                "; sollang source path error: $error" -> println
-                1 -> return
-            }
-        } => batch
-        [Text; ~] => diagnosticPaths!
-        batch.displayPaths -> appendPathViews(diagnosticPaths!)
-        cache.enabled -> if {
-            (batch.canonicalPaths -> len) != (batch.owners -> len)
-                -> if {
-                    "; sollang semantic cache requires resolved source paths" -> println
-                    1 -> return
-                }
-            0..<Int(batch.canonicalPaths -> len) -> each index {
-                batch.canonicalPaths[index] -> pathText => canonicalText
-                mappedPaths! -> replaceMappedPath(index, canonicalText)
-            }
-        }
-        batch.standardLibrarySourceCount => userSourceStart
-        batch.owners => owners
-        [Text; ~] => sources!
-        0 => sourceIndex!
-        sourceIndex! < (owners -> len) -> while {
-            owners[sourceIndex!] -> sourceDecoding.utf8Text => source
-            sources! -> push(source)
-            sourceIndex! + 1 => sourceIndex!
-        }
-        sources! -> llvm.emitLinuxCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache)
-    }
+    paths -> emitDiscoveredAndExplicitNativeProduct(explicitPaths, cache, false, false, "", "")
 }
 
 emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File, Process {
@@ -410,4 +387,13 @@ public emitWasmCheckedRoot root: move path.Path -> Unit uses Console, File, Proc
         }
     } => diagnosticCount
     diagnosticCount > 0 -> if { sourceRootExitFailure() }
+}
+
+public emitCachedLibraryCheckedRoot root: move path.Path, explicitStart: UIntSize, target: Int, cache: ref semanticCache.Request, libraryFile: Text, interfaceStage: Text -> Int uses Console, File, Process {
+    target != 0 and target != 1 -> if {
+        "; sollang source root error: shared libraries require windows-x64 or linux-x64" -> println
+        1 -> return
+    }
+    explicitStart -> collectExplicitPaths => explicitPaths
+    root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitNativeProduct(explicitPaths, cache, target == 0, true, libraryFile, interfaceStage)
 }

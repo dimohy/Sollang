@@ -1,16 +1,21 @@
-import sollang.compiler.llvm.text as llvm
+import sollang.compiler.llvm.source_root as sourceRoot
 import sollang.compiler.semantic.semantic_cache as semanticCache
-import sys.file as file
+import sys.path as path
 import sys.process as process
 
 main {
     process.arguments() => arguments
-    arguments[1] -> file.mapText => owner
-    owner -> slice(UIntSize(0), owner -> len) => source
-    [source; ~] => sources
-    [arguments[1]; ~] => paths
+    arguments[1] == "ordinary" => ordinary
+    not ordinary and arguments[1] != "library" -> if {
+        "unknown focused emitter mode" -> println
+        process.exit(1)
+    }
+    arguments[3] -> path.fromText(path.nativeStyle()) => root
     semanticCache.disabled() => cache
-    sources -> llvm.emitLibraryCheckedWithSourcePathsCached(paths, paths, 0, cache, true, "math.dll", arguments[2]) => status
-    owner -> len => ownerLength
+    ordinary -> if {
+        root -> sourceRoot.emitCachedCheckedRoot(4, 0, cache)
+    } else {
+        root -> sourceRoot.emitCachedLibraryCheckedRoot(4, 0, cache, "math.dll", arguments[2])
+    } => status
     process.exit(status)
 }
