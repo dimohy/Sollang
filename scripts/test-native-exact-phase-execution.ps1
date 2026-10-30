@@ -36,10 +36,47 @@ $otherGeneration=[pscustomobject]@{generationRecord=[pscustomobject]@{path='othe
 Assert-Rejected 'generation-link-wrong-file' {
     Assert-NativeExactPhaseGenerationLink $repository $generationReference $otherGeneration
 } 'PHASE_EXECUTION_COMPARISON_GENERATION_LINK_DIFFER'
+$batchPath = Join-Path $PSScriptRoot 'verify-native-exact-fixture-batch.ps1'
+$batchTokens = $null; $batchErrors = $null
+$batchAst = [Management.Automation.Language.Parser]::ParseFile($batchPath, [ref]$batchTokens, [ref]$batchErrors)
+if ($batchErrors.Count -ne 0) { throw 'TEST_BATCH_PARSE_FAILED' }
+$inventoryGuard = @($batchAst.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -ceq 'Assert-NativeExactBatchGenerationInventory'
+}, $true))
+if ($inventoryGuard.Count -ne 1) { throw 'TEST_BATCH_GENERATION_GUARD_MISSING' }
+. ([scriptblock]::Create($inventoryGuard[0].Extent.Text))
+$inventoryPath = Join-Path $root 'generation-inventory-control.json'
+function Test-GenerationInventory($Inventory) {
+    Save-Json $inventoryPath $Inventory
+    $plan = [pscustomobject]@{phase='parsing';generationRecord=$generationReference;
+        reviewedInventory=(Get-NativeExactPhaseReference $repository $inventoryPath)}
+    Assert-NativeExactBatchGenerationInventory $repository $plan
+}
+Test-GenerationInventory ([pscustomobject]@{generationRecord=$generationReference.path})
+$passed.Add('generation-inventory-path')
+Assert-NativeExactBatchGenerationInventory '.' ([pscustomobject]@{phase='parsing';generationRecord=$generationReference;
+    reviewedInventory=(Get-NativeExactPhaseReference $repository $inventoryPath)})
+$passed.Add('generation-inventory-relative-root')
+Assert-Rejected 'generation-inventory-object' {
+    Test-GenerationInventory ([pscustomobject]@{generationRecord=$generationReference})
+} 'PHASE_EXECUTION_GENERATION_INVENTORY_INVALID'
+Assert-Rejected 'generation-inventory-null' {
+    Test-GenerationInventory ([pscustomobject]@{generationRecord=$null})
+} 'PHASE_EXECUTION_GENERATION_INVENTORY_INVALID'
+Assert-Rejected 'generation-inventory-missing' {
+    Test-GenerationInventory ([pscustomobject]@{})
+} 'PHASE_EXECUTION_GENERATION_INVENTORY_INVALID'
+Assert-Rejected 'generation-inventory-wrong-file' {
+    Test-GenerationInventory ([pscustomobject]@{generationRecord='other-generation.json'})
+} 'PHASE_EXECUTION_GENERATION_INVENTORY_DIFFER'
+Assert-NativeExactBatchGenerationInventory $repository ([pscustomobject]@{phase='semantic-analysis'})
+$passed.Add('generation-inventory-other-phase')
 if ($GenerationLinkOnly) {
     Save-Json (Join-Path $root 'test-result.json') @{status='passed';completed=$passed.Count;total=$passed.Count;
         cases=@($passed);scope='generation-link-only; no compiler/405 execution';
         inputHashes=(Get-NativeExactPhaseHashes $repository @($PSCommandPath,
+            $batchPath,
             (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1'),
             (Join-Path $PSScriptRoot 'contracts/native-exact-phase-execution-acceptance.json')))}
     Write-Host "[native exact generation link] PASS $($passed.Count)/$($passed.Count); $root/test-result.json"

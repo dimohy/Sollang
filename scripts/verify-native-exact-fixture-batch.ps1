@@ -431,6 +431,21 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "native-exact-fixture-receipt.ps1")
 . (Join-Path $PSScriptRoot "native-exact-batch-allocation.ps1")
 . (Join-Path $PSScriptRoot "verification-process.ps1")
+function Assert-NativeExactBatchGenerationInventory {
+    param([string]$RepositoryRoot, $Contract)
+    if ($Contract.phase -cne 'parsing') { return }
+    $phaseRoot = [IO.Path]::GetFullPath($RepositoryRoot)
+    $inventory = Read-NativeExactPhaseReference $phaseRoot $Contract.reviewedInventory
+    if ($null -eq $inventory.PSObject.Properties['generationRecord'] -or
+        $inventory.generationRecord -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($inventory.generationRecord)) {
+        throw 'PHASE_EXECUTION_GENERATION_INVENTORY_INVALID'
+    }
+    if ($inventory.generationRecord -cne $Contract.generationRecord.path) {
+        throw 'PHASE_EXECUTION_GENERATION_INVENTORY_DIFFER'
+    }
+    [void](Read-NativeExactPhaseReference $phaseRoot $Contract.generationRecord)
+}
 $cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
 if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
     throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
@@ -440,6 +455,12 @@ if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
         -RunId $CancellationRunId -AcknowledgementPath $CancellationAcknowledgementPath
 }
 Assert-VerificationCancellationNotRequested
+
+if (-not [string]::IsNullOrWhiteSpace($PhaseExecutionContract)) {
+    $phasePlanPath = [IO.Path]::GetFullPath($PhaseExecutionContract, [IO.Path]::GetFullPath($RepositoryRoot))
+    $phasePlan = Get-Content -LiteralPath $phasePlanPath -Raw | ConvertFrom-Json
+    Assert-NativeExactBatchGenerationInventory $RepositoryRoot $phasePlan
+}
 
 Assert-NativeExactFixturePlan -Fixture $Fixture
 
