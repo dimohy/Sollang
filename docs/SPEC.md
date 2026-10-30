@@ -5894,6 +5894,13 @@ Requirements:
   preferred over runtime heap conversion.
 - Handle partial writes and API failures explicitly.
 
+Windows COM registered activation uses `CoCreateInstance` with class context
+`23`; an explicit server selects its direct class-factory path instead.
+Native linking includes `ole32` when the emitted declaration prefix requires
+COM initialization. Inspect at most the first 1 MiB for that declaration,
+preserving matches across read boundaries. A failed inspection is a build
+error rather than evidence that COM imports are unnecessary.
+
 ### WASI Targets
 
 For WASI-style targets, initial lowering should use the target ABI's stdout

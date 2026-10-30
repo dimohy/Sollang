@@ -26,7 +26,7 @@ class SlowStepDiagnostics:
     any observation or file write. Storage retains the first and latest samples.
     """
 
-    def __init__(self, plan: dict, output_path: Path | None = None):
+    def __init__(self, plan: dict, output_path: Path | None = None, *, timeout_seconds=None):
         keys = {"stage", "softLimitSeconds", "hardTimeoutSeconds",
                 "sampleIntervalSeconds", "maxSamples"}
         if not isinstance(plan, dict) or set(plan) != keys:
@@ -36,6 +36,7 @@ class SlowStepDiagnostics:
             raise ValueError("STEP_DIAGNOSTICS_INVALID_STAGE")
         self.soft_limit_seconds = _number(plan["softLimitSeconds"], "SOFT_LIMIT", positive=True)
         self.hard_timeout_seconds = _number(plan["hardTimeoutSeconds"], "HARD_TIMEOUT", positive=True)
+        self.declared_hard_timeout_seconds = self.hard_timeout_seconds
         self.sample_interval_seconds = _number(plan["sampleIntervalSeconds"], "SAMPLE_INTERVAL", positive=True)
         if (self.soft_limit_seconds >= self.hard_timeout_seconds
                 or self.sample_interval_seconds > self.hard_timeout_seconds):
@@ -44,6 +45,16 @@ class SlowStepDiagnostics:
                 or plan["maxSamples"] < 2):
             raise ValueError("STEP_DIAGNOSTICS_INVALID_MAX_SAMPLES")
         self.plan = dict(plan)
+        if timeout_seconds is not None:
+            timeout_seconds = _number(timeout_seconds, "BOUND_TIMEOUT", positive=True)
+            if timeout_seconds > self.hard_timeout_seconds:
+                raise ValueError("STEP_DIAGNOSTICS_BOUND_EXCEEDS_PLAN")
+            self.hard_timeout_seconds = timeout_seconds
+            self.soft_limit_seconds = min(self.soft_limit_seconds, timeout_seconds / 2)
+            self.sample_interval_seconds = min(self.sample_interval_seconds, timeout_seconds / 2)
+            self.plan.update(hardTimeoutSeconds=self.hard_timeout_seconds,
+                             softLimitSeconds=self.soft_limit_seconds,
+                             sampleIntervalSeconds=self.sample_interval_seconds)
         self.output_path = Path(output_path) if output_path is not None else None
         self._samples = []
         self._observations = 0
@@ -220,4 +231,5 @@ class SlowStepDiagnostics:
                         for sample in self._samples],
             "limitations": limitations,
             "automaticRetry": False, "automaticProfiling": False,
-            "hardTimeoutChanged": False}
+            "hardTimeoutChanged": self.hard_timeout_seconds != self.declared_hard_timeout_seconds,
+            "declaredHardTimeoutSeconds": self.declared_hard_timeout_seconds}

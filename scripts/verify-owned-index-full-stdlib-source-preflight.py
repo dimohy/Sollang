@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from completed_artifact_plan import initialize_output, cleanup_output, assert_output_shutdown
@@ -35,11 +36,11 @@ def parse_observation(stdout):
     return metadata, diagnostics
 
 
-def load_diagnostics_plan(path):
+def load_diagnostics_plan(path, timeout_seconds=600):
     if path is None:
         return None
     configuration = json.loads(read(path))
-    if SlowStepDiagnostics(configuration).hard_timeout_seconds != 600:
+    if SlowStepDiagnostics(configuration).hard_timeout_seconds != timeout_seconds:
         raise ValueError("STDLIB_PREFLIGHT_DIAGNOSTIC_HARD_TIMEOUT_MISMATCH")
     return configuration
 
@@ -53,7 +54,7 @@ def main():
                         help="Explicit compiler worker limit for the verification harness")
     parser.add_argument("--optimization", choices=("O0", "O1", "O2", "O3"), default="O1")
     parser.add_argument("--timeout-seconds", type=int, default=600,
-                        help="Explicit per-step budget; existing callers retain 600 seconds")
+                        help="Whole-case budget shared by formatting, build and execution")
     parser.add_argument("--diagnostics-plan", type=Path)
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append")
     parser.add_argument("--contract", type=Path, default=ROOT / "scripts/contracts/owned-index-full-stdlib-source-preflight.json")
@@ -63,9 +64,7 @@ def main():
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds expects a positive integer")
     diagnostics_plan = None if args.diagnostics_plan is None else args.diagnostics_plan.resolve()
-    diagnostics_configuration = load_diagnostics_plan(diagnostics_plan)
-    if diagnostics_configuration is not None and args.timeout_seconds != 600:
-        raise ValueError("STDLIB_PREFLIGHT_DIAGNOSTIC_SELECTED_BUDGET_MISMATCH")
+    diagnostics_configuration = load_diagnostics_plan(diagnostics_plan, args.timeout_seconds)
     compiler, output, contract_path = args.compiler.resolve(), args.output.resolve(), args.contract.resolve()
     contract_text = read(contract_path)
     contract = json.loads(contract_text)
@@ -102,7 +101,7 @@ def main():
         _, locked_sources, _ = compiler_manifest_inputs(ROOT, manifest)
         if locked_sources != compiler_sources:
             raise ValueError("STDLIB_PREFLIGHT_DISCOVERY_INPUT_DRIFT")
-        diagnostics_configuration = load_diagnostics_plan(diagnostics_plan)
+        diagnostics_configuration = load_diagnostics_plan(diagnostics_plan, args.timeout_seconds)
         initialize_output(ROOT, output, reusable_directories=args.reusable_compiler_directory)
         output.mkdir(parents=True)
         probe = output / "active-probe.slg"
@@ -134,10 +133,15 @@ def main():
                 lambda: all(path.is_file() and sha(path) == pins[str(path)] for path in inputs), sha,
                 record_path=execution_path)
             save = supervisor.save
+            case_started = time.monotonic()
 
             def run(command, prefix, timeout):
+                remaining = args.timeout_seconds - (time.monotonic() - case_started)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, args.timeout_seconds)
+                timeout = min(timeout, remaining)
                 diagnostic = None if diagnostics_configuration is None else SlowStepDiagnostics(
-                    diagnostics_configuration, output / (prefix + ".diagnostics.json"))
+                    diagnostics_configuration, output / (prefix + ".diagnostics.json"), timeout_seconds=timeout)
                 return supervisor.run(command, output / prefix, timeout=timeout, diagnostics=diagnostic).returncode
 
             metadata = {}

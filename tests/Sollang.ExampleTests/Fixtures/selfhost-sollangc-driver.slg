@@ -948,6 +948,22 @@ posixClangPath llvmHome: Text, storage: mut Arena -> Text {
     "$llvmHome/bin/clang" -> materialize(storage)
 }
 
+appendWindowsNativeLibraries llvmPath: Text, argv: mut [Text; ~] -> Bool uses Console, File {
+    llvmPath -> toolchain.usesComInterop -> when {
+        Ok(required) {
+            argv -> push("-lshell32")
+            argv -> push("-lws2_32")
+            argv -> push("-lbcrypt")
+            required -> if { argv -> push("-lole32") }
+            true
+        }
+        Err(error) {
+            "sollang: cannot inspect native LLVM imports: $error" -> runtime.eprintln
+            false
+        }
+    }
+}
+
 nativeLlStagePath directory: Text, ordinal: Int, storage: mut Arena -> Text {
     "$directory/.l$ordinal.ll" -> materialize(storage)
 }
@@ -1310,9 +1326,11 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     target == 0 -> if {
         clangArgv! -> push("-Xlinker")
         clangArgv! -> push("/subsystem:console")
-        clangArgv! -> push("-lshell32")
-        clangArgv! -> push("-lws2_32")
-        clangArgv! -> push("-lbcrypt")
+        llvmStage -> appendWindowsNativeLibraries(clangArgv!)
+            -> unless {
+                llvmStage -> reportNativeBuildFailureStages(executableStage)
+                -1 -> return
+            }
     }
     process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
     clangCommand -> run -> processCode => clangCode
@@ -1410,9 +1428,11 @@ executeNativePathBuildCore sources: [path.Path; ~], output: Text, llvmHome: Text
     target == 0 -> if {
         clangArgv! -> push("-Xlinker")
         clangArgv! -> push("/subsystem:console")
-        clangArgv! -> push("-lshell32")
-        clangArgv! -> push("-lws2_32")
-        clangArgv! -> push("-lbcrypt")
+        llvmStage -> appendWindowsNativeLibraries(clangArgv!)
+            -> unless {
+                llvmStage -> reportNativeBuildFailureStages(executableStage)
+                -1 -> return
+            }
     }
     process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
     clangCommand -> run -> processCode => clangCode

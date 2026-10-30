@@ -327,6 +327,16 @@ def load_diagnostics_plan(path):
     return plan
 
 
+def diagnostics_for_timeout(plan, prefix, timeout):
+    """Bind observations to the shorter shared-case deadline, never extend it."""
+    if plan is None:
+        return None
+    declared = SlowStepDiagnostics(plan)
+    if declared.hard_timeout_seconds != 180 or timeout > declared.hard_timeout_seconds:
+        raise ValueError('NUMERIC_DIAGNOSTICS_HARD_TIMEOUT_MISMATCH')
+    return SlowStepDiagnostics(plan, prefix.with_suffix('.diagnostics.json'), timeout_seconds=timeout)
+
+
 def audit_llvm_program(llvm, folder, expected_allocations, expected_stdout, run):
     """Reuse the same pointer/ownership audit for emitted and direct program IR."""
     if type(expected_allocations) is not int or expected_allocations < 0:
@@ -580,11 +590,10 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
     def run(command, prefix):
         if len(command) > 1 and command[0] == str(compiler) and command[1] == 'build':
             assert_build_space(output)
-        diagnostics = None if args.diagnostics_configuration is None else SlowStepDiagnostics(
-            args.diagnostics_configuration, prefix.with_suffix('.diagnostics.json'))
         timeout = native_timeout if args.mode == "paired" and command[:2] == [str(compiler), "build"] else 180
         if case_budget is not None:
             timeout = case_budget.remaining(command, timeout)
+        diagnostics = diagnostics_for_timeout(args.diagnostics_configuration, prefix, timeout)
         exit_code = execution.run(command, prefix, timeout=timeout, diagnostics=diagnostics).returncode
         if group is not None and not stable():
             raise ValueError("CHECKED_PRODUCER_INPUT_OR_BINARY_DRIFT_AFTER_COMMAND")

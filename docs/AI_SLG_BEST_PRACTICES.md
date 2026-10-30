@@ -1894,6 +1894,11 @@ Diagnostic rejection fixtures must call the checked semantic entrypoint, such
 as `emitChecked`, and compare its diagnostic and returned failure count. Raw
 `emit` output alone does not establish semantic acceptance or rejection.
 
+For Windows COM, preserve the reference compiler's registered activation
+context and its separate direct class-factory path. Link COM imports from the
+generated declaration requirement in every native build path. Propagate a
+failed declaration scan as a build error before invoking the linker.
+
 A generated checked package must preserve its validated standard-library source
 prefix. Use `emitCheckedFilesWithStandardLibrarySources` for the file-loading
 path or `emitCheckedWithPaths` for borrowed source views, supplying the exact

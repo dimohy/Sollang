@@ -1,6 +1,7 @@
 namespace sollang.compiler.toolchain
 
 import sys.process as process
+import sys.file as file
 
 # An explicit CLI option owns precedence. When it is absent, use the same
 # process-level LLVM contract as the managed bootstrap compiler. Missing and
@@ -11,5 +12,42 @@ public llvmHome explicit: Text -> Text uses Environment {
     process.environment("SOLLANG_LLVM_HOME") -> when {
         Option<Text>.Some(value) => value
         Option<Text>.None => ""
+    }
+}
+
+# Match the reference Windows linker's bounded declaration-prefix scan.
+# A failed read is an error, never evidence that COM imports are unnecessary.
+public usesComInterop llvmPath: Text -> Result<Bool, Text> uses File {
+    llvmPath -> file.openRead -> when {
+        Ok(reader) {
+            [UInt8; ~] => buffer!
+            0..<4096 -> each { buffer! -> push(0) }
+            "declare dllimport i32 @CoInitializeEx" => marker
+            UInt64(0) => offset!
+            UIntSize(0) => matched!
+            offset! < 1048576 -> while {
+                reader -> readIntoAt(buffer!, offset!) -> when {
+                    Ok(count) {
+                        count == 0 -> if { Result<Bool, Text>.Ok(false) -> return }
+                        0 => index!
+                        index! < Int(count) and offset! + UInt64(index!) < 1048576
+                            -> while {
+                                buffer![index!] => value
+                                value == (marker -> byte(matched!)) -> if {
+                                    matched! + 1 => matched!
+                                } else {
+                                    value == (marker -> byte(0)) -> if { 1 } else { 0 } => matched!
+                                }
+                                matched! == (marker -> len) -> if { Result<Bool, Text>.Ok(true) -> return }
+                                index! + 1 => index!
+                            }
+                        offset! + UInt64(count) => offset!
+                    }
+                    Err(error) { Result<Bool, Text>.Err(error) -> return }
+                }
+            }
+            Result<Bool, Text>.Ok(false)
+        }
+        Err(error) { Result<Bool, Text>.Err(error) }
     }
 }

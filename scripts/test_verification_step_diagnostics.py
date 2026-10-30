@@ -16,6 +16,20 @@ def plan(**changes):
 
 
 class SlowStepDiagnosticsTests(unittest.TestCase):
+    def test_bound_deadline_is_recorded_without_extending_the_plan(self):
+        original = plan()
+        diagnostic = SlowStepDiagnostics(original, timeout_seconds=17.25)
+        record = diagnostic.observe(0, 100, 0, 0)
+        self.assertTrue(record['hardTimeoutChanged'])
+        self.assertEqual(record['declaredHardTimeoutSeconds'], 20)
+        self.assertEqual(diagnostic.plan['hardTimeoutSeconds'], 17.25)
+        self.assertEqual(original['hardTimeoutSeconds'], 20)
+
+    def test_bound_deadline_cannot_extend_or_expire_the_plan(self):
+        for value in (0, -1, 21, True, float('nan')):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                SlowStepDiagnostics(plan(), timeout_seconds=value)
+
     def test_normal_and_exact_soft_boundary(self):
         diagnostic = SlowStepDiagnostics(plan())
         diagnostic.observe(0, 100, 0, 0)

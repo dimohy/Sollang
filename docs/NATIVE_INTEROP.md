@@ -285,6 +285,9 @@ com fixture class "00000000-0000-0000-C000-000000000046"
 `from` selects direct in-process activation through the DLL's
 `DllGetClassObject`; omitting it uses registered activation through
 `CoCreateInstance`. `in sta` and `in mta` make the apartment contract visible.
+Registered activation uses class context `23`, matching the reference
+compiler; direct DLL activation keeps its class-factory path. Windows native
+linking supplies `ole32` whenever the generated module requires COM.
 The first interface receives `fixture.create`, every interface receives an
 explicit `fixture.clone`, and methods retain normal flow syntax:
 

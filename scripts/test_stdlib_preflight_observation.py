@@ -36,6 +36,7 @@ class InputLeaseTests(unittest.TestCase):
                 'scripts/completed_artifact_plan.py', 'scripts/ArtifactLifecycle.ps1',
                 'scripts/Invoke-CompletedArtifactCleanup.ps1', 'scripts/contracts/artifact-lifecycle.json',
                 'scripts/verification_fingerprints.py', 'scripts/verification_contract_lease.py',
+                'scripts/verification_json_records.py',
                 'scripts/verification_stdlib_source_preflight.py', 'scripts/verify-c385-preir-call-numeric.py',
                 'scripts/verification_execution.py', 'scripts/verification_step_diagnostics.py',
                 'llvm/bin/clang.exe', 'llvm/bin/llvm-as.exe', 'llvm/bin/llvm-link.exe',
@@ -158,6 +159,8 @@ for name in sys.argv[1:]:
                 self.record_path.write_text(json.dumps(self.record))
 
             def run(self, command, prefix, **kwargs):
+                owner.assertLessEqual(kwargs['timeout'], 180)
+                owner.assertEqual(kwargs['diagnostics'].hard_timeout_seconds, kwargs['timeout'])
                 owner.assert_writer_denied([root / 'source.slg', root / 'contract.json', root / 'sources.txt',
                     root / 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt',
                     root / 'template.slg', root / 'compiler.dll', root / 'stdlib/library.slg',
@@ -178,8 +181,12 @@ for name in sys.argv[1:]:
                                        root / 'template.slg', root / 'compiler.dll'])
             return SimpleNamespace(stdout=kwargs['input'], stderr='', returncode=0)
 
+        diagnostic_plan = root / 'diagnostics.json'
+        diagnostic_plan.write_text(json.dumps(dict(stage='stdlib', softLimitSeconds=30,
+            hardTimeoutSeconds=180, sampleIntervalSeconds=2, maxSamples=92)))
         argv = ['stdlib', '--output', str(root / 'output'), '--compiler', str(root / 'compiler.exe'),
-                '--llvm', str(root / 'llvm'), '--contract', str(root / 'contract.json')]
+                '--llvm', str(root / 'llvm'), '--contract', str(root / 'contract.json'),
+                '--timeout-seconds', '180', '--diagnostics-plan', str(diagnostic_plan)]
         with patch.object(MODULE, 'ROOT', root), patch.object(MODULE, 'initialize_output'), \
                 patch.object(MODULE, 'cleanup_output') as cleanup, \
                 patch.object(MODULE, 'VerificationExecution', FakeSupervisor), \
@@ -195,6 +202,16 @@ for name in sys.argv[1:]:
 
 
 class ObservationTests(unittest.TestCase):
+    def test_diagnostic_plan_matches_selected_whole_case_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'diagnostics.json'
+            plan = dict(stage='stdlib', softLimitSeconds=30, hardTimeoutSeconds=180,
+                        sampleIntervalSeconds=2, maxSamples=92)
+            path.write_text(json.dumps(plan), encoding='utf-8')
+            self.assertEqual(MODULE.load_diagnostics_plan(path, 180), plan)
+            with self.assertRaisesRegex(ValueError, 'HARD_TIMEOUT_MISMATCH'):
+                MODULE.load_diagnostics_plan(path, 600)
+
     def test_success_has_no_diagnostics(self):
         metadata = {"checkedSemanticDiagnosticCount": 0}
         self.assertEqual(MODULE.parse_observation(json.dumps(metadata)), (metadata, []))
