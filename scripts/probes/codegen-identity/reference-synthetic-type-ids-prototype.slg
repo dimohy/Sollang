@@ -1,0 +1,119 @@
+namespace sollang.compiler.semantic.reference_synthetic_type_ids
+
+# Research implementation of the reference compiler's shape interning.
+# Callers retain declaration traversal order and supply nominal/builtin seeds.
+# This is not connected to production ABI diagnostics until full registration
+# and actual diagnostic consumption have matching C# and SLG evidence.
+public enum Kind { Named, Slice, Dynamic, Fixed, Reference, Option, Result }
+
+public struct Recipe {
+    public kind: Kind
+    public first: Int
+    public second: Int
+    public length: Int
+}
+
+public struct Shape {
+    public kind: Kind
+    public first: Int
+    public second: Int
+    public length: Int
+    public identity: Int
+}
+
+public struct Identities {
+    public ids: [Int; ~]
+    public nextTypeId: Int
+}
+
+public enum Error { InvalidType, InvalidShape, Cycle, TypeIdOverflow }
+
+kindKey kind: Kind -> Int => kind -> when {
+    Named => 0
+    Slice => 1
+    Dynamic => 2
+    Fixed => 3
+    Reference => 4
+    Option => 5
+    Result => 6
+}
+
+struct Allocation {
+    shapes: [Shape; ~]
+    next: Int
+}
+
+resolve ids: mut [Int; ~], visiting: mut [Bool; ~], allocation: mut Allocation, index: Int, recipes: ref [Recipe; ~] -> Result<Int, Error> {
+    index < 0 or index >= (recipes -> len)
+        -> if { Result<Int, Error>.Err(Error.InvalidType) -> return }
+    ids[index] >= 0
+        -> if { Result<Int, Error>.Ok(ids[index]) -> return }
+    visiting[index]
+        -> if { Result<Int, Error>.Err(Error.Cycle) -> return }
+    recipes[index] => recipe
+    (recipe.kind -> kindKey) == 0
+        -> if { Result<Int, Error>.Err(Error.InvalidType) -> return }
+    (recipe.kind -> kindKey) == 3 and recipe.length < 0
+        -> if { Result<Int, Error>.Err(Error.InvalidShape) -> return }
+    true => visiting[index]
+    ids -> resolve(visiting, allocation, recipe.first, recipes)? => first
+    (recipe.kind -> kindKey) == 6 -> if {
+        ids -> resolve(visiting, allocation, recipe.second, recipes)?
+    } else { -1 } => second
+    0 => found!
+    found! < (allocation.shapes -> len) -> while {
+        allocation.shapes[found!] => shape
+        (shape.kind -> kindKey) == (recipe.kind -> kindKey) and shape.first == first
+            and shape.second == second and shape.length == recipe.length
+            -> if {
+                shape.identity => ids[index]
+                false => visiting[index]
+                Result<Int, Error>.Ok(shape.identity) -> return
+            }
+        found! + 1 => found!
+    }
+    allocation.next < 0 or allocation.next == 2147483647
+        -> if { Result<Int, Error>.Err(Error.TypeIdOverflow) -> return }
+    allocation.next => identity
+    allocation.next + 1 => allocation.next
+    allocation.shapes -> push(Shape {
+        kind: recipe.kind
+        first: first
+        second: second
+        length: recipe.length
+        identity: identity
+    })
+    identity => ids[index]
+    false => visiting[index]
+    Result<Int, Error>.Ok(identity)
+}
+
+public register recipes: ref [Recipe; ~], seeds: ref [Int; ~], aliases: ref [Shape; ~], roots: ref [Int; ~], nextTypeId: Int -> Result<Identities, Error> {
+    (recipes -> len) != (seeds -> len) or nextTypeId < 0
+        -> if { Result<Identities, Error>.Err(Error.InvalidType) -> return }
+    [Int; ~] => ids!
+    [Bool; ~] => visiting!
+    [Shape; ~] => shapes!
+    seeds -> each seed {
+        seed < -1 or seed >= nextTypeId
+            -> if { Result<Identities, Error>.Err(Error.InvalidType) -> return }
+        ids! -> push(seed)
+        visiting! -> push(false)
+    }
+    aliases -> each alias {
+        alias.identity < 0 or alias.identity >= nextTypeId
+            or alias.first < 0 or alias.first >= nextTypeId
+            or ((alias.kind -> kindKey) == 6 and (alias.second < 0 or alias.second >= nextTypeId))
+            -> if { Result<Identities, Error>.Err(Error.InvalidShape) -> return }
+        shapes! -> each existing {
+            (existing.kind -> kindKey) == (alias.kind -> kindKey) and existing.first == alias.first
+                and existing.second == alias.second and existing.length == alias.length
+                and existing.identity != alias.identity
+                -> if { Result<Identities, Error>.Err(Error.InvalidShape) -> return }
+        }
+        shapes! -> push(alias)
+    }
+    Allocation { shapes: shapes!, next: nextTypeId } => allocation!
+    roots -> each root { ids! -> resolve(visiting!, allocation!, root, recipes)? => identity }
+    Identities { ids: ids!, nextTypeId: allocation!.next } -> Result<Identities, Error>.Ok
+}

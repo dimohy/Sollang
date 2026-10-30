@@ -1,0 +1,53 @@
+import sollang.compiler.semantic.reference_synthetic_type_ids as ids
+
+report label: Text, result: move Result<ids.Identities, ids.Error> -> Unit uses Console {
+    result -> when {
+        Err(error) {
+            error -> when {
+                InvalidType => "invalid-type"
+                InvalidShape => "invalid-shape"
+                Cycle => "cycle"
+                TypeIdOverflow => "overflow"
+            } => reason
+            "$label\t$reason" -> println
+        }
+        Ok(registered) {
+            "$label\tnext\t$(registered.nextTypeId)" -> println
+            registered.ids -> each identity { "$label\tid\t$identity" -> println }
+        }
+    }
+}
+
+main {
+    [
+    ids.Recipe { kind: ids.Kind.Named, first: -1, second: -1, length: 0 },
+    ids.Recipe { kind: ids.Kind.Dynamic, first: 0, second: -1, length: 0 },
+    ids.Recipe { kind: ids.Kind.Dynamic, first: 0, second: -1, length: 0 },
+    ids.Recipe { kind: ids.Kind.Option, first: 1, second: -1, length: 0 },
+    ids.Recipe { kind: ids.Kind.Result, first: 3, second: 0, length: 0 }; ~] => recipes
+    [2, -1, -1, -1, -1; ~] => seeds
+    [ids.Shape; ~] => noAliases
+    [4, 2; ~] => roots
+    "shared" -> report(recipes -> ids.register(seeds, noAliases, roots, 100))
+    [ids.Shape { kind: ids.Kind.Dynamic, first: 2, second: -1, length: 0, identity: 23 }; ~] => aliases
+    "alias" -> report(recipes -> ids.register(seeds, aliases, roots, 100))
+    [5,; ~] => badRoots
+    "root" -> report(recipes -> ids.register(seeds, noAliases, badRoots, 100))
+    [-1, -1, -1, -1, -1; ~] => missingSeeds
+    "seed" -> report(recipes -> ids.register(missingSeeds, noAliases, roots, 100))
+    [ids.Recipe { kind: ids.Kind.Dynamic, first: 0, second: -1, length: 0 }; ~] => cyclic
+    [-1,; ~] => unseeded
+    [0,; ~] => firstRoot
+    "cycle" -> report(cyclic -> ids.register(unseeded, noAliases, firstRoot, 100))
+    [
+    ids.Recipe { kind: ids.Kind.Named, first: -1, second: -1, length: 0 },
+    ids.Recipe { kind: ids.Kind.Fixed, first: 0, second: -1, length: -1 }; ~] => invalidFixed
+    [2, -1; ~] => pairSeeds
+    [1,; ~] => secondRoot
+    "length" -> report(invalidFixed -> ids.register(pairSeeds, noAliases, secondRoot, 100))
+    [
+    ids.Shape { kind: ids.Kind.Dynamic, first: 2, second: -1, length: 0, identity: 23 },
+    ids.Shape { kind: ids.Kind.Dynamic, first: 2, second: -1, length: 0, identity: 24 }; ~] => conflict
+    "conflict" -> report(recipes -> ids.register(seeds, conflict, roots, 100))
+    "overflow" -> report(recipes -> ids.register(seeds, noAliases, roots, 2147483647))
+}
