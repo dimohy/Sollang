@@ -289,10 +289,10 @@ resolveMissingUnaryExpressionTypes prepared: ref semanticContext.SemanticSnapsho
     anyChanged!
 }
 
-# Match BindingStatement's InferContextualValue: a rebind literal receives the
-# visible original owner's numeric type. Non-literal values retain their own
-# type so a mismatched rebind remains diagnosable before lowering.
-resolveMutableRebindLiteralTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], owners: ref [Int; ~], bindingValues: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~] -> Bool {
+# BindingStatement supplies the original owner's numeric context to its value.
+# Reuse the field-value walk for terminal control arms and arithmetic; named
+# values, conditions and earlier branch statements retain independent types.
+resolveMutableRebindNumericTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], owners: ref [Int; ~], bindingValues: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedContextByAst: mut [Int; ~] -> Bool {
     false => changed!
     prepared.package.ranges -> each range {
         0 => symbolIndex!
@@ -301,32 +301,18 @@ resolveMutableRebindLiteralTypes prepared: ref semanticContext.SemanticSnapshot,
             owners[globalSymbol] => owner
             owner != globalSymbol and bindingValues[owner] >= 0 and bindingValues[globalSymbol] >= 0
                 -> if {
-                    bindingValues[globalSymbol] => valueGlobal
-                    prepared.package.nodes[valueGlobal] => value
-                    value.kind == 14 -> if {
-                        expressionIndexByAst[bindingValues[owner]] => ownerExpression
-                        expressionIndexByAst[valueGlobal] => valueExpression
-                        ownerExpression >= 0 and valueExpression >= 0
+                    expressionIndexByAst[bindingValues[owner]] => ownerExpression
+                    ownerExpression >= 0 -> if {
+                        expressions[ownerExpression].typeId => ownerTypeId
+                        ownerTypeId >= 0 and ownerTypeId < (types -> len)
                             -> if {
-                                expressions[ownerExpression].typeId => ownerTypeId
-                                ownerTypeId >= 0 and ownerTypeId < (types -> len)
+                                types[ownerTypeId] => ownerType
+                                ownerType.kind == 1 and ownerType.origin == 1
+                                    and ((ownerType.symbol >= 2 and ownerType.symbol <= 13)
+                                    or (ownerType.symbol >= 19 and ownerType.symbol <= 22))
                                     -> if {
-                                        types[ownerTypeId] => ownerType
-                                        ownerType.kind == 1 and ownerType.origin == 1
-                                            and ((ownerType.symbol >= 2 and ownerType.symbol <= 13)
-                                            or (ownerType.symbol >= 19 and ownerType.symbol <= 22))
-                                            -> if {
-                                                prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => source
-                                                source -> numericLiteralRange.literalUsesFloatingSyntax(value.start, value.start + value.length) => floatingSyntax
-                                                (not floatingSyntax or ownerType.symbol >= 19)
-                                                    and expressions[valueExpression].typeId != ownerTypeId
-                                                    -> if {
-                                                        expressions[valueExpression] => contextual!
-                                                        ownerTypeId => contextual!.typeId
-                                                        contextual! => expressions[valueExpression]
-                                                        true => changed!
-                                                    }
-                                            }
+                                        prepared.package -> resolveContextualRecordFieldValue(types, expressions, expressionIndexByAst, index, range.sourceModule, bindingValues[globalSymbol], ownerTypeId, expectedContextByAst)
+                                            -> if { true => changed! }
                                     }
                             }
                     }
