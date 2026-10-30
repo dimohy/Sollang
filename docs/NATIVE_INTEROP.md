@@ -307,6 +307,12 @@ lookup, and symbol lookup are cached at program entry. Steady-state scalar
 method calls use one indirect LLVM call and introduce no heap allocation,
 reflection, wrapper object, or per-call lookup.
 
+Checked `QueryInterface` requires both a nonnegative `HRESULT` and a nonnull
+output pointer. Failure preserves the original status in `Err`, including a
+success status paired with a null pointer. A rejected output conveys no owned
+interface reference and is not released. The result wrapper makes this
+decision once; the runtime helper preserves the raw status and pointer.
+
 The supported 0.3 COM surface covers activation, scalar methods returning `Unit` or
 `Result<scalar, Int32>`, checked `QueryInterface` conversions, explicit
 cloning, and deterministic release. Owning `BSTR` and `VARIANT` wrappers are

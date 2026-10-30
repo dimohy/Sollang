@@ -5901,6 +5901,12 @@ COM initialization. Inspect at most the first 1 MiB for that declaration,
 preserving matches across read boundaries. A failed inspection is a build
 error rather than evidence that COM imports are unnecessary.
 
+`QueryInterface` returns `Ok` only when its `HRESULT` is nonnegative and its
+output pointer is nonnull. Otherwise it returns `Err` with the original
+`Int32` status, including zero when a server reports success without a value.
+Only an accepted interface result acquires an owner; a rejected output is not
+released by the compiler.
+
 ### WASI Targets
 
 For WASI-style targets, initial lowering should use the target ABI's stdout

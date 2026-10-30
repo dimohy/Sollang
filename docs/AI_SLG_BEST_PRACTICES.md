@@ -1898,6 +1898,10 @@ For Windows COM, preserve the reference compiler's registered activation
 context and its separate direct class-factory path. Link COM imports from the
 generated declaration requirement in every native build path. Propagate a
 failed declaration scan as a build error before invoking the linker.
+For `QueryInterface`, preserve the raw status and pointer until the result
+wrapper checks both. Return the original status in `Err` and acquire ownership
+only for accepted success; do not release a rejected output or rewrite its
+status in a second helper policy.
 
 A generated checked package must preserve its validated standard-library source
 prefix. Use `emitCheckedFilesWithStandardLibrarySources` for the file-loading

@@ -1,0 +1,33 @@
+import sys.process as process
+
+com fixture class "8A90E2A5-7A2D-4E2A-98A0-6B5C2A12C501" from "artifacts/com-query-response/query_fixture" in mta {
+    interface Calculator "4C10A47B-725D-41D3-B5A6-70D67D3BEB11" {
+    }
+    interface Arithmetic "B214A96D-58CF-4311-A29B-6DF850801C74" {
+    }
+}
+
+native probe from "artifacts/com-query-response/query_fixture" {
+    mode value: Int32 -> Int32 as "query_fixture_set_mode"
+    references: -> Int32 as "com_fixture_live_references"
+}
+
+main {
+    process.arguments() => arguments
+    arguments -> len => count
+    count > 2 -> if { 0 } else { count > 1 -> if { 2 } else { 1 } } => mode
+    Int32(mode) -> probe.mode => configuredMode
+    fixture.create() -> when {
+        Ok(calculator) {
+            calculator -> fixture.queryArithmeticFromCalculator -> when {
+                Ok(value) => "query=ok" -> println
+                Err(status) => "query=$status" -> println
+            }
+            probe.references() => inside
+            "inside=$inside" -> println
+        }
+        Err(status) => "activation=$status" -> println
+    }
+    probe.references() => after
+    "after=$after" -> println
+}
