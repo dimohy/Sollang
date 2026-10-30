@@ -3,6 +3,46 @@ namespace sollang.compiler.toolchain
 import sys.process as process
 import sys.file as file
 
+# The caller claims the definition/library stage names. Match WindowsLinker's
+# explicit llvm-lib import generation instead of relying on CRT startup objects
+# to pull imports into a /noentry DLL.
+public createImportLibrary tool: Text, definitionPath: Text, libraryPath: Text, specification: Text -> Int uses Console, File, Process {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (specification -> len) -> while {
+        bytes! -> push(specification -> byte(index!))
+        index! + 1 => index!
+    }
+    definitionPath -> file.openWrite -> when {
+        Err(error) { "sollang: cannot open import definition '$definitionPath': $error" -> println
+            -1 -> return }
+        Ok(writer) {
+            writer -> writeRangeAt(bytes!, 0, UIntSize(bytes! -> len), 0) -> when {
+                Err(error) { "sollang: cannot write import definition '$definitionPath': $error" -> println
+                    -1 -> return }
+                Ok(count) { count != UIntSize(bytes! -> len) -> if {
+                        "sollang: incomplete import definition '$definitionPath' ($count bytes)" -> println
+                        -1 -> return
+                } }
+            }
+            writer -> file.sync -> unless {
+                "sollang: cannot sync import definition '$definitionPath'" -> println
+                -1 -> return
+            }
+        }
+    }
+    Arena(0) => definitionArgumentStorage!
+    Arena(0) => libraryArgumentStorage!
+    "/def:$definitionPath" -> materialize(definitionArgumentStorage!) => definitionArgument
+    "/out:$libraryPath" -> materialize(libraryArgumentStorage!) => libraryArgument
+    [tool, "/nologo", "/machine:x64", definitionArgument, libraryArgument; ~] => arguments
+    process.Command { argv: arguments, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } -> run -> when {
+        Ok(code) { code }
+        Err(error) { "sollang: cannot run import library tool '$tool': $error" -> println
+            -1 }
+    }
+}
+
 # An explicit CLI option owns precedence. When it is absent, use the same
 # process-level LLVM contract as the managed bootstrap compiler. Missing and
 # empty environment values deliberately remain empty so the caller can use
