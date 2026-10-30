@@ -10,6 +10,7 @@ param(
     [string]$FormatCheckCompiler = '',
     [string[]]$FormatCheckSource = @(),
     [string]$LlvmObservationContract = '',
+    [ValidateSet('managed', 'selfhost')][string[]]$CompilerSide = @('managed', 'selfhost'),
     [ValidateRange(1, 64)][int]$Jobs = 1
 )
 
@@ -17,9 +18,21 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
 . (Join-Path $PSScriptRoot 'ArtifactLifecycle.ps1')
+function Get-PairedFixtureCompilers([string]$ManagedPath, [string]$SelfhostPath, [string[]]$Side) {
+    if ($Side.Count -eq 0 -or @($Side | Select-Object -Unique).Count -ne $Side.Count -or
+        @($Side | Where-Object { $_ -cnotin @('managed', 'selfhost') }).Count -gt 0) {
+        throw 'PAIRED_COMPILER_SELECTION_INVALID'
+    }
+    # Keep managed-first ordering when both sides are requested.
+    @(
+        [pscustomobject]@{ Name = 'managed'; Path = $ManagedPath; Stdlib = $false },
+        [pscustomobject]@{ Name = 'selfhost'; Path = $SelfhostPath; Stdlib = $true }
+    ) | Where-Object { $_.Name -cin $Side }
+}
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $managed = (Resolve-Path -LiteralPath $ManagedCompiler).Path
 $selfhost = (Resolve-Path -LiteralPath $SelfhostCompiler).Path
+$compilers = @(Get-PairedFixtureCompilers $managed $selfhost $CompilerSide)
 $llvmRoot = Join-Path $root '.tools/llvm-22.1.8'
 $llvmAs = Join-Path $llvmRoot 'bin/llvm-as.exe'
 $closure = Join-Path $PSScriptRoot 'verify-llvm-direct-call-closure.ps1'
@@ -181,10 +194,7 @@ try {
     }
     foreach ($case in $cases) {
         $expected = if ($case.Runtime) { Normalized $case.Runtime.stdout } else { Normalized ([IO.File]::ReadAllText($case.Expected)) }
-        foreach ($compiler in @(
-            [pscustomobject]@{ Name = 'managed'; Path = $managed; Stdlib = $false },
-            [pscustomobject]@{ Name = 'selfhost'; Path = $selfhost; Stdlib = $true }
-        )) {
+        foreach ($compiler in $compilers) {
             $script:pairedCaseClock = [Diagnostics.Stopwatch]::StartNew()
             $prefix = Join-Path $output "$($case.Name).$($compiler.Name)"
             $exe = "$prefix.exe"
@@ -273,9 +283,11 @@ try {
     } | ForEach-Object { $generatedHashes[$_.FullName] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
     $result = [ordered]@{
         schemaVersion = 1
-        status = if ($null -eq $failure -and $rows.Count -eq 2 * $cases.Count) { 'passed' } else { 'failed' }
-        completed = [int][Math]::Floor($rows.Count / 2.0)
+        status = if ($null -eq $failure -and $rows.Count -eq $CompilerSide.Count * $cases.Count) { 'passed' } else { 'failed' }
+        completed = [int][Math]::Floor($rows.Count / [double]$CompilerSide.Count)
         total = $cases.Count
+        compilerSides = @($CompilerSide)
+        claimsPairedExecutionComplete = $CompilerSide.Count -eq 2 -and $null -eq $failure -and $rows.Count -eq 2 * $cases.Count
         timeoutMilliseconds = $TimeoutMilliseconds
         jobs = $Jobs
         inputStable = $drift.Count -eq 0
@@ -295,4 +307,4 @@ if ($null -ne $failure) { throw "$failure result=$(Join-Path $output 'result.jso
 Complete-VerifiedArtifactOutput -OutputDirectory $output -ReusableCompilerDirectories $ReusableCompilerDirectories
 # The caller owns the shared compiler's lifecycle and any other pending consumers.
 # This consumer closes only the fixture output it created.
-Write-Host "[compiler paired native] PASS $($cases.Count)/$($cases.Count); result=$(Join-Path $output 'result.json')"
+Write-Host "[compiler native fixtures] PASS $($cases.Count)/$($cases.Count); sides=$($CompilerSide -join ','); result=$(Join-Path $output 'result.json')"

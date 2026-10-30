@@ -31,8 +31,36 @@ $script:pairedCaseClock = $null
 $shellPath = (Get-Process -Id $PID).Path
 $rows = [Collections.Generic.List[object]]::new()
 $failure = $null
-$expectedControls = 12 + [int]([bool]$PreviousWrapper) + [int]([bool]$PreviousBudgetWrapper)
+$expectedControls = 18 + [int]([bool]$PreviousWrapper) + [int]([bool]$PreviousBudgetWrapper)
 try {
+    $selectionFunctions = @($ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-PairedFixtureCompilers'
+    }, $true))
+    if ($selectionFunctions.Count -ne 1) { throw 'PAIRED_SELECTION_FUNCTION_NOT_UNIQUE' }
+    . ([ScriptBlock]::Create($selectionFunctions[0].Extent.Text))
+    foreach ($selection in @(
+        @{ id = 'both-keep-managed-first'; sides = @('selfhost', 'managed'); expected = 'managed,selfhost' },
+        @{ id = 'native-only-does-not-select-managed'; sides = @('selfhost'); expected = 'selfhost' },
+        @{ id = 'managed-only-does-not-select-native'; sides = @('managed'); expected = 'managed' }
+    )) {
+        $selected = @(Get-PairedFixtureCompilers 'managed-artifact' 'native-artifact' $selection.sides)
+        if (($selected.Name -join ',') -cne $selection.expected -or
+            @($selected | Where-Object { $_.Path -cne $(if ($_.Name -ceq 'managed') { 'managed-artifact' } else { 'native-artifact' }) }).Count -ne 0) {
+            throw "PAIRED_COMPILER_SELECTION_MISMATCH: $($selection.id)"
+        }
+        $rows.Add([ordered]@{ id = $selection.id; passed = $true })
+    }
+    foreach ($selection in @(
+        @{ id = 'empty-selection-rejected'; sides = @() },
+        @{ id = 'duplicate-selection-rejected'; sides = @('selfhost', 'selfhost') },
+        @{ id = 'unknown-selection-rejected'; sides = @('alternate') }
+    )) {
+        $rejection = $null
+        try { $null = Get-PairedFixtureCompilers 'managed-artifact' 'native-artifact' $selection.sides }
+        catch { $rejection = $_.Exception.Message }
+        if ($rejection -cne 'PAIRED_COMPILER_SELECTION_INVALID') { throw "PAIRED_SELECTION_NOT_REJECTED: $($selection.id)" }
+        $rows.Add([ordered]@{ id = $selection.id; passed = $true })
+    }
     $overbudgetOutput = Join-Path $output 'overbudget-must-not-start'
     $overbudgetRejected = $false
     try {
@@ -116,6 +144,7 @@ try {
         $usesPrivateSeed = $true
         $ReusableCompilerDirectories = @($seedOutput)
         $cases = @('fixture')
+        $CompilerSide = @('managed', 'selfhost')
         function Write-Host { }
         function Complete-VerifiedArtifactOutput {
             param([string]$OutputDirectory, [switch]$KeepCompiler, [string[]]$ReusableCompilerDirectories)
@@ -154,14 +183,16 @@ try {
     }
     $countExpressions = [regex]::Matches([IO.File]::ReadAllText($wrapper), '(?m)^\s*completed = (.+)\r?$')
     if ($countExpressions.Count -ne 1) { throw 'PAIRED_COMPLETION_EXPRESSION_NOT_UNIQUE' }
-    $countCompleted = [ScriptBlock]::Create('param($rows) ' + $countExpressions[0].Groups[1].Value)
+    $countCompleted = [ScriptBlock]::Create('param($rows, $CompilerSide) ' + $countExpressions[0].Groups[1].Value)
     foreach ($countCase in @(
         @{ runs = 0; expected = 0 }, @{ runs = 1; expected = 0 },
         @{ runs = 2; expected = 1 }, @{ runs = 3; expected = 1 },
         @{ runs = 15; expected = 7 }, @{ runs = 16; expected = 8 }
     )) {
-        $actual = & $countCompleted ([pscustomobject]@{ Count = $countCase.runs })
+        $actual = & $countCompleted ([pscustomobject]@{ Count = $countCase.runs }) @('managed', 'selfhost')
         if ($actual -ne $countCase.expected) { throw "PAIRED_INCOMPLETE_PAIR_COUNTED: $($countCase.runs)" }
+        $single = & $countCompleted ([pscustomobject]@{ Count = $countCase.runs }) @('selfhost')
+        if ($single -ne $countCase.runs) { throw "PAIRED_SINGLE_SIDE_COUNT_MISMATCH: $($countCase.runs)" }
     }
     $rows.Add([ordered]@{ id = 'completed-pairs'; passed = $true; controls = 6; previousFailure = 'Three successful runs are one completed pair, not two.' })
     Add-Type -TypeDefinition @'
