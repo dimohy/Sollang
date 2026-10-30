@@ -60,9 +60,19 @@ function BytesEqual([byte[]]$Left, [byte[]]$Right) {
 # exited processes and cannot prove that a descendant still belongs to a job.
 $processBridge = Join-Path $PSScriptRoot 'verification_process_bridge.py'
 $processPython = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$script:caseStopwatch = $null
+function Get-RemainingCaseSeconds([double]$ElapsedMilliseconds) {
+    $remaining = 180000 - $ElapsedMilliseconds
+    if ($ElapsedMilliseconds -lt 0 -or $remaining -le 0) {
+        throw 'ASYNC_TASK_OBSERVABILITY_CASE_BUDGET_EXHAUSTED'
+    }
+    [Math]::Min(120.0, $remaining / 1000.0)
+}
 function Run([string]$File, [string[]]$Arguments, [string]$Description) {
+    if ($null -eq $script:caseStopwatch) { throw 'ASYNC_TASK_OBSERVABILITY_CASE_CONTEXT_REQUIRED' }
+    $remainingSeconds = Get-RemainingCaseSeconds $script:caseStopwatch.Elapsed.TotalMilliseconds
     $captureDirectory = Join-Path $OutputDirectory ('process-' + [Guid]::NewGuid().ToString('N'))
-    & $processPython $processBridge --repo $root --output $captureDirectory --timeout-seconds 120 -- $File @Arguments | Out-Null
+    & $processPython $processBridge --repo $root --output $captureDirectory --timeout-seconds $remainingSeconds -- $File @Arguments | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "$Description did not complete with confirmed owned-process shutdown: $captureDirectory" }
     $evidence = Get-Content -LiteralPath (Join-Path $captureDirectory 'result.json') -Raw | ConvertFrom-Json
     if (-not $evidence.inputsStable -or -not $evidence.processesStopped -or @($evidence.processes).Count -ne 1) {
@@ -133,17 +143,23 @@ if ($ValidateInputsOnly) {
 
 
 $record = [ordered]@{
-    schemaVersion=1; status='failed'; scope='async-task-observability-managed-matrix'
+    schemaVersion=1; status='running'; scope='async-task-observability-managed-matrix'
     compilerPath=$Compiler; expectedCompilerSha256=$ExpectedCompilerSha256
     compilerSha256Start=$startHashes.compiler; compilerSha256End=$startHashes.compiler; compilerDrift=$false
     inputHashesStart=$startHashes; inputHashesEnd=$startHashes; inputDrift=$false
     completed=0; total=13; cases=@(); failureIds=@(); rootProcessIds=@(); descendantProcessIds=@(); orphanProcessIds=@()
+    maximumCaseMilliseconds=180000
     schemaControls=[ordered]@{ positiveAccepted=$false; negativeRejected=0; negativeTotal=9 }
 }
 $resultPath = Join-Path $OutputDirectory 'result.json'
+function Save-MatrixResult {
+    [IO.File]::WriteAllText($resultPath, (($record | ConvertTo-Json -Depth 16) + "`n"), [Text.UTF8Encoding]::new($false))
+}
+Save-MatrixResult
 $failureId = 'ASYNC_TASK_OBSERVABILITY_MANAGED_MATRIX_PREFLIGHT_FAILED'
 try {
     foreach ($case in $cases) {
+        $script:caseStopwatch = [Diagnostics.Stopwatch]::StartNew()
         $item = [ordered]@{
             id=$case.id; class=$case.class; target=if($case.id -ceq 'browser-async-actionable-rejection'){'wasm32-browser'}else{'windows-x64'}
             expectation=$case.expectation; sourceSha256=Hash $paths["source:$($case.id)"]
@@ -218,11 +234,21 @@ try {
             $item.orphanProcessIds = @($item.orphanProcessIds | Sort-Object -Unique)
             if ($item.orphanProcessIds.Count -ne 0) { throw "$($case.id) left live descendants" }
         }
+        $item.wholeCaseElapsedMilliseconds = $script:caseStopwatch.Elapsed.TotalMilliseconds
+        if ($item.wholeCaseElapsedMilliseconds -gt $record.maximumCaseMilliseconds) {
+            throw 'ASYNC_TASK_OBSERVABILITY_CASE_BUDGET_EXHAUSTED'
+        }
+        $script:caseStopwatch.Stop()
         $record.cases += [pscustomobject]$item
         $record.completed++
+        Save-MatrixResult
     }
     $record.status = 'passed'
 } catch {
+    $record.status = 'failed'
+    if ($_.Exception.Message -in @('ASYNC_TASK_OBSERVABILITY_CASE_BUDGET_EXHAUSTED', 'ASYNC_TASK_OBSERVABILITY_CASE_CONTEXT_REQUIRED')) {
+        $failureId = $_.Exception.Message
+    }
     $record.failureIds = @($failureId)
     $record.failure = $_.Exception.Message
 } finally {
