@@ -1,0 +1,46 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        argument! + 1 => argument!
+    }
+    paths! -> semanticContext.prepareFiles => prepared
+    prepared.package.ranges -> each range {
+        prepared.package.sources[range.sourceModule] -> slice(0, prepared.package.sources[range.sourceModule] -> len) => source
+        prepared.modules[range.sourceModule] => identity
+        0 => index!
+        index! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + index!] => symbol
+            symbol.kind == 7 or symbol.kind == 31 -> if {
+                symbol.parent => ancestor!
+                false => local!
+                ancestor! >= 0 and not local! -> while {
+                    prepared.package.symbols[range.symbolStart + ancestor!] => parent
+                    parent.kind == 7 or parent.kind == 31 -> if { true => local! } else { parent.parent => ancestor! }
+                }
+                not local! -> if {
+                    [UInt8; ~] => bytes!
+                    source -> diagnostics.appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, bytes!)
+                    bytes! -> file.borrowBytes => owner
+                    owner -> slice(0, owner -> len) => name
+                    "F\t$(range.sourceModule)\t$(index!)\t$(symbol.flags)\t$name\t$(symbol.typeNode)\t$(symbol.secondaryTypeNode)\t$(symbol.blockTypeNode)\t$(symbol.blockResultTypeNode)" -> println
+                }
+            }
+            index! + 1 => index!
+        }
+    }
+    prepared.semantic.types -> each type {
+        type.kind == 1 and type.origin == 3 -> if {
+            prepared.package.ranges[type.module] => range
+            prepared.package.symbols[range.symbolStart + type.symbol] => parameter
+            "G\t$(type.module)\t$(type.symbol)\t$(parameter.parent)\t$(parameter.nameToken)" -> println
+        }
+    }
+}

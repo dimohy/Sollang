@@ -4,7 +4,7 @@ namespace sollang.compiler.semantic.reference_synthetic_type_ids
 # Callers retain declaration traversal order and supply nominal/builtin seeds.
 # This is not connected to production ABI diagnostics until full registration
 # and actual diagnostic consumption have matching C# and SLG evidence.
-public enum Kind { Named, Slice, Dynamic, Fixed, Reference, Option, Result }
+public enum Kind { Named, Slice, Dynamic, Fixed, Reference, Option, Result, Task, Stream, EventStream, Product, ProductField }
 
 public struct Recipe {
     public kind: Kind
@@ -36,11 +36,44 @@ kindKey kind: Kind -> Int => kind -> when {
     Reference => 4
     Option => 5
     Result => 6
+    Task => 7
+    Stream => 8
+    EventStream => 9
+    Product => 10
+    ProductField => 11
 }
 
 struct Allocation {
     shapes: [Shape; ~]
+    fields: [Shape; ~]
     next: Int
+}
+
+# Product field keys are internal chain identities, not TypeIds. Interning the
+# complete label/value/tail tuple preserves field order without allocating a
+# compiler type for each field. Label keys are supplied after exact byte checks.
+internFields ids: mut [Int; ~], visiting: mut [Bool; ~], allocation: mut Allocation, index: Int, remaining: Int, recipes: ref [Recipe; ~] -> Result<Int, Error> {
+    remaining == 0 -> if {
+        index < 0 -> if { Result<Int, Error>.Ok(0) -> return }
+        Result<Int, Error>.Err(Error.InvalidShape) -> return
+    }
+    remaining < 0 or index < 0 or index >= (recipes -> len)
+        -> if { Result<Int, Error>.Err(Error.InvalidShape) -> return }
+    recipes[index] => field
+    (field.kind -> kindKey) != 11 or field.length < 0
+        -> if { Result<Int, Error>.Err(Error.InvalidShape) -> return }
+    ids -> resolve(visiting, allocation, field.first, recipes)? => value
+    ids -> internFields(visiting, allocation, field.second, remaining - 1, recipes)? => tail
+    0 => fieldIndex!
+    fieldIndex! < (allocation.fields -> len) -> while {
+        allocation.fields[fieldIndex!] => existing
+        existing.first == value and existing.second == tail and existing.length == field.length
+            -> if { Result<Int, Error>.Ok(fieldIndex! + 1) -> return }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    (allocation.fields -> len) + 1 => key
+    allocation.fields -> push(Shape { kind: Kind.ProductField, first: value, second: tail, length: field.length, identity: key })
+    Result<Int, Error>.Ok(key)
 }
 
 resolve ids: mut [Int; ~], visiting: mut [Bool; ~], allocation: mut Allocation, index: Int, recipes: ref [Recipe; ~] -> Result<Int, Error> {
@@ -51,12 +84,14 @@ resolve ids: mut [Int; ~], visiting: mut [Bool; ~], allocation: mut Allocation, 
     visiting[index]
         -> if { Result<Int, Error>.Err(Error.Cycle) -> return }
     recipes[index] => recipe
-    (recipe.kind -> kindKey) == 0
+    (recipe.kind -> kindKey) == 0 or (recipe.kind -> kindKey) == 11
         -> if { Result<Int, Error>.Err(Error.InvalidType) -> return }
     (recipe.kind -> kindKey) == 3 and recipe.length < 0
         -> if { Result<Int, Error>.Err(Error.InvalidShape) -> return }
     true => visiting[index]
-    ids -> resolve(visiting, allocation, recipe.first, recipes)? => first
+    (recipe.kind -> kindKey) == 10 -> if {
+        ids -> internFields(visiting, allocation, recipe.first, recipe.length, recipes)?
+    } else { ids -> resolve(visiting, allocation, recipe.first, recipes)? } => first
     (recipe.kind -> kindKey) == 6 -> if {
         ids -> resolve(visiting, allocation, recipe.second, recipes)?
     } else { -1 } => second
@@ -113,7 +148,7 @@ public register recipes: ref [Recipe; ~], seeds: ref [Int; ~], aliases: ref [Sha
         }
         shapes! -> push(alias)
     }
-    Allocation { shapes: shapes!, next: nextTypeId } => allocation!
+    Allocation { shapes: shapes!, fields: [Shape; ~], next: nextTypeId } => allocation!
     roots -> each root { ids! -> resolve(visiting!, allocation!, root, recipes)? => identity }
     Identities { ids: ids!, nextTypeId: allocation!.next } -> Result<Identities, Error>.Ok
 }

@@ -1,7 +1,9 @@
 namespace sollang.compiler.semantic.reference_prepared_type_ids
 
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.reference_type_ids as nominal
 import sollang.compiler.semantic.reference_synthetic_type_ids as synthetic
 import sys.file as file
@@ -103,7 +105,167 @@ appendTraitRoots prepared: ref semanticContext.SemanticSnapshot, roots: mut [Int
     }
 }
 
-public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> {
+genericIdentity prepared: ref semanticContext.SemanticSnapshot, module: Int, symbol: Int -> Int {
+    prepared.package.ranges[module] => range
+    prepared.package.symbols[range.symbolStart + symbol] => parameter
+    0 => ordinal!
+    0 => index!
+    index! < range.symbolCount -> while {
+        prepared.package.symbols[range.symbolStart + index!] => candidate
+        candidate.kind == 32 and candidate.parent == parameter.parent and candidate.nameToken < parameter.nameToken
+            -> if { ordinal! + 1 => ordinal! }
+        index! + 1 => index!
+    }
+    512 + ordinal!
+}
+
+productLabels prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
+    [Int; ~] => labels!
+    prepared.semantic.types -> each type { labels! -> push(0) }
+    [Int; ~] => modules!
+    [Int; ~] => tokens!
+    prepared.semantic.fields -> each field {
+        field.fieldSymbol < 0 and field.ownerType >= 0 and field.labelToken >= 0
+            -> if {
+                prepared.semantic.types[field.ownerType] => product
+                product.kind == 10 -> if {
+                    prepared.package.ranges[field.sourceModule] => range
+                    prepared.package.tokens[range.tokenStart + field.labelToken] => token
+                    prepared.package.sources[field.sourceModule] -> slice(token.span.start, token.span.length) => name
+                    -1 => label!
+                    0 => index!
+                    index! < (modules! -> len) and label! < 0 -> while {
+                        prepared.package.ranges[modules![index!]] => existingRange
+                        prepared.package.tokens[existingRange.tokenStart + tokens![index!]] => existingToken
+                        prepared.package.sources[modules![index!]] -> slice(existingToken.span.start, existingToken.span.length) => existing
+                        name == existing -> if { index! + 1 => label! }
+                        index! + 1 => index!
+                    }
+                    label! < 0 -> if {
+                        modules! -> push(field.sourceModule)
+                        tokens! -> push(field.labelToken)
+                        modules! -> len => label!
+                    }
+                    product.first => component!
+                    0 => ordinal!
+                    ordinal! < field.ordinal and component! >= 0 -> while {
+                        prepared.semantic.types[component!].second => component!
+                        ordinal! + 1 => ordinal!
+                    }
+                    component! >= 0 -> if { label! => labels![component!] }
+                }
+            }
+    }
+    labels!
+}
+
+# Modes mirror BindFunctionDeclaration: ordinary signatures defer composite
+# generic syntax; ownership and intrinsic/block results parse the full shape;
+# block inputs defer any occurrence of a generic parameter.
+appendSignatureRoot prepared: ref semanticContext.SemanticSnapshot, typeId: Int, mode: Int, roots: mut [Int; ~] -> Unit {
+    typeId < 0 -> if { return }
+    prepared.semantic.types[typeId] => type
+    mode != 1 and type.containsParameter -> if {
+        mode == 2 or type.kind != 1 -> if { return }
+    }
+    roots -> push(typeId)
+}
+
+intrinsicDeclaration prepared: ref semanticContext.SemanticSnapshot, module: Int, functionAst: Int -> Bool {
+    prepared.package.ranges[module] => range
+    prepared.package.nodes[range.astStart + functionAst] => node
+    node.firstToken + node.tokenCount - 1 => index!
+    index! >= node.firstToken -> while {
+        prepared.package.tokens[range.tokenStart + index!] => token
+        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment() and token.kind != grammar.tokenIdNewLine()
+            -> if {
+                (prepared.package.sources[module] -> slice(token.span.start, token.span.length)) == "intrinsic" -> return
+            }
+        index! - 1 => index!
+    }
+    false
+}
+
+appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: ref [Int; ~], roots: mut [Int; ~] -> Unit {
+    prepared.package.ranges -> each range {
+        0 => functionIndex!
+        functionIndex! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + functionIndex!] => function
+            function.kind == 7 or function.kind == 31 -> if {
+                function.parent => ancestor!
+                false => local!
+                ancestor! >= 0 and not local! -> while {
+                    prepared.package.symbols[range.symbolStart + ancestor!] => parent
+                    parent.kind == 7 or parent.kind == 31 -> if { true => local! } else { parent.parent => ancestor! }
+                }
+                not local! -> if {
+                    false => valueGeneric!
+                    -1 => primary!
+                    0 => index!
+                    index! < range.symbolCount -> while {
+                        prepared.package.symbols[range.symbolStart + index!] => symbol
+                        symbol.parent == functionIndex! -> if {
+                            symbol.kind == 32 -> if {
+                                prepared.package -> analysis.declaresIntegerValueGeneric(range.sourceModule, function.astNode, symbol.nameToken)
+                                    -> if { true => valueGeneric! }
+                            }
+                            symbol.kind == 35 and symbol.astNode == function.astNode
+                                -> if {
+                                    symbol.typeNode >= 0 -> if { references[range.astStart + symbol.typeNode] => primary! } else {
+                                        function.kind == 31 and function.parent >= 0 -> if {
+                                            prepared.package.symbols[range.symbolStart + function.parent] => owner
+                                            prepared.package -> typeIds.implOwnerTypeAst(range.sourceModule, owner.astNode) => ownerAst
+                                            ownerAst >= 0 -> if { references[range.astStart + ownerAst] => primary! }
+                                        }
+                                    }
+                                }
+                        }
+                        index! + 1 => index!
+                    }
+                    prepared -> appendSignatureRoot(primary!, 0, roots)
+                    function.typeNode => resultAst!
+                    function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultAst! } else {
+                        function.kind == 7 and primary! >= 0
+                            -> if { -1 => resultAst! }
+                    }
+                    resultAst! >= 0 -> if {
+                        prepared.modules[range.sourceModule] => module
+                        prepared.package.sources[range.sourceModule] -> slice(module.pathStart, module.pathLength) => moduleName
+                        prepared.package.tokens[range.tokenStart + function.nameToken] => nameToken
+                        prepared.package.sources[range.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+                        moduleName == "sys.runtime" and (name == "parallel" or name == "tryParallel") => parallelRole
+                        not parallelRole and (prepared -> intrinsicDeclaration(range.sourceModule, function.astNode))
+                            -> if { 1 } else { 0 } => mode
+                        prepared -> appendSignatureRoot(references[range.astStart + resultAst!], mode, roots)
+                    }
+                    function.blockTypeNode >= 0 -> if { prepared -> appendSignatureRoot(references[range.astStart + function.blockTypeNode], 2, roots) }
+                    function.blockResultTypeNode >= 0 -> if { prepared -> appendSignatureRoot(references[range.astStart + function.blockResultTypeNode], 1, roots) }
+                    not valueGeneric! and function.flags % 4 != 0
+                        -> if { prepared -> appendSignatureRoot(primary!, 1, roots) }
+                    0 => index!
+                    index! < range.symbolCount -> while {
+                        prepared.package.symbols[range.symbolStart + index!] => parameter
+                        parameter.kind == 35 and parameter.parent == functionIndex! and parameter.astNode != function.astNode and parameter.typeNode >= 0
+                            -> if {
+                                references[range.astStart + parameter.typeNode] => typeId
+                                prepared -> appendSignatureRoot(typeId, 0, roots)
+                                not valueGeneric! and parameter.flags % 4 != 0
+                                    -> if { prepared -> appendSignatureRoot(typeId, 1, roots) }
+                            }
+                        index! + 1 => index!
+                    }
+                }
+            }
+            functionIndex! + 1 => functionIndex!
+        }
+    }
+}
+
+public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(false)
+
+public registerDeclarations prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(true)
+
+registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarations: Bool -> Result<synthetic.Identities, Error> {
     [nominal.NominalDeclaration; ~] => declarations!
     [UInt8; ~] => strings!
     [Int; ~] => declarationBySymbol!
@@ -136,6 +298,8 @@ public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthet
     [0, 1, 2, 4, 5, 2, 6, 6, 7, 8, 9, 10, 11, 12, 13, 15, 14, 16, 17, 18, 18, 19, 19, 3, 31, 43] => builtins
     [Int; ~] => seeds!
     [synthetic.Recipe; ~] => recipes!
+    prepared -> productLabels => labels
+    0 => typeIndex!
     prepared.semantic.types -> each type {
         -1 => seed!
         type.kind == 1 -> if {
@@ -151,26 +315,42 @@ public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthet
                         }
                 }
         }
+        includeDeclarations and type.kind == 1 and type.origin == 3
+            -> if {
+                prepared -> genericIdentity(type.module, type.symbol) => seed!
+            }
         seeds! -> push(seed!)
         type.kind -> when {
             == 2 => synthetic.Kind.Slice
             == 3 => synthetic.Kind.Dynamic
             == 4 => synthetic.Kind.Fixed
             == 8 => synthetic.Kind.Reference
+            == 10 => synthetic.Kind.Product
+            == 11 => synthetic.Kind.ProductField
             == 7 {
-                type.origin == 4 and type.symbol == 0 -> if { synthetic.Kind.Option } else {
-                    type.origin == 4 and type.symbol == 1 -> if { synthetic.Kind.Result } else { synthetic.Kind.Named }
-                }
+                type.origin == 4 -> if {
+                    type.symbol -> when {
+                        == 0 => synthetic.Kind.Option
+                        == 1 => synthetic.Kind.Result
+                        == 2 => synthetic.Kind.Task
+                        == 3 => synthetic.Kind.Stream
+                        == 4 => synthetic.Kind.EventStream
+                        else => synthetic.Kind.Named
+                    }
+                } else { synthetic.Kind.Named }
             }
             else => synthetic.Kind.Named
         } => kind
         recipes! -> push(synthetic.Recipe {
             kind: kind
             first: type.first
-            second: type.kind == 7 and type.origin == 4 and type.symbol == 1
+            second: (type.kind == 7 and type.origin == 4 and type.symbol == 1) or type.kind == 11
                 -> if { type.second } else { -1 }
-            length: type.kind == 4 -> if { type.length } else { 0 }
+            length: type.kind == 4 or type.kind == 10 -> if { type.length } else {
+                type.kind == 11 -> if { labels[typeIndex!] } else { 0 }
+            }
         })
+        typeIndex! + 1 => typeIndex!
     }
     # These canonical runtime aliases are reserved by BuildTypeDefinitions
     # before all field roots, and share their IDs with Result annotations.
@@ -208,6 +388,7 @@ public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthet
         }
     }
     prepared -> appendTraitRoots(roots!)
+    includeDeclarations -> if { prepared -> appendFunctionRoots(references!, roots!) }
     recipes! -> synthetic.register(seeds!, aliases, roots!, boxed.nextTypeId) -> when {
         Err(error) { Result<synthetic.Identities, Error>.Err(Error.Synthetic(error)) }
         Ok(registered) { Result<synthetic.Identities, Error>.Ok(registered) }
