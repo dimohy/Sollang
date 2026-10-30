@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-30T18:58:24.212833+00:00",
+  "decisions": [
+    {
+      "id": "llvm-generation.string-literal-layout-and-utf8-byte-emission",
+      "managedSources": [
+        "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs",
+        "src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs"
+      ],
+      "selfhostSources": [
+        "selfhost/llvm/text/text_literals.slg"
+      ],
+      "structure": "C# normalizes parsed Text then UTF8-encodes global constants; SLG normalizes source-local raw layout and emits source UTF8 bytes directly",
+      "branches": "Ordinary n/r/t/backslash escapes, raw inline exclusion, source-only multiline indent removal, raw UTF8/quote/backslash emission; metadata raw strings retain lexical content",
+      "logic": "Raw length and byte emission share RawStringLayout/RawStringLine; ordinary decode only supported escapes; printable ASCII except quote/backslash emits directly, all other bytes emit uppercase two-digit LLVM hex",
+      "diagnostics": "Parser owns invalid raw layout and interpolation errors; literal byte emitter consumes admitted canonical tokens and does not select new syntax diagnostics",
+      "relatedManagedSources": [
+        "src/Sollang.Compiler/Parsing/StringLiteralParser.cs"
+      ],
+      "retainedSourceComparison": "P:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\literal-byte-emission-source-comparison01.json",
+      "status": "complete",
+      "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21041-scalar/source-comparison.json",
+      "completionScope": "Named source association only; no new compiler execution, whole numeric/string behavior, phase or platform acceptance."
+    },
+    {
+      "id": "llvm-generation.finite-floating-literal-bit-encoding",
+      "managedSources": [
+        "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs"
+      ],
+      "selfhostSources": [
+        "selfhost/llvm/floating_literals.slg",
+        "selfhost/llvm/text/foundation.slg"
+      ],
+      "structure": "CSharp formats the already rounded Float32 value as exact binary64 hexadecimal, or uses actual Float64 bits. SLG Encoding retains sign separately from the binary64 magnitude and writes sixteen uppercase hexadecimal digits.",
+      "branches": "Width32 versus64; sign and signed zero; finite normal/subnormal result, underflow zero, overflow rejection, decimal exponent and separators, exact character scalar conversion.",
+      "logic": "CSharp lexer removes source separators before NumberExpression. SLG source encoding skips admitted separators, builds exact decimal numerator/denominator, rounds a24/53-bit significand ties-to-even, then expresses Float32 normal/subnormal results in the exact double representation. This maps the producer/consumer decisions without claiming equality for every possible numeric spelling.",
+      "diagnostics": "CSharp TryParse plus IsFinite rejects overflow before publishing a literal; SLG invalid Encoding is consumed by the existing range diagnostic path. Numeric all-value/whole-platform parity remains a final verification scope.",
+      "relatedManagedSources": [
+        "src/Sollang.Compiler.Generators/LexerSourceGenerator.cs"
+      ],
+      "status": "complete",
+      "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21041-scalar/source-comparison.json",
+      "completionScope": "Named source association only; no new compiler execution, whole numeric/string behavior, phase or platform acceptance."
+    },
+    {
+      "id": "llvm-generation.signed-and-unsigned-decimal-format",
+      "managedSources": [
+        "src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeHelpers.cs"
+      ],
+      "selfhostSources": [
+        "selfhost/llvm/emitter/number_format.slg"
+      ],
+      "structure": "Both emit shared u64 and i64 decimal format helpers into caller-owned destination storage.",
+      "branches": "Zero value, repeated quotient/remainder digits, nonnegative signed value and negative signed value including minimum64-bit magnitude.",
+      "logic": "Unsigned digit count/write loops match instruction for instruction. Signed helper writes the minus byte, computes wrapping0-value and delegates to the unsigned helper. The complete two current raw LLVM function bodies match after indentation/blank-line/function-attribute normalization only.",
+      "diagnostics": "These helpers return exact byte lengths and do not allocate or choose source diagnostics. Buffer ownership/printing failure remains at their callers; no new runtime execution claim.",
+      "status": "complete",
+      "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21041-scalar/source-comparison.json",
+      "completionScope": "Named source association only; no new compiler execution, whole numeric/string behavior, phase or platform acceptance."
+    }
+  ],
+  "rawFormatMatches": [
+    {
+      "function": "sollang_format_u64",
+      "equal": true,
+      "normalizedLineCount": 30,
+      "normalizedSha256": "E329C05008BC9E673790AE0CF57389126D8DA0D56AB924FA11B90E01694653F6"
+    },
+    {
+      "function": "sollang_format_i64",
+      "equal": true,
+      "normalizedLineCount": 15,
+      "normalizedSha256": "51DB2B03F6DA78DEA1A453DEEF4C9D45AFD3A5FA133529132913E3FFA289C2D2"
+    }
+  ],
+  "sourceHashes": {
+    "selfhost/llvm/emitter/number_format.slg": "6D1B019D1F68538381B91DF33E8785B8665F1B137D5DA8BE5BB671B2137B5AC4",
+    "selfhost/llvm/floating_literals.slg": "601A61EC2DB1AB7DD26DD78FFFE4569A5CE880F1E32FFCEDF60F6A27E467673D",
+    "selfhost/llvm/text/foundation.slg": "91592A3F32DB92117E1CECE5FA8CAB94F1FD2FE0237F27E28BE59DFC616CFD1A",
+    "selfhost/llvm/text/text_literals.slg": "FC1A597E37D8CF3177F8418CD28F6EB9E2EC52C7DB311DB3C07D580C03F9BE4A",
+    "src/Sollang.Compiler.Generators/LexerSourceGenerator.cs": "D4D139E9B6EC1F13529766A00E7C0AE8EB3ED2F2A592C92008BD99ACD7BBCCD6",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs": "8873B3E6E4B76AAD4E248F0CD2E500DF3539236943FD56C776E58422CD467156",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeHelpers.cs": "119420F1B843E973401D222F42F793F421C448AC6F3DBC4BADFA0FC20E003864",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs": "09C05DE2DDB7EF7BC01AAEEF5EAF6190D51E0A6AAA2D7FCE917E7BDA20B4D696",
+    "src/Sollang.Compiler/Parsing/StringLiteralParser.cs": "FD7D272621E8B87C4776CDB22ED0B19DAEE099BB136C0B4164D8422EB5D694B5"
+  },
+  "compilerExecutions": 0,
+  "claimsPhaseComplete": false,
+  "claimsGoalComplete": false
+}

@@ -4264,7 +4264,13 @@
           "llvm-generation.checked-bounded-storage-layout",
           "llvm-generation.codegen-unit-identity-and-publication",
           "llvm-generation.platform-secure-random-iteration",
-          "llvm-generation.dns-platform-descriptor-and-owned-result"
+          "llvm-generation.dns-platform-descriptor-and-owned-result",
+          "llvm-generation.arena-allocation-and-byte-bounds",
+          "llvm-generation.bitset-inline-slot-and-tail-count",
+          "llvm-generation.string-literal-layout-and-utf8-byte-emission",
+          "llvm-generation.finite-floating-literal-bit-encoding",
+          "llvm-generation.signed-and-unsigned-decimal-format",
+          "llvm-generation.target-descriptor-and-capability-configuration"
         ],
         "decisions": [
           {
@@ -5180,6 +5186,123 @@
             "retainedSourceReview": "scripts/contracts/evidence/source13293/current-physical-source-review13307.json#sourceReviewNotes",
             "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21017-associations/source-comparison.json",
             "completionScope": "Named source association only; no whole source phase, platform execution, performance, runtime or Stage credit."
+          },
+          {
+            "id": "llvm-generation.arena-allocation-and-byte-bounds",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.Arena.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/text/containers.slg",
+              "selfhost/llvm/text/function_calls.slg",
+              "selfhost/llvm/text/ownership.slg"
+            ],
+            "structure": "CSharp RuntimeArena carries pointer/used/capacity; SLG canonical arena aggregate carries the same fields and shared runtime helpers mutate canonical storage slots. Function dispatch selects the actual arena constructor before ordinary calls.",
+            "branches": "Signed versus unsigned input widening, negative size, zero initial capacity, nonzero power-of-two alignment, padding/end overflow, capacity fit versus growth, and byte offset below used.",
+            "logic": "Both allocate at least one byte initially, compute offset by checked unsigned alignment, grow to max(doubled,end), copy used bytes then release the old allocation and publish new fields. SLG isolates failure/growth CFG in helpers while preserving caller predecessor identities.",
+            "diagnostics": "Invalid signed dimensions, alignment, unsigned wrap, out-of-bounds byte access and allocation failure trap. Existing target capability admission remains separate. This is source comparison of the named64-bit paths, not a new runtime or wasm claim.",
+            "status": "complete",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21038-memory/source-comparison.json",
+            "completionScope": "Named source-decision connection only; no new runtime, allocation, whole phase or platform acceptance credit."
+          },
+          {
+            "id": "llvm-generation.bitset-inline-slot-and-tail-count",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.BitSet.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/text/containers.slg",
+              "selfhost/llvm/emitter/type_queries.slg"
+            ],
+            "structure": "CSharp fixed inline bitset storage and SLG canonical bitset aggregate use64-bit words. Mutation targets the existing owner slot or mutable-borrow parameter; readonly operations consume the current aggregate.",
+            "branches": "Contains, set, remove, count and declared bit count; in-range versus invalid index; readonly aggregate versus mutable slot; whole-word versus final partial-word count.",
+            "logic": "Both select word index>>6 and bit index&63, use1<<bit for contains/or/clear, mask unused tail bits before ctpop and return the summed count as i32. SLG explicitly widens/sign-checks an index before unsigned bound comparison; the canonical CSharp i32 unsigned comparison rejects the same negative indices.",
+            "diagnostics": "Invalid index traps before storage access; final-bit masking prevents padding bits contributing to count. No heap materialization is introduced by the SLG read/mutation paths. No execution or whole file branch-coverage claim.",
+            "status": "complete",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21038-memory/source-comparison.json",
+            "completionScope": "Named source-decision connection only; no new runtime, allocation, whole phase or platform acceptance credit."
+          },
+          {
+            "id": "llvm-generation.string-literal-layout-and-utf8-byte-emission",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs",
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/text/text_literals.slg"
+            ],
+            "structure": "C# normalizes parsed Text then UTF8-encodes global constants; SLG normalizes source-local raw layout and emits source UTF8 bytes directly",
+            "branches": "Ordinary n/r/t/backslash escapes, raw inline exclusion, source-only multiline indent removal, raw UTF8/quote/backslash emission; metadata raw strings retain lexical content",
+            "logic": "Raw length and byte emission share RawStringLayout/RawStringLine; ordinary decode only supported escapes; printable ASCII except quote/backslash emits directly, all other bytes emit uppercase two-digit LLVM hex",
+            "diagnostics": "Parser owns invalid raw layout and interpolation errors; literal byte emitter consumes admitted canonical tokens and does not select new syntax diagnostics",
+            "relatedManagedSources": [
+              "src/Sollang.Compiler/Parsing/StringLiteralParser.cs"
+            ],
+            "retainedSourceComparison": "P:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\literal-byte-emission-source-comparison01.json",
+            "status": "complete",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21041-scalar/source-comparison.json",
+            "completionScope": "Named source association only; no new compiler execution, whole numeric/string behavior, phase or platform acceptance."
+          },
+          {
+            "id": "llvm-generation.finite-floating-literal-bit-encoding",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/floating_literals.slg",
+              "selfhost/llvm/text/foundation.slg"
+            ],
+            "structure": "CSharp formats the already rounded Float32 value as exact binary64 hexadecimal, or uses actual Float64 bits. SLG Encoding retains sign separately from the binary64 magnitude and writes sixteen uppercase hexadecimal digits.",
+            "branches": "Width32 versus64; sign and signed zero; finite normal/subnormal result, underflow zero, overflow rejection, decimal exponent and separators, exact character scalar conversion.",
+            "logic": "CSharp lexer removes source separators before NumberExpression. SLG source encoding skips admitted separators, builds exact decimal numerator/denominator, rounds a24/53-bit significand ties-to-even, then expresses Float32 normal/subnormal results in the exact double representation. This maps the producer/consumer decisions without claiming equality for every possible numeric spelling.",
+            "diagnostics": "CSharp TryParse plus IsFinite rejects overflow before publishing a literal; SLG invalid Encoding is consumed by the existing range diagnostic path. Numeric all-value/whole-platform parity remains a final verification scope.",
+            "relatedManagedSources": [
+              "src/Sollang.Compiler.Generators/LexerSourceGenerator.cs"
+            ],
+            "status": "complete",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21041-scalar/source-comparison.json",
+            "completionScope": "Named source association only; no new compiler execution, whole numeric/string behavior, phase or platform acceptance."
+          },
+          {
+            "id": "llvm-generation.signed-and-unsigned-decimal-format",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeHelpers.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/emitter/number_format.slg"
+            ],
+            "structure": "Both emit shared u64 and i64 decimal format helpers into caller-owned destination storage.",
+            "branches": "Zero value, repeated quotient/remainder digits, nonnegative signed value and negative signed value including minimum64-bit magnitude.",
+            "logic": "Unsigned digit count/write loops match instruction for instruction. Signed helper writes the minus byte, computes wrapping0-value and delegates to the unsigned helper. The complete two current raw LLVM function bodies match after indentation/blank-line/function-attribute normalization only.",
+            "diagnostics": "These helpers return exact byte lengths and do not allocate or choose source diagnostics. Buffer ownership/printing failure remains at their callers; no new runtime execution claim.",
+            "status": "complete",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21041-scalar/source-comparison.json",
+            "completionScope": "Named source association only; no new compiler execution, whole numeric/string behavior, phase or platform acceptance."
+          },
+          {
+            "id": "llvm-generation.target-descriptor-and-capability-configuration",
+            "status": "complete",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmRuntimePlatform.cs",
+              "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs",
+              "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs",
+              "src/Sollang.Compiler/CodeGen/WasmBrowserLlvmRuntimePlatform.cs",
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/target.slg",
+              "selfhost/llvm/text/entrypoints.slg",
+              "selfhost/llvm/text/runtime_preamble.slg"
+            ],
+            "relatedManagedSources": [
+              "src/Sollang.Compiler/TargetContract.cs"
+            ],
+            "structure": "CSharp platform factory and TargetContract feed one LLVM emitter. SLG target descriptors feed PrepareRequest/context before target-specific emission; semantic architecture enum meanings correspond despite different internal discriminant numbers.",
+            "branches": "Windows/Linux x64 runtime CPU dispatch with required SSE2 and optional feature mask1022; browser wasm32 baseline-only with zero optional features. Native compute/async/concurrent streams are enabled on Windows/Linux and gated off on browser targets.",
+            "logic": "Target triples and pointer widths match. SLG preparation transports architecture, dispatch policy and required/allowed/forbidden feature masks without deriving a replacement default. Wasm retains explicit hosted heap/source interfaces and unsupported filesystem stubs; their presence is not a browser filesystem capability claim.",
+            "diagnostics": "Current CSharp codegen capability guards and SLG target admission retain named unsupported native interop/COM/concurrency/browser boundaries. This comparison records descriptor selection and observed gates only; it does not certify every platform primitive or actual cross-platform execution.",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/source21044-target/source-comparison.json",
+            "completionScope": "Named target configuration source connection only; whole platform/runtime/performance and phase execution remain pending."
           }
         ],
         "sourceComparisonRecord": null,
