@@ -19439,10 +19439,7 @@ internal sealed partial class SemanticCompiler
     }
 
     private SollangException Error(int line, int column, string message) =>
-        ErrorAtModule(line, column,
-            _currentFunctionIsMain && _currentInterpolationOwnershipScope is not null
-                ? "<main>" : _currentModuleName,
-            message);
+        ErrorAtModule(line, column, _currentModuleName, message);
 
     private static SollangException ErrorAtModule(int line, int column, string moduleName, string message)
     {

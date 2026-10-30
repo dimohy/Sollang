@@ -3693,6 +3693,8 @@ namespace of its unique executable source, preserved when sources are combined;
 uses that function's module name. The failed build writes the semantic
 diagnostic to stderr without LLVM comments or worker-count notes. Compiler
 diagnostic streams use UTF-8 without a byte-order mark, including on Windows.
+Module names in diagnostics join parsed namespace segments with `.`; whitespace
+and comments in the namespace declaration are not part of the displayed name.
 For a missing field after a nominal constructor, the diagnostic points to the
 member access and names only the missing field. A qualified constructor type
 path, enclosing parentheses, or trivia around the member access do not become

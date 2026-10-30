@@ -1146,8 +1146,10 @@ An `Int` capacity query must check the wider backing value before narrowing;
 an unrepresentable capacity traps rather than wrapping to zero or a negative
 number. Keep valid source capacity hints independent of this result check.
 The semantic diagnostic for an interpolation expression uses a position inside
-that parsed expression. A `main` error names `<main>`; a named function error
-names its module. For these semantic failures, the CLI relays the diagnostic
+that parsed expression. A `main` error names its executable source's namespace,
+or `<main>` when no namespace is declared; a named function error names its module.
+Render parsed namespace segments without declaration whitespace or comments.
+For these semantic failures, the CLI relays the diagnostic
 without the LLVM worker note. Compiler diagnostic streams use UTF-8 without a
 byte-order mark on Windows as well as other targets; decode captured stderr
 strictly before comparing C# and self-hosted results.
