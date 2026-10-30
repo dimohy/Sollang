@@ -3547,6 +3547,46 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
             ast! + 1 => ast!
         }
     }
+    # A mutable rebind supplies its original owner's context before the value
+    # is inferred. Validate the same terminal value edges used by inference;
+    # a fixed-width value must not become a truncating LLVM constant.
+    prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+    prepared.package.ranges -> each range {
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            range.symbolStart + symbolIndex! => globalSymbol
+            resolved.mutableBindingOwners[globalSymbol] => owner
+            owner >= 0 and owner != globalSymbol and bindingValues[globalSymbol] >= 0
+                -> if {
+                    resolved.lexicalBindingTypeBySymbol[owner] => expectedTypeId
+                    expectedTypeId >= 0 and expectedTypeId < (resolved.types -> len)
+                        -> if {
+                            resolved.types[expectedTypeId] => expected
+                            expected.symbol -> typeIds.canonicalBuiltinSymbol => symbol
+                            expected.kind == 1 and expected.origin == 1 and symbol >= 2 and symbol <= 14
+                                and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, bindingValues[globalSymbol] - range.astStart))
+                                -> if {
+                                    prepared.package -> expressionTypeIds.contextualNumericValueAsts(firstChild!, nextChild!, bindingValues[globalSymbol], true) => values
+                                    values -> each global {
+                                        prepared.package.nodes[global] => value
+                                        false => negativeLeaf!
+                                        value.kind == 14 and value.parent >= 0 -> if {
+                                            prepared.package.nodes[range.astStart + value.parent] => parent
+                                            parent.kind == 22 and parent.operatorKind == grammar.tokenIdMinus() => negativeLeaf!
+                                        }
+                                        not negativeLeaf! -> if {
+                                            prepared -> numericCallLiteralAt(range.sourceModule, global - range.astStart, symbol, pointerBitWidth) => candidate
+                                            candidate.code > 0 and candidate.code != 3
+                                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
+                                                -> if { candidate => selected! }
+                                        }
+                                    }
+                                }
+                        }
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    }
     # A failed operand cannot erase the expected type of another source literal.
     resolved.callArguments -> each binding {
         binding.contextualInput and binding.sourceModule >= 0 and binding.sourceModule < (prepared.package.ranges -> len)
@@ -6777,8 +6817,11 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                                 lastChildByAst![thenGlobal] => thenValue
                                 lastChildByAst![elseGlobal] => elseValue
                                 thenValue >= 0 and elseValue >= 0 -> if {
-                                    typeIdByAst![thenValue] => thenTypeId
-                                    typeIdByAst![elseValue] => elseTypeId
+                                    resolved.types -> typeIds.builtinTypeId(0) => unitType
+                                    package.nodes[thenValue].kind == 9 or package.nodes[thenValue].kind == 61
+                                        -> if { unitType } else { typeIdByAst![thenValue] } => thenTypeId
+                                    package.nodes[elseValue].kind == 9 or package.nodes[elseValue].kind == 61
+                                        -> if { unitType } else { typeIdByAst![elseValue] } => elseTypeId
                                     thenTypeId >= 0 and elseTypeId >= 0 and thenTypeId != elseTypeId
                                         -> if {
                                             logical.parent >= 0 -> if { logical.parent } else { astIndex! } => ifExpressionAst
