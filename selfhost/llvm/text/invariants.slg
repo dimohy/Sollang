@@ -2361,6 +2361,18 @@ invalidMappedFlushIr context: ref emitterContext.EmitContext -> Int {
     invalid!
 }
 
+invalidBoundedArrayLayoutType context: ref emitterContext.EmitContext -> Int {
+    -1 => invalid!
+    0 => index!
+    index! < (context.typeLayoutStatuses -> len) and invalid! < 0
+        -> while {
+            context.typeLayoutStatuses[index!] == 4 and context.types[index!].kind == 12
+                -> if { index! => invalid! }
+            index! + 1 => index!
+        }
+    invalid!
+}
+
 invalidValueLayoutType context: ref emitterContext.EmitContext -> Int {
     -1 => invalid!
     0 => index!
@@ -2376,6 +2388,8 @@ invalidValueLayoutType context: ref emitterContext.EmitContext -> Int {
 }
 
 irInvariantDiagnosticCount context: ref emitterContext.EmitContext -> Int {
+    (context -> invalidBoundedArrayLayoutType) >= 0
+        -> if { 1 -> return }
     (context -> invalidValueLayoutType) >= 0 -> if { 1 -> return }
     context -> concreteFunctionsBySymbol => functions
     0 => count!

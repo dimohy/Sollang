@@ -497,7 +497,7 @@ public struct TypeLayoutRequest {
 public struct TypeLayout {
     public size: Int
     public align: Int
-    # 0 known, 1 unresolved recursive dependency, 2 unsupported type.
+    # 0 known, 1 unresolved dependency, 2 unsupported type, 4 layout overflow.
     public status: Int
 }
 
@@ -4490,6 +4490,25 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
         }
 }
 
+public boundedArrayStorageLayout elementSize: Int, elementAlign: Int, capacity: Int -> TypeLayout {
+    elementSize < 0 or elementAlign < 1 or capacity <= 0
+        -> if { TypeLayout { size: -1, align: 1, status: 2 } -> return }
+    # Match the checked Int32 operations in CSharp, including AlignUp's
+    # intermediate value + alignment before subtracting one.
+    TypeLayout { size: -1, align: 1, status: 4 } => overflow
+    Int64(elementAlign) => fieldAlign
+    8 + fieldAlign > 2147483647 -> if { overflow -> return }
+    ((8 + fieldAlign - 1) / fieldAlign) * fieldAlign => dataOffset
+    Int64(elementSize) * Int64(capacity) => payload
+    payload > 2147483647 -> if { overflow -> return }
+    dataOffset + payload => end
+    end > 2147483647 -> if { overflow -> return }
+    elementAlign > 8 -> if { elementAlign } else { 8 } => alignment
+    end + Int64(alignment) > 2147483647 -> if { overflow -> return }
+    ((end + Int64(alignment) - 1) / Int64(alignment)) * Int64(alignment) => size
+    TypeLayout { size: Int(size), align: alignment, status: 0 }
+}
+
 # Computes target-aware storage facts from canonical recursive identity. Nominal
 # layouts are a fixed point over owner-to-field edges, so declaration order does
 # not affect nested structs and box indirection terminates recursive layouts.
@@ -4676,14 +4695,10 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                     current.first >= 0 and statuses![current.first] == 0 and current.length >= 0
                         -> if {
                             request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => boundedElementLayout
-                            8 => boundedAlignment!
-                            boundedElementLayout.align > boundedAlignment!
-                                -> if { boundedElementLayout.align => boundedAlignment! }
-                            ((8 + boundedElementLayout.align - 1) / boundedElementLayout.align) * boundedElementLayout.align => boundedDataOffset
-                            boundedDataOffset + boundedElementLayout.size * current.length => boundedEnd
-                            ((boundedEnd + boundedAlignment! - 1) / boundedAlignment!) * boundedAlignment! => sizes![typeIndex!]
-                            boundedAlignment! => aligns![typeIndex!]
-                            0 => statuses![typeIndex!]
+                            boundedElementLayout.size -> boundedArrayStorageLayout(boundedElementLayout.align, current.length) => boundedLayout
+                            boundedLayout.size => sizes![typeIndex!]
+                            boundedLayout.align => aligns![typeIndex!]
+                            boundedLayout.status => statuses![typeIndex!]
                             true => changed!
                         }
                 }

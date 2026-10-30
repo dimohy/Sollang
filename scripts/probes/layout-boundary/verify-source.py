@@ -12,11 +12,21 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts"))
 from completed_artifact_plan import initialize_output
 from verification_execution import VerificationExecution
+from verification_source_proof import current_build_inputs
+
+
+def matches_layout(reference, observed):
+    if observed is None or observed["capacity"] != reference["capacity"]:
+        return False
+    if reference["status"] == "known":
+        return observed["status"] == 0 and observed["size"] == reference["size"] and observed["align"] == 8
+    return reference["status"] == "overflow" and observed["status"] == 4 and observed["size"] == -1 and observed["align"] == 1
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler", type=Path, required=True)
+    parser.add_argument("--native-build", type=Path)
     parser.add_argument("--managed-proof", type=Path, required=True)
     parser.add_argument("--semantic-proof", type=Path, required=True)
     parser.add_argument("--provider-contract", type=Path, required=True)
@@ -27,7 +37,9 @@ def main():
     sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
     managed = json.loads(args.managed_proof.read_text(encoding="utf-8-sig"))
     semantic = json.loads(args.semantic_proof.read_text(encoding="utf-8-sig"))
-    assert managed["completed"] == managed["total"] == 7
+    assert managed["completed"] == managed["total"] == 9
+    api_cases = [case for case in managed["cases"] if "capacity" in case]
+    assert len(api_cases) == 7 and all(case["passed"] for case in api_cases)
     pins = {}
     for path, record in ((args.managed_proof, managed), (args.semantic_proof, semantic)):
         assert record["status"] == "passed" and record["inputsStable"] and record["processesStopped"]
@@ -42,6 +54,16 @@ def main():
     for path in [Path(__file__), source, args.provider_contract, *providers,
                  *[llvm / "bin" / name for name in ("clang.exe", "lld-link.exe", "llvm-lib.exe")]]:
         pins[str(path.resolve())] = sha(path)
+    if args.native_build:
+        build_path = args.native_build.resolve() / "result.json"
+        build = json.loads(build_path.read_text(encoding="utf-8-sig"))
+        assert compiler == args.native_build.resolve() / "compiler.exe"
+        assert build["status"] == "passed" and build["inputsStable"]
+        assert sha(compiler) == build["compilerSha256"]
+        for path in [compiler, build_path, *current_build_inputs(ROOT, build)]:
+            pins[str(path.resolve())] = sha(path)
+    else:
+        assert managed["inputHashes"].get(str(compiler)) == sha(compiler), "LAYOUT_MANAGED_COMPILER_IDENTITY_MISMATCH"
     stable = lambda: all(Path(path).is_file() and sha(path) == value for path, value in pins.items())
     initialize_output(ROOT, output, reusable_directories=[path.resolve() for path in args.reusable_compiler_directory])
     output.mkdir()
@@ -59,17 +81,17 @@ def main():
 
     try:
         target = output / "layout.exe"
-        done = run([compiler, "build", source, *providers, "-o", target, "--target", "windows-x64",
-                    "--llvm", llvm, "--jobs", "1", "-O0", "--keep-temps"], "build")
+        command = [compiler, "build", source, *providers, "-o", target, "--target", "windows-x64",
+                   "--llvm", llvm, "--jobs", "1", "-O0", "--keep-temps"]
+        if args.native_build:
+            command += ["--stdlib", ROOT / "stdlib"]
+        done = run(command, "build")
         assert done.returncode == 0 and done.stderr == "", "LAYOUT_SOURCE_BUILD_FAILED"
-        for index, reference in enumerate(managed["cases"]):
+        for index, reference in enumerate(api_cases):
             done = run([target] + ["extra"] * index, f"run{index}")
             match = re.fullmatch(r"capacity=(-?\d+) status=(-?\d+) size=(-?\d+) align=(-?\d+)\s*", done.stdout)
             observed = dict(zip(("capacity", "status", "size", "align"), map(int, match.groups()))) if match else None
-            passed = done.returncode == 0 and done.stderr == "" and observed is not None and observed["capacity"] == reference["capacity"]
-            if passed:
-                passed = (observed["status"] == 0 and observed["size"] == reference["size"] and observed["align"] == 8
-                          if reference["status"] == "known" else observed["status"] != 0)
+            passed = done.returncode == 0 and done.stderr == "" and matches_layout(reference, observed)
             result["cases"].append(dict(capacity=reference["capacity"], expected=reference["expected"], actual=observed, passed=passed))
             result["completed"] += int(passed)
             execution.save()

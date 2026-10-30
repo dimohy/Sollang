@@ -24,8 +24,10 @@ def main():
     parser.add_argument("--native-build", type=Path, required=True)
     parser.add_argument("--rebuilt-fixture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--case", action="append", choices=["managed-project", "managed-plain", "managed-direct-factory", "native-registered", "native-guarded", "native-project", "native-plain", "native-direct-factory"])
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append", required=True)
     args = parser.parse_args()
+    assert not args.case or len(args.case) == len(set(args.case)), "COM_DUPLICATE_CASE_SELECTION"
     managed, build, output = args.managed_compiler.resolve(), args.native_build.resolve(), args.output.resolve()
     native = build / "compiler.exe"
     digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
@@ -75,6 +77,10 @@ def main():
              ("native", "project", manifest, b"ready\n", ["23"]),
              ("native", "plain", sources[2], b"plain\n", []),
              ("native", "direct-factory", direct, expected.read_bytes().replace(b"\r\n", b"\n"), None)]
+    if args.case:
+        specs = [spec for spec in specs if spec[0] + "-" + spec[1] in args.case]
+        result["total"] = len(specs)
+        result["scope"] = "Explicitly selected managed-first COM controls: " + ", ".join(args.case)
     error = None
     try:
         assert stable(), "COM_INPUT_DRIFT_BEFORE_EXECUTION"

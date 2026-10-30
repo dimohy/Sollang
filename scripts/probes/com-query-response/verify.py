@@ -37,6 +37,8 @@ def main():
         assert args.managed_evidence, "COM_QUERY_MANAGED_PROOF_REQUIRED"
         reference = args.managed_evidence.resolve()
         old = json.loads(reference.read_text(encoding="utf-8-sig"))
+        assert old["inputHashes"].get(str(managed)) == digest(managed), "COM_QUERY_MANAGED_COMPILER_IDENTITY_MISMATCH"
+        assert old["inputHashes"].get(str(managed.with_suffix(".dll"))) == digest(managed.with_suffix(".dll")), "COM_QUERY_MANAGED_COMPILER_IDENTITY_MISMATCH"
         assert old["status"] == "passed" and old["completed"] == old["total"] == 3
         assert old["inputsStable"] and old["processesStopped"]
         for name, expected in old["inputHashes"].items():
