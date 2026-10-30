@@ -27,6 +27,8 @@ struct OwnershipIrIndex {
     directExits: DirectExitIndex
     firstChild: [Int; ~]
     nextChild: [Int; ~]
+    firstDeclarationBySymbol: {Int: Int}
+    nextDeclaration: [Int; ~]
 }
 
 indexDirectExits nodes: ref [typedIr.TypedIrNode; ~] -> DirectExitIndex {
@@ -61,12 +63,20 @@ indexDirectExits nodes: ref [typedIr.TypedIrNode; ~] -> DirectExitIndex {
 # These facts describe only immutable IR links, not reachability decisions.
 # Keep original ascending node order and leave region/source/offset filters
 # with their existing query so exits under unusual parents are not discarded.
-indexOwnershipIr nodes: ref [typedIr.TypedIrNode; ~] -> OwnershipIrIndex {
+indexOwnershipIr nodes: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> OwnershipIrIndex {
     [Int; ~] => first!
     [Int; ~] => next!
+    {Int: Int} => firstDeclarationBySymbol!
+    [Int; ~] => nextDeclaration!
+    prepared.interpolations -> each node {
+        node.kind == 1 and node.symbol >= 0 -> if {
+            firstDeclarationBySymbol! -> putIfAbsent(node.symbol, -1) => inserted
+        }
+    }
     nodes -> each node {
         first! -> push(-1)
         next! -> push(-1)
+        nextDeclaration! -> push(-1)
     }
     (nodes -> len) - 1 => cursor!
     cursor! >= 0 -> while {
@@ -75,10 +85,17 @@ indexOwnershipIr nodes: ref [typedIr.TypedIrNode; ~] -> OwnershipIrIndex {
             first![parent] => next![cursor!]
             cursor! => first![parent]
         }
+        nodes[cursor!] => node
+        (node.kind == 10 or node.kind == 17 or node.kind == 29) and node.symbol >= 0
+            -> if {
+                firstDeclarationBySymbol! -> putIfAbsent(node.symbol, -1) => inserted
+                firstDeclarationBySymbol![node.symbol] => nextDeclaration![cursor!]
+                cursor! => firstDeclarationBySymbol![node.symbol]
+            }
         cursor! - 1 => cursor!
     }
     nodes -> indexDirectExits => exits
-    OwnershipIrIndex { directExits: exits, firstChild: first!, nextChild: next! }
+    OwnershipIrIndex { directExits: exits, firstChild: first!, nextChild: next!, firstDeclarationBySymbol: firstDeclarationBySymbol!, nextDeclaration: nextDeclaration! }
 }
 
 indexedDirectExitAfter nodes: ref [typedIr.TypedIrNode; ~], package: ref analysis.PackageAnalysis, index: ref DirectExitIndex, siteIndex: Int -> Int {
@@ -1531,7 +1548,7 @@ borrowedTextScalarVersionVisible prepared: ref semanticContext.SemanticSnapshot,
 
 # End only the replaced scalar's incoming loan, never an alias or an RHS read.
 # Calls obey the same independence and early-exit rules as other expressions.
-borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], replacementIr: Int -> Bool {
+borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], replacementIr: Int, irIndex: ref OwnershipIrIndex -> Bool {
     typed[replacementIr].operand0 => rhsIr
     rhsIr >= 0 and rhsIr < (typed -> len) -> unless { false -> return }
     typed -> borrowedTextFunctionIr(replacementIr) => functionIr
@@ -1597,7 +1614,7 @@ borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSna
                                         prepared.interpolations[interpolationIndex!] => interpolated
                                         interpolated.kind == 1 and interpolated.sourceToken == candidate.payloadToken
                                             -> if {
-                                                typed -> interpolationBindingIr(prepared, captureIr!, interpolationIndex!) => readBinding
+                                                typed -> interpolationBindingIr(prepared, captureIr!, interpolationIndex!, irIndex) => readBinding
                                                 typed -> borrowedTextSameScalarSlot(types, replacementIr, readBinding)
                                                     -> if { false -> return }
                                             }
@@ -1680,7 +1697,7 @@ borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapsh
             statementStart > definitionStart -> if {
                 typed -> borrowedTextSameScalarSlot(types, slotIr, statementIr!)
                     -> if {
-                        prepared -> borrowedTextScalarReplacementSupported(typed, types, statementIr!)
+                        prepared -> borrowedTextScalarReplacementSupported(typed, types, statementIr!, irIndex)
                             -> if { true => replaced! }
                     }
                 statementIr! => controlIr!
@@ -2121,7 +2138,7 @@ borrowedTextStoredArrayOrigin typed: ref [typedIr.TypedIrNode; ~], prepared: ref
 }
 
 # Interpolation retains the selected literal's lexical scope, not its later sink.
-interpolationBindingIr typed: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, literalIr: Int, nodeIndex: Int -> Int {
+interpolationBindingIr typed: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, literalIr: Int, nodeIndex: Int, irIndex: ref OwnershipIrIndex -> Int {
     prepared.interpolations[nodeIndex] => node
     node.kind != 1 or node.symbol < 0 -> if { -1 -> return }
     typed[literalIr] => literal
@@ -2129,8 +2146,8 @@ interpolationBindingIr typed: ref [typedIr.TypedIrNode; ~], prepared: ref semant
     typed -> borrowedTextFunctionIr(literalIr) => functionIr
     -1 => selected!
     UIntSize(0) => selectedStart!
-    0 => candidateIr!
-    candidateIr! < (typed -> len) -> while {
+    irIndex.firstDeclarationBySymbol[node.symbol] => candidateIr!
+    candidateIr! >= 0 -> while {
         typed[candidateIr!] => candidate
         candidate.sourceModule == literal.sourceModule and candidate.symbol == node.symbol
             and (typed -> borrowedTextFunctionIr(candidateIr!)) == functionIr
@@ -2156,7 +2173,7 @@ interpolationBindingIr typed: ref [typedIr.TypedIrNode; ~], prepared: ref semant
                             }
                     }
             }
-        candidateIr! + 1 => candidateIr!
+        irIndex.nextDeclaration[candidateIr!] => candidateIr!
     }
     selected!
 }
@@ -2185,7 +2202,7 @@ borrowedTextInterpolationOrigin typed: ref [typedIr.TypedIrNode; ~], prepared: r
         -> unless { BorrowedTextOriginFact { status: 3, usesOrigin: false, placeIr: -1 } -> return }
     prepared.interpolations[nodeIndex] => node
     node.kind == 1 -> if {
-        typed -> interpolationBindingIr(prepared, literalIr, nodeIndex) => bindingIr
+        typed -> interpolationBindingIr(prepared, literalIr, nodeIndex, callFunctionIndex.irIndex) => bindingIr
         bindingIr < 0 -> if { BorrowedTextOriginFact { status: 0, usesOrigin: false, placeIr: -1 } -> return }
         concrete -> if {
             typed -> borrowedTextConcreteOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, bindingIr, originIr, active, depth) -> return
@@ -3851,7 +3868,7 @@ public analyzeResolvedLoweredContextWithInterpolationFactsAndPaths prepared: ref
             }
         scalarVersionIndex! - 1 => scalarVersionIndex!
     }
-    typed -> indexOwnershipIr => irIndex
+    typed -> indexOwnershipIr(prepared) => irIndex
     BorrowedTextCallFunctionIndex {
         genericSelectionByCall: genericSelectionByCall!
         functionCandidates: functionCandidates
@@ -9381,6 +9398,20 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     {Int: Int} => firstInterpolationNameByToken!
     [Int; ~] => nextInterpolationName!
     [Bool; ~] => consumedInterpolationBindingByNode!
+    [Int; ~] => firstInterpolationMoveByBinding!
+    [Int; ~] => nextInterpolationMoveByBinding!
+    typed -> each node { firstInterpolationMoveByBinding! -> push(-1) }
+    moves! -> each moved { nextInterpolationMoveByBinding! -> push(-1) }
+    # Declaration identity is immutable here; keep the original move order.
+    (moves! -> len) - 1 => indexedMove!
+    indexedMove! >= 0 -> while {
+        moves![indexedMove!] -> typedIr.moveBindingDeclaration(typed) => bindingIr
+        bindingIr >= 0 -> if {
+            firstInterpolationMoveByBinding![bindingIr] => nextInterpolationMoveByBinding![indexedMove!]
+            indexedMove! => firstInterpolationMoveByBinding![bindingIr]
+        }
+        indexedMove! - 1 => indexedMove!
+    }
     prepared.interpolations -> each node {
         nextInterpolationName! -> push(-1)
         consumedInterpolationBindingByNode! -> push(false)
@@ -9413,20 +9444,19 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                     firstInterpolationNameByToken! -> putIfAbsent(token, -1) => inserted
                     firstInterpolationNameByToken![token] => nameIndex!
                     nameIndex! >= 0 -> while {
-                        typed -> interpolationBindingIr(prepared, literalIndex!, nameIndex!) => bindingIr
+                        typed -> interpolationBindingIr(prepared, literalIndex!, nameIndex!, callFunctionIndex.irIndex) => bindingIr
                         bindingIr >= 0 -> if {
-                            0 => moveIndex!
-                            moveIndex! < (moves! -> len) and not consumedInterpolationBindingByNode![nameIndex!]
+                            firstInterpolationMoveByBinding![bindingIr] => moveIndex!
+                            moveIndex! >= 0 and not consumedInterpolationBindingByNode![nameIndex!]
                                 -> while {
                                     moves![moveIndex!] => moved
                                     moved.sourceModule == literal.sourceModule
                                         and moved.symbol == prepared.interpolations[nameIndex!].symbol
                                         -> if {
-                                            moved -> typedIr.moveBindingDeclaration(typed) => movedBinding
-                                            movedBinding == bindingIr and (moveIndex! -> wholeMoveInvalidatesRead(literalIndex!))
+                                            moveIndex! -> wholeMoveInvalidatesRead(literalIndex!)
                                                 -> if { true => consumedInterpolationBindingByNode![nameIndex!] }
                                         }
-                                    moveIndex! + 1 => moveIndex!
+                                    nextInterpolationMoveByBinding![moveIndex!] => moveIndex!
                                 }
                         }
                         nextInterpolationName![nameIndex!] => nameIndex!
