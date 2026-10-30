@@ -1,6 +1,8 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.semantic.reference_prepared_type_ids as referencePrepared
+import sollang.compiler.semantic.reference_synthetic_type_ids as referenceSynthetic
 
 import sollang.compiler.semantic.semantic_cache as semanticCache
 import sollang.compiler.ast as ast
@@ -417,6 +419,14 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
     product.windows -> if { 1 } else { 0 } => expectedPathStyle
     PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: expectedPathStyle } => prepareRequest
     parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
+    # Keep reference identities before preparation moves the source snapshot.
+    # A retained mapping error matters only if an ABI rejection needs its ID;
+    # earlier semantic/export failures keep their existing diagnostic priority.
+    product.sharedLibrary -> if {
+        prepared -> referencePrepared.registerDeclarations
+    } else {
+        Result<referenceSynthetic.Identities, referencePrepared.Error>.Ok(referenceSynthetic.Identities { ids: [Int; ~], nextTypeId: 0 })
+    } => referenceIdentities
     prepareRequest -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, diagnosticPaths, targetName, path.nativeStyle(), cache) -> when {
         Err(code) { "; sollang semantic cache preparation error E$code" -> println
             1 -> return }
@@ -449,7 +459,7 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
             context -> collectLibraryDeclarations(0, userSourceStart) => declarations
             context -> prepareLibraryInterface(declarations, targetName, product.libraryFile) -> when {
                 Ok(plan) { plan }
-                Err(rejection) { rejection -> emitLibraryExportRejection(context)
+                Err(rejection) { rejection -> emitLibraryExportRejection(context, referenceIdentities)
                     1 -> return }
             } => plan
             context -> prepareScheduledCoreEmitterStateWithRoots(plan.functions) => scheduledState
@@ -457,7 +467,7 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
             preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
             plan -> validateLibraryExports(context, scheduledState) -> when {
                 Ok(_) { }
-                Err(rejection) { rejection -> emitLibraryWrapperRejection(plan, context)
+                Err(rejection) { rejection -> emitLibraryWrapperRejection(plan, context, referenceIdentities)
                     1 -> return }
             }
             plan.document -> writeLibraryInterfaceStage(product.interfaceStage)

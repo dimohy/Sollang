@@ -2,9 +2,23 @@ namespace sollang.compiler.semantic.reference_type_ids
 
 import sys.file as file
 
-# Preparation for the C# BuildTypeDefinitions identity contract. Promote into
-# the semantic registry after named and synthetic identities and their actual
-# diagnostic consumer agree; this is not yet a production ABI decision path.
+# Compatibility identities follow C# BuildTypeDefinitions declaration order.
+# The library ABI diagnostic path consumes the complete prepared registry.
+public enum TypeName { Named(Text), Numeric(Int) }
+
+public nameOf identity: Int -> TypeName {
+    identity >= 0 and identity < 50 -> if {
+        ["Unit", "Text", "Int", "Bool", "Int8", "Int16", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arguments", "Arena", "MappedBytes", "MutableMappedBytes", "Float32", "Float64", "IntSlice", "StaticIntArray", "StaticTextArray", "DynamicIntArray", "IntDictionaryView", "IntDictionary", "TaskInt", "Duration", "BoxDuration", "File", "FileWriter", "SourceText", "ProcessCommand", "AtomicReplaceRequest", "Path", "PathStyle", "DynamicUInt8Array", "DirectoryRaw", "DirectoryEntryKind", "DirectoryEntry", "DynamicDirectoryEntryArray", "DirectoryRawResult", "DirectoryReadResult", "Range", "MouseEvent", "MouseEventKind", "EventOverflowPolicy", "FixedUInt8Array12", "FixedUInt8Array16", "FixedUInt8Array32"] => names
+        TypeName.Named(names[identity]) -> return
+    }
+    identity -> when {
+        == 512 => TypeName.Named("GenericParameter")
+        == 513 => TypeName.Named("SecondaryGenericParameter")
+        == 514 => TypeName.Named("TertiaryGenericParameter")
+        == 1024 => TypeName.Named("FirstUserDefined")
+        else => TypeName.Numeric(identity)
+    }
+}
 public struct NominalDeclaration {
     public kind: Int
     public nameStart: UIntSize

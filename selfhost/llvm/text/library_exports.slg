@@ -5,6 +5,9 @@ import sollang.compiler.semantic.library_interfaces as libraryInterfaces
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.reference_type_ids as referenceIds
+import sollang.compiler.semantic.reference_prepared_type_ids as referencePrepared
+import sollang.compiler.semantic.reference_synthetic_type_ids as referenceSynthetic
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.syntax as syntax
 import sys.file as file
@@ -336,11 +339,11 @@ appendLibraryDeclarationName source: Text, range: analysis.SourceAnalysisRange, 
         member: libraryInterfaces.MetadataSpan { start: memberStart!, length: end - memberStart! } }
 }
 
-libraryBoundTypeName node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Result<Text, Unit> {
+libraryBoundTypeName node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, mapping: ref Result<referenceSynthetic.Identities, referencePrepared.Error> -> Result<referenceIds.TypeName, Unit> {
     node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol >= 0 and node.typeSymbol <= 25
         -> if {
             ["Unit", "Text", "Int", "Int8", "Int16", "Int", "Int64", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float32", "Float32", "Float64", "Float64", "Bool", "SourceText", "Range"] => names
-            Result<Text, Unit>.Ok(names[node.typeSymbol]) -> return
+            Result<referenceIds.TypeName, Unit>.Ok(referenceIds.TypeName.Named(names[node.typeSymbol])) -> return
         }
     node.typeKind == 1 and node.typeOrigin == 3 -> if {
         context.ranges[node.typeModule] => range
@@ -355,15 +358,28 @@ libraryBoundTypeName node: typedIr.TypedIrNode, context: ref emitterContext.Emit
         }
         ordinal! >= 0 and ordinal! < 3 -> if {
             ["GenericParameter", "SecondaryGenericParameter", "TertiaryGenericParameter"] => names
-            Result<Text, Unit>.Ok(names[ordinal!]) -> return
+            Result<referenceIds.TypeName, Unit>.Ok(referenceIds.TypeName.Named(names[ordinal!])) -> return
         }
     }
-    # Numeric CSharp TypeId diagnostics for synthetic/user types depend on its
-    # registry order. Keep this boundary explicit until that source unit agrees.
-    Result<Text, Unit>.Err
+    mapping -> when {
+        Ok(identities) {
+            node.typeId >= 0 and node.typeId < (identities.ids -> len)
+                and identities.ids[node.typeId] >= 0
+                -> if { Result<referenceIds.TypeName, Unit>.Ok(identities.ids[node.typeId] -> referenceIds.nameOf) -> return }
+        }
+        Err(_) { }
+    }
+    Result<referenceIds.TypeName, Unit>.Err
 }
 
-emitLibraryExportRejection rejection: ref LibraryExportRejection, context: ref emitterContext.EmitContext -> Unit uses Console {
+emitLibraryBoundTypeName typeName: referenceIds.TypeName -> Unit uses Console {
+    typeName -> when {
+        Named(name) { name -> print }
+        Numeric(identity) { identity -> print }
+    }
+}
+
+emitLibraryExportRejection rejection: ref LibraryExportRejection, context: ref emitterContext.EmitContext, mapping: ref Result<referenceSynthetic.Identities, referencePrepared.Error> -> Unit uses Console {
     rejection.kind -> when {
         NoPublicFunction { "sollang: a Sollang shared library must declare at least one public function" -> println
             return }
@@ -383,8 +399,12 @@ emitLibraryExportRejection rejection: ref LibraryExportRejection, context: ref e
             rejection.parameterOrdinal < 0 -> if { rejection.functionIndex } else {
                 rejection.functionIndex -> functionParameterAt(rejection.parameterOrdinal, context)
             } => nodeIndex
-            context.ir[nodeIndex] -> libraryBoundTypeName(context) -> when {
-                Ok(typeName) { "sollang: type '$typeName' is not a fixed-width library ABI type" -> println }
+            context.ir[nodeIndex] -> libraryBoundTypeName(context, mapping) -> when {
+                Ok(typeName) {
+                    "sollang: type '" -> print
+                    typeName -> emitLibraryBoundTypeName
+                    "' is not a fixed-width library ABI type" -> println
+                }
                 Err(_) {
                     context.ir[nodeIndex] => node
                     "sollang: compiler verification failure: CSharp library TypeId mapping is unresolved (kind $(node.typeKind), origin $(node.typeOrigin), module $(node.typeModule), symbol $(node.typeSymbol), type $(node.typeId))" -> println
@@ -401,11 +421,13 @@ emitLibraryExportRejection rejection: ref LibraryExportRejection, context: ref e
         }
         InputOwnership {
             rejection.functionIndex -> functionParameterAt(rejection.parameterOrdinal, context) => parameter
-            context.ir[parameter] -> libraryBoundTypeName(context) -> when {
+            context.ir[parameter] -> libraryBoundTypeName(context, mapping) -> when {
                 Ok(typeName) {
                     "sollang: public library function '$name' " -> print
                     rejection -> emitLibraryRejectionRole(context)
-                    " type '$typeName' is not ABI-safe; use Unit or a fixed-width numeric scalar" -> println
+                    " type '" -> print
+                    typeName -> emitLibraryBoundTypeName
+                    "' is not ABI-safe; use Unit or a fixed-width numeric scalar" -> println
                 }
                 Err(_) { "sollang: compiler verification failure: admitted library input has no CSharp ABI type name" -> println }
             }
@@ -432,7 +454,7 @@ emitLibraryRejectionRole rejection: ref LibraryExportRejection, context: ref emi
     }
 }
 
-emitLibraryWrapperRejection rejection: ref LibraryExportRejection, plan: ref LibraryExportPlan, context: ref emitterContext.EmitContext -> Unit uses Console {
+emitLibraryWrapperRejection rejection: ref LibraryExportRejection, plan: ref LibraryExportPlan, context: ref emitterContext.EmitContext, mapping: ref Result<referenceSynthetic.Identities, referencePrepared.Error> -> Unit uses Console {
     rejection.kind -> when {
         SymbolCollision {
             0 => ordinal!
@@ -448,7 +470,7 @@ emitLibraryWrapperRejection rejection: ref LibraryExportRejection, plan: ref Lib
             owner -> slice(exported.symbol.start, exported.symbol.length) => symbol
             "sollang: library export symbol collision for function '$name': '$symbol'" -> println
         }
-        else { rejection -> emitLibraryExportRejection(context) }
+        else { rejection -> emitLibraryExportRejection(context, mapping) }
     }
 }
 
