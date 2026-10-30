@@ -4001,8 +4001,12 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             nodeIndex -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => lengthResultWidth
             false => lengthFromI64!
             node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => bitSetLengthTypeId!
+            false => lengthReference!
             bitSetLengthTypeId! >= 0 and context.types[bitSetLengthTypeId!].kind == 8
-                -> if { context.types[bitSetLengthTypeId!].first => bitSetLengthTypeId! }
+                -> if {
+                    true => lengthReference!
+                    context.types[bitSetLengthTypeId!].first => bitSetLengthTypeId!
+                }
             bitSetLengthTypeId! >= 0 and (context.types[bitSetLengthTypeId!].kind == 14 or context.types[bitSetLengthTypeId!].kind == 4 or context.types[bitSetLengthTypeId!].kind == 12)
                 -> if {
                     context.types[bitSetLengthTypeId!].kind == 12
@@ -4030,57 +4034,71 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                             } else {
                                 "  %v$(labelIndex)_expression$(nodeIndex) = add i32 0, $(context.types[bitSetLengthTypeId!].length)" -> println
                         } }
-                } else {
-                    base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => baseBinding
-                    baseBinding >= 0 -> if {
+                } else { lengthReference! -> if {
+                        "  %v$(labelIndex)_expression$(nodeIndex)_length_source = load " -> print
+                        bitSetLengthTypeId! -> writeSemanticTypeId(context, state)
+                        ", ptr " -> print
+                        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                        ", align $(context.typeAligns[bitSetLengthTypeId!])" -> println
                         "  %v$(labelIndex)_expression$(nodeIndex)" -> print
                         lengthResultWidth == 32 -> if { "_raw" -> print }
                         " = extractvalue " -> print
-                        context.ir[baseBinding] -> writeIrType(context, state)
-                        " " -> print
-                        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
-                        context.ir[baseBinding] -> isDictionaryType
-                            -> if {
-                                context.ir[baseBinding].typeId >= 0 and context.types[context.ir[baseBinding].typeId].kind == 13
-                                    -> if { ", 0" -> println } else { ", 1" -> println }
-                            } else { ", 1" -> println }
+                        bitSetLengthTypeId! -> writeSemanticTypeId(context, state)
+                        " %v$(labelIndex)_expression$(nodeIndex)_length_source" -> print
+                        context.types[bitSetLengthTypeId!].kind == 13
+                            -> if { ", 0" -> println } else { ", 1" -> println }
                         true => lengthFromI64!
                     } else {
-                        node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => projectedBaseTypeId!
-                        projectedBaseTypeId! >= 0 and context.types[projectedBaseTypeId!].kind == 8
-                            -> if { context.types[projectedBaseTypeId!].first => projectedBaseTypeId! }
-                        projectedBaseTypeId! >= 0 -> if {
-                            context.types[projectedBaseTypeId!] => projectedBaseType
-                            projectedBaseType.kind == 4 -> if {
-                                "  %v$(labelIndex)_expression$(nodeIndex)" -> print
-                                lengthResultWidth == 32 -> if { "_raw" -> print }
-                                " = add i64 0, $(projectedBaseType.length)" -> println
-                                true => lengthFromI64!
-                            }
-                            projectedBaseType.kind == 2
-                                or (projectedBaseType -> typeIds.isDynamicArrayFamily)
-                                or (projectedBaseType -> typeIds.isDictionaryFamily)
-                                or projectedBaseType.kind == 12
-                                or (projectedBaseType.kind == 1
-                                and projectedBaseType.origin == 1
-                                and (projectedBaseType.symbol == 1
-                                or projectedBaseType.symbol == 15)) -> if {
+                        base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => baseBinding
+                        baseBinding >= 0 -> if {
+                            "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                            lengthResultWidth == 32 -> if { "_raw" -> print }
+                            " = extractvalue " -> print
+                            context.ir[baseBinding] -> writeIrType(context, state)
+                            " " -> print
+                            labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                            context.ir[baseBinding] -> isDictionaryType
+                                -> if {
+                                    context.ir[baseBinding].typeId >= 0 and context.types[context.ir[baseBinding].typeId].kind == 13
+                                        -> if { ", 0" -> println } else { ", 1" -> println }
+                                } else { ", 1" -> println }
+                            true => lengthFromI64!
+                        } else {
+                            node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => projectedBaseTypeId!
+                            projectedBaseTypeId! >= 0 and context.types[projectedBaseTypeId!].kind == 8
+                                -> if { context.types[projectedBaseTypeId!].first => projectedBaseTypeId! }
+                            projectedBaseTypeId! >= 0 -> if {
+                                context.types[projectedBaseTypeId!] => projectedBaseType
+                                projectedBaseType.kind == 4 -> if {
                                     "  %v$(labelIndex)_expression$(nodeIndex)" -> print
                                     lengthResultWidth == 32 -> if { "_raw" -> print }
-                                    " = extractvalue " -> print
-                                    projectedBaseType.kind == 2 -> if {
-                                        "%sollang.int_slice" -> print
-                                    } else {
-                                        projectedBaseTypeId! -> writeSemanticTypeId(context, state)
-                                    }
-                                    " " -> print
-                                    labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
-                                    projectedBaseType.kind == 13 -> if { ", 0" -> println } else { ", 1" -> println }
+                                    " = add i64 0, $(projectedBaseType.length)" -> println
                                     true => lengthFromI64!
                                 }
+                                projectedBaseType.kind == 2
+                                    or (projectedBaseType -> typeIds.isDynamicArrayFamily)
+                                    or (projectedBaseType -> typeIds.isDictionaryFamily)
+                                    or projectedBaseType.kind == 12
+                                    or (projectedBaseType.kind == 1
+                                    and projectedBaseType.origin == 1
+                                    and (projectedBaseType.symbol == 1
+                                    or projectedBaseType.symbol == 15)) -> if {
+                                        "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                                        lengthResultWidth == 32 -> if { "_raw" -> print }
+                                        " = extractvalue " -> print
+                                        projectedBaseType.kind == 2 -> if {
+                                            "%sollang.int_slice" -> print
+                                        } else {
+                                            projectedBaseTypeId! -> writeSemanticTypeId(context, state)
+                                        }
+                                        " " -> print
+                                        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                                        projectedBaseType.kind == 13 -> if { ", 0" -> println } else { ", 1" -> println }
+                                        true => lengthFromI64!
+                                    }
+                            }
                         }
-                    }
-                }
+                } }
             lengthFromI64! and lengthResultWidth == 32 -> if {
                 "  %v$(labelIndex)_expression$(nodeIndex) = trunc i64 %v$(labelIndex)_expression$(nodeIndex)_raw to i32" -> println
             }
