@@ -18,12 +18,26 @@ function Convert-C437AuditLlvm {
           [Parameter(Mandatory)][ValidateSet('managed','native')][string]$CompilerKind,
           [Parameter(Mandatory)][string]$CaseId)
     $auditText=$LlvmText
+    if ($auditText.Contains('@c437_audit_')) { throw "C437 $CaseId input is already instrumented" }
     if ($CompilerKind -ceq 'native') {
         if ([regex]::Matches($auditText,'(?m)^define i32 @main\(\) \{').Count -ne 1) { throw "C437 $CaseId native entry ABI mismatch" }
         $auditText=[regex]::Replace($auditText,'(?m)^define i32 @main\(\) \{','define i32 @slg_program_main() {')
-        $auditText=$auditText.Replace('call ptr @malloc(','call ptr @c437_audit_malloc(').Replace('call void @free(','call void @c437_audit_free(').Replace('ptr @free','ptr @c437_audit_free').Replace('call ptr @realloc(','call ptr @c437_audit_realloc(')
     } else {
-        $auditText=$auditText.Replace('call ptr @sollang_alloc(','call ptr @c437_audit_malloc(').Replace('call void @sollang_free(','call void @c437_audit_free(').Replace('ptr @sollang_free','ptr @c437_audit_free').Replace('call ptr @sollang_realloc(','call ptr @c437_audit_realloc(').Replace('@sollang_start()','@slg_program_main()')
+        $auditText=$auditText.Replace('@sollang_start()','@slg_program_main()')
+    }
+    # Allocation ABI is independent of the frontend entry ABI. Current Native
+    # emission uses the same Sollang allocation functions as the C# compiler.
+    foreach ($allocator in @('malloc','sollang_alloc')) {
+        $auditText=$auditText.Replace("call ptr @$allocator(",'call ptr @c437_audit_malloc(')
+    }
+    foreach ($release in @('free','sollang_free')) {
+        $auditText=$auditText.Replace("call void @$release(",'call void @c437_audit_free(').Replace("ptr @$release",'ptr @c437_audit_free')
+    }
+    foreach ($reallocator in @('realloc','sollang_realloc')) {
+        $auditText=$auditText.Replace("call ptr @$reallocator(",'call ptr @c437_audit_realloc(')
+    }
+    if ($auditText -match '(?m)^(?!\s*(?:declare|define)\b)[^\r\n]*(?:call (?:ptr|void)|ptr) @(?:sollang_alloc|sollang_free|sollang_realloc|malloc|free|realloc)\b') {
+        throw "C437 $CaseId uninstrumented allocation ABI"
     }
     return $auditText
 }

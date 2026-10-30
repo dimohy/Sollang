@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
 from completed_artifact_plan import initialize_output
@@ -19,6 +20,25 @@ def read(path):
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
+
+
+def validate_source_closure(sources, canonical):
+    if not sources or len(sources) != len(canonical) or sources[1:] != canonical[1:]:
+        raise ValueError("ASYNC_START_CANONICAL_SOURCE_CLOSURE")
+
+
+def remaining_case_seconds(start, now=None):
+    remaining = 180 - ((time.monotonic() if now is None else now) - start)
+    if remaining <= 0 or remaining > 180:
+        raise ValueError("ASYNC_START_CASE_BUDGET_EXHAUSTED")
+    return remaining
+
+
+def instrument_start_allocator(body):
+    calls = re.findall(r'\bcall ptr @(malloc|sollang_alloc)\(', body)
+    if len(calls) != 1:
+        raise ValueError("ASYNC_START_ALLOCATOR_HOOK_SHAPE")
+    return body.replace('@' + calls[0] + '(', '@diagnostic_test_alloc(')
 
 
 def main():
@@ -59,8 +79,7 @@ def main():
     canonical = [(ROOT / line.strip()).resolve() for line in
                  manifest.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
     sources = [Path(p).resolve() for p in build[2:build.index("-o")]]
-    if len(sources) != 151 or sources[1:] != canonical[1:]:
-        raise ValueError("ASYNC_START_CANONICAL_SOURCE_CLOSURE")
+    validate_source_closure(sources, canonical)
     generated = proof["generatedOutputHashes"]
     for path in (producer, module):
         if generated.get(str(path)) != sha(path):
@@ -85,22 +104,22 @@ def main():
         execution = VerificationExecution(ROOT, output, record, stable, sha)
         error = None
         try:
-            emitted = execution.run([str(producer), "x" * 21], output / "runtime-source", timeout=180)
+            case_start = time.monotonic()
+            emitted = execution.run([str(producer), "x" * 21], output / "runtime-source",
+                                    timeout=remaining_case_seconds(case_start))
             if emitted.returncode != 0 or emitted.stderr:
                 raise ValueError("ASYNC_START_CURRENT_SOURCE_EMISSION_FAILED")
             text = (output / "runtime-source.stdout").read_text(encoding="utf-8-sig")
             start = text.index("define internal { ptr, i32 } @sollang_diagnostic_start(")
             end = text.index("\n}", start) + 2
             body = text[start:end]
-            if body.count("@malloc(") != 1:
-                raise ValueError("ASYNC_START_ALLOCATOR_HOOK_SHAPE")
+            body = instrument_start_allocator(body)
             global_line = next(line for line in text.splitlines()
                                if line.startswith("@sollang_diagnostic_next_session_id ="))
             headers = [line for line in module.read_text(encoding="utf-8-sig").splitlines()
                        if line.startswith("target ") or re.match(r"^%[^ ]+ = type ", line)]
             # Only the original allocator-failure hook and C ABI accessors are added.
             # The actual production start body and session-ID global remain visible.
-            body = body.replace("@malloc(", "@diagnostic_test_alloc(")
             glue = """
 declare ptr @diagnostic_test_alloc(i64)
 define ptr @diagnostic_start_probe(i32 %capacity, ptr %error) {
@@ -135,12 +154,16 @@ entry:
                 ("run", [str(output / "runtime.exe")]),
             ]
             for name, command in commands:
-                result = execution.run(command, output / name, timeout=180)
+                result = execution.run(command, output / name,
+                                       timeout=remaining_case_seconds(case_start))
                 if result.returncode != 0 or result.stderr:
                     raise ValueError("ASYNC_START_" + name.upper() + "_FAILED")
             actual = (output / "run.stdout").read_bytes().replace(b"\r\n", b"\n")
             if actual != contract["expectedStdout"].encode("utf-8"):
                 raise ValueError("ASYNC_START_ORIGINAL_CONTROL_OUTPUT_CHANGED")
+            elapsed = 180 - remaining_case_seconds(case_start)
+            record["wholeCaseElapsedMilliseconds"] = round(elapsed * 1000, 3)
+            record["maximumCaseMilliseconds"] = 180000
             record.update(status="passed", completed=9,
                           cases=[dict(id=name, status="passed", passed=True)
                                  for name in contract["controls"]])
