@@ -138,21 +138,32 @@ spanPrecedes source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
     left.length < right.length
 }
 
-hashEquals source: Text, declared: MetadataSpan, bytes: [UInt8] -> Bool {
-    declared.length != 64 -> if { false -> return }
+public hashHex bytes: [UInt8] -> [UInt8; 64] {
     sha256.create() => hasher!
     hasher! -> update(bytes)
     hasher! -> finish => digest
-    UIntSize(0) => index!
-    true => matches!
+    [UInt8(0); 64] => hex!
+    0 => index!
     index! < 32 -> while {
-        digest[Int(index!)] => value
+        digest[index!] => value
         value / 16 => high
         value % 16 => low
         high < 10 -> if { high + 48 } else { high + 87 } => highHex
         low < 10 -> if { low + 48 } else { low + 87 } => lowHex
-        (source -> byte(declared.start + index! * 2)) != highHex
-            or (source -> byte(declared.start + index! * 2 + 1)) != lowHex
+        highHex => hex![index! * 2]
+        lowHex => hex![index! * 2 + 1]
+        index! + 1 => index!
+    }
+    hex!
+}
+
+hashEquals source: Text, declared: MetadataSpan, bytes: [UInt8] -> Bool {
+    declared.length != 64 -> if { false -> return }
+    bytes -> hashHex => actual
+    UIntSize(0) => index!
+    true => matches!
+    index! < 64 -> while {
+        (source -> byte(declared.start + index!)) != actual[Int(index!)]
             -> if { false => matches! }
         index! + 1 => index!
     }
@@ -205,6 +216,71 @@ abiSafe source: Text, span: MetadataSpan -> Bool {
 
 validationIssue status: Int, exportIndex: Int, parameterIndex: Int -> ValidationIssue => ValidationIssue { status: status, exportIndex: exportIndex, parameterIndex: parameterIndex }
 
+public abiMaterial source: Text, exports: ref [LibraryExport; ~], parameters: ref [LibraryParameter; ~] -> [UInt8; ~] {
+    [Int; ~] => order!
+    0 => exportIndex!
+    exportIndex! < (exports -> len) -> while {
+        order! -> push(exportIndex!)
+        exportIndex! + 1 => exportIndex!
+    }
+    1 => sortIndex!
+    sortIndex! < (order! -> len) -> while {
+        sortIndex! => cursor!
+        cursor! > 0 -> while {
+            order![cursor!] => right
+            order![cursor! - 1] => left
+            source -> spanPrecedes(exports[right].qualifiedName, exports[left].qualifiedName)
+                -> unless { break }
+            left => order![cursor!]
+            right => order![cursor! - 1]
+            cursor! - 1 => cursor!
+        }
+        sortIndex! + 1 => sortIndex!
+    }
+    [UInt8; ~] => abiBytes!
+    0 => ordinal!
+    ordinal! < (order! -> len) -> while {
+        ordinal! > 0 -> if { abiBytes! -> push(10) }
+        exports[order![ordinal!]] => exported
+        source -> appendSpan(exported.qualifiedName, abiBytes!)
+        abiBytes! -> push(0)
+        0 => parameterOrdinal!
+        parameterOrdinal! < exported.parameterCount -> while {
+            parameterOrdinal! > 0 -> if { abiBytes! -> push(0) }
+            source -> appendSpan(parameters[exported.parameterStart + parameterOrdinal!].typeName, abiBytes!)
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+        abiBytes! -> push(0)
+        abiBytes! -> push(45)
+        abiBytes! -> push(62)
+        source -> appendSpan(exported.resultType, abiBytes!)
+        ordinal! + 1 => ordinal!
+    }
+    abiBytes!
+}
+
+public signatureMaterial source: Text, exported: LibraryExport, parameters: ref [LibraryParameter; ~] -> [UInt8; ~] {
+    [UInt8; ~] => signature!
+    source -> appendSpan(exported.name, signature!)
+    signature! -> push(0)
+    source -> appendSpan(exported.symbol, signature!)
+    signature! -> push(0)
+    0 => parameterOrdinal!
+    parameterOrdinal! < exported.parameterCount -> while {
+        parameterOrdinal! > 0 -> if { signature! -> push(0) }
+        parameters[exported.parameterStart + parameterOrdinal!] => parameter
+        source -> appendSpan(parameter.name, signature!)
+        signature! -> push(58)
+        source -> appendSpan(parameter.typeName, signature!)
+        parameterOrdinal! + 1 => parameterOrdinal!
+    }
+    signature! -> push(0)
+    signature! -> push(45)
+    signature! -> push(62)
+    source -> appendSpan(exported.resultType, signature!)
+    signature!
+}
+
 validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: Text -> ValidationIssue {
     document.schema != 1 -> if { 21 -> validationIssue(-1, -1) -> return }
     source -> spanIs(document.abi, "sollang-c-v1")
@@ -225,46 +301,8 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: 
         current == 47 or current == 92 -> if { 72 -> validationIssue(-1, -1) -> return }
         fileIndex! + 1 => fileIndex!
     }
-    [Int; ~] => order!
-    0 => exportIndex!
-    exportIndex! < (document.exports -> len) -> while {
-        order! -> push(exportIndex!)
-        exportIndex! + 1 => exportIndex!
-    }
-    1 => sortIndex!
-    sortIndex! < (order! -> len) -> while {
-        sortIndex! => cursor!
-        cursor! > 0 -> while {
-            order![cursor!] => right
-            order![cursor! - 1] => left
-            source -> spanPrecedes(document.exports[right].qualifiedName, document.exports[left].qualifiedName)
-                -> unless { break }
-            left => order![cursor!]
-            right => order![cursor! - 1]
-            cursor! - 1 => cursor!
-        }
-        sortIndex! + 1 => sortIndex!
-    }
-    [UInt8; ~] => abiBytes!
-    0 => ordinal!
-    ordinal! < (order! -> len) -> while {
-        ordinal! > 0 -> if { abiBytes! -> push(10) }
-        document.exports[order![ordinal!]] => exported
-        source -> appendSpan(exported.qualifiedName, abiBytes!)
-        abiBytes! -> push(0)
-        0 => parameterOrdinal!
-        parameterOrdinal! < exported.parameterCount -> while {
-            parameterOrdinal! > 0 -> if { abiBytes! -> push(0) }
-            source -> appendSpan(document.parameters[exported.parameterStart + parameterOrdinal!].typeName, abiBytes!)
-            parameterOrdinal! + 1 => parameterOrdinal!
-        }
-        abiBytes! -> push(0)
-        abiBytes! -> push(45)
-        abiBytes! -> push(62)
-        source -> appendSpan(exported.resultType, abiBytes!)
-        ordinal! + 1 => ordinal!
-    }
-    source -> hashEquals(document.abiHash, abiBytes!)
+    source -> abiMaterial(document.exports, document.parameters) => abiBytes
+    source -> hashEquals(document.abiHash, abiBytes)
         -> unless { 73 -> validationIssue(-1, -1) -> return }
     0 => signatureIndex!
     signatureIndex! < (document.exports -> len) -> while {
@@ -287,25 +325,8 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: 
             validationOrdinal! + 1 => validationOrdinal!
         }
         source -> abiSafe(exported.resultType) -> unless { 74 -> validationIssue(signatureIndex!, -1) -> return }
-        [UInt8; ~] => signature!
-        source -> appendSpan(exported.name, signature!)
-        signature! -> push(0)
-        source -> appendSpan(exported.symbol, signature!)
-        signature! -> push(0)
-        0 => parameterOrdinal!
-        parameterOrdinal! < exported.parameterCount -> while {
-            parameterOrdinal! > 0 -> if { signature! -> push(0) }
-            document.parameters[exported.parameterStart + parameterOrdinal!] => parameter
-            source -> appendSpan(parameter.name, signature!)
-            signature! -> push(58)
-            source -> appendSpan(parameter.typeName, signature!)
-            parameterOrdinal! + 1 => parameterOrdinal!
-        }
-        signature! -> push(0)
-        signature! -> push(45)
-        signature! -> push(62)
-        source -> appendSpan(exported.resultType, signature!)
-        source -> hashEquals(exported.signatureHash, signature!)
+        source -> signatureMaterial(exported, document.parameters) => signature
+        source -> hashEquals(exported.signatureHash, signature)
             -> unless { 65 -> validationIssue(signatureIndex!, -1) -> return }
         0 => previous!
         previous! < signatureIndex! -> while {

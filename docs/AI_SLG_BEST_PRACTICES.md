@@ -1814,6 +1814,10 @@ validation. Decode scalars across packed-word boundaries and honor the declared
 byte length. Share scalar rules with identity decoding; valid empty fragments
 and supplementary scalars remain accepted.
 
+Library interface producers and integrity validation share the canonical ABI
+and signature material helpers. Preserve qualified-name ordering, NUL field
+separators, complete SHA-256 hashes, and lowercase hexadecimal bytes.
+
 For UTF-8 grammar inputs, keep mapped `SourceText` owners alive and use the
 shared `source_decoding.utf8Text` borrowed view before parsing or hashing.
 Grammar source hashing normalizes the line endings specified in `SPEC.md`;
