@@ -1701,6 +1701,57 @@ public moveOwnershipRegion nodeIndex: Int, ir: [TypedIrNode] -> Int {
     -1
 }
 
+# MoveEvent keeps its storage root for cleanup. Declaration identity is a
+# separate query: an input can retain its named read rather than its IR10 slot.
+public moveBindingDeclaration event: MoveEvent, ir: [TypedIrNode] -> Int {
+    event.bindingIr => root
+    root < 0 or root >= (ir -> len) -> if { -1 -> return }
+    ir[root] => node
+    node.kind == 10 or node.kind == 17 or node.kind == 29
+        -> if { root -> return }
+    node.kind == 5 and node.operand0 >= 0 and node.operand0 < (ir -> len)
+        -> if {
+            ir[node.operand0] => declaration
+            declaration.kind == 10 or declaration.kind == 17 or declaration.kind == 29
+                -> if { node.operand0 -> return }
+        }
+    node.kind != 5 -> if { -1 -> return }
+    # Input reads are SSA names and need not carry an operand0 slot link.
+    # Their declaration belongs to this exact function and symbol identity.
+    root => functionIr!
+    0 => edges!
+    functionIr! >= 0 and functionIr! < (ir -> len) and edges! < (ir -> len)
+        and ir[functionIr!].kind != 0
+        -> while {
+            ir[functionIr!].parent => functionIr!
+            edges! + 1 => edges!
+        }
+    functionIr! < 0 or functionIr! >= (ir -> len)
+        -> if { -1 -> return }
+    ir[functionIr!].kind != 0 -> if { -1 -> return }
+    ir[functionIr!] => function
+    function.operand1 => parameter!
+    0 => ordinal!
+    parameter! < 0 -> if {
+        function.nextOperand => parameter!
+        1 => ordinal!
+    }
+    parameter! >= 0 and parameter! < (ir -> len) and ordinal! < (ir -> len)
+        -> while {
+            ir[parameter!] => declaration
+            declaration.kind == 10 and declaration.parent == functionIr!
+                and declaration.sourceModule == node.sourceModule and declaration.symbol == node.symbol
+                -> if { parameter! -> return }
+            ordinal! == 0 -> if {
+                function.nextOperand => parameter!
+            } else {
+                declaration.nextOperand => parameter!
+            }
+            ordinal! + 1 => ordinal!
+        }
+    -1
+}
+
 public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [MoveEvent; ~] {
     ir -> functionDeclarationIrs => functionIrs
     [MoveEvent; ~] => events!
