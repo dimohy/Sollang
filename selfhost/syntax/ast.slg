@@ -29,6 +29,31 @@ public struct AstNode {
 # the CST ancestor walk before its transparent syntax nodes are discarded.
 # A binding, call argument, operator operand, or expression body is not a
 # statement root. Final block/function value admission is a semantic decision.
+# ParseStatement in C# reads its target after the complete source expression.
+# A nested block, call or collection owns its internal binding arrows.
+outerBindingNameToken tokens: ref [syntax.SyntaxToken; ~], first: Int, count: Int -> Int {
+    first => cursor!
+    first + count => end
+    0 => depth!
+    false => afterArrow!
+    cursor! < end -> while {
+        tokens[cursor!].kind => kind
+        kind == grammar.tokenIdFatArrow() and depth! == 0
+            -> if {
+                true => afterArrow!
+            } else {
+                afterArrow! and depth! == 0 and kind == grammar.tokenIdIdentifier()
+                    -> if { cursor! -> return }
+                kind == grammar.tokenIdLeftParen() or kind == grammar.tokenIdLeftBracket() or kind == grammar.tokenIdLeftBrace()
+                    -> if { depth! + 1 => depth! }
+                kind == grammar.tokenIdRightParen() or kind == grammar.tokenIdRightBracket() or kind == grammar.tokenIdRightBrace()
+                    -> if { depth! - 1 => depth! }
+            }
+        cursor! + 1 => cursor!
+    }
+    -1
+}
+
 public bareYieldStatement source: Text, node: AstNode, token: syntax.SyntaxToken -> Bool {
     (node.kind == 15 and (node.flags / 524288) % 2 == 1
         and token.kind == grammar.tokenIdIdentifier()
@@ -1970,38 +1995,8 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
                     }
             }
         declaration!.kind == 9 -> if {
-            declaration!.firstToken => bindingToken!
             declaration!.firstToken + declaration!.tokenCount => bindingEnd
-            false => afterFatArrow!
-            0 => bindingGroupDepth!
-            bindingToken! < bindingEnd -> while {
-                tokens[bindingToken!] => bindingCandidate
-                bindingCandidate.kind == grammar.tokenIdFatArrow() and bindingGroupDepth! == 0
-                    -> if {
-                        true => afterFatArrow!
-                        bindingToken! + 1 => bindingToken!
-                    } else {
-                        afterFatArrow! and bindingGroupDepth! == 0 -> if {
-                            bindingCandidate.kind == grammar.tokenIdIdentifier()
-                                -> if {
-                                    bindingToken! => declaration!.payloadToken
-                                    bindingEnd => bindingToken!
-                                } else {
-                                    bindingToken! + 1 => bindingToken!
-                                }
-                        } else {
-                            bindingCandidate.kind == grammar.tokenIdLeftParen() or bindingCandidate.kind == grammar.tokenIdLeftBracket() or bindingCandidate.kind == grammar.tokenIdLeftBrace()
-                                -> if {
-                                    bindingGroupDepth! + 1 => bindingGroupDepth!
-                                }
-                            bindingCandidate.kind == grammar.tokenIdRightParen() or bindingCandidate.kind == grammar.tokenIdRightBracket() or bindingCandidate.kind == grammar.tokenIdRightBrace()
-                                -> if {
-                                    bindingGroupDepth! - 1 => bindingGroupDepth!
-                                }
-                            bindingToken! + 1 => bindingToken!
-                        }
-                    }
-            }
+            tokens -> outerBindingNameToken(declaration!.firstToken, declaration!.tokenCount) => declaration!.payloadToken
             declaration!.payloadToken + 1 => bindingSuffixToken!
             bindingSuffixToken! < bindingEnd and (tokens[bindingSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[bindingSuffixToken!].kind == grammar.triviaIdComment())
                 -> while {
@@ -2142,52 +2137,29 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
             }
         }
         declaration!.kind == 53 -> if {
-            declaration!.firstToken => assignmentToken!
-            declaration!.firstToken + declaration!.tokenCount => assignmentEnd
-            false => afterAssignmentArrow!
-            assignmentToken! < assignmentEnd -> while {
-                tokens[assignmentToken!].kind == grammar.tokenIdFatArrow()
-                    -> if {
-                        true => afterAssignmentArrow!
-                    } else {
-                        afterAssignmentArrow! and tokens[assignmentToken!].kind == grammar.tokenIdIdentifier()
-                            -> if {
-                                assignmentToken! => declaration!.payloadToken
-                                assignmentEnd => assignmentToken!
-                            }
-                    }
-                assignmentToken! + 1 => assignmentToken!
-            }
+            tokens -> outerBindingNameToken(declaration!.firstToken, declaration!.tokenCount) => declaration!.payloadToken
         }
         declaration!.kind == 54 -> if {
-            -1 => declaration!.payloadToken
+            tokens -> outerBindingNameToken(declaration!.firstToken, declaration!.tokenCount) => declaration!.payloadToken
             -1 => declaration!.secondaryToken
-            declaration!.firstToken => fieldAssignmentToken!
-            declaration!.firstToken + declaration!.tokenCount => fieldAssignmentEnd
-            false => afterFieldAssignmentArrow!
-            false => afterFieldAssignmentDot!
-            fieldAssignmentToken! < fieldAssignmentEnd -> while {
-                tokens[fieldAssignmentToken!].kind == grammar.tokenIdFatArrow()
-                    -> if {
-                        true => afterFieldAssignmentArrow!
-                    } else {
-                        afterFieldAssignmentArrow! and declaration!.payloadToken < 0 and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier()
-                            -> if {
-                                fieldAssignmentToken! => declaration!.payloadToken
-                                1 => declaration!.flags
-                            }
-                        afterFieldAssignmentArrow! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdDot()
-                            -> if {
-                                true => afterFieldAssignmentDot!
-                            } else {
-                                afterFieldAssignmentDot! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier()
-                                    -> if {
-                                        fieldAssignmentToken! => declaration!.secondaryToken
-                                        fieldAssignmentEnd => fieldAssignmentToken!
-                                    }
-                            }
-                    }
-                fieldAssignmentToken! + 1 => fieldAssignmentToken!
+            declaration!.payloadToken >= 0 -> if {
+                1 => declaration!.flags
+                declaration!.payloadToken + 1 => fieldAssignmentToken!
+                declaration!.firstToken + declaration!.tokenCount => fieldAssignmentEnd
+                false => afterFieldAssignmentDot!
+                fieldAssignmentToken! < fieldAssignmentEnd -> while {
+                    tokens[fieldAssignmentToken!].kind == grammar.tokenIdDot()
+                        -> if {
+                            true => afterFieldAssignmentDot!
+                        } else {
+                            afterFieldAssignmentDot! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    fieldAssignmentToken! => declaration!.secondaryToken
+                                    fieldAssignmentEnd => fieldAssignmentToken!
+                                }
+                        }
+                    fieldAssignmentToken! + 1 => fieldAssignmentToken!
+                }
             }
         }
         declaration!.kind == 32 -> if {
