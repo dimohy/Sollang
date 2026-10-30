@@ -1104,6 +1104,10 @@ prepareNative request: ref PrepareRequest -> emitterContext.EmitContext {
 }
 
 emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context -> emitPreparedWindowsContextWithEntry(state, true)
+}
+
+emitPreparedWindowsContextWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool -> Unit uses Console, Process {
     context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
     context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
@@ -1259,7 +1263,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
     needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
     needsSocketRuntime -> if { "declare i64 @strlen(ptr)" -> println }
     comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
-    context -> emitCore(state)
+    context -> emitCoreWithEntry(state, emitEntry)
     needsSocketRuntime -> if { socketRuntime.emitWindowsRuntime() }
     needsSocketCompletionRuntime -> if { socketRuntime.emitWindowsCompletionRuntime() }
     needsDnsRuntime -> if { dnsRuntime.emitWindowsRuntime() }
@@ -1298,6 +1302,10 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
 }
 
 emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context -> emitPreparedLinuxContextWithEntry(state, true)
+}
+
+emitPreparedLinuxContextWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool -> Unit uses Console, Process {
     context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
     context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
@@ -1356,7 +1364,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
     needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
     needsEnvironmentRuntime -> if { environmentRuntime.emitTypeRuntime() }
     needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
-    context -> emitCore(state)
+    context -> emitCoreWithEntry(state, emitEntry)
     needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime or needsOwnedFileRuntime
         -> if { "declare ptr @__errno_location()" -> println }
     needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime

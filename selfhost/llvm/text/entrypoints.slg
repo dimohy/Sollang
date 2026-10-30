@@ -383,6 +383,11 @@ public emitCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~], use
 }
 
 public emitCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    NativeEmissionProduct { windows: true, sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
+    sources -> emitCheckedNativeProduct(diagnosticPaths, paths, userSourceStart, cache, product)
+}
+
+emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request, product: NativeEmissionProduct -> Int uses Console, File, Process {
     userSourceStart < 0 or userSourceStart > (sources -> len)
         -> if {
             "; sollang source root error: invalid standard-library source prefix" -> println
@@ -407,96 +412,12 @@ public emitCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths
         Ok(value) { value }
     } => parsedPackage
     sources -> emitSourceStyleNotes
-    llvmTarget.windowsX64() => target
-    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    product.windows -> if { llvmTarget.windowsX64() } else { llvmTarget.linuxX64() } => target
+    product.windows -> if { "windows-x64" } else { "linux-x64" } => targetName
+    product.windows -> if { 1 } else { 0 } => expectedPathStyle
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: expectedPathStyle } => prepareRequest
     parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
-    prepareRequest -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, diagnosticPaths, "windows-x64", path.nativeStyle(), cache) -> when {
-        Err(code) { "; sollang semantic cache preparation error E$code" -> println
-            1 -> return }
-        Ok(value) { value }
-    } => cached
-    cached.words => pendingWords
-    cached.checked => checked
-    checked -> when {
-        DeclarationRejected(rejection) {
-            rejection -> emitFunctionDeclarationRejection(diagnosticPaths)
-            1 -> return
-        }
-        Rejected(rejection) {
-            rejection -> emitSignatureRejection(diagnosticPaths)
-            1 -> return
-        }
-        ImportRejected(rejection) {
-            rejection -> emitInterpolationImportRejection(diagnosticPaths)
-            1 -> return
-        }
-        Ready(context) { context }
-    } => context
-    context -> checkedContextDiagnosticCount => diagnosticCount
-    diagnosticCount == 0 -> if {
-        context -> emitInterpolationSemanticWarnings
-        context -> emitOrdinaryNumericWarnings(userSourceStart)
-        context -> prepareScheduledCoreEmitterState => scheduledState
-        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
-        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
-        pendingWords -> stagePreparedSemanticCache(cache)
-            -> unless { 1 -> return }
-        target.dataLayoutLine -> println
-        target.tripleLine -> println
-        context -> emitPreparedWindowsContext(scheduledState)
-    } else {
-        context -> diagnostics.emitBlockingDiagnostics
-        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
-        emittedSemanticCount == 0 -> if {
-            context -> emitIrInvariantDiagnostics
-        }
-    }
-    diagnosticCount
-}
-
-public emitLinuxChecked sources: move [Text; ~] -> Int uses Console, File, Process {
-    [Text; ~] => paths
-    sources -> emitLinuxCheckedWithPaths(paths, 0)
-}
-
-public emitLinuxCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, File, Process {
-    semanticCache.disabled() => cache
-    sources -> emitLinuxCheckedWithPathsCached(paths, userSourceStart, cache)
-}
-
-public emitLinuxCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    sources -> emitLinuxCheckedWithSourcePathsCached(paths, paths, userSourceStart, cache)
-}
-
-public emitLinuxCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    userSourceStart < 0 or userSourceStart > (sources -> len)
-        -> if {
-            "; sollang source root error: invalid standard-library source prefix" -> println
-            1 -> return
-        }
-    sources -> checkedPathCacheAdmissionStatus(paths, cache) => cacheAdmission
-    cacheAdmission != 0 -> if {
-        sources -> syntaxDiagnosticCount => syntaxCount
-        syntaxCount > 0 -> if {
-            sources -> emitFileSyntaxDiagnostics(diagnosticPaths)
-            syntaxCount -> return
-        }
-        sources -> emitSourceStyleNotes
-        "; sollang semantic cache preparation error E$cacheAdmission" -> println
-        1 -> return
-    }
-    sources -> semanticAnalysis.analyzeCheckedTextSources -> when {
-        Err(code) {
-            sources -> emitFileSyntaxDiagnostics(diagnosticPaths)
-            code -> return
-        }
-        Ok(value) { value }
-    } => parsedPackage
-    sources -> emitSourceStyleNotes
-    llvmTarget.linuxX64() => target
-    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
-    parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
-    prepareRequest -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, diagnosticPaths, "linux-x64", path.nativeStyle(), cache) -> when {
+    prepareRequest -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, diagnosticPaths, targetName, path.nativeStyle(), cache) -> when {
         Err(code) { "; sollang semantic cache preparation error E$code" -> println
             1 -> return }
         Ok(value) { value }
@@ -519,29 +440,80 @@ public emitLinuxCheckedWithSourcePathsCached sources: move [Text; ~], diagnostic
         Ready(context) { context }
     } => context
     context -> checkedContextDiagnosticCount => diagnosticCount!
-    0 => comInteropCount!
-    context -> diagnostics.comInteropFunctionCount => comInteropCount!
-    comInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    product.windows -> if { 0 } else { context -> diagnostics.comInteropFunctionCount } => comInteropCount
+    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
         context -> emitInterpolationSemanticWarnings
         context -> emitOrdinaryNumericWarnings(userSourceStart)
-        context -> prepareScheduledCoreEmitterState => scheduledState
-        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
-        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
-        pendingWords -> stagePreparedSemanticCache(cache)
-            -> unless { 1 -> return }
-        target.dataLayoutLine -> println
-        target.tripleLine -> println
-        context -> emitPreparedLinuxContext(scheduledState)
+        product.sharedLibrary -> if {
+            context -> collectLibraryDeclarations(0, userSourceStart) => declarations
+            context -> prepareLibraryInterface(declarations, targetName, product.libraryFile) -> when {
+                Ok(plan) { plan }
+                Err(rejection) { rejection -> emitLibraryExportRejection(context)
+                    1 -> return }
+            } => plan
+            context -> prepareScheduledCoreEmitterStateWithRoots(plan.functions) => scheduledState
+            context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+            preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+            plan -> validateLibraryExports(context, scheduledState) -> when {
+                Ok(_) { }
+                Err(rejection) { rejection -> emitLibraryWrapperRejection(plan, context)
+                    1 -> return }
+            }
+            plan.document -> writeLibraryInterfaceStage(product.interfaceStage)
+                -> unless { 1 -> return }
+            pendingWords -> stagePreparedSemanticCache(cache)
+                -> unless { 1 -> return }
+            target.dataLayoutLine -> println
+            target.tripleLine -> println
+            product.windows -> if {
+                context -> emitPreparedWindowsContextWithEntry(scheduledState, false)
+            } else {
+                context -> emitPreparedLinuxContextWithEntry(scheduledState, false)
+            }
+            plan -> emitLibraryExports(context, scheduledState, product.windows)
+        } else {
+            context -> prepareScheduledCoreEmitterState => scheduledState
+            context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+            preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+            pendingWords -> stagePreparedSemanticCache(cache)
+                -> unless { 1 -> return }
+            target.dataLayoutLine -> println
+            target.tripleLine -> println
+            product.windows -> if {
+                context -> emitPreparedWindowsContextWithEntry(scheduledState, true)
+            } else {
+                context -> emitPreparedLinuxContextWithEntry(scheduledState, true)
+            }
+        }
     } else {
         context -> diagnostics.emitBlockingDiagnostics
         context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
         emittedSemanticCount == 0 -> if {
             context -> emitIrInvariantDiagnostics
         }
-        comInteropCount! > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+        comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
     }
     diagnosticCount!
+}
+
+public emitLinuxChecked sources: move [Text; ~] -> Int uses Console, File, Process {
+    [Text; ~] => paths
+    sources -> emitLinuxCheckedWithPaths(paths, 0)
+}
+
+public emitLinuxCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, File, Process {
+    semanticCache.disabled() => cache
+    sources -> emitLinuxCheckedWithPathsCached(paths, userSourceStart, cache)
+}
+
+public emitLinuxCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    sources -> emitLinuxCheckedWithSourcePathsCached(paths, paths, userSourceStart, cache)
+}
+
+public emitLinuxCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    NativeEmissionProduct { windows: false, sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
+    sources -> emitCheckedNativeProduct(diagnosticPaths, paths, userSourceStart, cache, product)
 }
 
 public emitWasmChecked sources: move [Text; ~] -> Int uses Console, Process {
@@ -1332,4 +1304,9 @@ public emitWasmCheckedFiles paths: move [Text; ~] -> Int uses Console, File, Pro
     sources! -> emitWasmChecked => diagnosticCount
     owners! -> len => ownerCount
     diagnosticCount
+}
+
+public emitLibraryCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request, windows: Bool, libraryFile: Text, interfaceStage: Text -> Int uses Console, File, Process {
+    NativeEmissionProduct { windows: windows, sharedLibrary: true, libraryFile: libraryFile, interfaceStage: interfaceStage } => product
+    sources -> emitCheckedNativeProduct(diagnosticPaths, paths, userSourceStart, cache, product)
 }

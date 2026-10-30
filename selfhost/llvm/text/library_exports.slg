@@ -7,6 +7,7 @@ import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.syntax as syntax
+import sys.file as file
 import syntax.generated.slg as grammar
 
 # The selection owns names and keeps validated IR indexes as reachability roots.
@@ -17,6 +18,493 @@ public struct LibraryDeclarations {
     public qualifiedNames: [libraryInterfaces.MetadataSpan; ~]
     public memberNames: [libraryInterfaces.MetadataSpan; ~]
     public strings: [UInt8; ~]
+}
+
+enum LibraryExportErrorKind {
+    NoPublicFunction
+    BoundType
+    DeclaredType
+    Effects
+    ValueFunctionRequired
+    Capture
+    InputOwnership
+    MemberCollision
+    SymbolCollision
+    MetadataModel
+}
+
+struct LibraryExportRejection {
+    kind: LibraryExportErrorKind
+    functionIndex: Int
+    parameterOrdinal: Int
+}
+
+struct LibraryExportPlan {
+    functions: [Int; ~]
+    document: libraryInterfaces.LibraryInterface
+}
+
+struct NativeEmissionProduct {
+    windows: Bool
+    sharedLibrary: Bool
+    libraryFile: Text
+    interfaceStage: Text
+}
+
+struct LibraryNameSpans {
+    qualified: libraryInterfaces.MetadataSpan
+    member: libraryInterfaces.MetadataSpan
+}
+
+writeLibraryInterfaceStage document: ref libraryInterfaces.LibraryInterface, stage: Text -> Bool uses Console, File {
+    document -> libraryInterfaces.serialize(2147483647) -> when {
+        Ok(bytes) { bytes }
+        Err(error) { "sollang: library interface serialization failed at byte $(error.offset)" -> println
+            false -> return }
+    } => bytes
+    stage -> file.openWrite -> when {
+        Err(code) { "sollang: cannot open library interface stage '$stage' (error $code)" -> println
+            false -> return }
+        Ok(writer) {
+            writer -> writeRangeAt(bytes, 0, UIntSize(bytes -> len), 0) -> when {
+                Err(code) { "sollang: cannot write library interface stage '$stage' (error $code)" -> println
+                    false -> return }
+                Ok(count) { count != UIntSize(bytes -> len) -> if {
+                        "sollang: incomplete library interface stage '$stage' ($count bytes)" -> println
+                        false -> return
+                } }
+            }
+            writer -> file.sync -> unless {
+                "sollang: cannot sync library interface stage '$stage'" -> println
+                false -> return
+            }
+        }
+    }
+    true
+}
+
+libraryExportRejection kind: LibraryExportErrorKind, functionIndex: Int, parameterOrdinal: Int -> LibraryExportRejection => LibraryExportRejection {
+    kind: kind, functionIndex: functionIndex, parameterOrdinal: parameterOrdinal
+}
+
+public libraryAbiType node: typedIr.TypedIrNode -> Result<Text, Unit> {
+    node.typeKind == 1 and node.typeOrigin == 1 -> if {
+        node.typeSymbol -> when {
+            == 0 { Result<Text, Unit>.Ok("Unit") -> return }
+            == 2 { Result<Text, Unit>.Ok("Int32") -> return }
+            == 3 { Result<Text, Unit>.Ok("Int8") -> return }
+            == 4 { Result<Text, Unit>.Ok("Int16") -> return }
+            == 5 { Result<Text, Unit>.Ok("Int32") -> return }
+            == 6 { Result<Text, Unit>.Ok("Int64") -> return }
+            == 7 { Result<Text, Unit>.Ok("Int64") -> return }
+            == 8 { Result<Text, Unit>.Ok("UInt8") -> return }
+            == 9 { Result<Text, Unit>.Ok("UInt16") -> return }
+            == 10 { Result<Text, Unit>.Ok("UInt32") -> return }
+            == 11 { Result<Text, Unit>.Ok("UInt64") -> return }
+            == 20 { Result<Text, Unit>.Ok("Float32") -> return }
+            == 21 { Result<Text, Unit>.Ok("Float64") -> return }
+            else { }
+        }
+    }
+    Result<Text, Unit>.Err
+}
+
+appendLibraryText bytes: mut [UInt8; ~], value: Text -> libraryInterfaces.MetadataSpan {
+    UIntSize(bytes -> len) => start
+    value -> appendLibraryBytes(0, value -> len, bytes)
+    libraryInterfaces.MetadataSpan { start: start, length: value -> len }
+}
+
+libraryParameterName functionIndex: Int, ordinal: Int, parameterIndex: Int, context: ref emitterContext.EmitContext -> Text {
+    context.ir[functionIndex] => function
+    context.ranges[function.sourceModule] => range
+    context.symbols[range.symbolStart + function.symbol] => symbol
+    context.nodes[range.astStart + symbol.astNode] => declaration
+    ordinal == 0 and declaration.secondaryToken < 0
+        -> if { "value" -> return }
+    context.ir[parameterIndex].payloadToken => tokenIndex
+    context.tokens[range.tokenStart + tokenIndex] => token
+    context.sources[function.sourceModule] -> slice(token.span.start, token.span.length)
+}
+
+libraryDeclaredType functionIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext -> [UInt8; ~] {
+    context.ir[functionIndex] => function
+    context.ranges[function.sourceModule] => range
+    context.symbols[range.symbolStart + function.symbol] => symbol
+    symbol.secondaryTypeNode => typeAst!
+    ordinal >= 0 -> if {
+        functionIndex -> functionParameterAt(ordinal, context) => parameterIndex
+        context.symbols[range.symbolStart + context.ir[parameterIndex].symbol].typeNode => typeAst!
+    } else {
+        typeAst! < 0 -> if { symbol.typeNode => typeAst! }
+    }
+    context.nodes[range.astStart + typeAst!] => node
+    [UInt8; ~] => bytes!
+    node.firstToken => tokenIndex!
+    tokenIndex! < node.firstToken + node.tokenCount
+        -> while {
+            context.tokens[range.tokenStart + tokenIndex!] => token
+            token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                and token.kind != grammar.tokenIdNewLine()
+                -> if { context.sources[function.sourceModule] -> appendLibraryBytes(token.span.start, token.span.length, bytes!) }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    bytes!
+}
+
+libraryDeclaredAbiSafe bytes: ref [UInt8; ~] -> Bool {
+    bytes -> file.borrowBytes => owner
+    owner -> slice(UIntSize(0), owner -> len) => value
+    value == "Unit" or value == "Int8" or value == "Int16" or value == "Int32" or value == "Int64"
+        or value == "UInt8" or value == "UInt16" or value == "UInt32" or value == "UInt64"
+        or value == "Float32" or value == "Float64"
+}
+
+libraryDeclaresEffects functionIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    context.ir[functionIndex] => function
+    context.ranges[function.sourceModule] => range
+    context.symbols[range.symbolStart + function.symbol] => symbol
+    context.nodes[range.astStart + symbol.astNode] => declaration
+    declaration.firstToken => index!
+    index! < declaration.firstToken + declaration.tokenCount
+        -> while {
+            context.tokens[range.tokenStart + index!] => token
+            token.kind == grammar.tokenIdLeftBrace() -> if { false -> return }
+            token.span.length == 4
+                and (context.sources[function.sourceModule] -> slice(token.span.start, token.span.length)) == "uses"
+                -> if { true -> return }
+            index! + 1 => index!
+        }
+    false
+}
+
+prepareLibraryInterface context: ref emitterContext.EmitContext, declarations: move LibraryDeclarations, targetName: Text, libraryFile: Text -> Result<LibraryExportPlan, LibraryExportRejection> {
+    (declarations.functions -> len) == 0 -> if {
+        Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.NoPublicFunction -> libraryExportRejection(-1, -1)) -> return
+    }
+    declarations.strings => strings!
+    [libraryInterfaces.LibraryExport; ~] => exports!
+    [libraryInterfaces.LibraryParameter; ~] => parameters!
+    0 => ordinal!
+    # CSharp computes all bound ABI type names before validating any source
+    # declaration. Preserve that error ordering across the complete export set.
+    ordinal! < (declarations.functions -> len) -> while {
+        declarations.functions[ordinal!] => functionIndex
+        Int(parameters! -> len) => parameterStart
+        0 => parameterOrdinal!
+        functionIndex -> functionParameterAt(parameterOrdinal!, context) => parameterIndex!
+        parameterIndex! >= 0 -> while {
+            context.ir[parameterIndex!] -> libraryAbiType -> when {
+                Ok(value) { value }
+                Err(_) { Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.BoundType -> libraryExportRejection(functionIndex, parameterOrdinal!)) -> return }
+            } => typeName
+            functionIndex -> libraryParameterName(parameterOrdinal!, parameterIndex!, context) => name
+            strings! -> appendLibraryText(name) => nameSpan
+            strings! -> appendLibraryText(typeName) => typeSpan
+            parameters! -> push(libraryInterfaces.LibraryParameter { name: nameSpan, typeName: typeSpan })
+            parameterOrdinal! + 1 => parameterOrdinal!
+            functionIndex -> functionParameterAt(parameterOrdinal!, context) => parameterIndex!
+        }
+        context.ir[functionIndex] -> libraryAbiType -> when {
+            Ok(value) { value }
+            Err(_) { Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.BoundType -> libraryExportRejection(functionIndex, -1)) -> return }
+        } => resultType
+        strings! -> appendLibraryText(resultType) => resultSpan
+        exports! -> push(libraryInterfaces.LibraryExport {
+            name: declarations.memberNames[ordinal!], qualifiedName: declarations.qualifiedNames[ordinal!]
+            symbol: libraryInterfaces.MetadataSpan { start: 0, length: 0 }
+            parameterStart: parameterStart, parameterCount: parameterOrdinal!, resultType: resultSpan
+            signatureHash: libraryInterfaces.MetadataSpan { start: 0, length: 0 }
+        })
+        ordinal! + 1 => ordinal!
+    }
+    0 => declarationOrdinal!
+    declarations.functions -> each functionIndex {
+        0 => parameterOrdinal!
+        functionIndex -> functionParameterAt(parameterOrdinal!, context) => parameterIndex!
+        parameterIndex! >= 0 -> while {
+            functionIndex -> libraryDeclaredType(parameterOrdinal!, context) => declared
+            declared -> libraryDeclaredAbiSafe -> unless {
+                Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.DeclaredType -> libraryExportRejection(functionIndex, parameterOrdinal!)) -> return
+            }
+            parameterOrdinal! + 1 => parameterOrdinal!
+            functionIndex -> functionParameterAt(parameterOrdinal!, context) => parameterIndex!
+        }
+        functionIndex -> libraryDeclaredType(-1, context) => declaredResult
+        declaredResult -> libraryDeclaredAbiSafe -> unless {
+            Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.DeclaredType -> libraryExportRejection(functionIndex, -1)) -> return
+        }
+        functionIndex -> libraryDeclaresEffects(context)
+            -> if {
+                Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.Effects -> libraryExportRejection(functionIndex, -1)) -> return
+            }
+        0 => previous!
+        previous! < declarationOrdinal! -> while {
+            strings! -> librarySpansEqual(declarations.memberNames[previous!], declarations.memberNames[declarationOrdinal!])
+                -> if {
+                    Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.MemberCollision -> libraryExportRejection(functionIndex, -1)) -> return
+                }
+            previous! + 1 => previous!
+        }
+        declarationOrdinal! + 1 => declarationOrdinal!
+    }
+    exports! -> libraryInterfaces.create(parameters!, strings!, targetName, libraryFile) -> when {
+        Ok(document) { document }
+        Err(_) { Result<LibraryExportPlan, LibraryExportRejection>.Err(LibraryExportErrorKind.MetadataModel -> libraryExportRejection(-1, -1)) -> return }
+    } => document
+    Result<LibraryExportPlan, LibraryExportRejection>.Ok(LibraryExportPlan { functions: declarations.functions, document: document })
+}
+
+validateLibraryExports plan: ref LibraryExportPlan, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Result<Unit, LibraryExportRejection> {
+    0 => wrapperOrdinal!
+    plan.functions -> each functionIndex {
+        context.ir[functionIndex] => function
+        context.ranges[function.sourceModule] => range
+        context.symbols[range.symbolStart + function.symbol] => symbol
+        function.flags / 8 % 2 == 1 or function.flags / 64 % 2 == 1
+            or (function -> typedIr.functionDeclaresGenericParameters(context.ranges, context.symbols))
+            or symbol.blockNameToken >= 0 or symbol.blockTypeNode >= 0
+            -> if {
+                Result<Unit, LibraryExportRejection>.Err(LibraryExportErrorKind.ValueFunctionRequired -> libraryExportRejection(functionIndex, -1)) -> return
+            }
+        functionIndex -> functionCaptures(context, state) => captures
+        (captures -> len) > 0 -> if {
+            Result<Unit, LibraryExportRejection>.Err(LibraryExportErrorKind.Capture -> libraryExportRejection(functionIndex, -1)) -> return
+        }
+        0 => parameterOrdinal!
+        functionIndex -> functionParameterAt(parameterOrdinal!, context) => parameterIndex!
+        parameterIndex! >= 0 -> while {
+            context.ir[parameterIndex!].flags % 4 != 0 -> if {
+                Result<Unit, LibraryExportRejection>.Err(LibraryExportErrorKind.InputOwnership -> libraryExportRejection(functionIndex, parameterOrdinal!)) -> return
+            }
+            parameterOrdinal! + 1 => parameterOrdinal!
+            functionIndex -> functionParameterAt(parameterOrdinal!, context) => parameterIndex!
+        }
+        0 => previous!
+        previous! < wrapperOrdinal! -> while {
+            plan.document.strings -> librarySpansEqual(plan.document.exports[previous!].symbol, plan.document.exports[wrapperOrdinal!].symbol)
+                -> if {
+                    Result<Unit, LibraryExportRejection>.Err(LibraryExportErrorKind.SymbolCollision -> libraryExportRejection(functionIndex, -1)) -> return
+                }
+            previous! + 1 => previous!
+        }
+        wrapperOrdinal! + 1 => wrapperOrdinal!
+    }
+    Result<Unit, LibraryExportRejection>.Ok
+}
+
+appendLibraryDeclarationName source: Text, range: analysis.SourceAnalysisRange, symbol: symbols.Symbol, identity: modules.ModuleIdentity, tokens: ref [syntax.SyntaxToken; ~], strings: mut [UInt8; ~] -> LibraryNameSpans {
+    UIntSize(strings -> len) => nameStart
+    identity.pathLength > 0 -> if {
+        range.tokenStart => index!
+        index! < range.tokenStart + range.tokenCount -> while {
+            tokens[index!] => token
+            token.span.start >= identity.pathStart + identity.pathLength
+                -> if { break }
+            token.span.start >= identity.pathStart
+                and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                -> if { source -> appendLibraryBytes(token.span.start, token.span.length, strings) }
+            index! + 1 => index!
+        }
+        strings -> push(46)
+    }
+    symbol.nameToken => nameToken!
+    UIntSize(strings -> len) => memberStart!
+    true => more!
+    more! -> while {
+        tokens[range.tokenStart + nameToken!] => token
+        UIntSize(strings -> len) => memberStart!
+        source -> appendLibraryBytes(token.span.start, token.span.length, strings)
+        nameToken! + 1 => next!
+        next! < range.tokenCount
+            and (tokens[range.tokenStart + next!].kind == grammar.triviaIdWhitespace()
+            or tokens[range.tokenStart + next!].kind == grammar.triviaIdComment())
+            -> while { next! + 1 => next! }
+        next! < range.tokenCount and tokens[range.tokenStart + next!].kind == grammar.tokenIdDot()
+            -> if {
+                strings -> push(46)
+                next! + 1 => next!
+                next! < range.tokenCount
+                    and (tokens[range.tokenStart + next!].kind == grammar.triviaIdWhitespace()
+                    or tokens[range.tokenStart + next!].kind == grammar.triviaIdComment())
+                    -> while { next! + 1 => next! }
+                next! => nameToken!
+            } else { false => more! }
+    }
+    UIntSize(strings -> len) => end
+    LibraryNameSpans { qualified: libraryInterfaces.MetadataSpan { start: nameStart, length: end - nameStart },
+        member: libraryInterfaces.MetadataSpan { start: memberStart!, length: end - memberStart! } }
+}
+
+libraryBoundTypeName node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Result<Text, Unit> {
+    node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol >= 0 and node.typeSymbol <= 25
+        -> if {
+            ["Unit", "Text", "Int", "Int8", "Int16", "Int", "Int64", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float32", "Float32", "Float64", "Float64", "Bool", "SourceText", "Range"] => names
+            Result<Text, Unit>.Ok(names[node.typeSymbol]) -> return
+        }
+    node.typeKind == 1 and node.typeOrigin == 3 -> if {
+        context.ranges[node.typeModule] => range
+        context.symbols[range.symbolStart + node.typeSymbol] => generic
+        0 => ordinal!
+        0 => index!
+        index! < node.typeSymbol -> while {
+            context.symbols[range.symbolStart + index!] => symbol
+            symbol.kind == 32 and symbol.parent == generic.parent
+                -> if { ordinal! + 1 => ordinal! }
+            index! + 1 => index!
+        }
+        ordinal! >= 0 and ordinal! < 3 -> if {
+            ["GenericParameter", "SecondaryGenericParameter", "TertiaryGenericParameter"] => names
+            Result<Text, Unit>.Ok(names[ordinal!]) -> return
+        }
+    }
+    # Numeric CSharp TypeId diagnostics for synthetic/user types depend on its
+    # registry order. Keep this boundary explicit until that source unit agrees.
+    Result<Text, Unit>.Err
+}
+
+emitLibraryExportRejection rejection: ref LibraryExportRejection, context: ref emitterContext.EmitContext -> Unit uses Console {
+    rejection.kind -> when {
+        NoPublicFunction { "sollang: a Sollang shared library must declare at least one public function" -> println
+            return }
+        MetadataModel { "sollang: compiler verification failure: admitted library export metadata is invalid" -> println
+            return }
+        else { }
+    }
+    context.ir[rejection.functionIndex] => function
+    context.ranges[function.sourceModule] => range
+    context.symbols[range.symbolStart + function.symbol] => symbol
+    [UInt8; ~] => bytes!
+    context.sources[function.sourceModule] -> appendLibraryDeclarationName(range, symbol, context.modules[function.sourceModule], context.tokens, bytes!) => nameSpans
+    bytes! -> file.borrowBytes => owner
+    owner -> slice(nameSpans.qualified.start, nameSpans.qualified.length) => name
+    rejection.kind -> when {
+        BoundType {
+            rejection.parameterOrdinal < 0 -> if { rejection.functionIndex } else {
+                rejection.functionIndex -> functionParameterAt(rejection.parameterOrdinal, context)
+            } => nodeIndex
+            context.ir[nodeIndex] -> libraryBoundTypeName(context) -> when {
+                Ok(typeName) { "sollang: type '$typeName' is not a fixed-width library ABI type" -> println }
+                Err(_) {
+                    context.ir[nodeIndex] => node
+                    "sollang: compiler verification failure: CSharp library TypeId mapping is unresolved (kind $(node.typeKind), origin $(node.typeOrigin), module $(node.typeModule), symbol $(node.typeSymbol), type $(node.typeId))" -> println
+                }
+            }
+        }
+        DeclaredType {
+            rejection.functionIndex -> libraryDeclaredType(rejection.parameterOrdinal, context) => rawBytes
+            rawBytes -> file.borrowBytes => rawOwner
+            rawOwner -> slice(UIntSize(0), rawOwner -> len) => typeName
+            "sollang: public library function '$name' " -> print
+            rejection -> emitLibraryRejectionRole(context)
+            " type '$typeName' is not ABI-safe; use Unit or a fixed-width numeric scalar" -> println
+        }
+        InputOwnership {
+            rejection.functionIndex -> functionParameterAt(rejection.parameterOrdinal, context) => parameter
+            context.ir[parameter] -> libraryBoundTypeName(context) -> when {
+                Ok(typeName) {
+                    "sollang: public library function '$name' " -> print
+                    rejection -> emitLibraryRejectionRole(context)
+                    " type '$typeName' is not ABI-safe; use Unit or a fixed-width numeric scalar" -> println
+                }
+                Err(_) { "sollang: compiler verification failure: admitted library input has no CSharp ABI type name" -> println }
+            }
+        }
+        Effects { "sollang: public library function '$name' must not require effects" -> println }
+        ValueFunctionRequired { "sollang: public library function '$name' must be a synchronous, non-generic value function" -> println }
+        Capture { "sollang: public library function '$name' cannot capture local state" -> println }
+        MemberCollision {
+            owner -> slice(nameSpans.member.start, nameSpans.member.length) => member
+            "sollang: library member name collision for '$member'" -> println
+        }
+        SymbolCollision { "sollang: compiler verification failure: library symbol collision requires its export plan" -> println }
+        else { }
+    }
+}
+
+emitLibraryRejectionRole rejection: ref LibraryExportRejection, context: ref emitterContext.EmitContext -> Unit uses Console {
+    rejection.parameterOrdinal < 0 -> if { "result" -> print } else {
+        rejection.parameterOrdinal == 0 -> if { "input" -> print } else {
+            rejection.functionIndex -> functionParameterAt(rejection.parameterOrdinal, context) => parameter
+            rejection.functionIndex -> libraryParameterName(rejection.parameterOrdinal, parameter, context) => name
+            "parameter '$name'" -> print
+        }
+    }
+}
+
+emitLibraryWrapperRejection rejection: ref LibraryExportRejection, plan: ref LibraryExportPlan, context: ref emitterContext.EmitContext -> Unit uses Console {
+    rejection.kind -> when {
+        SymbolCollision {
+            0 => ordinal!
+            ordinal! < (plan.functions -> len) and plan.functions[ordinal!] != rejection.functionIndex
+                -> while { ordinal! + 1 => ordinal! }
+            ordinal! < (plan.functions -> len) -> unless {
+                "sollang: compiler verification failure: rejected library function is absent from its export plan" -> println
+                return
+            }
+            plan.document.exports[ordinal!] => exported
+            plan.document.strings -> file.borrowBytes => owner
+            owner -> slice(exported.qualifiedName.start, exported.qualifiedName.length) => name
+            owner -> slice(exported.symbol.start, exported.symbol.length) => symbol
+            "sollang: library export symbol collision for function '$name': '$symbol'" -> println
+        }
+        else { rejection -> emitLibraryExportRejection(context) }
+    }
+}
+
+librarySpansEqual bytes: ref [UInt8; ~], left: libraryInterfaces.MetadataSpan, right: libraryInterfaces.MetadataSpan -> Bool {
+    left.length != right.length -> if { false -> return }
+    UIntSize(0) => offset!
+    offset! < left.length -> while {
+        bytes[Int(left.start + offset!)] != bytes[Int(right.start + offset!)]
+            -> if { false -> return }
+        offset! + 1 => offset!
+    }
+    true
+}
+
+emitLibraryParameterList functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    0 => ordinal!
+    functionIndex -> functionParameterAt(ordinal!, context) => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        ordinal! > 0 -> if { ", " -> print }
+        context.ir[parameterIndex!] -> writeFunctionValueAbiType(context, state)
+        ordinal! == 0 -> if { " %it" -> print } else { " %arg_$(ordinal! - 1)" -> print }
+        ordinal! + 1 => ordinal!
+        functionIndex -> functionParameterAt(ordinal!, context) => parameterIndex!
+    }
+}
+
+emitLibraryExports plan: ref LibraryExportPlan, context: ref emitterContext.EmitContext, state: ref CoreEmitterState, windows: Bool -> Unit uses Console {
+    plan.document.strings -> file.borrowBytes => owner
+    0 => ordinal!
+    ordinal! < (plan.functions -> len) -> while {
+        plan.functions[ordinal!] => functionIndex
+        context.ir[functionIndex] => function
+        plan.document.exports[ordinal!].symbol => symbol
+        "define " -> print
+        windows -> if { "dllexport " -> print } else { "protected " -> print }
+        function -> writeFunctionValueAbiType(context, state)
+        " @" -> print
+        owner -> slice(symbol.start, symbol.length) -> print
+        "(" -> print
+        functionIndex -> emitLibraryParameterList(context, state)
+        ") {" -> println
+        "entry:" -> println
+        function.typeSymbol == 0 -> if { "  call " -> print } else { "  %result = call " -> print }
+        function -> writeFunctionValueAbiType(context, state)
+        " @sollang_m$(function.sourceModule)_s$(function.symbol)(" -> print
+        functionIndex -> emitLibraryParameterList(context, state)
+        ")" -> println
+        function.typeSymbol == 0 -> if { "  ret void" -> println } else {
+            "  ret " -> print
+            function -> writeFunctionValueAbiType(context, state)
+            " %result" -> println
+        }
+        "}" -> println
+        "" -> println
+        ordinal! + 1 => ordinal!
+    }
 }
 
 appendLibraryBytes source: Text, start: UIntSize, length: UIntSize, bytes: mut [UInt8; ~] -> Unit {
@@ -73,53 +561,9 @@ public collectLibraryDeclarationsFrom sources: ref [Text; ~], ranges: ref [analy
                         -> if { true => duplicate! }
                 }
                 not local! and not duplicate! -> if {
-                    sources[function.sourceModule] => source
-                    UIntSize(strings! -> len) => nameStart
-                    0 => moduleIndex!
-                    moduleIndex! < (identities -> len) -> while {
-                        identities[moduleIndex!] => identity
-                        identity.sourceIndex == function.sourceModule and identity.pathLength > 0
-                            -> if {
-                                range.tokenStart => tokenIndex!
-                                tokenIndex! < range.tokenStart + range.tokenCount
-                                    -> while {
-                                        tokens[tokenIndex!] => token
-                                        token.span.start >= identity.pathStart
-                                            and token.span.start < identity.pathStart + identity.pathLength
-                                            and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
-                                            -> if { source -> appendLibraryBytes(token.span.start, token.span.length, strings!) }
-                                        tokenIndex! + 1 => tokenIndex!
-                                    }
-                                strings! -> push(46)
-                            }
-                        moduleIndex! + 1 => moduleIndex!
-                    }
-                    symbol.nameToken => nameToken!
-                    UIntSize(strings! -> len) => memberStart!
-                    true => more!
-                    more! -> while {
-                        tokens[range.tokenStart + nameToken!] => token
-                        UIntSize(strings! -> len) => memberStart!
-                        source -> appendLibraryBytes(token.span.start, token.span.length, strings!)
-                        nameToken! + 1 => next!
-                        next! < range.tokenCount
-                            and (tokens[range.tokenStart + next!].kind == grammar.triviaIdWhitespace()
-                            or tokens[range.tokenStart + next!].kind == grammar.triviaIdComment())
-                            -> while { next! + 1 => next! }
-                        next! < range.tokenCount and tokens[range.tokenStart + next!].kind == grammar.tokenIdDot()
-                            -> if {
-                                strings! -> push(46)
-                                next! + 1 => next!
-                                next! < range.tokenCount
-                                    and (tokens[range.tokenStart + next!].kind == grammar.triviaIdWhitespace()
-                                    or tokens[range.tokenStart + next!].kind == grammar.triviaIdComment())
-                                    -> while { next! + 1 => next! }
-                                next! => nameToken!
-                            } else { false => more! }
-                    }
-                    UIntSize(strings! -> len) => nameEnd
-                    libraryInterfaces.MetadataSpan { start: nameStart, length: nameEnd - nameStart } => qualifiedName
-                    libraryInterfaces.MetadataSpan { start: memberStart!, length: nameEnd - memberStart! } => memberName
+                    sources[function.sourceModule] -> appendLibraryDeclarationName(range, symbol, identities[function.sourceModule], tokens, strings!) => names
+                    names.qualified => qualifiedName
+                    names.member => memberName
                     functions! -> push(functionIndex!)
                     qualifiedNames! -> push(qualifiedName)
                     memberNames! -> push(memberName)
