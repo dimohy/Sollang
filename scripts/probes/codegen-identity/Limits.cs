@@ -2,8 +2,8 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] != "declared-lengths")
-    throw new ArgumentException("compiler assembly, artifact directory, and optional declared-lengths mode required");
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records"))
+    throw new ArgumentException("compiler assembly, artifact directory, and optional declared-lengths/declared-records mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
 Directory.CreateDirectory(directory);
@@ -15,7 +15,7 @@ var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache",
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
 
-if (args.Length == 3)
+if (args.Length == 3 && args[2] == "declared-lengths")
 {
     var checkedLength = cacheType.GetMethod("CheckedLength", BindingFlags.NonPublic | BindingFlags.Static)!;
     var identityMaximum = Convert.ToInt64(cacheType.GetField("MaximumIdentityBytes", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue());
@@ -44,6 +44,41 @@ if (args.Length == 3)
             Console.WriteLine(JsonSerializer.Serialize(new { description, maximum, value, accepted, result, diagnostic }));
         }
     }
+    return;
+}
+
+if (args.Length == 3)
+{
+    var units = Array.CreateInstance(unitType, 2);
+    for (var index = 0; index < units.Length; index++)
+        units.SetValue(Activator.CreateInstance(unitType,
+            [Enum.ToObject(kindType, index * 2), "", Activator.CreateInstance(keyType, [101UL, 202UL])!, "", false]), index);
+    var output = Activator.CreateInstance(outputType, [units])!;
+    var checksum = cacheType.GetMethod("Checksum", BindingFlags.NonPublic | BindingFlags.Static)!;
+    void Observe(ulong kind, ulong declaredFragmentBytes, string label)
+    {
+        var words = ((IReadOnlyList<ulong>)encode.Invoke(null, [output, 101UL, 202UL, 303UL])!).ToArray();
+        words[8] = kind;
+        words[13] = declaredFragmentBytes;
+        words[7] = (ulong)checksum.Invoke(null, [words, 8, words.Length - 8, 7809847782465536322UL])!;
+        var path = Path.Combine(directory, label + ".cgu");
+        using (var stream = File.Create(path))
+        using (var writer = new BinaryWriter(stream))
+            foreach (var word in words) writer.Write(word);
+        var accepted = true;
+        string? diagnostic = null;
+        try { read.Invoke(null, [path, 101UL, 202UL, 303UL]); }
+        catch (TargetInvocationException error) when (error.InnerException is InvalidDataException)
+        {
+            accepted = false;
+            diagnostic = error.InnerException.Message;
+        }
+        Console.WriteLine(JsonSerializer.Serialize(new { label, kind, declaredFragmentBytes, accepted, diagnostic, words }));
+    }
+    foreach (var length in new[] { 0UL, 1073741825UL, 4294967296UL, 4294967297UL, 9223372036854775808UL, ulong.MaxValue })
+        Observe(0, length, $"fragment-{length}");
+    foreach (var kind in new[] { 3UL, 4294967296UL, ulong.MaxValue })
+        Observe(kind, 0, $"kind-{kind}");
     return;
 }
 
