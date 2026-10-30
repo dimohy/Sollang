@@ -16,6 +16,12 @@ public struct NominalIdentities {
     public nextTypeId: Int
 }
 
+public struct BoxIdentities {
+    public ids: [Int; ~]
+    public primitiveIds: [Int; 4]
+    public nextTypeId: Int
+}
+
 public enum Error { InvalidKind, InvalidSpan }
 
 intrinsicIdentity name: Text, kind: Int -> Int {
@@ -71,4 +77,39 @@ public registerNominals declarations: ref [NominalDeclaration; ~], strings: ref 
         }
     }
     NominalIdentities { ids: ids!, nextTypeId: nextTypeId! } -> Result<NominalIdentities, Error>.Ok
+}
+
+# BuildTypeDefinitions orders eligible names by their already registered ID.
+# Text, Int, its Int32 alias and Bool lead that order; Duration keeps BoxDuration.
+# The other intrinsic records/enums are deliberately excluded by C# as well.
+public registerNominalBoxes declarations: ref [NominalDeclaration; ~], strings: ref [UInt8; ~] -> Result<BoxIdentities, Error> {
+    declarations -> registerNominals(strings) -> when {
+        Err(error) { Result<BoxIdentities, Error>.Err(error) -> return }
+        Ok(nominal) {
+            nominal.nextTypeId => first
+            [first, first + 1, first + 2, first + 3] => primitiveIds
+            first + 4 => nextTypeId!
+            [Int; ~] => ids!
+            0 => fill!
+            fill! < (declarations -> len) -> while {
+                ids! -> push(-1)
+                fill! + 1 => fill!
+            }
+            [3, 4] -> each kind {
+                0 => index!
+                index! < (declarations -> len) -> while {
+                    declarations[index!].kind == kind -> if {
+                        nominal.ids[index!] => elementTypeId
+                        elementTypeId == 27 -> if { 28 => ids![index!] }
+                        elementTypeId >= 1024 -> if {
+                            nextTypeId! => ids![index!]
+                            nextTypeId! + 1 => nextTypeId!
+                        }
+                    }
+                    index! + 1 => index!
+                }
+            }
+            BoxIdentities { ids: ids!, primitiveIds: primitiveIds, nextTypeId: nextTypeId! } -> Result<BoxIdentities, Error>.Ok -> return
+        }
+    }
 }
