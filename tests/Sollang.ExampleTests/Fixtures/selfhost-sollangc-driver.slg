@@ -415,6 +415,28 @@ emitCachedRootAndFiles target: Int -> Unit uses Console, File, Process {
     count > 0 -> if { exitFailure() }
 }
 
+emitCachedLibraryRootAndFiles target: Int -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    (arguments -> len) < 9 -> if {
+        "; sollang semantic cache library emitter arguments are incomplete" -> println
+        exitFailure()
+        return
+    }
+    arguments[0] -> semanticCache.compilerIdentity -> when {
+        Ok(value) { value }
+        Err(code) { "; sollang compiler identity error E$code" -> println
+            exitFailure()
+            return }
+    } => compiler
+    arguments[4] -> semanticCache.configurationIdentity => configuration
+    semanticGenerations.CompilationIdentity { compiler: compiler, target: UInt64(target), configuration: configuration } => identity
+    semanticCache.Request { enabled: true, destination: arguments[2], staged: arguments[3], identity: identity } => cache
+    arguments[7] -> path.fromText(path.nativeStyle()) => root
+    UIntSize(8) -> sourceStart => fileStart
+    root -> llvmRoot.emitCachedLibraryCheckedRoot(fileStart, target, cache, arguments[5], arguments[6]) => count
+    count > 0 -> if { exitFailure() }
+}
+
 emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths
     paths -> semanticContext.prepareFiles => snapshot
@@ -948,6 +970,10 @@ posixClangPath llvmHome: Text, storage: mut Arena -> Text {
     "$llvmHome/bin/clang" -> materialize(storage)
 }
 
+nativeLlvmLibPath llvmHome: Text, storage: mut Arena -> Text {
+    (llvmHome -> len) == 0 -> if { "llvm-lib" } else { "$llvmHome\\bin\\llvm-lib.exe" -> materialize(storage) }
+}
+
 appendWindowsNativeLibraries llvmPath: Text, argv: mut [Text; ~] -> Bool uses Console, File {
     llvmPath -> toolchain.usesComInterop -> when {
         Ok(required) {
@@ -1021,12 +1047,20 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
     Arena(0) => llvmStageStorage!
     Arena(0) => executableStageStorage!
     Arena(0) => cacheStageNameStorage!
+    Arena(0) => interfaceStageNameStorage!
+    Arena(0) => definitionStageNameStorage!
+    Arena(0) => importStageNameStorage!
     0 => ordinal!
     ordinal! < 256 -> while {
         ".l$(ordinal!).ll.semantic" -> materialize(cacheStageNameStorage!) => cacheStageName
+        ".l$(ordinal!).ll.slglib.json" -> materialize(interfaceStageNameStorage!) => interfaceStageName
+        ".l$(ordinal!).ll.ucrt.def" -> materialize(definitionStageNameStorage!) => definitionStageName
+        ".l$(ordinal!).ll.ucrt.lib" -> materialize(importStageNameStorage!) => importStageName
         false => existingCacheStage!
         existingEntries -> each entry {
-            (entry.name -> pathText) == cacheStageName -> if { true => existingCacheStage! }
+            entry.name -> pathText => name
+            name == cacheStageName or name == interfaceStageName or name == definitionStageName or name == importStageName
+                -> if { true => existingCacheStage! }
         }
         existingCacheStage! -> if {
             ordinal! + 1 => ordinal!
@@ -1138,8 +1172,68 @@ asciiEqualsIgnoreCase left: Text, right: Text -> Bool {
 
 asciiEndsWithIgnoreCase value: Text, suffix: Text -> Bool {
     (value -> len) >= (suffix -> len) -> unless { false -> return }
-    value -> slice((value -> len) - (suffix -> len), suffix -> len)
-        -> asciiEqualsIgnoreCase(suffix)
+    (value -> len) - (suffix -> len) => start
+    UIntSize(0) => index!
+    index! < (suffix -> len) -> while {
+        value -> byte(start + index!) -> asciiLower => left
+        suffix -> byte(index!) -> asciiLower => right
+        left != right -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+nativeFileStem name: Text -> Text {
+    name -> len => end!
+    UIntSize(0) => index!
+    index! < (name -> len) -> while {
+        name -> byte(index!) == 46 -> if { index! => end! }
+        index! + 1 => index!
+    }
+    name -> slice(0, end!)
+}
+
+nativeLibraryFileName name: Text, target: Int, storage: mut Arena -> Text {
+    target == 0 -> if { "$name.dll" -> materialize(storage) } else { "lib$name.so" -> materialize(storage) }
+}
+
+defaultNativeLibraryOutput source: Text, target: Int, storage: mut Arena -> Text {
+    source -> nativeOutputName => name
+    name -> nativeFileStem => stem
+    source -> slice(0, (source -> len) - (name -> len)) => directory
+    target == 0 -> if { "$directory$stem.dll" -> materialize(storage) } else { "$(directory)lib$stem.so" -> materialize(storage) }
+}
+
+nativeLibraryInterfacePath output: Text, target: Int, storage: mut Arena -> Text {
+    output -> nativeOutputName => fileName
+    fileName -> nativeFileStem => stem
+    0 => skip!
+    target == 1 and (stem -> len) > 3
+        and (stem -> byte(0)) == 108 and (stem -> byte(1)) == 105 and (stem -> byte(2)) == 98
+        -> if { 3 => skip! }
+    stem -> slice(UIntSize(skip!), (stem -> len) - UIntSize(skip!)) => name
+    output -> slice(0, (output -> len) - (fileName -> len)) => directory
+    target -> nativeTargetName => targetName
+    "$directory$name.$targetName.slglib.json" -> materialize(storage)
+}
+
+nativeLibraryOutputValid output: Text, target: Int -> Bool uses Console {
+    output -> nativeOutputName => name
+    target == 0 -> if {
+        name -> asciiEndsWithIgnoreCase(".dll") -> unless {
+            "sollang: a windows-x64 library output must end with '.dll'" -> runtime.eprintln
+            false -> return
+        }
+    } else {
+        (name -> len) >= 3 and (name -> byte(0)) == 108 and (name -> byte(1)) == 105 and (name -> byte(2)) == 98
+            and (name -> len) >= 3 and (name -> byte((name -> len) - 3)) == 46
+            and (name -> byte((name -> len) - 2)) == 115 and (name -> byte((name -> len) - 1)) == 111
+            -> unless {
+                "sollang: a linux-x64 library output must use the conventional 'lib<name>.so' form" -> runtime.eprintln
+                false -> return
+            }
+    }
+    true
 }
 
 hasWindowsShortNameMarker name: Text -> Bool {
@@ -1248,7 +1342,7 @@ nativeOutputPathSafe output: Text, hostTarget: Int -> Bool uses Console, File {
     true
 }
 
-executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool -> Int uses Console, File, Process {
+executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
     target == 2 -> if {
         "sollang: native CLI wasm linking is not implemented yet" -> println
         -1 -> return
@@ -1278,9 +1372,17 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     Arena(0) => cacheDestinationStorage!
     output -> nativeOutputName => outputName
     target -> nativeTargetName => cacheTarget
-    "$cacheDirectory/$(outputName).native-$(cacheTarget)$(optimization).semantic" -> materialize(cacheDestinationStorage!) => cacheDestination
+    sharedLibrary -> if { ".library" } else { "" } => productSuffix
+    "$cacheDirectory/$(outputName).native-$(cacheTarget)$(optimization)$productSuffix.semantic" -> materialize(cacheDestinationStorage!) => cacheDestination
     includeStdlibRoot -> if {
         cacheDestination -> nativePublicationPathSupported
+            -> unless { -1 -> return }
+    }
+    Arena(0) => interfaceDestinationStorage!
+    output -> nativeLibraryInterfacePath(target, interfaceDestinationStorage!) => interfaceDestination
+    sharedLibrary -> if {
+        output -> nativeLibraryOutputValid(target) -> unless { -1 -> return }
+        interfaceDestination -> nativeOutputPathSafe(hostTarget)
             -> unless { -1 -> return }
     }
     stageDirectory -> claimNativeBuildStages => stageOrdinal
@@ -1291,14 +1393,40 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     stageDirectory -> nativeExecutableStagePath(stageOrdinal, executableStageStorage!) => executableStage
     Arena(0) => cacheStageStorage!
     "$llvmStage.semantic" -> materialize(cacheStageStorage!) => cacheStage
+    Arena(0) => interfaceStageStorage!
+    "$llvmStage.slglib.json" -> materialize(interfaceStageStorage!) => interfaceStage
+    Arena(0) => definitionStageStorage!
+    "$llvmStage.ucrt.def" -> materialize(definitionStageStorage!) => definitionStage
+    Arena(0) => importStageStorage!
+    "$llvmStage.ucrt.lib" -> materialize(importStageStorage!) => importStage
+    Arena(0) => importToolStorage!
+    llvmHome -> nativeLlvmLibPath(importToolStorage!) => importTool
+    sharedLibrary and target == 0 and (llvmHome -> len) > 0
+        -> if {
+            importTool -> path.fromText(path.nativeStyle()) => importToolPath
+            importToolPath -> cliProject.manifestFileExists
+                -> unless {
+                    "sollang: LLVM import library tool was not found: $importTool" -> runtime.eprintln
+                    llvmStage -> reportNativeBuildFailureStages(executableStage)
+                    -1 -> return
+                }
+        }
     [Text; ~] => emitArgv!
     emitArgv! -> push(arguments[0])
     includeStdlibRoot -> if {
-        target == 0 -> if { "windows-stdlib-cache" } else { "linux-stdlib-cache" } => cachedMode
+        sharedLibrary -> if {
+            target == 0 -> if { "windows-library-stdlib-cache" } else { "linux-library-stdlib-cache" }
+        } else {
+            target == 0 -> if { "windows-stdlib-cache" } else { "linux-stdlib-cache" }
+        } => cachedMode
         emitArgv! -> push(cachedMode)
         emitArgv! -> push(cacheDestination)
         emitArgv! -> push(cacheStage)
         emitArgv! -> push(optimization)
+        sharedLibrary -> if {
+            emitArgv! -> push(output -> nativeOutputName)
+            emitArgv! -> push(interfaceStage)
+        }
     } else { emitArgv! -> push(emitterMode) }
     emitterArguments -> each emitterArgument { emitArgv! -> push(emitterArgument) }
     includeStdlibRoot -> if { emitArgv! -> push(selectedStdlibRoot) }
@@ -1323,15 +1451,28 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     Arena(0) => clangPathStorage!
     llvmHome -> nativeClangPath(hostTarget, clangPathStorage!) => clangPath
     [clangPath, llvmStage, optimization, "-Wno-override-module", "-o", executableStage; ~] => clangArgv!
+    sharedLibrary -> if { clangArgv! -> push("-shared") }
     target == 0 -> if {
         clangArgv! -> push("-Xlinker")
-        clangArgv! -> push("/subsystem:console")
+        sharedLibrary -> if { "/noentry" } else { "/subsystem:console" } => entryOption
+        clangArgv! -> push(entryOption)
+        sharedLibrary -> if {
+            "LIBRARY ucrtbase.dll\nEXPORTS\n_wspawnvp\nmemcpy\nstrlen\ngetchar\n" => specification
+            importTool -> toolchain.createImportLibrary(definitionStage, importStage, specification) => importCode
+            importCode != 0 -> if {
+                llvmStage -> reportNativeBuildFailureStages(executableStage)
+                importCode -> return
+            }
+            clangArgv! -> push("-lkernel32")
+            clangArgv! -> push(importStage)
+        }
         llvmStage -> appendWindowsNativeLibraries(clangArgv!)
             -> unless {
                 llvmStage -> reportNativeBuildFailureStages(executableStage)
                 -1 -> return
             }
     }
+    sharedLibrary and target == 1 -> if { clangArgv! -> push("-fPIC") }
     process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
     clangCommand -> run -> processCode => clangCode
     clangCode != 0 -> if {
@@ -1350,6 +1491,13 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     not executablePublished -> if {
         llvmStage -> reportNativeBuildFailureStages(executableStage)
         -1 -> return
+    }
+    sharedLibrary -> if {
+        interfaceStage -> publishNativeBuildStage(interfaceDestination)
+            -> unless {
+                llvmStage -> reportNativeBuildFailureStages(executableStage)
+                -1 -> return
+            }
     }
     includeStdlibRoot -> if {
         cacheStage -> semanticCache.publish(cacheDestination) -> when {
@@ -1370,6 +1518,11 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
             -1 -> return
         }
     }
+    sharedLibrary and target == 0 and not keepTemps
+        -> if {
+            definitionStage -> removeNativeBuildStages(importStage)
+                -> unless { -1 -> return }
+        }
     keepTemps and not quiet -> if { "Kept $llvmPath" -> println }
     not quiet -> if { "Wrote $output" -> println }
     0
@@ -1464,7 +1617,16 @@ executeNativePathBuildCore sources: [path.Path; ~], output: Text, llvmHome: Text
     0
 }
 
-executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool -> Int uses Console, File, Process {
+executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
+    Arena(0) => interfacePathStorage!
+    output -> nativeLibraryInterfacePath(target, interfacePathStorage!) => interfacePath
+    Arena(0) => interfaceLockStorage!
+    interfacePath -> nativeOutputLockPath(interfaceLockStorage!) => interfaceLock
+    sharedLibrary -> if {
+        output -> nativeLibraryOutputValid(target) -> unless { -1 -> return }
+        interfacePath -> nativeOutputPathSafe(hostTarget)
+            -> unless { -1 -> return }
+    }
     Arena(0) => llvmPathStorage!
     "$output.ll" -> materialize(llvmPathStorage!) => llvmPath
     output -> nativeOutputPathSafe(hostTarget) -> unless { -1 -> return }
@@ -1475,13 +1637,36 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
     llvmPath -> nativeOutputLockPath(llvmLockStorage!) => llvmLock
     executableLock -> claimNativeBuildOutputLocks(llvmLock)
         -> unless { -1 -> return }
-    sources -> executeNativeBuildCore(output, llvmHome, stdlibOption, optimization, target, hostTarget, jobs, keepTemps, quiet, emitterMode, emitterArguments, includeStdlibRoot) => result
+    sharedLibrary -> if {
+        interfaceLock -> file.createExclusive => interfaceStatus
+        interfaceStatus != 1 -> if {
+            "sollang: native build output lock is busy: $interfaceLock" -> runtime.eprintln
+            executableLock -> removeNativeBuildStages(llvmLock)
+                -> unless { -1 -> return }
+            -1 -> return
+        }
+    }
+    sources -> executeNativeBuildCore(output, llvmHome, stdlibOption, optimization, target, hostTarget, jobs, keepTemps, quiet, emitterMode, emitterArguments, includeStdlibRoot, sharedLibrary) => result
+    true => interfaceReleased!
+    sharedLibrary -> if { interfaceLock -> removeNativeBuildStage => interfaceReleased! }
     executableLock -> removeNativeBuildStages(llvmLock)
         -> unless { -1 -> return }
+    not interfaceReleased! -> if { -1 -> return }
     result
 }
 
-executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool -> Int uses Console, File, Process {
+executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
+    sharedLibrary -> if {
+        [Text; ~] => sourceTexts!
+        0 => sourceIndex!
+        sourceIndex! < (sources -> len) -> while {
+            sources -> pathTextAt(sourceIndex!) => source
+            sourceTexts! -> push(source)
+            sourceIndex! + 1 => sourceIndex!
+        }
+        [Text; ~] => emitterArguments
+        sourceTexts! -> executeNativeBuild(output, llvmHome, stdlibOption, optimization, target, hostTarget, jobs, keepTemps, quiet, target -> nativeCliTargetMode, emitterArguments, true, true) -> return
+    }
     Arena(0) => llvmPathStorage!
     "$output.ll" -> materialize(llvmPathStorage!) => llvmPath
     output -> nativeOutputPathSafe(hostTarget) -> unless { -1 -> return }
@@ -1506,10 +1691,10 @@ executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Proce
     runCommand -> run -> processCode
 }
 
-runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
     Arena(0) => outputStorage!
     (outputOption -> len) > 0 -> if {
-        sources -> executeNativePathBuild(outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild) => buildCode
+        sources -> executeNativePathBuild(outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, sharedLibrary) => buildCode
         buildCode != 0 -> if {
             buildCode
         } else {
@@ -1518,8 +1703,10 @@ runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Tex
             } else { 0 }
         }
     } else {
-        defaultSource -> defaultNativeOutput(target, outputStorage!) => output
-        sources -> executeNativePathBuild(output, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild) => buildCode
+        sharedLibrary -> if {
+            defaultSource -> defaultNativeLibraryOutput(target, outputStorage!)
+        } else { defaultSource -> defaultNativeOutput(target, outputStorage!) } => output
+        sources -> executeNativePathBuild(output, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, sharedLibrary) => buildCode
         buildCode != 0 -> if {
             buildCode
         } else {
@@ -1530,7 +1717,7 @@ runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Tex
     }
 }
 
-runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOption: Text, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOption: Text, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
     hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
     workspace.sourceDirectory -> cliLock.destinationAt(hostStyle) => destination
     Arena(0) => snapshotStorage!
@@ -1569,7 +1756,7 @@ runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOpt
         1 -> return
     }
     (outputOption -> len) > 0 -> if {
-        sources.sources -> runNativePathCli(input.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments) -> return
+        sources.sources -> runNativePathCli(input.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary) -> return
     }
     hostTarget == 0 -> if { "\\" } else { "/" } => separator
     workspace.sourceDirectory => workspaceDirectory
@@ -1590,11 +1777,15 @@ runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOpt
             1 -> return
         }
     Arena(0) => outputStorage!
-    "$packageDirectory$separator$productName$suffix" -> materialize(outputStorage!) => output
-    sources.sources -> runNativePathCli(input.source, output, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
+    sharedLibrary -> if {
+        Arena(0) => fileNameStorage!
+        productName -> nativeLibraryFileName(target, fileNameStorage!) => fileName
+        "$packageDirectory$separator$fileName" -> materialize(outputStorage!)
+    } else { "$packageDirectory$separator$productName$suffix" -> materialize(outputStorage!) } => output
+    sources.sources -> runNativePathCli(input.source, output, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
-runNativeProjectSourceGraph projectOption: Text, projectInput: cliProject.ProjectInput, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativeProjectSourceGraph projectOption: Text, projectInput: cliProject.ProjectInput, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
     hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
     [path.Path; ~] => graphRoots!
     [path.Path; ~] => packageManifests!
@@ -1617,21 +1808,21 @@ runNativeProjectSourceGraph projectOption: Text, projectInput: cliProject.Projec
         "sollang: $(sources.diagnostic)" -> runtime.eprintln
         1 -> return
     }
-    sources.sources -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
+    sources.sources -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
-runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
     includeDependencies -> if {
-        projectOption -> runNativeProjectSourceGraph(projectInput, locked, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments) -> return
+        projectOption -> runNativeProjectSourceGraph(projectInput, locked, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary) -> return
     }
     [path.Path; ~] => productSources!
     productSources! -> push(projectInput.source -> path.fromText(path.nativeStyle()))
-    productSources! -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
+    productSources! -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
-runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
     includeDependencies -> if {
-        projectOption -> runNativeProjectSourceGraph(projectInput, locked, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments) -> return
+        projectOption -> runNativeProjectSourceGraph(projectInput, locked, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary) -> return
     }
     sourceDirectory -> path.fromText(path.nativeStyle()) => projectSourceRoot
     projectSourceRoot -> sourceRoot.discoverDirect => projectSources
@@ -1639,7 +1830,7 @@ runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectI
         "sollang: project source root contains no .slg files" -> println
         1 -> return
     }
-    projectSources -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
+    projectSources -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
 runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
@@ -1916,7 +2107,7 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     Arena(0) => candidateCountStorage!
     "$candidateSourceCount" -> materialize(candidateCountStorage!) => candidateCountText
     [filter!, candidateCountText, selectedStdlibRoot; ~] => testEmitterArguments
-    testBuildSources! -> executeNativeBuild(output, llvmHome!, stdlibOption!, optimization!, target!, hostTarget, jobs!, false, true, emitterMode, testEmitterArguments, false) => buildCode
+    testBuildSources! -> executeNativeBuild(output, llvmHome!, stdlibOption!, optimization!, target!, hostTarget, jobs!, false, true, emitterMode, testEmitterArguments, false, false) => buildCode
     buildCode != 0 -> if { buildCode -> return }
     [Text; ~] => programArguments
     output -> executeNativeProgram(programArguments)
@@ -2096,6 +2287,10 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         "sollang: --library currently supports windows-x64 and linux-x64" -> println
         1 -> return
     }
+    library! and (outputOption! -> len) > 0 -> if {
+        outputOption! -> nativeLibraryOutputValid(target!)
+            -> unless { 1 -> return }
+    }
     not runAfterBuild and parsingProgramArguments!
         -> if {
             "sollang: build does not accept program arguments after --" -> println
@@ -2107,7 +2302,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
             "sollang: $(workspaceInput.diagnostic)" -> runtime.eprintln
             1 -> return
         }
-        workspaceInput -> runNativeWorkspaceProduct(productOption!, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!) -> return
+        workspaceInput -> runNativeWorkspaceProduct(productOption!, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!, library!) -> return
     }
     (projectOption! -> len) > 0 -> if {
         projectOption! -> cliProject.load(productOption!, projectManifestStorage!, projectRootStorage!, projectNameStorage!) => projectInput
@@ -2115,10 +2310,24 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
             "sollang: $(projectInput.diagnostic)" -> runtime.eprintln
             1 -> return
         }
+        Arena(0) => projectOutputStorage!
+        library! and (outputOption! -> len) == 0 -> if {
+            hostTarget == 0 -> if { "\\" } else { "/" } => separator
+            projectInput.projectDirectory => projectDirectory
+            Arena(0) => buildStorage!
+            "$projectDirectory$(separator)build" -> materialize(buildStorage!) => buildDirectory
+            buildDirectory -> ensureDirectory -> unless {
+                "sollang: project output directory could not be created" -> runtime.eprintln
+                1 -> return
+            }
+            Arena(0) => fileNameStorage!
+            projectInput.productName -> nativeLibraryFileName(target!, fileNameStorage!) => fileName
+            "$buildDirectory$separator$fileName" -> materialize(projectOutputStorage!) => outputOption!
+        }
         projectInput.multiProduct -> if {
-            projectOption! -> runNativeSelectedProduct(projectInput, true, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+            projectOption! -> runNativeSelectedProduct(projectInput, true, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!, library!)
         } else {
-            projectOption! -> runNativeProjectDirectory(projectInput, projectInput.sourceDirectory, true, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+            projectOption! -> runNativeProjectDirectory(projectInput, projectInput.sourceDirectory, true, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!, library!)
         } => projectCode
         projectCode -> return
     }
@@ -2146,16 +2355,18 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         outputOption! => output
         target! -> nativeCliTargetMode => emitterMode
         [Text; ~] => emitterArguments
-        expandedSources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
+        expandedSources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true, library!) => buildCode
         buildCode != 0 -> if { buildCode -> return }
         runAfterBuild -> if {
             output -> executeNativeProgram(programArguments!)
         } else { 0 }
     } else {
-        sources![0] -> defaultNativeOutput(target!, outputStorage!) => output
+        library! -> if {
+            sources![0] -> defaultNativeLibraryOutput(target!, outputStorage!)
+        } else { sources![0] -> defaultNativeOutput(target!, outputStorage!) } => output
         target! -> nativeCliTargetMode => emitterMode
         [Text; ~] => emitterArguments
-        expandedSources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
+        expandedSources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true, library!) => buildCode
         buildCode != 0 -> if { buildCode -> return }
         runAfterBuild -> if {
             output -> executeNativeProgram(programArguments!)
@@ -2480,6 +2691,16 @@ main {
         UIntSize(2) -> emitTestFiles(1, false)
         process.exit(0)
     }
+    arguments[1] -> textEquals("windows-library-stdlib-cache")
+        -> if {
+            0 -> emitCachedLibraryRootAndFiles
+            process.exit(0)
+        }
+    arguments[1] -> textEquals("linux-library-stdlib-cache")
+        -> if {
+            1 -> emitCachedLibraryRootAndFiles
+            process.exit(0)
+        }
     arguments[1] -> textEquals("windows-stdlib-cache")
         -> if {
             emitCachedRootAndFiles(0)
