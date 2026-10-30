@@ -97,7 +97,11 @@ def expected_stage_outcome(expected_stages, stage, side):
                 and isinstance(candidate.get("stdout"), str) and isinstance(candidate.get("stderr"), str),
                 "exact stage oracle required")
         try:
-            validate_policy(candidate, stage)
+            if candidate.get("stdoutPolicy") == "compiler-build-telemetry-with-diagnostics-v1":
+                require(stage == "compile" and candidate["exitCode"] == 0 and candidate["stdout"] == "",
+                        "BUILD_STDOUT_POLICY_SCOPE")
+            else:
+                validate_policy(candidate, stage)
         except ValueError as error:
             raise PhaseClosureError(str(error)) from error
         return candidate

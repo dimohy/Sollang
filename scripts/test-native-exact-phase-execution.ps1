@@ -124,6 +124,21 @@ if ($externalReference.path -cne [IO.Path]::GetFullPath($externalFile).Replace('
     throw 'TEST_EXTERNAL_PHASE_PATH_IDENTITY'
 }
 $passed.Add('owned-external-phase-path')
+$externalRoot = Get-Item -LiteralPath (Join-Path $env:LOCALAPPDATA 'Sollang') -Force
+if ($externalRoot.Attributes -band [IO.FileAttributes]::ReparsePoint) { $passed.Add('configured-external-root-junction') }
+$junctionTarget = Join-Path $root 'external-junction-target'
+[void][IO.Directory]::CreateDirectory($junctionTarget)
+[IO.File]::WriteAllText((Join-Path $junctionTarget 'proof.txt'), 'descendant links must be rejected')
+$junction = Join-Path $external 'forbidden-child'
+if (-not [IO.Path]::GetFullPath($junction).StartsWith([IO.Path]::GetFullPath($external) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'TEST_JUNCTION_BOUNDARY' }
+[void](New-Item -ItemType Junction -Path $junction -Target $junctionTarget)
+try {
+    Assert-Rejected 'external-child-junction-file' { Get-NativeExactPhaseReference $repository (Join-Path $junction 'proof.txt') } 'PHASE_EXECUTION_REPARSE_POINT'
+    Assert-Rejected 'external-child-junction-output' { Assert-NativeExactPhaseOutputPath $repository (Join-Path $junction 'next') } 'PHASE_EXECUTION_OUTPUT_REPARSE_POINT'
+} finally {
+    # Remove only this test-owned directory link; preserve its target and logs.
+    Remove-Item -LiteralPath $junction -Force
+}
 Assert-Rejected 'external-sibling-rejected' {
     Assert-NativeExactPhaseOutputPath $repository (Join-Path $env:LOCALAPPDATA 'Sollang-other/proof.json')
 } 'PHASE_EXECUTION_OUTPUT_BOUNDARY'
@@ -428,6 +443,14 @@ $buildPolicyCase=[pscustomobject]@{expectedStages=[pscustomobject]@{
     run=[pscustomobject]@{exitCode=0;stdout='';stderr='';stdoutPolicy='compiler-build-telemetry-v1'}}}
 $null=Get-NativeExactPhaseExpectedStage $buildPolicyCase compile managed
 $passed.Add('declared-successful-build-stdout-policy')
+$buildPolicyCase.expectedStages.compile.stderr="warning S002: declared`n"
+$buildPolicyCase.expectedStages.compile.stdoutPolicy='compiler-build-telemetry-with-diagnostics-v1'
+$declaredWarning=Get-NativeExactPhaseExpectedStage $buildPolicyCase compile managed
+if ($declaredWarning.stderr -cne "warning S002: declared`n") { throw 'TEST_DECLARED_BUILD_WARNING_CHANGED' }
+if (-not (Test-Json -Json ($buildPolicyCase.expectedStages.compile | ConvertTo-Json -Depth 20) -Schema (@{'$schema'=$fullSchema['$schema'];'$defs'=$fullSchema['$defs'];'$ref'='#/$defs/exactStage'} | ConvertTo-Json -Depth 30))) { throw 'TEST_WARNING_BUILD_SCHEMA_REJECTED' }
+$passed.Add('declared-warning-build-stdout-policy')
+$buildPolicyCase.expectedStages.compile.stderr=''
+$buildPolicyCase.expectedStages.compile.stdoutPolicy='compiler-build-telemetry-v1'
 Assert-Rejected 'build-stdout-policy-not-program-output' {
     Get-NativeExactPhaseExpectedStage $buildPolicyCase run managed
 } 'PHASE_EXECUTION_BUILD_STDOUT_POLICY_SCOPE'

@@ -366,6 +366,20 @@ function Get-NativeExactPhasePathRoot {
     return ''
 }
 
+function Test-NativeExactPhaseArtifactRootLink {
+    param([IO.FileSystemInfo]$Item)
+    if (-not $IsWindows -or $Item -isnot [IO.DirectoryInfo] -or [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $false }
+    $external = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Sollang')))
+    if (-not $Item.FullName.Equals($external, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $policy = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'contracts/artifact-lifecycle.json') -Raw | ConvertFrom-Json
+    if ($policy.externalOutputRoot -cne 'LOCALAPPDATA/Sollang') { throw 'PHASE_EXECUTION_ARTIFACT_POLICY_INVALID' }
+    $target = $Item.ResolveLinkTarget($true)
+    if ($null -eq $target -or $target -isnot [IO.DirectoryInfo] -or -not $target.Exists) { throw 'PHASE_EXECUTION_ARTIFACT_ROOT_TARGET_INVALID' }
+    # The artifact policy owns this exact root, including its configured link.
+    # Every descendant and every other ancestor still rejects reparse points.
+    return $true
+}
+
 function Get-NativeExactPhaseFile {
     param([string]$RepositoryRoot, [string]$Path)
     $root = [IO.Path]::GetFullPath($RepositoryRoot)
@@ -377,7 +391,8 @@ function Get-NativeExactPhaseFile {
     }
     $ancestor = Get-Item -LiteralPath $full
     while ($null -ne $ancestor) {
-        if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "PHASE_EXECUTION_REPARSE_POINT: $Path" }
+        if (($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+            -not (Test-NativeExactPhaseArtifactRootLink $ancestor)) { throw "PHASE_EXECUTION_REPARSE_POINT: $Path" }
         $ancestor = if ($ancestor -is [IO.DirectoryInfo]) { $ancestor.Parent } else { $ancestor.Directory }
     }
     return $full
@@ -403,7 +418,9 @@ function Assert-NativeExactPhaseOutputPath {
     $ancestor = $full
     while ($ancestor) {
         if (Test-Path -LiteralPath $ancestor) {
-            if ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            $item = Get-Item -LiteralPath $ancestor -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+                -not (Test-NativeExactPhaseArtifactRootLink $item)) {
                 throw 'PHASE_EXECUTION_OUTPUT_REPARSE_POINT'
             }
         }
@@ -460,8 +477,9 @@ function Get-NativeExactPhaseExpectedStage {
         if ($keys.Count -notin @(3,4) -or @($keys | Where-Object { $_ -cnotin @('exitCode','stdout','stderr','stdoutPolicy') }).Count -gt 0 -or
             ($candidate.exitCode -isnot [int] -and $candidate.exitCode -isnot [long]) -or
             $candidate.stdout -isnot [string] -or $candidate.stderr -isnot [string]) { throw 'PHASE_EXECUTION_EXACT_ORACLE_REQUIRED' }
-        if ('stdoutPolicy' -cin $keys -and ($candidate.stdoutPolicy -cne 'compiler-build-telemetry-v1' -or
-            $Stage -cne 'compile' -or $candidate.exitCode -ne 0 -or $candidate.stdout -cne '' -or $candidate.stderr -cne '')) {
+        if ('stdoutPolicy' -cin $keys -and ($candidate.stdoutPolicy -cnotin @('compiler-build-telemetry-v1','compiler-build-telemetry-with-diagnostics-v1') -or
+            $Stage -cne 'compile' -or $candidate.exitCode -ne 0 -or $candidate.stdout -cne '' -or
+            ($candidate.stdoutPolicy -ceq 'compiler-build-telemetry-v1' -and $candidate.stderr -cne ''))) {
             throw 'PHASE_EXECUTION_BUILD_STDOUT_POLICY_SCOPE'
         }
     }

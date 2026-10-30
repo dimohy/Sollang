@@ -205,12 +205,13 @@ class PhaseClosureTests(unittest.TestCase):
         self.write_record("contract.json", contract)
         self.refresh_execution_links(update_actual=True)
 
-    def install_build_telemetry(self):
+    def install_build_telemetry(self, diagnostic=""):
         from verification_build_stdout import POLICY, validate_build_stdout
         helper = "scripts/verification_build_stdout.py"
         self.write(helper, Path(__file__).with_name("verification_build_stdout.py").read_text(encoding="utf-8"))
         contract = json.loads((self.root / "contract.json").read_text())
-        contract["cases"][0]["expectedStages"]["compile"]["stdoutPolicy"] = POLICY
+        contract["cases"][0]["expectedStages"]["compile"]["stdoutPolicy"] = "compiler-build-telemetry-with-diagnostics-v1" if diagnostic else POLICY
+        contract["cases"][0]["expectedStages"]["compile"]["stderr"] = diagnostic
         self.write_record("contract.json", contract)
         for side in ("managed", "selfhost"):
             path = f"records/positive-header-{side}-compile.json"
@@ -231,7 +232,8 @@ class PhaseClosureTests(unittest.TestCase):
             outcome["actualStdout"] = raw.decode()
             outcome["stdoutRecord"] = self.link(log)
             stderr_log = f"records/{side}-build.stderr.log"
-            (self.root / stderr_log).write_bytes(b"")
+            (self.root / stderr_log).write_bytes(diagnostic.encode("utf-8"))
+            outcome["actualStderr"] = diagnostic
             outcome["stderrRecord"] = self.link(stderr_log)
             process_path = f"records/{side}-build.process.json"
             self.write_record(process_path, {"pid":1,"finishedAtUtc":"2026-10-19T00:00:00Z","exit":0,
@@ -248,6 +250,26 @@ class PhaseClosureTests(unittest.TestCase):
     def test_declared_build_telemetry_preserves_raw_and_passes(self):
         self.install_build_telemetry()
         self.validate()
+
+    def test_build_telemetry_with_exact_declared_warning(self):
+        self.install_build_telemetry("warning S002: declared\n")
+        self.validate()
+
+    def test_warning_policy_cannot_hide_negative_or_program_output(self):
+        base = {"exitCode": 0, "stdout": "", "stderr": "warning S002: declared\n", "stdoutPolicy": "compiler-build-telemetry-with-diagnostics-v1"}
+        for stage, changes in (("run", {}), ("grammar", {}), ("compile", {"exitCode": 1}), ("compile", {"stdout": "program output"})):
+            with self.subTest(stage=stage, changes=changes), self.assertRaisesRegex(MODULE.PhaseClosureError, "BUILD_STDOUT_POLICY_SCOPE"):
+                MODULE.expected_stage_outcome({stage: {**base, **changes}}, stage, "managed")
+
+    def test_declared_build_warning_cannot_be_missing_or_changed(self):
+        for actual in ("", "warning S002: changed\n", "warning S002: declared\nwarning S003: extra\n"):
+            with self.subTest(actual=actual):
+                self.install_build_telemetry("warning S002: declared\n")
+                log = "records/managed-build.stderr.log"
+                (self.root / log).write_bytes(actual.encode("utf-8"))
+                self.change_record("records/positive-header-managed-compile.json", actualStderr=actual, stderrRecord=self.link(log))
+                self.refresh_execution_links()
+                self.rejects("case behavior or diagnostic differs")
 
     def test_build_telemetry_requires_pinned_helper(self):
         self.install_build_telemetry()
