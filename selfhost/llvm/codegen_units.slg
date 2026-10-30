@@ -2,7 +2,8 @@ namespace sollang.compiler.llvm.codegen_units
 
 # LLVM fragments are retained as packed little-endian bytes: one UInt64 stores
 # up to eight output bytes. Module identity words retain the complete canonical
-# namespace bytes so a lookup-hash collision is rejected instead of reused.
+# namespace bytes so hash ties are ordered by complete identities, never reused
+# as if the hash alone were an identity.
 public struct PackedFragment {
     public words: [UInt64; ~]
     public byteLength: Int
@@ -24,7 +25,7 @@ public struct CodegenUnits {
 
 # Validation status: 0 valid, 1 truncated, 2 magic, 3 schema, 4 context,
 # 5 declared length, 6 envelope checksum, 7 structure, 8 canonical order,
-# 9 unit cardinality/kind, 10 module identity collision, 11 fragment checksum.
+# 9 unit cardinality/kind, 10 invalid/duplicate module identity, 11 fragment checksum.
 public struct CodegenValidation {
     public status: Int
     public unitCount: Int
@@ -42,6 +43,11 @@ public struct MergedCodegen {
     public byteLength: Int
     public unitCount: Int
     public status: Int
+}
+
+struct IdentityScalar {
+    value: Int
+    byteLength: Int
 }
 
 mix hash: UInt64, value: UInt64 -> UInt64 {
@@ -81,6 +87,91 @@ requiredWords byteLength: Int -> Int {
     byteLength / 8 => wordLength!
     byteLength % 8 == 0 -> unless { wordLength! + 1 => wordLength! }
     wordLength!
+}
+
+identityScalar words: ref [UInt64; ~], start: Int, end: Int -> IdentityScalar {
+    IdentityScalar { value: -1, byteLength: 0 } => invalid
+    start < 0 or start >= end or end > (words -> len)
+        -> if { invalid -> return }
+    words[start] > 255 -> if { invalid -> return }
+    Int(words[start]) => first
+    first < 128 -> if { IdentityScalar { value: first, byteLength: 1 } -> return }
+    0 => width!
+    0 => value!
+    0 => minimum!
+    first >= 194 and first <= 223 -> if {
+        2 => width!
+        first - 192 => value!
+        128 => minimum!
+    } else {
+        first >= 224 and first <= 239 -> if {
+            3 => width!
+            first - 224 => value!
+            2048 => minimum!
+        } else {
+            first >= 240 and first <= 244 -> if {
+                4 => width!
+                first - 240 => value!
+                65536 => minimum!
+            }
+        }
+    }
+    width! == 0 or width! > end - start -> if { invalid -> return }
+    1 => offset!
+    offset! < width! -> while {
+        words[start + offset!] => next
+        next < 128 or next > 191 -> if { invalid -> return }
+        value! * 64 + Int(next) - 128 => value!
+        offset! + 1 => offset!
+    }
+    value! < minimum! or value! > 1114111 or (value! >= 55296 and value! <= 57343)
+        -> if { invalid -> return }
+    IdentityScalar { value: value!, byteLength: width! }
+}
+
+identityUtf8Valid words: ref [UInt64; ~], start: Int, length: Int -> Bool {
+    start -> canRead(length, words -> len) -> unless { false -> return }
+    start + length => end
+    start => index!
+    index! < end -> while {
+        words -> identityScalar(index!, end) => scalar
+        scalar.value < 0 -> if { false -> return }
+        index! + scalar.byteLength => index!
+    }
+    true
+}
+
+ordinalFirstUnit value: Int -> Int {
+    value >= 65536 -> if { 55296 + (value - 65536) / 1024 } else { value }
+}
+
+# CSharp StringComparer.Ordinal compares UTF-16 units, not UTF-8 byte order.
+# Valid supplementary scalars share their high unit only with supplementary
+# scalars; their scalar order then supplies the low-unit comparison.
+# Return2 keeps malformed input distinct from equal identities.
+identityOrder words: ref [UInt64; ~], leftStart: Int, leftLength: Int, rightStart: Int, rightLength: Int -> Int {
+    not (words -> identityUtf8Valid(leftStart, leftLength))
+        or not (words -> identityUtf8Valid(rightStart, rightLength))
+        -> if { 2 -> return }
+    leftStart + leftLength => leftEnd
+    rightStart + rightLength => rightEnd
+    leftStart => left!
+    rightStart => right!
+    left! < leftEnd and right! < rightEnd -> while {
+        words -> identityScalar(left!, leftEnd) => a
+        words -> identityScalar(right!, rightEnd) => b
+        a.value != b.value -> if {
+            a.value -> ordinalFirstUnit => aFirst
+            b.value -> ordinalFirstUnit => bFirst
+            aFirst < bFirst or (aFirst == bFirst and a.value < b.value)
+                -> if { -1 -> return } else { 1 -> return }
+        }
+        left! + a.byteLength => left!
+        right! + b.byteLength => right!
+    }
+    left! < leftEnd -> if { 1 -> return }
+    right! < rightEnd -> if { -1 -> return }
+    0
 }
 
 checksum words: [UInt64; ~], start: Int, count: Int, seed: UInt64 -> UInt64 {
@@ -143,6 +234,10 @@ inputShapeValid units: CodegenUnits -> Bool {
     valid! and index! < count -> while {
         units.identityStarts[index!] -> canRead(units.identityLengths[index!], units.identityWords -> len)
             -> unless { false => valid! }
+        valid! -> if {
+            units.identityWords -> identityUtf8Valid(units.identityStarts[index!], units.identityLengths[index!])
+                -> unless { false => valid! }
+        }
         units.fragmentStarts[index!] -> canRead(units.fragmentWordLengths[index!], units.fragmentWords -> len)
             -> unless { false => valid! }
         valid! and units.fragmentByteLengths[index!] >= 0 and units.fragmentWordLengths[index!] == (units.fragmentByteLengths[index!] -> requiredWords)
@@ -159,7 +254,12 @@ unitLess units: CodegenUnits, left: Int, right: Int -> Bool {
         units.kinds[left] > units.kinds[right] -> if {
             false
         } else {
-            units.moduleHashes[left] -> lessUnsigned(units.moduleHashes[right])
+            units.moduleHashes[left] == units.moduleHashes[right]
+                -> if {
+                    units.identityWords -> identityOrder(units.identityStarts[left], units.identityLengths[left], units.identityStarts[right], units.identityLengths[right]) == -1
+                } else {
+                    units.moduleHashes[left] -> lessUnsigned(units.moduleHashes[right])
+                }
         }
     }
 }
@@ -265,6 +365,8 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
         8 => index!
         -1 => previousKind!
         UInt64(0) => previousModuleHash!
+        0 => previousIdentityStart!
+        0 => previousIdentityLength!
         0 => prefixCount!
         0 => suffixCount!
         0 => unitIndex!
@@ -302,13 +404,6 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                     kind == 1 -> if {
                         moduleCount! + 1 => moduleCount!
                         identityLength! == 0 -> if { 9 => status! }
-                        previousKind! == 1 and moduleHash == previousModuleHash!
-                            -> if { 10 => status! }
-                        status! == 0 and previousKind! == 1 -> if {
-                            previousModuleHash! -> lessUnsigned(moduleHash)
-                                -> unless { 8 => status! }
-                        }
-                        moduleHash => previousModuleHash!
                     }
                     kind == 2 -> if {
                         suffixCount! + 1 => suffixCount!
@@ -322,8 +417,27 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                             identityIndex! + 1 => identityIndex!
                         }
                     status! == 0 and kind == 1 -> if {
+                        words -> identityUtf8Valid(identityStart, identityLength!)
+                            -> unless { 10 => status! }
+                    }
+                    status! == 0 and kind == 1 -> if {
                         words -> identityHash(identityStart, identityLength!) => actualModuleHash
                         actualModuleHash != moduleHash -> if { 10 => status! }
+                    }
+                    status! == 0 and kind == 1 -> if {
+                        previousKind! == 1 -> if {
+                            moduleHash == previousModuleHash! -> if {
+                                words -> identityOrder(previousIdentityStart!, previousIdentityLength!, identityStart, identityLength!) => order
+                                order == 0 or order == 2 -> if { 10 => status! }
+                                order == 1 -> if { 8 => status! }
+                            } else {
+                                previousModuleHash! -> lessUnsigned(moduleHash)
+                                    -> unless { 8 => status! }
+                            }
+                        }
+                        moduleHash => previousModuleHash!
+                        identityStart => previousIdentityStart!
+                        identityLength! => previousIdentityLength!
                     }
                     fragmentByteCount! + fragmentByteLength! => fragmentByteCount!
                     words -> fragmentChecksum(fragmentStart!, fragmentWordLength!, fragmentByteLength!) => actualFragmentChecksum

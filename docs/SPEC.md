@@ -6094,6 +6094,10 @@ Current backend:
   full module identities, the schema-1 per-fragment and envelope checksums, and is
   atomically replaced only after a successful link. A corrupt or incompatible
   generation is reported and rebuilt; cached and clean LLVM bytes must match.
+  Module identities require strict UTF-8. Equal stable hashes are ordered by
+  their complete identities using ordinal UTF-16 order; a hash tie alone is
+  not a duplicate. An exact duplicate identity or a forged identity hash is
+  rejected.
 - canonical self-host module interfaces retain the full parsed namespace as
   length-prefixed UTF-8 bytes in the schema-2 interface payload. Whitespace and
   comments do not participate in namespace identity. The namespace hash is a

@@ -1788,6 +1788,12 @@ the selected producer. Recheck compiler, runtime, grammar, and source hashes
 after execution. A changed producer starts a new verification epoch; never
 combine cases from different compiler hashes into one current proof.
 
+Persistent codegen units retain complete UTF-8 module identities. Validate the
+encoding before comparing identities. A stable hash orders buckets; ties use
+the complete identity in C# ordinal UTF-16 order. Keep valid hash collisions
+distinct from duplicate names and forged hashes, and share the same comparison
+between canonical encoding and validation.
+
 For UTF-8 grammar inputs, keep mapped `SourceText` owners alive and use the
 shared `source_decoding.utf8Text` borrowed view before parsing or hashing.
 Grammar source hashing normalizes the line endings specified in `SPEC.md`;
