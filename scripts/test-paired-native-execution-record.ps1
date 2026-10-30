@@ -11,7 +11,9 @@ if (-not $output.StartsWith((Join-Path $root 'artifacts') + [IO.Path]::Directory
 }
 $wrapper = Join-Path $PSScriptRoot 'verify-compiler-paired-native-fixtures.ps1'
 $helper = Join-Path $PSScriptRoot 'verification-process.ps1'
-$paths = @($PSCommandPath, $wrapper, $helper)
+$paths = @($PSCommandPath, $wrapper, $helper,
+    (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1'),
+    (Join-Path $PSScriptRoot 'stage2-artifact-receipt.ps1'))
 if ($PreviousWrapper) { $paths += (Resolve-Path -LiteralPath $PreviousWrapper).Path }
 if ($PreviousBudgetWrapper) { $paths += (Resolve-Path -LiteralPath $PreviousBudgetWrapper).Path }
 $before = [ordered]@{}
@@ -25,14 +27,60 @@ $functions = @($ast.FindAll({ param($node)
 }, $true))
 if ($functions.Count -ne 1) { throw 'PAIRED_EXECUTION_WRAPPER_FUNCTION_NOT_UNIQUE' }
 . $helper
+. (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1')
 . ([ScriptBlock]::Create($functions[0].Extent.Text))
 $script:pairedCaseClock = $null
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $shellPath = (Get-Process -Id $PID).Path
 $rows = [Collections.Generic.List[object]]::new()
 $failure = $null
-$expectedControls = 18 + [int]([bool]$PreviousWrapper) + [int]([bool]$PreviousBudgetWrapper)
+$expectedControls = 26 + [int]([bool]$PreviousWrapper) + [int]([bool]$PreviousBudgetWrapper)
 try {
+    foreach ($functionName in @('Get-PairedSharedLlvmInputs', 'Assert-PairedSharedLlvm')) {
+        $sharedFunction = @($ast.FindAll({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $functionName
+        }, $true))
+        if ($sharedFunction.Count -ne 1) { throw 'PAIRED_SHARED_FUNCTION_NOT_UNIQUE' }
+        . ([ScriptBlock]::Create($sharedFunction[0].Extent.Text))
+    }
+    $sharedRoot = Join-Path $output 'shared-contract'
+    [IO.Directory]::CreateDirectory($sharedRoot) | Out-Null
+    if (@(Get-PairedSharedLlvmInputs $sharedRoot profile).Count -ne 0) { throw 'SHARED_OPT_IN_CHANGED' }
+    $rows.Add(@{ id='shared-absent-keeps-legacy-scope'; passed=$true })
+    $sharedCounts = Join-Path $sharedRoot 'profile.common.llvm.regex-counts.txt'
+    $managedCounts = Join-Path $sharedRoot 'profile.llvm.regex-counts.txt'
+    $nativeCounts = Join-Path $sharedRoot 'profile.selfhost.llvm.regex-counts.txt'
+    $managedLlvm = Join-Path $sharedRoot 'managed.ll'
+    $nativeLlvm = Join-Path $sharedRoot 'native.ll'
+    [IO.File]::WriteAllText($sharedCounts, "1`tshared-marker`n")
+    [IO.File]::WriteAllText($managedCounts, "1`tmanaged-marker`n")
+    [IO.File]::WriteAllText($nativeCounts, "1`tnative-marker`n")
+    [IO.File]::WriteAllText($managedLlvm, '; managed-marker shared-marker')
+    [IO.File]::WriteAllText($nativeLlvm, '; native-marker shared-marker')
+    if (@(Get-PairedSharedLlvmInputs $sharedRoot profile).Count -ne 3) { throw 'SHARED_INPUTS_INCOMPLETE' }
+    $rows.Add(@{ id='shared-and-both-producer-inputs-pinned'; passed=$true })
+    Assert-PairedSharedLlvm $managedLlvm $sharedRoot profile $true
+    $rows.Add(@{ id='managed-uses-shared-contract'; passed=$true })
+    Assert-PairedSharedLlvm $nativeLlvm $sharedRoot profile $false
+    $rows.Add(@{ id='native-uses-identical-shared-contract'; passed=$true })
+    [IO.File]::WriteAllText($nativeLlvm, '; native-marker')
+    $rejected = $false
+    try { Assert-PairedSharedLlvm $nativeLlvm $sharedRoot profile $false }
+    catch { $rejected = $_.Exception.Message.StartsWith('EXACT_LLVM_REGEX_COUNT') }
+    if (-not $rejected) { throw 'SHARED_LEGACY_OVERRIDE_BYPASS' }
+    $rows.Add(@{ id='legacy-producer-check-cannot-bypass-shared'; passed=$true })
+    foreach ($invalid in @(
+        @{id='shared-empty-rejected-before-build';text='';error='PAIRED_SHARED_LLVM_EMPTY'},
+        @{id='shared-invalid-pattern-rejected-before-build';text="1`t[`n";error='PAIRED_SHARED_LLVM_REGEX_INVALID'},
+        @{id='shared-negative-count-rejected-before-build';text="-1`tshared-marker`n";error='PAIRED_SHARED_LLVM_COUNT_INVALID'}
+    )) {
+        [IO.File]::WriteAllText($sharedCounts, $invalid.text)
+        $rejection = $null
+        try { $null = @(Get-PairedSharedLlvmInputs $sharedRoot profile) }
+        catch { $rejection = $_.Exception.Message }
+        if ($rejection -cne $invalid.error) { throw "SHARED_INVALID_INPUT_NOT_REJECTED: $($invalid.id)" }
+        $rows.Add(@{ id=$invalid.id; passed=$true })
+    }
     $selectionFunctions = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-PairedFixtureCompilers'
     }, $true))

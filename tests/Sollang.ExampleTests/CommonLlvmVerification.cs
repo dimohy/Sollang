@@ -13,7 +13,9 @@ internal static class CommonLlvmVerification
         input = Path.GetFullPath(input);
         var expected = Path.Combine(repository, "examples", "regression", "expected");
         var paths = LlvmAssertions.SelectCommonPaths(expected, fixture, target);
-        var assertions = new[] { paths.Contains, paths.NotContains, paths.RegexCounts };
+        var assertions = new[] { paths.Contains, paths.NotContains, paths.RegexCounts,
+                LlvmAssertions.SharedRegexCountsPath(paths.RegexCounts) }
+            .OfType<string>().ToArray();
         if (!assertions.Any(path => File.Exists(path) && !string.IsNullOrWhiteSpace(File.ReadAllText(path))))
             throw new InvalidDataException("The common LLVM assertion contract must not be empty.");
         var inputs = new[] { input, typeof(CommonLlvmVerification).Assembly.Location,

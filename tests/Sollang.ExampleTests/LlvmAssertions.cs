@@ -78,7 +78,16 @@ internal static class LlvmAssertions
             }
         }
 
-        foreach (var assertion in ReadAssertions(regexCountsPath))
+        // This additional contract is shared by both producers, even when a
+        // producer-specific legacy contract is selected above.
+        var sharedPath = SharedRegexCountsPath(regexCountsPath);
+        var sharedAssertions = sharedPath is null ? Array.Empty<string>() : ReadAssertions(sharedPath).ToArray();
+        if (sharedPath is not null && File.Exists(sharedPath) && sharedAssertions.Length == 0)
+        {
+            error = "Shared LLVM regex-count assertions must not be empty.";
+            return false;
+        }
+        foreach (var assertion in ReadAssertions(regexCountsPath).Concat(sharedAssertions))
         {
             var separator = assertion.IndexOf('\t');
             if (separator <= 0
@@ -102,6 +111,15 @@ internal static class LlvmAssertions
 
         error = "";
         return true;
+    }
+
+    internal static string? SharedRegexCountsPath(string regexCountsPath)
+    {
+        var name = Path.GetFileName(regexCountsPath);
+        var shared = Regex.Replace(name,
+            @"(?:\.(?:csharp|slg|selfhost))?(?:\.linux-x64)?\.llvm\.regex-counts\.txt$",
+            ".common.llvm.regex-counts.txt", RegexOptions.CultureInvariant);
+        return shared == name ? null : Path.Combine(Path.GetDirectoryName(regexCountsPath)!, shared);
     }
 
     static string NormalizeLlvmTypeIdentities(string value) =>

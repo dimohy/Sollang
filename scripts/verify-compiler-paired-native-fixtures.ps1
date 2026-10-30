@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
 . (Join-Path $PSScriptRoot 'ArtifactLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1')
 function Get-PairedFixtureCompilers([string]$ManagedPath, [string]$SelfhostPath, [string[]]$Side) {
     if ($Side.Count -eq 0 -or @($Side | Select-Object -Unique).Count -ne $Side.Count -or
         @($Side | Where-Object { $_ -cnotin @('managed', 'selfhost') }).Count -gt 0) {
@@ -28,6 +29,36 @@ function Get-PairedFixtureCompilers([string]$ManagedPath, [string]$SelfhostPath,
         [pscustomobject]@{ Name = 'managed'; Path = $ManagedPath; Stdlib = $false },
         [pscustomobject]@{ Name = 'selfhost'; Path = $SelfhostPath; Stdlib = $true }
     ) | Where-Object { $_.Name -cin $Side }
+}
+function Get-PairedSharedLlvmInputs([string]$ExpectedRoot, [string]$FixtureName) {
+    $shared = Join-Path $ExpectedRoot "$FixtureName.common.llvm.regex-counts.txt"
+    if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) { return }
+    $lines = @([IO.File]::ReadAllLines($shared) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($lines.Count -eq 0) { throw 'PAIRED_SHARED_LLVM_EMPTY' }
+    foreach ($line in $lines) {
+        $fields = $line.Split("`t", 2)
+        $expectedMatches = 0
+        if ($fields.Count -ne 2 -or -not [int]::TryParse($fields[0], [ref]$expectedMatches) -or
+            $expectedMatches -lt 0) { throw 'PAIRED_SHARED_LLVM_COUNT_INVALID' }
+        try { $null = [regex]::new($fields[1]) }
+        catch [ArgumentException] { throw 'PAIRED_SHARED_LLVM_REGEX_INVALID' }
+    }
+    $shared
+    foreach ($managedSide in @($true, $false)) {
+        (Get-NativeExactLlvmContracts -ExpectedRoot $ExpectedRoot -Fixture $FixtureName `
+            -CompilerIsManagedDll $managedSide).InputPaths
+    }
+}
+function Assert-PairedSharedLlvm([string]$LlvmPath, [string]$ExpectedRoot,
+        [string]$FixtureName, [bool]$ManagedSide) {
+    $shared = Join-Path $ExpectedRoot "$FixtureName.common.llvm.regex-counts.txt"
+    if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) { return }
+    $contracts = Get-NativeExactLlvmContracts -ExpectedRoot $ExpectedRoot `
+        -Fixture $FixtureName -CompilerIsManagedDll $ManagedSide
+    Assert-NativeExactLlvmContracts -LlvmPath $LlvmPath -Contracts $contracts
+    $contracts.RegexCounts = $shared
+    $contracts.InputPaths = @($contracts.InputPaths) + @($shared)
+    Assert-NativeExactLlvmContracts -LlvmPath $LlvmPath -Contracts $contracts
 }
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $managed = (Resolve-Path -LiteralPath $ManagedCompiler).Path
@@ -135,10 +166,15 @@ $formatSources = @($FormatCheckSource | ForEach-Object {
     $resolved
 } | Select-Object -Unique)
 $inputs = @($managed, $selfhost, $llvmAs, $closure, $sourceClosure,
+    (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1'),
+    (Join-Path $PSScriptRoot 'stage2-artifact-receipt.ps1'),
     (Join-Path $PSScriptRoot 'source-module-header.ps1'), $PSCommandPath,
     (Join-Path $PSScriptRoot 'verification-process.ps1')) +
     $managedRuntime + $stdlibSources +
     @($cases | ForEach-Object { $_.Sources; if (-not $_.Runtime) { $_.Expected }; if ($_.Manifest) { $_.Manifest }; if ($_.CompilerStderrExpected) { $_.CompilerStderrExpected } }) +
+    @($cases | ForEach-Object {
+        Get-PairedSharedLlvmInputs (Join-Path $root 'examples/regression/expected') $_.Name
+    }) +
     $extraInputs + @($formatSources) + @(if ($formatExecutable) { $formatExecutable }) +
     @(if ($observationContract) { $observationContract; $observationScript; $observationPython })
 foreach ($path in $inputs) {
@@ -225,6 +261,8 @@ try {
                 "paired $($case.Name) LLVM assemble" "$prefix.as"
             $directCalls = Invoke-CaseProcess 'pwsh' @('-NoProfile', '-File', $closure, '-LlvmPath', $llvmPath) `
                 "paired $($case.Name) direct-call closure" "$prefix.closure"
+            Assert-PairedSharedLlvm $llvmPath (Join-Path $root 'examples/regression/expected') `
+                $case.Name ($compiler.Name -ceq 'managed')
             $observationLink = $null
             if ($observationContract -and $compiler.Name -ceq 'selfhost') {
                 $observationPath = "$prefix.llvm-observation.json"
