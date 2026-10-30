@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.emitter.diagnostics
 
 import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
 import sollang.compiler.ir.interpolation as interpolationIr
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.emitter.context as emitterContext
@@ -21,6 +22,25 @@ import sollang.compiler.syntax as syntax
 import sollang.compiler.diagnostics as syntaxDiagnostics
 import syntax.generated.slg as grammar
 import sys.file as file
+
+# Error() retains the source namespace, including interpolation inference in main.
+# The fallback belongs only to a source without a declared namespace.
+semanticDiagnosticModuleText context: ref emitterContext.EmitContext, sourceModule: Int -> Text {
+    sourceModule < 0 -> if { "<main>" -> return }
+    context.modules[sourceModule] => identity
+    identity.pathLength == 0 -> if { "<main>" -> return }
+    context.sources[sourceModule] -> slice(identity.pathStart, identity.pathLength)
+}
+
+# Namespace source views may contain trivia. Reuse the language lexer to emit
+# parsed namespace spelling without allocating a replacement Text owner.
+emitCanonicalDiagnosticModuleName moduleName: Text -> Unit uses Console {
+    moduleName -> lexer.lex => tokens
+    tokens -> each token {
+        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+            -> if { moduleName -> slice(token.span.start, token.span.length) -> print }
+    }
+}
 
 public usesMappedBytesRuntime context: ref emitterContext.EmitContext -> Bool {
     0 => nodeIndex!
@@ -1363,14 +1383,10 @@ emitOwnedBindingBranchDiagnostic context: ref emitterContext.EmitContext, diagno
     context.ranges[diagnostic.sourceModule] => range
     context.ir[diagnostic.actualOrigin].astNode => controlAst
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, controlAst))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] owned binding '$name" -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] owned binding '$name" -> print
     nameToken.span.start + nameToken.span.length < (context.sources[binding.sourceModule] -> len)
         and (context.sources[binding.sourceModule] -> byte(nameToken.span.start + nameToken.span.length)) == '!'
         -> if { "!" -> print }
@@ -1387,22 +1403,20 @@ emitOwnedBindingCreationDiagnostic context: ref emitterContext.EmitContext, diag
     context.ir[diagnostic.actualSymbol] => binding
     context.ranges[diagnostic.sourceModule] => range
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, binding.astNode))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     diagnostic.expectedSymbol >= 0 -> if {
         context.ir[diagnostic.expectedSymbol] => payload
         context.nodes[range.astStart + payload.astNode] => payloadPattern
         context.tokens[range.tokenStart + payloadPattern.secondaryToken] => payloadToken
         context.sources[diagnostic.sourceModule] -> slice(payloadToken.span.start, payloadToken.span.length) => payloadName
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] " -> print
         payloadName -> emitBorrowedEnumPayloadMessage
     } else {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] owned container values must be created directly at their binding site in the current slice" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] owned container values must be created directly at their binding site in the current slice" -> println
     }
 }
 
@@ -1715,14 +1729,10 @@ emitBorrowedTextOriginMutationDiagnostic context: ref emitterContext.EmitContext
     context.tokens[borrowedRange.tokenStart + borrowed.payloadToken] => borrowedToken
     context.sources[borrowed.sourceModule] -> slice(borrowedToken.span.start, borrowedToken.span.length) => borrowedName
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(borrowedRange, borrowed.astNode))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] cannot move or mutate " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] cannot move or mutate " -> print
     diagnostic.code == 23 -> if { "owner '" -> print } else { "origin '" -> print }
     context -> emitBorrowedTextOriginPlace(diagnostic.expectedModule, diagnostic.expectedSymbol)
     diagnostic.code == 23 -> if {
@@ -1787,14 +1797,10 @@ emitBorrowedOwnedMoveDiagnostic context: ref emitterContext.EmitContext, diagnos
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
     context.ir[diagnostic.actualSymbol] => argument
     context.ranges[diagnostic.sourceModule] => sourceRange
-    "<main>" => moduleName!
-    context.nodes -> semanticDiagnostics.expressionBelongsToMain(sourceRange, argument.astNode) => inMain
-    not inMain and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] owned value '$name' is borrowed and cannot be passed to move input of function '" -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] owned value '$name' is borrowed and cannot be passed to move input of function '" -> print
     context -> emitOwnedMoveFunctionName(diagnostic.actualBuiltin, diagnostic.expectedModule)
     "'; transfer ownership with a move input such as '$name: move " -> print
     diagnostic.actualOrigin -> emitBoxOperandTypeName(context)
@@ -1807,14 +1813,10 @@ emitBorrowedOwnedStorageOrResultDiagnostic context: ref emitterContext.EmitConte
     context.tokens[range.tokenStart + borrowedUse.payloadToken] => nameToken
     context.sources[borrowedUse.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, borrowedUse.astNode))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
     diagnostic.code == 31 -> if {
         "borrowed owned value '$name' cannot be copied into array storage; transfer an owned value instead" -> println
     } else {
@@ -1958,14 +1960,10 @@ emitAggregateTransferOverlapDiagnostic context: ref emitterContext.EmitContext, 
         }
     context.nodes[constructorRange.astStart + constructor.astNode] => constructorAst
     context.sources[constructor.sourceModule] -> syntaxDiagnostics.sourceLocation(constructorAst.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(constructorRange, constructor.astNode))
-        and context.modules[constructor.sourceModule].pathLength > 0
-        -> if {
-            context.modules[constructor.sourceModule] => identity
-            context.sources[constructor.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] owned binding '$name' cannot initialize more than one aggregate position" -> println
+    context -> semanticDiagnosticModuleText(constructor.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] owned binding '$name' cannot initialize more than one aggregate position" -> println
 }
 
 emitFirstOwnedBindingDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
@@ -2090,14 +2088,10 @@ emitFirstOwnedBindingDiagnostic context: ref emitterContext.EmitContext -> Unit 
         }
     context.tokens[range.tokenStart + binding.payloadToken] => nameToken
     context.sources[binding.sourceModule] -> syntaxDiagnostics.sourceLocation(nameToken.span.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, binding.astNode))
-        and context.modules[binding.sourceModule].pathLength > 0
-        -> if {
-            context.modules[binding.sourceModule] => identity
-            context.sources[binding.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(binding.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
     diagnostic.code == 38 -> if {
         "owned field '" -> print
         context -> emitOwnedBindingFieldPath(diagnostic.actualSymbol)
@@ -2221,12 +2215,10 @@ emitBorrowedTextOriginProjection context: ref emitterContext.EmitContext, placeI
 
 emitBorrowedTextReturnInference context: ref emitterContext.EmitContext, diagnostic: ownershipCheck.OwnershipDiagnostic -> Unit uses Console {
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    context.modules[diagnostic.sourceModule] => module
-    module.pathLength > 0 -> if {
-        context.sources[diagnostic.sourceModule] -> slice(module.pathStart, module.pathLength) => moduleName!
-    }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] function '" -> print
     context -> emitBorrowedTextDeclarationName(diagnostic.sourceModule, diagnostic.functionSymbol)
     "' cannot return Text storage after slicing borrowed SourceText; return a value whose borrowed Text origins can be inferred from its inputs or copy into an owned text type" -> println
 }
@@ -2238,13 +2230,10 @@ emitBorrowedTextReturnEscape context: ref emitterContext.EmitContext, diagnostic
     context.tokens[ownerRange.tokenStart + ownerSymbol.nameToken] => ownerToken
     context.sources[owner.sourceModule] -> slice(ownerToken.span.start, ownerToken.span.length) => name
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] borrowed origin '$name" -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] borrowed origin '$name" -> print
     context -> emitBorrowedTextOriginProjection(diagnostic.expectedModule)
     diagnostic.code == ownershipCheck.borrowedTextBlockEscapeCode()
         -> if {
@@ -2313,16 +2302,10 @@ emitFunctionReturnPrefix context: ref emitterContext.EmitContext, diagnostic: ow
             context.tokens[declarationRange.tokenStart + declaration.nameToken].span.start => displayStart!
         }
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(displayStart!) => location
-    "<main>" => moduleName!
-    context.ranges[diagnostic.sourceModule] => range
-    context.symbols[range.symbolStart + diagnostic.functionSymbol] => function
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, function.astNode))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
 }
 
 emitFunctionReturnCompatibility context: ref emitterContext.EmitContext, diagnostic: ownershipCheck.OwnershipDiagnostic -> Unit uses Console {
@@ -3094,14 +3077,10 @@ firstBlockingInterpolationNode context: ref emitterContext.EmitContext -> Int {
 }
 
 emitInterpolationSemanticPrefixAt context: ref emitterContext.EmitContext, nodeIndex: Int, sourceModule: Int, location: syntaxDiagnostics.SourceLocation -> Unit uses Console {
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.interpolationBelongsToMain(context.ranges[sourceModule], context.interpolations, nodeIndex))
-        and context.modules[sourceModule].pathLength > 0
-        -> if {
-            context.modules[sourceModule] => identity
-            context.sources[sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
 }
 
 emitInterpolationSemanticPrefix context: ref emitterContext.EmitContext, nodeIndex: Int, sourceModule: Int -> Unit uses Console {
@@ -3178,14 +3157,10 @@ emitEnumPayloadStorageDiagnostics context: ref emitterContext.EmitContext -> Uni
             context.tokens[range.tokenStart + pattern.secondaryToken] => payloadToken
             context.sources[diagnostic.sourceModule] -> slice(payloadToken.span.start, payloadToken.span.length) => payloadName
             context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(pattern.start) => location
-            "<main>" => moduleName!
-            not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, binding.astNode))
-                and context.modules[diagnostic.sourceModule].pathLength > 0
-                -> if {
-                    context.modules[diagnostic.sourceModule] => identity
-                    context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-                }
-            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+            context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+            "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'] " -> print
             payloadName -> emitBorrowedEnumPayloadMessage
         } else {
             context.symbols[range.symbolStart + binding.symbol] => owner
@@ -3197,14 +3172,10 @@ emitEnumPayloadStorageDiagnostics context: ref emitterContext.EmitContext -> Uni
             } else {
                 context.nodes[range.astStart + diagnostic.argumentAst] => argument
                 context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(argument.start) => location
-                "<main>" => moduleName!
-                not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, diagnostic.argumentAst))
-                    and context.modules[diagnostic.sourceModule].pathLength > 0
-                    -> if {
-                        context.modules[diagnostic.sourceModule] => identity
-                        context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-                    }
-                "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+                context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+                "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+                moduleName -> emitCanonicalDiagnosticModuleName
+                "'] " -> print
             }
             "owned value '$name' is borrowed and cannot be stored in owned enum payload storage; transfer ownership with a move input such as '$name: move ...', or store a borrowed view/copy the value explicitly" -> println
         }
@@ -3424,9 +3395,14 @@ public emitInterpolationDiagnostics context: ref emitterContext.EmitContext -> U
                     (receiverType.kind == 1 and receiverType.origin == 1)
                         or receiverType.kind == 2 or receiverType.kind == 3
                         or receiverType.kind == 4 or receiverType.kind == 12
-                        -> if { "$moduleName." -> print }
+                        -> if {
+                            moduleName -> emitCanonicalDiagnosticModuleName
+                            "." -> print
+                        }
                     receiverTypeId -> emitBoxOperandTypeName(context)
-                    ".$name' is internal to module '$moduleName'" -> println
+                    ".$name' is internal to module '" -> print
+                    moduleName -> emitCanonicalDiagnosticModuleName
+                    "'" -> println
                 }
             context.interpolationMissingMemberOwnerTypeByNode[nodeIndex!] >= 0
                 -> if {
@@ -3459,7 +3435,11 @@ public emitInterpolationDiagnostics context: ref emitterContext.EmitContext -> U
                     context.tokens[ownerRange.tokenStart + fieldSymbol.nameToken] => fieldNameToken
                     context.sources[ownerSource] -> slice(fieldNameToken.span.start, fieldNameToken.span.length) => fieldName
                     context -> emitInterpolationSemanticPrefix(nodeIndex!, sourceModule)
-                    "cannot read private field '$fieldName' of struct '$moduleName.$ownerName' outside module '$moduleName'; use its public factory or public instance methods" -> println
+                    "cannot read private field '$fieldName' of struct '" -> print
+                    moduleName -> emitCanonicalDiagnosticModuleName
+                    ".$ownerName' outside module '" -> print
+                    moduleName -> emitCanonicalDiagnosticModuleName
+                    "'; use its public factory or public instance methods" -> println
                 }
             context.invalidArgumentsInterpolationIndexByNode[nodeIndex!]
                 and context.invalidCollectionIndexExpectedTypeByNode[nodeIndex!] < 0
@@ -4148,13 +4128,10 @@ emitCallDiagnostic context: ref emitterContext.EmitContext, callIndex: Int -> Un
                             } else {
                                 callNode.kind == 10 -> if {
                                     context.sources[call.sourceModule] -> syntaxDiagnostics.sourceLocation(nameStart) => location
-                                    "<main>" => moduleName!
-                                    context.modules[call.sourceModule].pathLength > 0
-                                        -> if {
-                                            context.modules[call.sourceModule] => identity
-                                            context.sources[call.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-                                        }
-                                    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] unknown value-flow target '" -> print
+                                    context -> semanticDiagnosticModuleText(call.sourceModule) => moduleName
+                                    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+                                    moduleName -> emitCanonicalDiagnosticModuleName
+                                    "'] unknown value-flow target '" -> print
                                     context -> emitFlowTargetName(call.sourceModule, nameStart, nameLength)
                                     "'" -> println
                                 } else {
@@ -5232,15 +5209,11 @@ emitNumericLiteralDiagnostic context: ref emitterContext.EmitContext, diagnostic
         None { locationNode.start }
     } => locationStart
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(locationStart) => location
-    "<main>" => moduleName!
-    context.nodes -> semanticDiagnostics.expressionBelongsToMain(sourceRange, diagnostic.locationAst) => inMain
-    not inMain and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     diagnostic.expectedSymbol -> typeIds.builtinTypeName => targetName
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] numeric literal " -> print
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] numeric literal " -> print
     context.constantLiterals -> constantLowering.find(sourceRange.literalStart, sourceRange.literalCount, diagnostic.literalAst) -> when {
         Some(folded) {
             folded < 0 -> if {
@@ -5325,13 +5298,10 @@ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Uni
     context.ranges[diagnostic.sourceModule] => sourceRange
     context.nodes[sourceRange.astStart + diagnostic.argumentAst] => argument
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(argument.start) => location
-    "<main>" => moduleName!
-    context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
     diagnostic.code == 5 -> if {
         "expected a boxed value but received " -> print
         diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
@@ -5407,29 +5377,19 @@ emitMemberFieldCollision context: ref emitterContext.EmitContext -> Unit uses Co
     context.tokens[sourceRange.tokenStart + declaration.nameToken] => nameToken
     context.sources[collision.sourceModule] -> syntaxDiagnostics.sourceLocation(nameToken.span.start) => location
     context.sources[collision.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => memberName
-    "<main>" => moduleName!
-    context.modules[collision.sourceModule].pathLength > 0
-        -> if {
-            context.modules[collision.sourceModule] => identity
-            context.sources[collision.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] member '" -> print
+    context -> semanticDiagnosticModuleText(collision.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] member '" -> print
     collision.ownerType -> emitBoxOperandTypeName(context)
     ".$memberName' conflicts with a stored field of the same name" -> println
 }
 
 emitExpressionSemanticPrefix context: ref emitterContext.EmitContext, diagnostic: semanticDiagnostics.ExpressionOperandDiagnostic, location: syntaxDiagnostics.SourceLocation -> Unit uses Console {
-    "<main>" => moduleName!
-    context.ranges[diagnostic.sourceModule] => sourceRange
-    context.nodes -> semanticDiagnostics.expressionBelongsToMain(sourceRange, diagnostic.astNode)
-        => inMain
-    not inMain and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength)
-                => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
 }
 
 emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
@@ -5631,7 +5591,9 @@ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit
         context.sources[field.sourceModule] -> slice(ownerModule.pathStart, ownerModule.pathLength) => moduleName
         "cannot construct struct '" -> print
         diagnostic.operandTypeId -> emitBoxOperandTypeName(context)
-        "' outside module '$moduleName' because field '$fieldName' is private; use its public factory or public instance methods" -> println
+        "' outside module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "' because field '$fieldName' is private; use its public factory or public instance methods" -> println
         return
     }
     diagnostic.code == 38 -> if {
@@ -5715,7 +5677,11 @@ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit
             context.sources[call.targetSourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
             context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
             context -> emitExpressionSemanticPrefix(diagnostic, location)
-            "function '$moduleName.$name' is internal to module '$moduleName'" -> println
+            "function '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            ".$name' is internal to module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'" -> println
             return
         }
         diagnostic.code == 48 -> if {
@@ -6324,7 +6290,11 @@ emitPrivateFieldOperationDiagnostics context: ref emitterContext.EmitContext -> 
                 context.sources[ownerSource] -> slice(privateFieldNameToken.span.start, privateFieldNameToken.span.length) => privateFieldName
                 node.kind -> when {
                     == 12 {
-                        "; sollang semantic error: cannot construct struct '$moduleName.$ownerName' outside module '$moduleName' because field '$privateFieldName' is private; use its public factory or public instance methods" -> println
+                        "; sollang semantic error: cannot construct struct '" -> print
+                        moduleName -> emitCanonicalDiagnosticModuleName
+                        ".$ownerName' outside module '" -> print
+                        moduleName -> emitCanonicalDiagnosticModuleName
+                        "' because field '$privateFieldName' is private; use its public factory or public instance methods" -> println
                     }
                     == 13 {
                         -1 => fieldToken!
@@ -6337,12 +6307,20 @@ emitPrivateFieldOperationDiagnostics context: ref emitterContext.EmitContext -> 
                             }
                         context.tokens[sourceRange.tokenStart + fieldToken!] => fieldNameToken
                         context.sources[node.sourceModule] -> slice(fieldNameToken.span.start, fieldNameToken.span.length) => fieldName
-                        "; sollang semantic error: cannot read private field '$fieldName' of struct '$moduleName.$ownerName' outside module '$moduleName'; use its public factory or public instance methods" -> println
+                        "; sollang semantic error: cannot read private field '$fieldName' of struct '" -> print
+                        moduleName -> emitCanonicalDiagnosticModuleName
+                        ".$ownerName' outside module '" -> print
+                        moduleName -> emitCanonicalDiagnosticModuleName
+                        "'; use its public factory or public instance methods" -> println
                     }
                     else {
                         context.tokens[sourceRange.tokenStart + operationAst.secondaryToken] => fieldNameToken
                         context.sources[node.sourceModule] -> slice(fieldNameToken.span.start, fieldNameToken.span.length) => fieldName
-                        "; sollang semantic error: cannot write private field '$fieldName' of struct '$moduleName.$ownerName' outside module '$moduleName'; use its public factory or public instance methods" -> println
+                        "; sollang semantic error: cannot write private field '$fieldName' of struct '" -> print
+                        moduleName -> emitCanonicalDiagnosticModuleName
+                        ".$ownerName' outside module '" -> print
+                        moduleName -> emitCanonicalDiagnosticModuleName
+                        "'; use its public factory or public instance methods" -> println
                     }
                 }
             }
@@ -7803,15 +7781,10 @@ emitInitializerSemanticPrefix context: ref emitterContext.EmitContext, sourceMod
 emitInitializerSemanticPrefixAtOffset context: ref emitterContext.EmitContext, sourceModule: Int, valueAst: Int, offset: UIntSize -> Unit uses Console {
     context.ranges[sourceModule] => range
     context.sources[sourceModule] -> syntaxDiagnostics.sourceLocation(offset) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, valueAst))
-        -> if {
-            context.modules[sourceModule] => identity
-            identity.pathLength > 0 -> if {
-                context.sources[sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-            }
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
 }
 
 emitNominalDeclarationName context: ref emitterContext.EmitContext, declarationIndex: Int -> Unit uses Console {
@@ -7890,14 +7863,10 @@ emitNominalInitializerDiagnostics context: ref emitterContext.EmitContext -> Uni
         context.symbols[fieldRange.symbolStart + field.fieldSymbol] => fieldSymbol
         context.tokens[fieldRange.tokenStart + fieldSymbol.nameToken] => nameToken
         context.sources[field.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => fieldName
-        "<main>" => moduleName!
-        context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, mismatch.valueAst) => inMain
-        not inMain and context.modules[mismatch.sourceModule].pathLength > 0
-            -> if {
-                context.modules[mismatch.sourceModule] => identity
-                context.sources[mismatch.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-            }
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] field '$fieldName' expects " -> print
+        context -> semanticDiagnosticModuleText(mismatch.sourceModule) => moduleName
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] field '$fieldName' expects " -> print
         field.fieldType -> emitBoxOperandTypeName(context)
         ", got " -> print
         mismatch.actualTypeId -> emitBoxOperandTypeName(context)
@@ -8118,15 +8087,12 @@ emitArrayElementLayoutDiagnostics context: ref emitterContext.EmitContext -> Uni
                     context.tokens[range.tokenStart + tokenIndex!] => name
                     context.sources[sourceNode.sourceModule] => source
                     context.modules[sourceNode.sourceModule] => identity
-                    "<main>" => moduleName!
-                    identity.pathLength > 0 -> if {
-                        source -> slice(identity.pathStart, identity.pathLength) => moduleName!
-                    }
+                    context -> semanticDiagnosticModuleText(identity.sourceIndex) => moduleName
                     17 => code!
                     invalidArray.kind == 3 -> if { 18 => code! }
                     invalidArray.kind == 4 -> if { 19 => code! }
                     invalidArray.kind == 12 -> if { 20 => code! }
-                    source -> emitSignatureTypeDiagnosticForSource(moduleName!, name, "", code!)
+                    source -> emitSignatureTypeDiagnosticForSource(moduleName, name, "", code!)
                 } else {
                     invalidArray.kind == 2 -> if {
                         "; sollang semantic error: readonly array views require inline scalar or user-value elements" -> println
@@ -8167,19 +8133,10 @@ public emitConsumedBindingReadDiagnostic context: ref emitterContext.EmitContext
         -> slice(diagnostic.span.start, diagnostic.span.length) => name
     context.sources[diagnostic.sourceModule]
         -> syntaxDiagnostics.sourceLocation(diagnostic.span.start) => location
-    "<main>" => moduleName!
-    context.ranges[diagnostic.sourceModule] => sourceRange
-    false => inMain!
-    diagnostic.astNode >= 0 and diagnostic.astNode < sourceRange.astCount
-        -> if {
-            context.nodes -> semanticDiagnostics.expressionBelongsToMain(sourceRange, diagnostic.astNode) => inMain!
-        }
-    not inMain! and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] unknown binding '$name'; check its spelling and lexical scope. If the value was consumed by a move input, use the owner returned by that call, borrow it before the move, or create a new owner before reuse" -> println
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] unknown binding '$name'; check its spelling and lexical scope. If the value was consumed by a move input, use the owner returned by that call, borrow it before the move, or create a new owner before reuse" -> println
 }
 
 emitConsumedBindingReadDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
@@ -8338,24 +8295,22 @@ globalFunctionAliasAdmissionDiagnostics context: ref emitterContext.EmitContext,
     context -> traitSignatureDiagnostics(writeDiagnostics) => traitFailures
     traitFailures > 0 -> if { traitFailures -> return }
     writeDiagnostics -> if {
-        "<main>" => moduleName!
-        diagnostic.contextSourceModule >= 0 -> if {
-            context.modules[diagnostic.contextSourceModule] => identity
-            identity.pathLength > 0 -> if {
-                context.sources[diagnostic.contextSourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-            }
-        }
+        context -> semanticDiagnosticModuleText(diagnostic.contextSourceModule) => moduleName
         diagnostic.code == 1 -> if {
             diagnostic.marker -> calls.globalFunctionAliasModule => targetModule
             diagnostic.marker -> calls.canonicalGlobalFunctionAliasName => targetName
-            "sollang: semantic error at 0:0: [module '$(moduleName!)'] standard library function '$targetModule.$targetName' was not loaded" -> println
+            "sollang: semantic error at 0:0: [module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'] standard library function '$targetModule.$targetName' was not loaded" -> println
         } else {
             context.ranges[diagnostic.targetSourceModule] => range
             context.symbols[range.symbolStart + diagnostic.functionSymbol] => target
             context.tokens[range.tokenStart + target.nameToken] => token
             context.sources[diagnostic.targetSourceModule] -> syntaxDiagnostics.sourceLocation(token.span.start) => location
             diagnostic.marker -> calls.globalFunctionAliasName => name
-            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] global import alias '$name' conflicts with an existing function" -> println
+            "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'] global import alias '$name' conflicts with an existing function" -> println
         }
     }
     1
@@ -8536,14 +8491,12 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
     context.nodes[directRange.astStart + diagnostic.callAst] => directCall
     # Ordinary calls retain the source namespace even in main. Main-only
     # interpolation diagnostics own their separate scope-aware prefix.
-    "<main>" => moduleName!
-    context.modules[diagnostic.sourceModule] => sourceIdentity
-    sourceIdentity.pathLength > 0 -> if {
-        context.sources[diagnostic.sourceModule] -> slice(sourceIdentity.pathStart, sourceIdentity.pathLength) => moduleName!
-    }
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     diagnostic.nativePathStyle -> if {
         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] sys.path.nativeStyle does not accept arguments" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] sys.path.nativeStyle does not accept arguments" -> println
         return
     }
     diagnostic.genericTypeArguments -> if {
@@ -8552,7 +8505,9 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
         context.symbols[declarationRange.symbolStart + diagnostic.functionSymbol] => declaration
         context.tokens[declarationRange.tokenStart + declaration.nameToken] => nameToken
         context.sources[diagnostic.targetSourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] generic function '$name' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] generic function '$name' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
         return
     }
     diagnostic.runtimeRequest and diagnostic.targetPathAst >= 0
@@ -8562,7 +8517,9 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
                 context.nodes[directRange.astStart + diagnostic.targetPathAst].start => offset!
             }
             context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(offset!) => location
-            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+            "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'] " -> print
             directCall.kind == 10 -> if { "function '" -> print }
             calls.ModuleCallResolution {
                 sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
@@ -8578,7 +8535,9 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
         }
     directCall.kind == 11 -> if {
         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] function '" -> print
         calls.ModuleCallResolution {
             sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
             origin: 0, targetModule: diagnostic.targetSourceModule,
@@ -8599,7 +8558,9 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
     context.tokens[range.tokenStart + function.nameToken] => nameToken
     context.sources[diagnostic.targetSourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
     context.sources[diagnostic.targetSourceModule] -> syntaxDiagnostics.sourceLocation(nameToken.span.start) => location
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '$name' expects $(diagnostic.expectedAdditionalArguments) additional argument(s)" -> println
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] function '$name' expects $(diagnostic.expectedAdditionalArguments) additional argument(s)" -> println
 }
 
 public emitBlockingDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
@@ -8732,14 +8693,10 @@ emitOwnedIndexReadDiagnostic context: ref emitterContext.EmitContext -> Unit use
     context.nodes[range.astStart + diagnostic.indexAst] => node
     context.tokens[range.tokenStart + node.payloadToken] => bracket
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(bracket.span.start) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, diagnostic.indexAst))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] " -> print
     diagnostic.elementTypeId -> emitOwnedIndexReadMessage(diagnostic.dictionary, context)
 }
 
@@ -8752,14 +8709,10 @@ emitDictionaryKeyDiagnostic context: ref emitterContext.EmitContext -> Unit uses
         context.tokens[range.tokenStart + diagnostic.nameToken].span.start => locationStart!
     }
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(locationStart!) => location
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, diagnostic.locationAst))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] dictionary key type " -> print
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] dictionary key type " -> print
     diagnostic.keyTypeId -> emitBoxOperandTypeName(context)
     " must implement Hash.hash: self -> Int and Eq.eq: self -> Int" -> println
 }
@@ -8773,18 +8726,16 @@ emitCallOwnershipDiagnostic context: ref emitterContext.EmitContext -> Unit uses
     context.symbols[functionRange.symbolStart + diagnostic.functionSymbol] => function
     context.tokens[functionRange.tokenStart + function.nameToken] => functionToken
     context.sources[diagnostic.targetSourceModule] -> slice(functionToken.span.start, functionToken.span.length) => functionName
-    "<main>" => moduleName!
-    not (context.nodes -> semanticDiagnostics.expressionBelongsToMain(range, diagnostic.argumentAst))
-        and context.modules[diagnostic.sourceModule].pathLength > 0
-        -> if {
-            context.modules[diagnostic.sourceModule] => identity
-            context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-        }
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     diagnostic.code == 4 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '$functionName' requires an addressable owner or reference; literals and temporary values cannot be borrowed" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] function '$functionName' requires an addressable owner or reference; literals and temporary values cannot be borrowed" -> println
         return
     }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '$functionName' mutably borrows a container" -> print
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] function '$functionName' mutably borrows a container" -> print
     diagnostic.code == 1 -> if {
         context.nodes[range.astStart + diagnostic.rootAst] => root
         context.tokens[range.tokenStart + root.firstToken] => token
@@ -8805,25 +8756,30 @@ emitBindingDeclarationDiagnostic context: ref emitterContext.EmitContext -> Unit
     context.tokens[range.tokenStart + diagnostic.nameToken] => token
     context.sources[diagnostic.sourceModule] -> slice(token.span.start, token.span.length) => name
     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(token.span.start) => location
-    "<main>" => moduleName!
-    context.modules[diagnostic.sourceModule] => identity
-    identity.pathLength > 0 -> if {
-        context.sources[diagnostic.sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName!
-    }
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     diagnostic.code == 13 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
-        moduleName! != "<main>" -> if { "$(moduleName!)." -> print }
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] function '" -> print
+        moduleName != "<main>" -> if {
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "." -> print
+        }
         "$name' cannot infer one return type from the function body" -> println
         return
     }
     diagnostic.code == 14 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] index must be " -> print
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] index must be " -> print
         diagnostic.expectedTypeId -> emitBoxOperandTypeName(context)
         "" -> println
         return
     }
     diagnostic.code == 15 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] array elements must have one type; expected " -> print
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] array elements must have one type; expected " -> print
         diagnostic.expectedTypeId -> emitBoxOperandTypeName(context)
         ", got " -> print
         diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
@@ -8832,7 +8788,9 @@ emitBindingDeclarationDiagnostic context: ref emitterContext.EmitContext -> Unit
     }
     diagnostic.code == 11 or diagnostic.code == 12
         -> if {
-            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] indexed assignment " -> print
+            "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'] indexed assignment " -> print
             diagnostic.code == 11 -> if { "value" -> print } else { "index" -> print }
             " must be " -> print
             diagnostic.expectedTypeId -> emitBoxOperandTypeName(context)
@@ -8840,11 +8798,15 @@ emitBindingDeclarationDiagnostic context: ref emitterContext.EmitContext -> Unit
             return
         }
     diagnostic.code == 10 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] binding name '$(name)' is reserved" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] binding name '$(name)' is reserved" -> println
         return
     }
     diagnostic.code == 2 or diagnostic.code == 9 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] " -> print
         diagnostic.code == 9 -> if {
             context.libraryCalls -> each libraryCall {
                 libraryCall.status == 3 and libraryCall.sourceModule == diagnostic.sourceModule
@@ -8894,10 +8856,14 @@ emitBindingDeclarationDiagnostic context: ref emitterContext.EmitContext -> Unit
             diagnostic.code == 6 -> if { "updated expects Int arguments" => message! }
             diagnostic.code == 7 -> if { "append must be bound directly with '=>'" => message! }
             diagnostic.code == 8 -> if { "updated must be bound directly with '=>'" => message! }
-            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] $(message!)" -> println
+            "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "'] $(message!)" -> println
             return
         }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] binding '$name' already exists in this scope" -> println
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] binding '$name' already exists in this scope" -> println
 }
 
 public emitDeclaredTypeSpelling source: ref Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, annotation: ast.AstNode -> Unit uses Console {
@@ -8923,11 +8889,15 @@ public emitDeclaredTypeSpelling source: ref Text, tokens: ref [syntax.SyntaxToke
 public emitSignatureTypeDiagnosticForSource source: Text, moduleName: Text, name: syntax.SyntaxToken, genericName: Text, code: Int -> Unit uses Console {
     source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
     code == 23 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move" -> println
         return
     }
     code >= 17 and code <= 20 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] " -> print
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] " -> print
         code == 17 -> if { "readonly array views require inline scalar or user-value elements" -> println }
         code == 18 -> if { "growable array elements must have a supported inline value layout" -> println }
         code == 19 -> if { "fixed array elements must be inline scalar or user values" -> println }
@@ -8936,20 +8906,29 @@ public emitSignatureTypeDiagnosticForSource source: Text, moduleName: Text, name
     }
     code == 22 -> if {
         source -> slice(name.span.start, name.span.length) => fieldName
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] struct field '$fieldName' must be an inline value type" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] struct field '$fieldName' must be an inline value type" -> println
         return
     }
     code == 15 or code == 16 -> if {
         code == 15 -> if { "generic move inputs are not implemented yet" } else {
             "generic local and impl functions are not implemented yet"
         } => message
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] $message" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] $message" -> println
         return
     }
     code == 5 or code == 6 or code == 7 -> if {
         source -> slice(name.span.start, name.span.length) => functionName
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] function '" -> print
-        moduleName != "<main>" -> if { "$moduleName." -> print }
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] function '" -> print
+        moduleName != "<main>" -> if {
+            moduleName -> emitCanonicalDiagnosticModuleName
+            "." -> print
+        }
         functionName -> print
         code == 5 -> if { "' public function signatures require explicit input and return types" -> println }
         code == 6 -> if { "' an inferred private function must be consumed by exactly one function or main scope" -> println }
@@ -8958,18 +8937,26 @@ public emitSignatureTypeDiagnosticForSource source: Text, moduleName: Text, name
     }
     code == 4 -> if {
         source -> slice(name.span.start, name.span.length) => variantName
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] enum variant '$variantName' payload must be an inline value type" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] enum variant '$variantName' payload must be an inline value type" -> println
         return
     }
     code == 3 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] mut input expects an owned container or struct value" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] mut input expects an owned container or struct value" -> println
         return
     }
     code == 2 -> if {
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] generic function input must use its type parameter '$genericName' in this slice" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "'] generic function input must use its type parameter '$genericName' in this slice" -> println
         return
     }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] fixed array length must be a nonnegative integer literal" -> println
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] fixed array length must be a nonnegative integer literal" -> println
 }
 
 emitInferredInputConflict context: ref emitterContext.EmitContext -> Unit uses Console {
@@ -8980,10 +8967,14 @@ emitInferredInputConflict context: ref emitterContext.EmitContext -> Unit uses C
     context.sources[diagnostic.sourceModule] => source
     source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
     context.modules[diagnostic.sourceModule] => identity
-    "<main>" => moduleName!
-    identity.pathLength > 0 -> if { source -> slice(identity.pathStart, identity.pathLength) => moduleName! }
-    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
-    moduleName! != "<main>" -> if { "$(moduleName!)." -> print }
+    context -> semanticDiagnosticModuleText(identity.sourceIndex) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] function '" -> print
+    moduleName != "<main>" -> if {
+        moduleName -> emitCanonicalDiagnosticModuleName
+        "." -> print
+    }
     source -> slice(name.span.start, name.span.length) -> print
     "' has conflicting inferred input types " -> print
     diagnostic.firstTypeId -> emitBoxOperandTypeName(context)
@@ -8997,17 +8988,13 @@ emitSignatureTypeDiagnostic context: ref emitterContext.EmitContext -> Unit uses
     context.ranges[diagnostic.sourceModule] => range
     context.tokens[range.tokenStart + diagnostic.nameToken] => name
     context.sources[diagnostic.sourceModule] => source
-    "<main>" => moduleName!
-    context.modules[diagnostic.sourceModule] => identity
-    identity.pathLength > 0 -> if {
-        source -> slice(identity.pathStart, identity.pathLength) => moduleName!
-    }
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     "" => genericName!
     diagnostic.code == 2 -> if {
         context.tokens[range.tokenStart + diagnostic.genericToken] => generic
         source -> slice(generic.span.start, generic.span.length) => genericName!
     }
-    source -> emitSignatureTypeDiagnosticForSource(moduleName!, name, genericName!, diagnostic.code)
+    source -> emitSignatureTypeDiagnosticForSource(moduleName, name, genericName!, diagnostic.code)
 }
 
 constantCollectionMessage failure: constantLowering.Failure -> Text {
