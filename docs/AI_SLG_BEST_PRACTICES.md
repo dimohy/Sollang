@@ -794,6 +794,9 @@ the indexed value is borrowed `Text`. See
 [`1668-arguments-return-forwarding.slg`](../examples/regression/1668-arguments-return-forwarding.slg)
 for the direct value-flow form. Host availability remains governed by the
 [`Arguments` contract in SPEC.md](SPEC.md).
+Windows publishes the view after validating every UTF-16 argument. Setup failure
+leaves an empty view and a failing normal process exit; do not substitute lossy
+decoding or publish a partially converted argument list.
 
 ## 9. Put behavior on instances
 

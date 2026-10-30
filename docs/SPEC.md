@@ -4597,7 +4597,11 @@ Forwarding the view adds no allocation or cleanup obligation.
 
 On Windows, Sollang uses the operating system's Unicode command-line parser and
 converts each UTF-16 item to validated UTF-8 storage retained until program
-exit. That storage is released exactly once by the runtime. On Linux, the
+exit. The complete argument snapshot is published only after every conversion
+succeeds. If parsing, allocation, or conversion fails, the runtime releases
+partial storage, exposes an empty argument view, and preserves a failed process
+status through normal main completion (exit code 1). That storage is released
+exactly once by the runtime. On Linux, the
 native `argc`/`argv` entry ABI supplies stable byte spans directly. Browser wasm
 does not currently define host process arguments and rejects the property.
 

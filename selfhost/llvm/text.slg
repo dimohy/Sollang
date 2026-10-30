@@ -93,7 +93,8 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
             usesArguments and context.pointerBitWidth != 32
                 -> if {
                     context.expectedPathStyle == 1 -> if {
-                        "  call void @sollang_init_utf8_arguments()" -> println
+                        "  %arguments_ok = call i32 @sollang_init_arguments()" -> println
+                        "  %arguments_valid = icmp ne i32 %arguments_ok, 0" -> println
                     } else {
                         "  %argc64 = zext i32 %argc to i64" -> println
                         "  store i64 %argc64, ptr @sollang_argc, align 8" -> println
@@ -115,7 +116,7 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
                 -> if { "  call void @sollang_platform_socket_cleanup()" -> println }
             usesArguments and context.expectedPathStyle == 1 and context.pointerBitWidth != 32
                 -> if {
-                    "  call void @sollang_dispose_utf8_arguments()" -> println
+                    "  call void @sollang_dispose_arguments()" -> println
                 }
             context -> diagnostics.usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
             context.pointerBitWidth != 32 and context.expectedPathStyle == 0 and (context -> diagnostics.usesTextRuntime)
@@ -124,7 +125,13 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
                     "  %exit_code = zext i8 %io_failed to i32" -> println
                     "  ret i32 %exit_code" -> println
                 } else {
-                    "  ret i32 0" -> println
+                    usesArguments and context.expectedPathStyle == 1 and context.pointerBitWidth != 32
+                        -> if {
+                            "  %exit_code = select i1 %arguments_valid, i32 0, i32 1" -> println
+                            "  ret i32 %exit_code" -> println
+                        } else {
+                            "  ret i32 0" -> println
+                        }
                 }
             "}" -> println
             entryEnd! => functionIndex!

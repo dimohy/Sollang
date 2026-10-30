@@ -62,12 +62,18 @@ $results = foreach ($case in $contract.cases) {
     $item = [ordered]@{name=$case.name;fixture=$case.fixture;sourceSha256=$sourceHashes[$case.fixture];passed=$false;output='';error=$null}
     try {
         $llvm = $llvmByFixture[$case.fixture]
-        $hasArguments = $llvm.Contains('call void @sollang_init_utf8_arguments()')
+        $hasArguments = $llvm.Contains('call i32 @sollang_init_arguments()')
         if ($hasArguments -ne $case.requiresArguments) { throw 'Arguments capability reachability mismatch' }
         $audit = $llvm.Replace('@malloc(', '@audit_malloc(').Replace('@realloc(', '@audit_realloc(').Replace('@free(', '@audit_free(').Replace('@main()', '@slg_program_main()').Replace('@WideCharToMultiByte(', '@audit_WideCharToMultiByte(').Replace('declare dllimport i32 @audit_WideCharToMultiByte', 'declare i32 @audit_WideCharToMultiByte')
+        $audit = $audit.Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').Replace('call void @sollang_free(', 'call void @audit_free(')
+        if ($audit -notmatch '(?m)^declare ptr @audit_malloc\(') { $audit += "`ndeclare ptr @audit_malloc(i64)`n" }
+        if ($audit -notmatch '(?m)^declare void @audit_free\(') { $audit += "`ndeclare void @audit_free(ptr)`n" }
         [IO.File]::WriteAllText("$prefix.audit.ll",$audit,[Text.UTF8Encoding]::new($false))
         $options = @('-Wno-override-module',"-DEXPECTED_ALLOCATIONS=$($case.allocations)")
-        if ($case.PSObject.Properties.Name -contains 'failureKind') { $options += "-DFAIL_$($case.failureKind)=$($case.failureOrdinal)" }
+        if ($case.PSObject.Properties.Name -contains 'failureKind') {
+            $options += "-DFAIL_$($case.failureKind)=$($case.failureOrdinal)"
+            $options += '-DEXPECTED_EXIT_CODE=1'
+        }
         $null = Invoke-ArgumentsProcess $clang ($options + @("$prefix.audit.ll",$shim,'-O1','-lshell32','-lbcrypt','-o',$executable)) "$($case.name) audit link"
         $item.output = (Invoke-ArgumentsProcess $executable @($case.arguments) "$($case.name) audit execute" 10000).Replace("`r`n","`n")
         $expected = $case.expected.Replace("`r`n","`n").Replace('{executable}',$executable)

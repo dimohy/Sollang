@@ -4,6 +4,9 @@
 #ifndef EXPECTED_ALLOCATIONS
 #error Define EXPECTED_ALLOCATIONS for the audited fixture.
 #endif
+#ifndef EXPECTED_EXIT_CODE
+#define EXPECTED_EXIT_CODE 0
+#endif
 
 static int allocations;
 static int releases;
@@ -71,6 +74,6 @@ extern int slg_program_main(void);
 int main(void) {
     int result = slg_program_main();
     printf("allocations=%d,releases=%d\n", allocations, releases);
-    return result != 0 || allocations != EXPECTED_ALLOCATIONS
+    return result != EXPECTED_EXIT_CODE || allocations != EXPECTED_ALLOCATIONS
         || releases != EXPECTED_ALLOCATIONS || invalid_releases != 0;
 }

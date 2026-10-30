@@ -746,116 +746,160 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             }
             """ -> println
         } else {
-            "@sollang_argc = internal global i64 0" -> println
-            "@sollang_argv = internal global ptr null" -> println
-            "define i64 @sollang_argument_count() {" -> println
-            "entry:" -> println
-            "  %count = load i64, ptr @sollang_argc, align 8" -> println
-            "  ret i64 %count" -> println
-            "}" -> println
-            "define %sollang.text @sollang_argument(i64 %index) {" -> println
-            "entry:" -> println
-            "  %argv = load ptr, ptr @sollang_argv, align 8" -> println
-            "  %slot = getelementptr ptr, ptr %argv, i64 %index" -> println
-            "  %value = load ptr, ptr %slot, align 8" -> println
-            "  br label %length_loop" -> println
-            "length_loop:" -> println
-            "  %length = phi i64 [ 0, %entry ], [ %next, %length_body ]" -> println
-            "  %byte_ptr = getelementptr i8, ptr %value, i64 %length" -> println
-            "  %byte = load i8, ptr %byte_ptr, align 1" -> println
-            "  %done = icmp eq i8 %byte, 0" -> println
-            "  br i1 %done, label %length_done, label %length_body" -> println
-            "length_body:" -> println
-            "  %next = add i64 %length, 1" -> println
-            "  br label %length_loop" -> println
-            "length_done:" -> println
-            "  %text_ptr = insertvalue %sollang.text poison, ptr %value, 0" -> println
-            "  %text = insertvalue %sollang.text %text_ptr, i64 %length, 1" -> println
-            "  ret %sollang.text %text" -> println
-            "}" -> println
             context.expectedPathStyle == 1 -> if {
                 """
-                define internal void @sollang_dispose_utf8_arguments() {
-                entry:
-                  %argv = load ptr, ptr @sollang_argv, align 8
-                  %argc = load i64, ptr @sollang_argc, align 8
-                  store ptr null, ptr @sollang_argv, align 8
-                  store i64 0, ptr @sollang_argc, align 8
-                  %has_owner = icmp ne ptr %argv, null
-                  br i1 %has_owner, label %loop, label %done
-                loop:
-                  %index = phi i64 [ 0, %entry ], [ %next, %release ]
-                  %complete = icmp eq i64 %index, %argc
-                  br i1 %complete, label %release_vector, label %release
-                release:
-                  %slot = getelementptr ptr, ptr %argv, i64 %index
-                  %text = load ptr, ptr %slot, align 8
-                  call void @sollang_free(ptr %text)
-                  %next = add i64 %index, 1
-                  br label %loop
-                release_vector:
-                  call void @sollang_free(ptr %argv)
-                  br label %done
-                done:
-                  ret void
-                }
-                define internal void @sollang_init_utf8_arguments() {
+                @sollang_argument_count_value = internal global i64 0
+                @sollang_argument_records = internal global ptr null
+                define internal i32 @sollang_init_arguments() {
                 entry:
                   %argc_slot = alloca i32, align 4
                   %command = call ptr @GetCommandLineW()
                   %wide_argv = call ptr @CommandLineToArgvW(ptr %command, ptr %argc_slot)
-                  %wide_ok = icmp ne ptr %wide_argv, null
-                  br i1 %wide_ok, label %allocate, label %done
+                  %argv_ok = icmp ne ptr %wide_argv, null
+                  br i1 %argv_ok, label %allocate, label %fail
+
                 allocate:
                   %argc32 = load i32, ptr %argc_slot, align 4
                   %argc = zext i32 %argc32 to i64
-                  %argv_bytes = mul i64 %argc, 8
-                  %utf8_argv = call ptr @sollang_alloc(i64 %argv_bytes)
-                  %argv_ok = icmp ne ptr %utf8_argv, null
-                  br i1 %argv_ok, label %publish_owner, label %free_wide
-                publish_owner:
-                  store ptr %utf8_argv, ptr @sollang_argv, align 8
-                  br label %loop
+                  %record_bytes = mul i64 %argc, 16
+                  %records = call ptr @sollang_alloc(i64 %record_bytes)
+                  %records_ok = icmp ne ptr %records, null
+                  br i1 %records_ok, label %loop, label %free_wide_fail
+
                 loop:
-                  %index = phi i64 [ 0, %publish_owner ], [ %next, %stored ]
-                  %complete = icmp eq i64 %index, %argc
-                  br i1 %complete, label %success, label %size
-                size:
-                  %wide_slot = getelementptr ptr, ptr %wide_argv, i64 %index
+                  %i = phi i64 [ 0, %allocate ], [ %next, %stored ]
+                  %done = icmp eq i64 %i, %argc
+                  br i1 %done, label %success, label %convert_size
+
+                convert_size:
+                  %wide_slot = getelementptr ptr, ptr %wide_argv, i64 %i
                   %wide = load ptr, ptr %wide_slot, align 8
-                  %byte_count32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr null, i32 0, ptr null, ptr null)
-                  %byte_count_valid = icmp sgt i32 %byte_count32, 0
-                  br i1 %byte_count_valid, label %allocate_text, label %release_partial
-                allocate_text:
-                  %byte_count = zext i32 %byte_count32 to i64
-                  %utf8 = call ptr @sollang_alloc(i64 %byte_count)
+                  %bytes32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr null, i32 0, ptr null, ptr null)
+                  %bytes_valid = icmp sgt i32 %bytes32, 0
+                  br i1 %bytes_valid, label %convert_alloc, label %cleanup_partial
+
+                convert_alloc:
+                  %bytes = zext i32 %bytes32 to i64
+                  %utf8 = call ptr @sollang_alloc(i64 %bytes)
                   %utf8_ok = icmp ne ptr %utf8, null
-                  br i1 %utf8_ok, label %convert, label %release_partial
+                  br i1 %utf8_ok, label %convert, label %cleanup_partial
+
                 convert:
-                  %written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr %utf8, i32 %byte_count32, ptr null, ptr null)
-                  %converted = icmp eq i32 %written, %byte_count32
-                  br i1 %converted, label %stored, label %release_current
-                stored:
-                  %utf8_slot = getelementptr ptr, ptr %utf8_argv, i64 %index
-                  store ptr %utf8, ptr %utf8_slot, align 8
-                  %next = add i64 %index, 1
-                  store i64 %next, ptr @sollang_argc, align 8
-                  br label %loop
-                success:
-                  br label %free_wide
-                release_current:
+                  %written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr %utf8, i32 %bytes32, ptr null, ptr null)
+                  %converted = icmp eq i32 %written, %bytes32
+                  br i1 %converted, label %stored, label %free_current
+
+                free_current:
                   call void @sollang_free(ptr %utf8)
-                  br label %release_partial
-                release_partial:
-                  call void @sollang_dispose_utf8_arguments()
-                  br label %free_wide
-                free_wide:
-                  %ignored = call ptr @LocalFree(ptr %wide_argv)
-                  br label %done
-                done:
+                  br label %cleanup_partial
+
+                stored:
+                  %record = getelementptr %sollang.text, ptr %records, i64 %i
+                  %ptr_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 0
+                  store ptr %utf8, ptr %ptr_slot, align 8
+                  %len_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 1
+                  %length = sub i64 %bytes, 1
+                  store i64 %length, ptr %len_slot, align 8
+                  %next = add i64 %i, 1
+                  br label %loop
+
+                cleanup_partial:
+                  %j = phi i64 [ %i, %convert_size ], [ %i, %convert_alloc ], [ %i, %free_current ], [ %prev, %cleanup_free ]
+                  %cleanup_done = icmp eq i64 %j, 0
+                  br i1 %cleanup_done, label %free_records_fail, label %cleanup_free
+
+                cleanup_free:
+                  %prev = sub i64 %j, 1
+                  %old_record = getelementptr %sollang.text, ptr %records, i64 %prev
+                  %old_ptr_slot = getelementptr inbounds %sollang.text, ptr %old_record, i32 0, i32 0
+                  %old_ptr = load ptr, ptr %old_ptr_slot, align 8
+                  call void @sollang_free(ptr %old_ptr)
+                  br label %cleanup_partial
+
+                free_records_fail:
+                  call void @sollang_free(ptr %records)
+                  br label %free_wide_fail
+
+                success:
+                  store i64 %argc, ptr @sollang_argument_count_value, align 8
+                  store ptr %records, ptr @sollang_argument_records, align 8
+                  %ignored_wide = call ptr @LocalFree(ptr %wide_argv)
+                  ret i32 1
+
+                free_wide_fail:
+                  %ignored_fail = call ptr @LocalFree(ptr %wide_argv)
+                  br label %fail
+
+                fail:
+                  ret i32 0
+                }
+
+                define internal i64 @sollang_argument_count() {
+                entry:
+                  %count = load i64, ptr @sollang_argument_count_value, align 8
+                  ret i64 %count
+                }
+
+                define internal %sollang.text @sollang_argument(i64 %index) {
+                entry:
+                  %records = load ptr, ptr @sollang_argument_records, align 8
+                  %record = getelementptr %sollang.text, ptr %records, i64 %index
+                  %value = load %sollang.text, ptr %record, align 8
+                  ret %sollang.text %value
+                }
+
+                define internal void @sollang_dispose_arguments() {
+                entry:
+                  %count = load i64, ptr @sollang_argument_count_value, align 8
+                  %records = load ptr, ptr @sollang_argument_records, align 8
+                  br label %loop
+
+                loop:
+                  %i = phi i64 [ 0, %entry ], [ %next, %free_item ]
+                  %done = icmp eq i64 %i, %count
+                  br i1 %done, label %finish, label %free_item
+
+                free_item:
+                  %record = getelementptr %sollang.text, ptr %records, i64 %i
+                  %ptr_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 0
+                  %ptr = load ptr, ptr %ptr_slot, align 8
+                  call void @sollang_free(ptr %ptr)
+                  %next = add i64 %i, 1
+                  br label %loop
+
+                finish:
+                  call void @sollang_free(ptr %records)
                   ret void
                 }
                 """ -> println
+            } else {
+                "@sollang_argc = internal global i64 0" -> println
+                "@sollang_argv = internal global ptr null" -> println
+                "define i64 @sollang_argument_count() {" -> println
+                "entry:" -> println
+                "  %count = load i64, ptr @sollang_argc, align 8" -> println
+                "  ret i64 %count" -> println
+                "}" -> println
+                "define %sollang.text @sollang_argument(i64 %index) {" -> println
+                "entry:" -> println
+                "  %argv = load ptr, ptr @sollang_argv, align 8" -> println
+                "  %slot = getelementptr ptr, ptr %argv, i64 %index" -> println
+                "  %value = load ptr, ptr %slot, align 8" -> println
+                "  br label %length_loop" -> println
+                "length_loop:" -> println
+                "  %length = phi i64 [ 0, %entry ], [ %next, %length_body ]" -> println
+                "  %byte_ptr = getelementptr i8, ptr %value, i64 %length" -> println
+                "  %byte = load i8, ptr %byte_ptr, align 1" -> println
+                "  %done = icmp eq i8 %byte, 0" -> println
+                "  br i1 %done, label %length_done, label %length_body" -> println
+                "length_body:" -> println
+                "  %next = add i64 %length, 1" -> println
+                "  br label %length_loop" -> println
+                "length_done:" -> println
+                "  %text_ptr = insertvalue %sollang.text poison, ptr %value, 0" -> println
+                "  %text = insertvalue %sollang.text %text_ptr, i64 %length, 1" -> println
+                "  ret %sollang.text %text" -> println
+                "}" -> println
             }
         }
     }
