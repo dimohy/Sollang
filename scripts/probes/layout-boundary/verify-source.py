@@ -28,30 +28,39 @@ def main():
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--native-build", type=Path)
     parser.add_argument("--managed-proof", type=Path, required=True)
-    parser.add_argument("--semantic-proof", type=Path, required=True)
-    parser.add_argument("--provider-contract", type=Path, required=True)
+    parser.add_argument("--semantic-proof", type=Path)
+    parser.add_argument("--provider-contract", type=Path)
+    parser.add_argument("--arithmetic-only", action="store_true",
+                        help="Test the independent production arithmetic module; no full layoutsFor API claim")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append", required=True)
     args = parser.parse_args()
     output, compiler = args.output.resolve(), args.compiler.resolve()
     sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
     managed = json.loads(args.managed_proof.read_text(encoding="utf-8-sig"))
-    semantic = json.loads(args.semantic_proof.read_text(encoding="utf-8-sig"))
+    assert args.arithmetic_only or (args.semantic_proof and args.provider_contract), "LAYOUT_FULL_API_PROOFS_REQUIRED"
     assert managed["completed"] == managed["total"] == 9
     api_cases = [case for case in managed["cases"] if "capacity" in case]
     assert len(api_cases) == 7 and all(case["passed"] for case in api_cases)
     pins = {}
-    for path, record in ((args.managed_proof, managed), (args.semantic_proof, semantic)):
+    references = [(args.managed_proof, managed)]
+    if args.semantic_proof:
+        references.append((args.semantic_proof, json.loads(args.semantic_proof.read_text(encoding="utf-8-sig"))))
+    for path, record in references:
         assert record["status"] == "passed" and record["inputsStable"] and record["processesStopped"]
         for name, digest in record["inputHashes"].items():
             assert sha(name) == digest, "LAYOUT_SOURCE_REFERENCE_DRIFT:" + name
             pins[name] = digest
         pins[str(path.resolve())] = sha(path)
-    contract = json.loads(args.provider_contract.read_text(encoding="utf-8-sig"))
-    providers = [ROOT / name for name in contract["reusableCheckedProducer"]["additionalSources"]]
-    source = Path(__file__).with_name("layout.slg")
+    if args.arithmetic_only:
+        providers = [ROOT / "selfhost/llvm/emitter/layout_arithmetic.slg"]
+        source = Path(__file__).with_name("arithmetic.slg")
+    else:
+        contract = json.loads(args.provider_contract.read_text(encoding="utf-8-sig"))
+        providers = [ROOT / name for name in contract["reusableCheckedProducer"]["additionalSources"]]
+        source = Path(__file__).with_name("layout.slg")
     llvm = ROOT / ".tools/llvm-22.1.8"
-    for path in [Path(__file__), source, args.provider_contract, *providers,
+    for path in [Path(__file__), source, *([args.provider_contract] if args.provider_contract else []), *providers,
                  *[llvm / "bin" / name for name in ("clang.exe", "lld-link.exe", "llvm-lib.exe")]]:
         pins[str(path.resolve())] = sha(path)
     if args.native_build:
@@ -70,6 +79,8 @@ def main():
     result = dict(schemaVersion=1, status="running", completed=0, total=7, inputHashes=pins,
                   cases=[], maximumCaseSeconds=180, claimsGoalComplete=False,
                   scope="Actual SLG layoutsFor API, two tiny semantic types; no huge array/backing/LLVM allocation or new Native compiler")
+    if args.arithmetic_only:
+        result["scope"] = "Independent production checked arithmetic module only; no full layoutsFor API or full compiler-program acceptance"
     execution = VerificationExecution(ROOT, output, result, stable, sha)
     error, started = None, time.monotonic()
 

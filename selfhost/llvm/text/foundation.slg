@@ -19,6 +19,7 @@ import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.diagnostics as diagnostics
 import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.llvm.emitter.layout_arithmetic as layoutArithmetic
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.composite_types as compositeTypes
@@ -4491,22 +4492,13 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
 }
 
 public boundedArrayStorageLayout elementSize: Int, elementAlign: Int, capacity: Int -> TypeLayout {
-    elementSize < 0 or elementAlign < 1 or capacity <= 0
-        -> if { TypeLayout { size: -1, align: 1, status: 2 } -> return }
-    # Match the checked Int32 operations in CSharp, including AlignUp's
-    # intermediate value + alignment before subtracting one.
-    TypeLayout { size: -1, align: 1, status: 4 } => overflow
-    Int64(elementAlign) => fieldAlign
-    8 + fieldAlign > 2147483647 -> if { overflow -> return }
-    ((8 + fieldAlign - 1) / fieldAlign) * fieldAlign => dataOffset
-    Int64(elementSize) * Int64(capacity) => payload
-    payload > 2147483647 -> if { overflow -> return }
-    dataOffset + payload => end
-    end > 2147483647 -> if { overflow -> return }
-    elementAlign > 8 -> if { elementAlign } else { 8 } => alignment
-    end + Int64(alignment) > 2147483647 -> if { overflow -> return }
-    ((end + Int64(alignment) - 1) / Int64(alignment)) * Int64(alignment) => size
-    TypeLayout { size: Int(size), align: alignment, status: 0 }
+    elementSize -> layoutArithmetic.boundedArrayStorageLayout(elementAlign, capacity) -> when {
+        Ok(layout) { TypeLayout { size: layout.size, align: layout.align, status: 0 } }
+        Err(error) {
+            error -> when { InvalidInput { 2 } Overflow { 4 } } => status
+            TypeLayout { size: -1, align: 1, status: status }
+        }
+    }
 }
 
 # Computes target-aware storage facts from canonical recursive identity. Nominal

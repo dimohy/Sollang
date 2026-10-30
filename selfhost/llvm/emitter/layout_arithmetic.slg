@@ -1,0 +1,28 @@
+namespace sollang.compiler.llvm.emitter.layout_arithmetic
+
+public struct BoundedArrayLayout {
+    public dataOffset: Int
+    public size: Int
+    public align: Int
+}
+
+public enum Error { InvalidInput, Overflow }
+
+# Match TypeDefinitionTable's checked operation order before publishing a size.
+public boundedArrayStorageLayout elementSize: Int, elementAlign: Int, capacity: Int -> Result<BoundedArrayLayout, Error> {
+    elementSize < 0 or elementAlign < 1 or capacity <= 0
+        -> if { Error.InvalidInput -> Result<BoundedArrayLayout, Error>.Err -> return }
+    Error.Overflow -> Result<BoundedArrayLayout, Error>.Err => overflow
+    Int64(elementAlign) => fieldAlign
+    8 + fieldAlign > 2147483647 -> if { overflow -> return }
+    ((8 + fieldAlign - 1) / fieldAlign) * fieldAlign => dataOffset
+    Int64(elementSize) * Int64(capacity) => payload
+    payload > 2147483647 -> if { overflow -> return }
+    dataOffset + payload => end
+    end > 2147483647 -> if { overflow -> return }
+    elementAlign > 8 -> if { elementAlign } else { 8 } => alignment
+    end + Int64(alignment) > 2147483647 -> if { overflow -> return }
+    ((end + Int64(alignment) - 1) / Int64(alignment)) * Int64(alignment) => size
+    BoundedArrayLayout { dataOffset: Int(dataOffset), size: Int(size), align: alignment }
+        -> Result<BoundedArrayLayout, Error>.Ok
+}

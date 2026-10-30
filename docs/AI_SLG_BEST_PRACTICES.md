@@ -897,6 +897,12 @@ Read each collection's storage suffix independently. `{Int: [Int; <=4]}` has a
 growable dictionary containing bounded array values. Adding `; <=8` inside the
 dictionary's outer braces bounds the dictionary at 8; the value array keeps 4.
 
+Keep checked storage arithmetic in `sollang.compiler.llvm.emitter.layout_arithmetic`;
+the semantic type traversal calls that contract instead of duplicating size
+formulas. Preserve the C# checked operation order and reject overflow before
+LLVM generation. Frontend error output must use the canonical `sollang: `
+prefix so the existing diagnostic relay recognizes it before stage publication.
+
 Dictionary `take(key)` transfers the removed value to a result binding. A
 growable dictionary rebuilds its remaining entries at the same capacity and
 releases the old backing; a bounded inline dictionary keeps its backing and
