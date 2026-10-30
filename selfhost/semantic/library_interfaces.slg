@@ -348,6 +348,138 @@ writeMetadataSpan writer: mut json.Writer, source: Text, span: MetadataSpan -> R
     writer -> string(source -> slice(span.start, span.length))
 }
 
+storeMetadataText bytes: mut [UInt8; ~], value: Text -> MetadataSpan {
+    UIntSize(bytes -> len) => start
+    UIntSize(0) => offset!
+    offset! < (value -> len) -> while {
+        bytes -> push(value -> byte(offset!))
+        offset! + 1 => offset!
+    }
+    MetadataSpan { start: start, length: UIntSize(bytes -> len) - start }
+}
+
+storeMetadataHash bytes: mut [UInt8; ~], value: [UInt8; 64] -> MetadataSpan {
+    UIntSize(bytes -> len) => start
+    value -> each digit { bytes -> push(digit) }
+    MetadataSpan { start: start, length: 64 }
+}
+
+metadataSpanValid span: MetadataSpan, byteCount: UIntSize -> Bool {
+    span.start <= byteCount and span.length <= byteCount - span.start
+}
+
+producerShapeValid strings: ref [UInt8; ~], exports: ref [LibraryExport; ~], parameters: ref [LibraryParameter; ~] -> Bool {
+    UIntSize(strings -> len) => size
+    (exports -> len) == 0 -> if { false -> return }
+    exports -> each exported {
+        not (exported.name -> metadataSpanValid(size))
+            or not (exported.qualifiedName -> metadataSpanValid(size))
+            or not (exported.resultType -> metadataSpanValid(size))
+            or exported.parameterStart < 0 or exported.parameterCount < 0
+            or exported.parameterStart > (parameters -> len)
+            or exported.parameterCount > (parameters -> len) - exported.parameterStart
+            -> if { false -> return }
+    }
+    parameters -> each parameter {
+        not (parameter.name -> metadataSpanValid(size)) or not (parameter.typeName -> metadataSpanValid(size))
+            -> if { false -> return }
+    }
+    strings -> file.borrowBytes => owner
+    owner -> slice(UIntSize(0), owner -> len) => source
+    0 => index!
+    index! < (exports -> len) -> while {
+        exports[index!] => exported
+        source -> abiSafe(exported.resultType) -> unless { false -> return }
+        0 => previous!
+        previous! < index! -> while {
+            source -> sameSpan(exports[previous!].name, exported.name)
+                -> if { false -> return }
+            previous! + 1 => previous!
+        }
+        index! + 1 => index!
+    }
+    parameters -> each parameter {
+        source -> abiSafe(parameter.typeName) -> unless { false -> return }
+    }
+    true
+}
+
+producerAbiHash strings: ref [UInt8; ~], exports: ref [LibraryExport; ~], parameters: ref [LibraryParameter; ~] -> [UInt8; 64] {
+    strings -> file.borrowBytes => owner
+    owner -> slice(UIntSize(0), owner -> len) -> abiMaterial(exports, parameters) -> hashHex
+}
+
+producerSignatureHash strings: ref [UInt8; ~], exported: LibraryExport, parameters: ref [LibraryParameter; ~] -> [UInt8; 64] {
+    strings -> file.borrowBytes => owner
+    owner -> slice(UIntSize(0), owner -> len) -> signatureMaterial(exported, parameters) -> hashHex
+}
+
+storeExportSymbol strings: mut [UInt8; ~], qualifiedName: MetadataSpan, abiHash: [UInt8; 64] -> MetadataSpan {
+    UIntSize(strings -> len) => start
+    strings -> push(115)
+    strings -> push(108)
+    strings -> push(103)
+    strings -> push(95)
+    abiHash -> each digit { strings -> push(digit) }
+    strings -> push(95)
+    UIntSize(0) => offset!
+    offset! < qualifiedName.length -> while {
+        strings[Int(qualifiedName.start + offset!)] => value
+        # Valid source identifiers contain BMP scalars. Emit one underscore for
+        # each non-ASCII scalar, matching the C# UTF-16 character sanitizer.
+        value < 128 or value >= 192 -> if {
+            (value >= 48 and value <= 57) or (value >= 65 and value <= 90) or (value >= 97 and value <= 122)
+                -> if { strings -> push(value) } else { strings -> push(95) }
+        }
+        offset! + 1 => offset!
+    }
+    MetadataSpan { start: start, length: UIntSize(strings -> len) - start }
+}
+
+# Call after declaration admission. Hash material, symbol construction and
+# strict consumer validation share one metadata model with the reader.
+public create exports: move [LibraryExport; ~], parameters: move [LibraryParameter; ~], strings: move [UInt8; ~], target: Text, libraryFile: Text -> Result<LibraryInterface, json.Error> {
+    target == "windows-x64" or target == "linux-x64"
+        -> unless { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return }
+    (libraryFile -> len) > 0 -> unless { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return }
+    UIntSize(0) => pathIndex!
+    pathIndex! < (libraryFile -> len) -> while {
+        libraryFile -> byte(pathIndex!) => value
+        value == 47 or value == 92 -> if { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: pathIndex! }) -> return }
+        pathIndex! + 1 => pathIndex!
+    }
+    strings -> producerShapeValid(exports, parameters)
+        -> unless { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return }
+    strings -> producerAbiHash(exports, parameters) => digest
+    strings => ownedStrings!
+    ownedStrings! -> storeMetadataText("sollang-c-v1") => abi
+    ownedStrings! -> storeMetadataText(target) => targetSpan
+    ownedStrings! -> storeMetadataText(libraryFile) => fileSpan
+    ownedStrings! -> storeMetadataHash(digest) => hashSpan
+    [LibraryExport; ~] => completedExports!
+    exports -> each exported {
+        ownedStrings! -> storeExportSymbol(exported.qualifiedName, digest) => symbol
+        LibraryExport { name: exported.name, qualifiedName: exported.qualifiedName, symbol: symbol,
+            parameterStart: exported.parameterStart, parameterCount: exported.parameterCount,
+            resultType: exported.resultType, signatureHash: MetadataSpan { start: 0, length: 0 } } => pending
+        ownedStrings! -> producerSignatureHash(pending, parameters) => signature
+        ownedStrings! -> storeMetadataHash(signature) => signatureSpan
+        completedExports! -> push(LibraryExport { name: pending.name, qualifiedName: pending.qualifiedName, symbol: pending.symbol,
+            parameterStart: pending.parameterStart, parameterCount: pending.parameterCount,
+            resultType: pending.resultType, signatureHash: signatureSpan })
+    }
+    emptyDocument() => document!
+    1 => document!.schema
+    abi => document!.abi
+    targetSpan => document!.target
+    fileSpan => document!.libraryFile
+    hashSpan => document!.abiHash
+    completedExports! => document!.exports
+    parameters => document!.parameters
+    ownedStrings! => document!.strings
+    Result<LibraryInterface, json.Error>.Ok(document!)
+}
+
 # The metadata model and JSON writer are shared with the strict reader. The
 # caller supplies its output budget; one byte is reserved for the final LF.
 public serialize document: ref LibraryInterface, maxOutputBytes: Int -> Result<[UInt8; ~], json.Error> {

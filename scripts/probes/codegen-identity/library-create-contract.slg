@@ -1,0 +1,38 @@
+import sollang.compiler.semantic.library_interfaces as interfaces
+import sys.file as file
+import sys.process as process
+
+check path: Text, target: Text, libraryFile: Text, badParameter: Bool, label: Text -> Unit uses Console, File {
+    path -> interfaces.readPath("windows-x64") => input
+    input.exports => exports
+    input.parameters => parameters!
+    input.strings => strings
+    badParameter -> if {
+        parameters![0] => first
+        interfaces.LibraryParameter { name: first.name, typeName: interfaces.MetadataSpan { start: UIntSize(strings -> len) + 1, length: 1 } } => parameters![0]
+    }
+    exports -> interfaces.create(parameters!, strings, target, libraryFile) -> when {
+        Ok(document) {
+            "$label=accepted" -> println
+            document -> interfaces.serialize(4096) -> when {
+                Ok(bytes) {
+                    bytes -> file.borrowBytes => owner
+                    "json=" -> print
+                    owner -> slice(UIntSize(0), owner -> len) -> print
+                    owner -> interfaces.parseSourceForTarget(target) => restored
+                    "roundtrip=$(restored.status)" -> println
+                }
+                Err(_) { "serialize=failed" -> println }
+            }
+        }
+        Err(_) { "$label=rejected" -> println }
+    }
+}
+
+main {
+    process.arguments() => arguments
+    arguments[1] -> check("windows-x64", "math.dll", false, "positive")
+    arguments[1] -> check("invalid", "math.dll", false, "target")
+    arguments[1] -> check("windows-x64", "../math.dll", false, "path")
+    arguments[1] -> check("windows-x64", "math.dll", true, "span")
+}
