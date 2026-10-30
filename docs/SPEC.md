@@ -6097,7 +6097,10 @@ Current backend:
   Module identities require strict UTF-8. Equal stable hashes are ordered by
   their complete identities using ordinal UTF-16 order; a hash tie alone is
   not a duplicate. An exact duplicate identity or a forged identity hash is
-  rejected.
+  rejected. Each LLVM fragment also requires strict UTF-8 after checksum and
+  padding validation, including scalars split across packed-word boundaries.
+  Empty fragments remain valid; malformed text is rejected before decoding or
+  merging a generation.
 - canonical self-host module interfaces retain the full parsed namespace as
   length-prefixed UTF-8 bytes in the schema-2 interface payload. Whitespace and
   comments do not participate in namespace identity. The namespace hash is a

@@ -45,7 +45,7 @@ public struct MergedCodegen {
     public status: Int
 }
 
-struct IdentityScalar {
+struct Utf8Scalar {
     value: Int
     byteLength: Int
 }
@@ -89,13 +89,26 @@ requiredWords byteLength: Int -> Int {
     wordLength!
 }
 
-identityScalar words: ref [UInt64; ~], start: Int, end: Int -> IdentityScalar {
-    IdentityScalar { value: -1, byteLength: 0 } => invalid
-    start < 0 or start >= end or end > (words -> len)
+utf8Byte words: ref [UInt64; ~], wordStart: Int, byteOffset: Int, packed: Bool -> UInt64 {
+    packed -> if {
+        byteOffset % 8 -> power256 => factor
+        words[wordStart + byteOffset / 8] / factor % 256
+    } else { words[wordStart + byteOffset] }
+}
+
+# Identity bytes occupy one word each; fragment bytes occupy little-endian words.
+# Both views use the same strict scalar rules without copying their payloads.
+utf8Scalar words: ref [UInt64; ~], wordStart: Int, start: Int, end: Int, packed: Bool -> Utf8Scalar {
+    Utf8Scalar { value: -1, byteLength: 0 } => invalid
+    start < 0 or start >= end
         -> if { invalid -> return }
-    words[start] > 255 -> if { invalid -> return }
-    Int(words[start]) => first
-    first < 128 -> if { IdentityScalar { value: first, byteLength: 1 } -> return }
+    packed -> if { end -> requiredWords } else { end } => storageWords
+    wordStart -> canRead(storageWords, words -> len)
+        -> unless { invalid -> return }
+    words -> utf8Byte(wordStart, start, packed) => firstWord
+    firstWord > 255 -> if { invalid -> return }
+    Int(firstWord) => first
+    first < 128 -> if { Utf8Scalar { value: first, byteLength: 1 } -> return }
     0 => width!
     0 => value!
     0 => minimum!
@@ -119,14 +132,14 @@ identityScalar words: ref [UInt64; ~], start: Int, end: Int -> IdentityScalar {
     width! == 0 or width! > end - start -> if { invalid -> return }
     1 => offset!
     offset! < width! -> while {
-        words[start + offset!] => next
+        words -> utf8Byte(wordStart, start + offset!, packed) => next
         next < 128 or next > 191 -> if { invalid -> return }
         value! * 64 + Int(next) - 128 => value!
         offset! + 1 => offset!
     }
     value! < minimum! or value! > 1114111 or (value! >= 55296 and value! <= 57343)
         -> if { invalid -> return }
-    IdentityScalar { value: value!, byteLength: width! }
+    Utf8Scalar { value: value!, byteLength: width! }
 }
 
 identityUtf8Valid words: ref [UInt64; ~], start: Int, length: Int -> Bool {
@@ -134,7 +147,21 @@ identityUtf8Valid words: ref [UInt64; ~], start: Int, length: Int -> Bool {
     start + length => end
     start => index!
     index! < end -> while {
-        words -> identityScalar(index!, end) => scalar
+        words -> utf8Scalar(0, index!, end, false) => scalar
+        scalar.value < 0 -> if { false -> return }
+        index! + scalar.byteLength => index!
+    }
+    true
+}
+
+packedUtf8Valid words: ref [UInt64; ~], wordStart: Int, byteLength: Int -> Bool {
+    byteLength < 0 -> if { false -> return }
+    byteLength -> requiredWords => storageWords
+    wordStart -> canRead(storageWords, words -> len)
+        -> unless { false -> return }
+    0 => index!
+    index! < byteLength -> while {
+        words -> utf8Scalar(wordStart, index!, byteLength, true) => scalar
         scalar.value < 0 -> if { false -> return }
         index! + scalar.byteLength => index!
     }
@@ -158,8 +185,8 @@ identityOrder words: ref [UInt64; ~], leftStart: Int, leftLength: Int, rightStar
     leftStart => left!
     rightStart => right!
     left! < leftEnd and right! < rightEnd -> while {
-        words -> identityScalar(left!, leftEnd) => a
-        words -> identityScalar(right!, rightEnd) => b
+        words -> utf8Scalar(0, left!, leftEnd, false) => a
+        words -> utf8Scalar(0, right!, rightEnd, false) => b
         a.value != b.value -> if {
             a.value -> ordinalFirstUnit => aFirst
             b.value -> ordinalFirstUnit => bFirst
@@ -450,6 +477,10 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                             words[fragmentStart! + fragmentWordLength! - 1] / paddingFactor != 0
                                 -> if { 7 => status! }
                         }
+                    status! == 0 -> if {
+                        words -> packedUtf8Valid(fragmentStart!, fragmentByteLength!)
+                            -> unless { 7 => status! }
+                    }
                     kind => previousKind!
                     fragmentStart! + fragmentWordLength! => index!
                 }

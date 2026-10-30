@@ -1794,6 +1794,11 @@ the complete identity in C# ordinal UTF-16 order. Keep valid hash collisions
 distinct from duplicate names and forged hashes, and share the same comparison
 between canonical encoding and validation.
 
+LLVM fragment payloads also require strict UTF-8 after checksum and padding
+validation. Decode scalars across packed-word boundaries and honor the declared
+byte length. Share scalar rules with identity decoding; valid empty fragments
+and supplementary scalars remain accepted.
+
 For UTF-8 grammar inputs, keep mapped `SourceText` owners alive and use the
 shared `source_decoding.utf8Text` borrowed view before parsing or hashing.
 Grammar source hashing normalizes the line endings specified in `SPEC.md`;
