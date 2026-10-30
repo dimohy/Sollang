@@ -5,7 +5,9 @@ import hashlib
 import json
 import shutil
 import struct
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from focused_verification_output import VerificationOutput, lifecycle_inputs, sha
@@ -14,6 +16,35 @@ from verification_fingerprints import managed_runtime_inputs
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "scripts/probes/numeric-context-cache"
+
+
+class CacheCaseBudget:
+    """Keep every stage of one cache case inside the fixed 180-second limit."""
+    seconds = 180
+
+    def __init__(self, row, clock=time.monotonic):
+        self.row, self.clock = row, clock
+        self.started = clock()
+        row["wholeCaseBudgetSeconds"] = self.seconds
+
+    def remaining(self, command, limit):
+        elapsed = self.clock() - self.started
+        self.row["wholeCaseElapsedSeconds"] = elapsed
+        if elapsed >= self.seconds:
+            raise subprocess.TimeoutExpired(command, self.seconds)
+        return min(limit, self.seconds - elapsed)
+
+    def run(self, execution, command, stdout, stderr):
+        original = execution.timeout
+        execution.timeout = self.remaining(command, original)
+        try:
+            return execution.run(command, stdout, stderr)
+        finally:
+            execution.timeout = original
+            self.row["wholeCaseElapsedSeconds"] = self.clock() - self.started
+
+    def finish(self):
+        self.remaining(["cache-case-completion", self.row["id"]], self.seconds)
 
 
 def generic_closure_inputs():
@@ -34,14 +65,16 @@ def verify_generic_closure(compiler, output, inputs, parent_result, compiler_kin
                                 reusable_directories=reusable_directories) as execution:
             helper, executable = control_output / "unrelated.slg", control_output / "probe.exe"
             for label, version in zip(("cold", "warm"), versions):
+                row = {"id": label, "status": "running"}
+                budget = CacheCaseBudget(row)
+                result["cases"].append(row)
                 shutil.copyfile(version, helper)
                 helper_hash = sha(helper)
-                row = {"id": label, "status": "running", "helperSha256": helper_hash}
-                result["cases"].append(row)
+                row["helperSha256"] = helper_hash
                 execution.save()
                 command = [str(compiler), "build", str(main_source), str(helper), "-o", str(executable),
                            "--llvm", str(ROOT / ".tools/llvm-22.1.8"), "--target", "windows-x64", "-O1"]
-                code = execution.run(command, control_output / f"{label}.build.stdout.log",
+                code = budget.run(execution, command, control_output / f"{label}.build.stdout.log",
                                      control_output / f"{label}.build.stderr.log")
                 stdout = (control_output / f"{label}.build.stdout.log").read_text(encoding="utf-8-sig")
                 stderr = (control_output / f"{label}.build.stderr.log").read_text(encoding="utf-8-sig")
@@ -49,7 +82,7 @@ def verify_generic_closure(compiler, output, inputs, parent_result, compiler_kin
                 execution.save()
                 if code != 0 or stderr.strip() or sha(helper) != helper_hash:
                     raise ValueError(f"GENERIC_CACHE_CLOSURE_BUILD_FAILED: {label}: {stderr}")
-                code = execution.run([str(executable)], control_output / f"{label}.run.stdout.log",
+                code = budget.run(execution, [str(executable)], control_output / f"{label}.run.stdout.log",
                                      control_output / f"{label}.run.stderr.log")
                 actual = (control_output / f"{label}.run.stdout.log").read_text(encoding="utf-8-sig").strip()
                 passed = (code == 0 and actual == expected
@@ -60,6 +93,7 @@ def verify_generic_closure(compiler, output, inputs, parent_result, compiler_kin
                     words = native_cache_words(control_output)
                     row["nativeAdmission"] = {"reused": words[5], "rejected": words[6], "uncached": words[7],
                                               "restorationExercised": words[5] > 0}
+                budget.finish()
                 row.update(status="passed" if passed else "failed", passed=passed,
                            runExit=code, stdoutMatchesExpected=actual == expected)
                 execution.save()
@@ -230,17 +264,18 @@ def verify_link_failure(compiler, output, inputs, parent_result, main_source, pr
     try:
         with VerificationOutput(ROOT, control, [*inputs, clang, main_source, provider, cache, executable, contract], result,
                                 reusable_directories=reusable_directories) as execution:
+            row = {"id": "existing-cache-link-failure", "status": "running", "expectedBuildExit": 42}
+            budget = CacheCaseBudget(row)
+            result["cases"].append(row)
             source, fake_llvm = control / "fail-clang.c", control / "fake-llvm"
             (fake_llvm / "bin").mkdir(parents=True)
             fake_clang = fake_llvm / "bin/clang.exe"
             source.write_text('#include <stdio.h>\nint main(void) { fputs("C476 injected linker failure\\n", stderr); return 42; }\n', encoding="utf-8")
-            code = execution.run([str(clang), "-x", "c", str(source), "-o", str(fake_clang)],
+            code = budget.run(execution, [str(clang), "-x", "c", str(source), "-o", str(fake_clang)],
                                  control / "prepare.stdout", control / "prepare.stderr")
             if code or (control / "prepare.stderr").read_bytes():
                 raise ValueError("NATIVE_CACHE_FAILURE_CONTROL_PREPARATION")
-            row = {"id": "existing-cache-link-failure", "status": "running", "expectedBuildExit": 42}
-            result["cases"].append(row)
-            code = execution.run([str(compiler), "build", str(main_source), str(provider), "-o", str(executable),
+            code = budget.run(execution, [str(compiler), "build", str(main_source), str(provider), "-o", str(executable),
                                   "--llvm", str(fake_llvm), "--target", "windows-x64"],
                                  control / "build.stdout", control / "build.stderr")
             stdout = (control / "build.stdout").read_text(encoding="utf-8-sig")
@@ -253,8 +288,9 @@ def verify_link_failure(compiler, output, inputs, parent_result, main_source, pr
                     or "sollang: native linker failed with exit code 42" not in stdout
                     or "[semantic-cache]" in stdout or originals != after):
                 raise ValueError("NATIVE_CACHE_FAILED_LINK_PUBLISHED_OR_NOT_REACHED")
-            code = execution.run([str(executable)], control / "run.stdout", control / "run.stderr")
+            code = budget.run(execution, [str(executable)], control / "run.stdout", control / "run.stderr")
             actual = (control / "run.stdout").read_text(encoding="utf-8-sig").strip()
+            budget.finish()
             row.update(runExit=code, passed=code == 0 and actual == expected and not (control / "run.stderr").read_bytes())
             row["status"] = "passed" if row["passed"] else "failed"
             if not row["passed"]:
@@ -301,21 +337,23 @@ def main():
         shutil.copyfile(versions[0], main_source)
         baseline_annotations, baseline_stderr = None, None
         for index, label in enumerate(("cold", "warm")):
+            row = {"id": label, "status": "running"}
+            budget = CacheCaseBudget(row)
+            result["cases"].append(row)
             shutil.copyfile(versions[index + 1], provider)
             source_hashes = {str(path): sha(path) for path in (main_source, provider)}
             executable = output / "probe.exe"
-            row = {"id": label, "status": "running", "sourceHashes": source_hashes}
-            result["cases"].append(row)
+            row["sourceHashes"] = source_hashes
             execution.save()
             command = [str(compiler), "build", str(main_source), str(provider), "-o", str(executable),
                        "--llvm", str(ROOT / ".tools/llvm-22.1.8"), "--target", "windows-x64"]
-            build_exit = execution.run(command, output / f"{label}.build.stdout.log",
+            build_exit = budget.run(execution, command, output / f"{label}.build.stdout.log",
                                        output / f"{label}.build.stderr.log")
             stdout = (output / f"{label}.build.stdout.log").read_text(encoding="utf-8-sig")
             stderr = (output / f"{label}.build.stderr.log").read_text(encoding="utf-8-sig")
             if build_exit != 0 or source_hashes != {str(path): sha(path) for path in (main_source, provider)}:
                 raise ValueError(f"CONTEXTUAL_NUMERIC_BUILD_FAILED: {label}: {stderr}")
-            if execution.run([str(executable)], output / f"{label}.run.stdout.log",
+            if budget.run(execution, [str(executable)], output / f"{label}.run.stdout.log",
                              output / f"{label}.run.stderr.log") != 0:
                 raise ValueError(f"CONTEXTUAL_NUMERIC_RUN_FAILED: {label}")
             actual = (output / f"{label}.run.stdout.log").read_text(encoding="utf-8-sig").strip()
@@ -337,6 +375,7 @@ def main():
                 raise ValueError(f"CONTEXTUAL_NUMERIC_RESTORATION_CHANGED: {stdout}")
             if index and (annotations != baseline_annotations or stderr != baseline_stderr):
                 raise ValueError(f"CONTEXTUAL_NUMERIC_RESTORATION_CHANGED: {stdout}")
+            budget.finish()
             row.update(status="passed", passed=True, runStdout=actual, numericAnnotations=annotations,
                        mainModule=main_module, expectedBindings={name: bindings[name] for name in expected_bindings},
                        buildStderr=stderr, semanticStatus=[line for line in stdout.splitlines()
