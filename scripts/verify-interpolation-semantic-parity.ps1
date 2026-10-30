@@ -325,7 +325,8 @@ if ($unknownScopeComparison.status -cne 'compared-before-slg-edit' -or
 $unknownScopeSources = @('src/Sollang.Compiler/Semantics/SemanticCompiler.cs', 'selfhost/semantic/calls.slg',
     'selfhost/semantic/call_resolution_sources.slg', 'selfhost/ir/interpolation.slg',
     'selfhost/semantic/interpolation_inference.slg', 'selfhost/llvm/text/context_prepare.slg',
-    'selfhost/llvm/emitter/diagnostics.slg')
+    'selfhost/llvm/emitter/diagnostics.slg', 'selfhost/semantic/ownership_check.slg',
+    'selfhost/ir/typed.slg', 'selfhost/llvm/text/foundation.slg')
 if (@($unknownScopeComparison.sourceHashes.PSObject.Properties).Count -ne $unknownScopeSources.Count) {
     throw 'CURRENT_UNKNOWN_SOURCE_COMPARISON_INVALID'
 }
