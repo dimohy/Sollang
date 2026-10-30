@@ -1,0 +1,39 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.reference_prepared_type_ids as identities
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        argument! + 1 => argument!
+    }
+    paths! -> semanticContext.prepareFiles => prepared
+    prepared -> identities.register -> when {
+        Err(error) {
+            error -> when {
+                Nominal(reason) { "nominal" -> println }
+                Synthetic(reason) {
+                    reason -> when {
+                        InvalidType => "invalid-type"
+                        InvalidShape => "invalid-shape"
+                        Cycle => "cycle"
+                        TypeIdOverflow => "overflow"
+                    } -> println
+                }
+                InvalidSource { "invalid-source" -> println }
+            }
+            process.exit(1)
+        }
+        Ok(registered) {
+            0 => index!
+            index! < (registered.ids -> len) -> while {
+                registered.ids[index!] >= 0 -> if { "$(index!)\t$(registered.ids[index!])" -> println }
+                index! + 1 => index!
+            }
+            "next\t$(registered.nextTypeId)" -> println
+        }
+    }
+}

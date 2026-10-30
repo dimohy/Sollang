@@ -1,0 +1,34 @@
+import sollang.compiler.semantic.context as semanticContext
+import sys.process as process
+import syntax.generated.slg as grammar
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        argument! + 1 => argument!
+    }
+    paths! -> semanticContext.prepareFiles => prepared
+    prepared.semantic.references -> each reference {
+        reference.typeAst >= 0 -> if {
+            prepared.package.ranges[reference.sourceModule] => range
+            prepared.package.nodes[range.astStart + reference.typeAst] => annotation
+            annotation.parent < 0 or prepared.package.nodes[range.astStart + annotation.parent].kind != 12
+                -> if {
+                    annotation.parent => owner!
+                    owner! >= 0 and prepared.package.nodes[range.astStart + owner!].kind != 29
+                        -> while { prepared.package.nodes[range.astStart + owner!].parent => owner! }
+                    owner! >= 0 -> if {
+                        prepared.package.nodes[range.astStart + owner!] => method
+                        prepared.package.tokens[range.tokenStart + method.payloadToken] => nameToken
+                        prepared.package.sources[reference.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+                        prepared.package.sources[reference.sourceModule] -> slice(annotation.start, annotation.length) => text
+                        annotation.operatorKind == grammar.tokenIdArrow() => returns
+                        "$(reference.sourceModule)\t$(owner!)\t$name\t$returns\t$(reference.typeId)\t$text" -> println
+                    }
+                }
+        }
+    }
+}

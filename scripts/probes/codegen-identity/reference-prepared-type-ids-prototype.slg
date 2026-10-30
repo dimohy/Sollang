@@ -1,0 +1,215 @@
+namespace sollang.compiler.semantic.reference_prepared_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.reference_type_ids as nominal
+import sollang.compiler.semantic.reference_synthetic_type_ids as synthetic
+import sys.file as file
+import syntax.generated.slg as grammar
+
+# Current source facts feed the same research registry that was checked against
+# C# metadata. Function-declaration registration and production ABI consumption
+# are separate pending steps; this API covers the semantic constructor only.
+public enum Error { Nominal(nominal.Error), Synthetic(synthetic.Error), InvalidSource }
+
+struct TraitUse {
+    typeId: Int
+    start: UIntSize
+    returns: Bool
+}
+
+referencesAssociated prepared: ref semanticContext.SemanticSnapshot, module: Int, traitSymbol: Int, annotation: Int -> Bool {
+    prepared.package.ranges[module] => range
+    prepared.package.sources[module] -> slice(0, prepared.package.sources[module] -> len) => source
+    prepared.package.nodes[range.astStart + annotation] => node
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        prepared.package.symbols[range.symbolStart + symbolIndex!] => associated
+        associated.kind == 28 and associated.parent == traitSymbol and associated.nameToken >= 0
+            -> if {
+                prepared.package.tokens[range.tokenStart + associated.nameToken] => nameToken
+                source -> slice(nameToken.span.start, nameToken.span.length) => name
+                node.firstToken => tokenIndex!
+                tokenIndex! < node.firstToken + node.tokenCount
+                    -> while {
+                        prepared.package.tokens[range.tokenStart + tokenIndex!] => token
+                        token.kind == grammar.tokenIdIdentifier()
+                            and (source -> slice(token.span.start, token.span.length)) == name
+                            -> if { true -> return }
+                        tokenIndex! + 1 => tokenIndex!
+                    }
+            }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    false
+}
+
+appendTraitRoots prepared: ref semanticContext.SemanticSnapshot, roots: mut [Int; ~] -> Unit {
+    prepared.package.ranges -> each range {
+        0 => methodIndex!
+        methodIndex! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + methodIndex!] => method
+            method.kind == 29 and method.parent >= 0 -> if {
+                [TraitUse; ~] => uses!
+                [Bool; ~] => selected!
+                prepared.semantic.references -> each reference {
+                    reference.sourceModule == range.sourceModule and reference.typeAst >= 0
+                        -> if {
+                            prepared.package.nodes[range.astStart + reference.typeAst] => annotation
+                            annotation.parent < 0 or prepared.package.nodes[range.astStart + annotation.parent].kind != 12
+                                -> if {
+                                    annotation.parent => owner!
+                                    owner! >= 0 and prepared.package.nodes[range.astStart + owner!].kind != 29
+                                        -> while { prepared.package.nodes[range.astStart + owner!].parent => owner! }
+                                    owner! == method.astNode
+                                        and not (prepared -> referencesAssociated(range.sourceModule, method.parent, reference.typeAst))
+                                        -> if {
+                                            uses! -> push(TraitUse {
+                                                typeId: reference.typeId
+                                                start: annotation.start
+                                                returns: annotation.operatorKind == grammar.tokenIdArrow()
+                                            })
+                                            selected! -> push(false)
+                                        }
+                                }
+                        }
+                }
+                # BindTraits parses the return first, then parameters in source
+                # order, independently of compact AST/type-reference order.
+                [true, false] -> each returns {
+                    0 => count!
+                    count! < (uses! -> len) -> while {
+                        -1 => chosen!
+                        0 => index!
+                        index! < (uses! -> len) -> while {
+                            not selected![index!] and ((returns and uses![index!].returns) or (not returns and not uses![index!].returns))
+                                -> if {
+                                    chosen! < 0 -> if { index! => chosen! } else {
+                                        uses![index!].start < uses![chosen!].start -> if { index! => chosen! }
+                                    }
+                                }
+                            index! + 1 => index!
+                        }
+                        chosen! >= 0 -> if {
+                            roots -> push(uses![chosen!].typeId)
+                            true => selected![chosen!]
+                        }
+                        count! + 1 => count!
+                    }
+                }
+            }
+            methodIndex! + 1 => methodIndex!
+        }
+    }
+}
+
+public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> {
+    [nominal.NominalDeclaration; ~] => declarations!
+    [UInt8; ~] => strings!
+    [Int; ~] => declarationBySymbol!
+    prepared.package.symbols -> each symbol { declarationBySymbol! -> push(-1) }
+    prepared.package.ranges -> each range {
+        prepared.package.sources[range.sourceModule] -> slice(0, prepared.package.sources[range.sourceModule] -> len) => source
+        prepared.modules[range.sourceModule] => identity
+        0 => index!
+        index! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + index!] => symbol
+            (symbol.kind == 3 or symbol.kind == 4)
+                and symbol.flags / 512 % 2 == 0 and symbol.flags / 65536 % 2 == 0
+                -> if {
+                    UIntSize(strings! -> len) => start
+                    source -> diagnostics.appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, strings!)
+                    declarations! -> len => declarationBySymbol![range.symbolStart + index!]
+                    declarations! -> push(nominal.NominalDeclaration { kind: symbol.kind, nameStart: start, nameLength: UIntSize(strings! -> len) - start })
+                }
+            index! + 1 => index!
+        }
+    }
+    declarations! -> nominal.registerNominals(strings!) -> when {
+        Err(error) { Result<synthetic.Identities, Error>.Err(Error.Nominal(error)) -> return }
+        Ok(named) { named }
+    } => named
+    declarations! -> nominal.registerNominalBoxes(strings!) -> when {
+        Err(error) { Result<synthetic.Identities, Error>.Err(Error.Nominal(error)) -> return }
+        Ok(boxed) { boxed }
+    } => boxed
+    [0, 1, 2, 4, 5, 2, 6, 6, 7, 8, 9, 10, 11, 12, 13, 15, 14, 16, 17, 18, 18, 19, 19, 3, 31, 43] => builtins
+    [Int; ~] => seeds!
+    [synthetic.Recipe; ~] => recipes!
+    prepared.semantic.types -> each type {
+        -1 => seed!
+        type.kind == 1 -> if {
+            type.origin == 1 and type.symbol >= 0 and type.symbol < (builtins -> len)
+                -> if { builtins[type.symbol] => seed! }
+            (type.origin == 0 or type.origin == 2) and type.module >= 0 and type.module < (prepared.package.ranges -> len)
+                -> if {
+                    prepared.package.ranges[type.module] => range
+                    type.symbol >= 0 and type.symbol < range.symbolCount
+                        -> if {
+                            declarationBySymbol![range.symbolStart + type.symbol] => declaration
+                            declaration >= 0 -> if { named.ids[declaration] => seed! }
+                        }
+                }
+        }
+        seeds! -> push(seed!)
+        type.kind -> when {
+            == 2 => synthetic.Kind.Slice
+            == 3 => synthetic.Kind.Dynamic
+            == 4 => synthetic.Kind.Fixed
+            == 8 => synthetic.Kind.Reference
+            == 7 {
+                type.origin == 4 and type.symbol == 0 -> if { synthetic.Kind.Option } else {
+                    type.origin == 4 and type.symbol == 1 -> if { synthetic.Kind.Result } else { synthetic.Kind.Named }
+                }
+            }
+            else => synthetic.Kind.Named
+        } => kind
+        recipes! -> push(synthetic.Recipe {
+            kind: kind
+            first: type.first
+            second: type.kind == 7 and type.origin == 4 and type.symbol == 1
+                -> if { type.second } else { -1 }
+            length: type.kind == 4 -> if { type.length } else { 0 }
+        })
+    }
+    # These canonical runtime aliases are reserved by BuildTypeDefinitions
+    # before all field roots, and share their IDs with Result annotations.
+    [
+    synthetic.Shape { kind: synthetic.Kind.Slice, first: 2, second: -1, length: 0, identity: 20 },
+    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 2, second: -1, length: 0, identity: 23 },
+    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 7, second: -1, length: 0, identity: 36 },
+    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 39, second: -1, length: 0, identity: 40 },
+    synthetic.Shape { kind: synthetic.Kind.Fixed, first: 7, second: -1, length: 12, identity: 47 },
+    synthetic.Shape { kind: synthetic.Kind.Fixed, first: 7, second: -1, length: 16, identity: 48 },
+    synthetic.Shape { kind: synthetic.Kind.Fixed, first: 7, second: -1, length: 32, identity: 49 },
+    synthetic.Shape { kind: synthetic.Kind.Result, first: 37, second: 1, length: 0, identity: 41 },
+    synthetic.Shape { kind: synthetic.Kind.Result, first: 40, second: 1, length: 0, identity: 42 }; ~] => aliases
+    [Int; ~] => references!
+    prepared.package.nodes -> each node { references! -> push(-1) }
+    prepared.semantic.references -> each reference {
+        reference.typeAst >= 0 -> if {
+            prepared.package.ranges[reference.sourceModule] => range
+            reference.typeId => references![range.astStart + reference.typeAst]
+        }
+    }
+    [Int; ~] => roots!
+    [3, 4] -> each ownerKind {
+        prepared.package.ranges -> each range {
+            0 => index!
+            index! < range.symbolCount -> while {
+                prepared.package.symbols[range.symbolStart + index!] => symbol
+                (symbol.kind == 26 or symbol.kind == 27) and symbol.parent >= 0 and symbol.typeNode >= 0
+                    -> if {
+                        prepared.package.symbols[range.symbolStart + symbol.parent] => parent
+                        parent.kind == ownerKind -> if { roots! -> push(references![range.astStart + symbol.typeNode]) }
+                    }
+                index! + 1 => index!
+            }
+        }
+    }
+    prepared -> appendTraitRoots(roots!)
+    recipes! -> synthetic.register(seeds!, aliases, roots!, boxed.nextTypeId) -> when {
+        Err(error) { Result<synthetic.Identities, Error>.Err(Error.Synthetic(error)) }
+        Ok(registered) { Result<synthetic.Identities, Error>.Ok(registered) }
+    }
+}
