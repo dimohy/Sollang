@@ -933,6 +933,94 @@ class ImplementationUnitCountTests(unittest.TestCase):
             MODULE.known_implementation_unit_counts(progress)
 
 
+AUDIT_SPEC = importlib.util.spec_from_file_location(
+    "source_connections", Path(__file__).with_name("audit-structural-source-connections.py"))
+AUDIT = importlib.util.module_from_spec(AUDIT_SPEC)
+AUDIT_SPEC.loader.exec_module(AUDIT)
+
+
+class SourceConnectionAuditTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        scopes = {}
+        rows = []
+        for phase in MODULE.PHASE_SCOPES:
+            names = {"managed": f"src/Sollang.Compiler/{phase}/Probe.cs",
+                     "selfhost": f"selfhost/{phase}/probe.slg"}
+            scopes[phase] = {side: [str(Path(name).parent).replace("\\", "/")]
+                             for side, name in names.items()}
+            for name in names.values():
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("source", encoding="utf-8")
+            decision = {"id": phase + ".provider", "status": "complete",
+                        **{field: field + " comparison" for field in ("structure", "branches", "logic", "diagnostics")},
+                        **{side + "Sources": [name] for side, name in names.items()}}
+            rows.append({"phase": phase, "status": "partial", "decisionInventory": {
+                "status": "pending", "sourceScopes": copy.deepcopy(scopes[phase]),
+                "requiredDecisionIds": [decision["id"]], "decisions": [decision]}})
+        self.scopes = scopes
+        self.detail = {"phaseProgress": rows, "promotionRequirements": {
+            "sourceExtensions": {"managed": ".cs", "selfhost": ".slg"},
+            "decisionFields": ["structure", "branches", "logic", "diagnostics"]}}
+        self.inventory = rows[-1]["decisionInventory"]
+        self.decision = self.inventory["decisions"][0]
+        self.patcher = patch.object(AUDIT, "PHASE_SCOPES", scopes)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def audit(self):
+        return AUDIT.audit_source_connections(self.detail, self.root)
+
+    def test_all_connections_grant_no_phase_or_execution_credit(self):
+        report = self.audit()
+        self.assertEqual((report["completed"], report["total"]), (6, 6))
+        self.assertEqual(report["compilerExecutions"], 0)
+        self.assertFalse(report["claimsPhaseComplete"])
+        self.assertFalse(report["claimsGoalComplete"])
+        self.assertTrue(all(row["status"] == "partial" for row in self.detail["phaseProgress"]))
+
+    def test_new_source_is_reported_missing_without_promoting_phase(self):
+        path = self.root / self.scopes["llvm-generation"]["managed"][0] / "Missing.cs"
+        path.write_text("unassociated source", encoding="utf-8")
+        report = self.audit()
+        self.assertEqual(report["completed"], 5)
+        self.assertEqual(report["phases"][-1]["coverage"]["managed"]["missing"],
+                         [path.relative_to(self.root).as_posix()])
+
+    def test_pending_phase_cannot_hide_out_of_scope_source(self):
+        self.decision["selfhostSources"] = ["selfhost/control-flow/probe.slg"]
+        with self.assertRaisesRegex(AUDIT.DETAIL.PhaseClosureError, "outside scope"):
+            self.audit()
+
+    def test_scope_cannot_be_narrowed(self):
+        self.inventory["sourceScopes"]["managed"] = self.decision["managedSources"]
+        with self.assertRaisesRegex(AUDIT.DETAIL.PhaseClosureError, "cannot be narrowed"):
+            self.audit()
+
+    def test_duplicate_identity_is_rejected(self):
+        self.inventory["decisions"].append(copy.deepcopy(self.decision))
+        with self.assertRaisesRegex(AUDIT.DETAIL.PhaseClosureError, "duplicate decision identity"):
+            self.audit()
+
+    def test_missing_required_decision_is_rejected(self):
+        self.inventory["requiredDecisionIds"].append("missing")
+        with self.assertRaisesRegex(AUDIT.DETAIL.PhaseClosureError, "inventory differs"):
+            self.audit()
+
+    def test_missing_comparison_is_rejected(self):
+        self.decision["logic"] = " "
+        with self.assertRaisesRegex(AUDIT.DETAIL.PhaseClosureError, "missing decision comparison"):
+            self.audit()
+
+    def test_duplicate_source_is_rejected(self):
+        self.decision["managedSources"] *= 2
+        with self.assertRaisesRegex(AUDIT.DETAIL.PhaseClosureError, "duplicate decision source"):
+            self.audit()
+
+
 class PhaseArtifactPathTests(unittest.TestCase):
     def test_owned_external_binary_and_tampering(self):
         with tempfile.TemporaryDirectory() as directory:
