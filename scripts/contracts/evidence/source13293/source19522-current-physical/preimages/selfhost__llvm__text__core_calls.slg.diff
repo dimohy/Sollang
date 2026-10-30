@@ -1,0 +1,28 @@
+--- selfhost/llvm/text/core_calls.slg@b8a40eb9cb9dd4741c696dbf699869ae7f4bbf3f
++++ selfhost/llvm/text/core_calls.slg
+@@ -3847,6 +3847,11 @@
+ }
+ 
+ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    callIndex -> emitLengthValue(ownerIndex, context, state)
++    callIndex -> emitReadonlyScalarTemporaryDrop(-1, ownerIndex, context, state)
++}
++
++emitLengthValue callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[callIndex] => call
+     context.ir[call.operand0] => base
+     base -> integerNodeWidth(context, state) => lengthReceiverIntegerWidth
+@@ -4076,6 +4081,13 @@
+ }
+ 
+ emitWhileCollectionSizeIntrinsic request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    request -> emitWhileCollectionSizeValue(context, state)
++    context.ir[request.nodeIndex].opcode == -201 -> if {
++        request.nodeIndex -> emitReadonlyScalarTemporaryDrop(request.whileIndex, request.ownerIndex, context, state)
++    }
++}
++
++emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[request.nodeIndex] => call
+     context.ir[call.operand0] => base
+     call.opcode == -236 => capacity
