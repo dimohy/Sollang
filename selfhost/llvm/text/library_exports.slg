@@ -1,0 +1,145 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.semantic.library_interfaces as libraryInterfaces
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+# The selection owns names and keeps validated IR indexes as reachability roots.
+# The caller supplies the actual stdlib source interval from its preparation
+# request; namespace spelling is never used to infer source provenance.
+public struct LibraryDeclarations {
+    public functions: [Int; ~]
+    public qualifiedNames: [libraryInterfaces.MetadataSpan; ~]
+    public memberNames: [libraryInterfaces.MetadataSpan; ~]
+    public strings: [UInt8; ~]
+}
+
+appendLibraryBytes source: Text, start: UIntSize, length: UIntSize, bytes: mut [UInt8; ~] -> Unit {
+    UIntSize(0) => offset!
+    offset! < length -> while {
+        bytes -> push(source -> byte(start + offset!))
+        offset! + 1 => offset!
+    }
+}
+
+libraryNamePrecedes bytes: ref [UInt8; ~], left: libraryInterfaces.MetadataSpan, right: libraryInterfaces.MetadataSpan -> Bool {
+    UIntSize(0) => offset!
+    offset! < left.length and offset! < right.length
+        -> while {
+            bytes[Int(left.start + offset!)] => a
+            bytes[Int(right.start + offset!)] => b
+            a != b -> if { a < b -> return }
+            offset! + 1 => offset!
+        }
+    left.length < right.length
+}
+
+public collectLibraryDeclarations context: ref emitterContext.EmitContext, standardLibrarySourceStart: Int, standardLibrarySourceCount: Int -> LibraryDeclarations {
+    context.sources -> collectLibraryDeclarationsFrom(context.ranges, context.tokens, context.symbols, context.modules, context.ir, standardLibrarySourceStart, standardLibrarySourceCount)
+}
+
+public collectLibraryDeclarationsFrom sources: ref [Text; ~], ranges: ref [analysis.SourceAnalysisRange; ~], tokens: ref [syntax.SyntaxToken; ~], sourceSymbols: ref [symbols.Symbol; ~], identities: ref [modules.ModuleIdentity; ~], ir: ref [typedIr.TypedIrNode; ~], standardLibrarySourceStart: Int, standardLibrarySourceCount: Int -> LibraryDeclarations {
+    [Int; ~] => functions!
+    [libraryInterfaces.MetadataSpan; ~] => qualifiedNames!
+    [libraryInterfaces.MetadataSpan; ~] => memberNames!
+    [UInt8; ~] => strings!
+    0 => functionIndex!
+    functionIndex! < (ir -> len) -> while {
+        ir[functionIndex!] => function
+        function.kind == 0 and function.flags / 4 % 2 == 1
+            and function.flags / 128 % 2 == 0
+            and function.sourceModule >= 0 and function.sourceModule < (ranges -> len)
+            and not (function.sourceModule >= standardLibrarySourceStart
+            and function.sourceModule < standardLibrarySourceStart + standardLibrarySourceCount)
+            -> if {
+                ranges[function.sourceModule] => range
+                sourceSymbols[range.symbolStart + function.symbol] => symbol
+                symbol.parent => ancestor!
+                false => local!
+                ancestor! >= 0 -> while {
+                    sourceSymbols[range.symbolStart + ancestor!] => parent
+                    parent.kind == 7 -> if { true => local! }
+                    parent.parent => ancestor!
+                }
+                false => duplicate!
+                functions! -> each selected {
+                    ir[selected] => previous
+                    previous.sourceModule == function.sourceModule and previous.symbol == function.symbol
+                        -> if { true => duplicate! }
+                }
+                not local! and not duplicate! -> if {
+                    sources[function.sourceModule] => source
+                    UIntSize(strings! -> len) => nameStart
+                    0 => moduleIndex!
+                    moduleIndex! < (identities -> len) -> while {
+                        identities[moduleIndex!] => identity
+                        identity.sourceIndex == function.sourceModule and identity.pathLength > 0
+                            -> if {
+                                range.tokenStart => tokenIndex!
+                                tokenIndex! < range.tokenStart + range.tokenCount
+                                    -> while {
+                                        tokens[tokenIndex!] => token
+                                        token.span.start >= identity.pathStart
+                                            and token.span.start < identity.pathStart + identity.pathLength
+                                            and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                                            -> if { source -> appendLibraryBytes(token.span.start, token.span.length, strings!) }
+                                        tokenIndex! + 1 => tokenIndex!
+                                    }
+                                strings! -> push(46)
+                            }
+                        moduleIndex! + 1 => moduleIndex!
+                    }
+                    symbol.nameToken => nameToken!
+                    UIntSize(strings! -> len) => memberStart!
+                    true => more!
+                    more! -> while {
+                        tokens[range.tokenStart + nameToken!] => token
+                        UIntSize(strings! -> len) => memberStart!
+                        source -> appendLibraryBytes(token.span.start, token.span.length, strings!)
+                        nameToken! + 1 => next!
+                        next! < range.tokenCount
+                            and (tokens[range.tokenStart + next!].kind == grammar.triviaIdWhitespace()
+                            or tokens[range.tokenStart + next!].kind == grammar.triviaIdComment())
+                            -> while { next! + 1 => next! }
+                        next! < range.tokenCount and tokens[range.tokenStart + next!].kind == grammar.tokenIdDot()
+                            -> if {
+                                strings! -> push(46)
+                                next! + 1 => next!
+                                next! < range.tokenCount
+                                    and (tokens[range.tokenStart + next!].kind == grammar.triviaIdWhitespace()
+                                    or tokens[range.tokenStart + next!].kind == grammar.triviaIdComment())
+                                    -> while { next! + 1 => next! }
+                                next! => nameToken!
+                            } else { false => more! }
+                    }
+                    UIntSize(strings! -> len) => nameEnd
+                    libraryInterfaces.MetadataSpan { start: nameStart, length: nameEnd - nameStart } => qualifiedName
+                    libraryInterfaces.MetadataSpan { start: memberStart!, length: nameEnd - memberStart! } => memberName
+                    functions! -> push(functionIndex!)
+                    qualifiedNames! -> push(qualifiedName)
+                    memberNames! -> push(memberName)
+                    (functions! -> len) - 1 => position!
+                    position! > 0 and (strings! -> libraryNamePrecedes(qualifiedNames![position!], qualifiedNames![position! - 1]))
+                        -> while {
+                            functions![position! - 1] => previousFunction
+                            qualifiedNames![position! - 1] => previousName
+                            memberNames![position! - 1] => previousMember
+                            functions![position!] => functions![position! - 1]
+                            qualifiedNames![position!] => qualifiedNames![position! - 1]
+                            memberNames![position!] => memberNames![position! - 1]
+                            previousFunction => functions![position!]
+                            previousName => qualifiedNames![position!]
+                            previousMember => memberNames![position!]
+                            position! - 1 => position!
+                        }
+                }
+            }
+        functionIndex! + 1 => functionIndex!
+    }
+    LibraryDeclarations { functions: functions!, qualifiedNames: qualifiedNames!, memberNames: memberNames!, strings: strings! }
+}

@@ -1,0 +1,51 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.text as llvm
+import sys.file as file
+
+functionNode moduleIndex: Int, symbolIndex: Int, flags: Int -> typedIr.TypedIrNode => typedIr.TypedIrNode {
+    kind: 0, parent: -1, sourceModule: moduleIndex, astNode: 0
+    symbol: symbolIndex, targetModule: -1, typeOrigin: 1, typeModule: 1
+    typeSymbol: 2, typeId: 2, typeKind: 1, typeFlags: 0
+    payloadToken: -1, opcode: 0, operand0: -1, operand1: -1
+    nextOperand: -1, flags: flags
+}
+
+main {
+    ["public standard value: Int32 -> Int32 { value }\n",
+    "namespace z # namespace trivia\npublic last value: Int32 -> Int32 { value }\npublic extra.member value: Int32 -> Int32 { value }\n",
+    "namespace a\npublic first value: Int32 -> Int32 { value }\nhidden value: Int32 -> Int32 { value }\n"; ~] => sources
+    sources -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities
+    [typedIr.TypedIrNode; ~] => ir!
+    0 => moduleIndex!
+    moduleIndex! < (package.ranges -> len) -> while {
+        package.ranges[moduleIndex!] => range
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => symbol
+            symbol.kind == 7 -> if {
+                ir! -> push(moduleIndex! -> functionNode(symbolIndex!, symbol.flags))
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        moduleIndex! + 1 => moduleIndex!
+    }
+    # A later specialized copy of an already selected declaration is not an export.
+    ir! -> push(ir![1])
+    sources -> llvm.collectLibraryDeclarationsFrom(package.ranges, package.tokens, package.symbols, identities, ir!, 0, 1) => selected
+    selected.strings -> file.borrowBytes => names
+    "count=$(selected.functions -> len)" -> println
+    0 => index!
+    index! < (selected.functions -> len) -> while {
+        selected.qualifiedNames[index!] => qualified
+        selected.memberNames[index!] => member
+        names -> slice(qualified.start, qualified.length) -> print
+        "|" -> print
+        names -> slice(member.start, member.length) -> println
+        index! + 1 => index!
+    }
+    sources -> llvm.collectLibraryDeclarationsFrom(package.ranges, package.tokens, package.symbols, identities, ir!, 0, Int(sources -> len)) => empty
+    "all-stdlib=$(empty.functions -> len)" -> println
+}

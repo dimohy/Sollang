@@ -17,6 +17,7 @@ $fragmentPaths = @(
     "selfhost/llvm/text/entry_expressions.slg"
     "selfhost/llvm/text/core_prepare.slg"
     "selfhost/llvm/text/foundation.slg"
+    "selfhost/llvm/text/library_exports.slg"
     "selfhost/llvm/text/text_literals.slg"
     "selfhost/llvm/text/native_handles.slg"
     "selfhost/llvm/text/entrypoints.slg"
