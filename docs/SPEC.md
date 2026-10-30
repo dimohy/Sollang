@@ -6117,7 +6117,8 @@ Current backend:
   full module identities, the schema-1 per-fragment and envelope checksums, and is
   atomically replaced only after a successful link. A corrupt or incompatible
   generation is reported and rebuilt; cached and clean LLVM bytes must match.
-  Module identities require strict UTF-8. Equal stable hashes are ordered by
+  Module identities require strict UTF-8 and at most 1,048,576 encoded bytes.
+  The global module may retain its empty identity. Equal stable hashes are ordered by
   their complete identities using ordinal UTF-16 order; a hash tie alone is
   not a duplicate. An exact duplicate identity or a forged identity hash is
   rejected. Each LLVM fragment also requires strict UTF-8 after checksum and

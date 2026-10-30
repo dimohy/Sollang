@@ -1803,7 +1803,8 @@ after execution. A changed producer starts a new verification epoch; never
 combine cases from different compiler hashes into one current proof.
 
 Persistent codegen units retain complete UTF-8 module identities. Validate the
-encoding before comparing identities. A stable hash orders buckets; ties use
+encoding and the C# byte-length limit before comparing identities; retain the
+global module's valid empty identity. A stable hash orders buckets; ties use
 the complete identity in C# ordinal UTF-16 order. Keep valid hash collisions
 distinct from duplicate names and forged hashes, and share the same comparison
 between canonical encoding and validation.
