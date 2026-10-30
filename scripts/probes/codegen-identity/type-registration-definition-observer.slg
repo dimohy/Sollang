@@ -1,0 +1,60 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        argument! + 1 => argument!
+    }
+    paths! -> semanticContext.prepareFiles => prepared
+    [Int; ~] => references!
+    0 => node!
+    node! < (prepared.package.nodes -> len) -> while {
+        references! -> push(-1)
+        node! + 1 => node!
+    }
+    prepared.semantic.references -> each reference {
+        reference.typeAst >= 0 -> if {
+            prepared.package.ranges[reference.sourceModule] => range
+            reference.typeId => references![range.astStart + reference.typeAst]
+        }
+    }
+    prepared.package.ranges -> each range {
+        prepared.package.sources[range.sourceModule] -> slice(0, prepared.package.sources[range.sourceModule] -> len) => source
+        prepared.modules[range.sourceModule] => identity
+        0 => index!
+        index! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + index!] => symbol
+            (symbol.kind == 3 or symbol.kind == 4)
+                and symbol.flags / 512 % 2 == 0 and symbol.flags / 65536 % 2 == 0
+                -> if {
+                    [UInt8; ~] => bytes!
+                    source -> diagnostics.appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, bytes!)
+                    bytes! -> file.borrowBytes => owner
+                    owner -> slice(0, owner -> len) => name
+                    "N\t$(symbol.kind)\t$(range.sourceModule)\t$(index!)\t$name" -> println
+                }
+            (symbol.kind == 26 or symbol.kind == 27) and symbol.parent >= 0 and symbol.typeNode >= 0
+                -> if {
+                    prepared.package.symbols[range.symbolStart + symbol.parent] => parent
+                    parent.kind == 3 or parent.kind == 4 -> if {
+                        prepared.package.nodes[range.astStart + symbol.typeNode] => annotation
+                        source -> slice(annotation.start, annotation.length) => text
+                        "F\t$(parent.kind)\t$(range.sourceModule)\t$(symbol.parent)\t$(symbol.kind)\t$(references![range.astStart + symbol.typeNode])\t$text" -> println
+                    }
+                }
+            index! + 1 => index!
+        }
+    }
+    0 => index!
+    index! < (prepared.semantic.types -> len) -> while {
+        prepared.semantic.types[index!] => type
+        "T\t$(index!)\t$(type.kind)\t$(type.origin)\t$(type.module)\t$(type.symbol)\t$(type.first)\t$(type.second)\t$(type.length)" -> println
+        index! + 1 => index!
+    }
+}
