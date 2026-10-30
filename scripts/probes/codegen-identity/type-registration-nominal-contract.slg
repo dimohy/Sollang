@@ -1,0 +1,45 @@
+import sollang.compiler.semantic.reference_type_ids as identities
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    arguments[1] -> file.mapText => input
+    [UInt8; ~] => strings!
+    [identities.NominalDeclaration; ~] => declarations!
+    UIntSize(0) => cursor!
+    cursor! < (input -> len) -> while {
+        Int(input -> byte(cursor!)) - 48 => kind
+        cursor! + 2 => cursor!
+        UIntSize(strings! -> len) => nameStart
+        cursor! < (input -> len) and (input -> byte(cursor!)) != 9
+            -> while {
+                strings! -> push(input -> byte(cursor!))
+                cursor! + 1 => cursor!
+            }
+        UIntSize(strings! -> len) - nameStart => nameLength
+        declarations! -> push(identities.NominalDeclaration { kind: kind, nameStart: nameStart, nameLength: nameLength })
+        cursor! < (input -> len) and (input -> byte(cursor!)) != 10
+            -> while { cursor! + 1 => cursor! }
+        cursor! < (input -> len) -> if { cursor! + 1 => cursor! }
+    }
+    declarations! -> identities.registerNominals(strings!) -> when {
+        Err(error) { error -> when {
+                InvalidKind { "invalid declaration kind" }
+                InvalidSpan { "invalid name span" }
+            } => message
+            "identity registration failed: $message" -> println
+            process.exit(1) }
+        Ok(registered) {
+            strings! -> file.borrowBytes => source
+            0 => index!
+            index! < (declarations! -> len) -> while {
+                declarations![index!] => declaration
+                source -> slice(declaration.nameStart, declaration.nameLength) => name
+                "$name\t$(registered.ids[index!])" -> println
+                index! + 1 => index!
+            }
+            "next\t$(registered.nextTypeId)" -> println
+        }
+    }
+}

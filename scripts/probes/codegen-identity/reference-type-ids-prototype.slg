@@ -1,0 +1,74 @@
+namespace sollang.compiler.semantic.reference_type_ids
+
+import sys.file as file
+
+# Preparation for the C# BuildTypeDefinitions identity contract. Promote into
+# the semantic registry after named and synthetic identities and their actual
+# diagnostic consumer agree; this is not yet a production ABI decision path.
+public struct NominalDeclaration {
+    public kind: Int
+    public nameStart: UIntSize
+    public nameLength: UIntSize
+}
+
+public struct NominalIdentities {
+    public ids: [Int; ~]
+    public nextTypeId: Int
+}
+
+public enum Error { InvalidKind, InvalidSpan }
+
+intrinsicIdentity name: Text, kind: Int -> Int {
+    kind == 3 -> if {
+        ["std.time.Duration", "sys.file.File", "sys.file.FileWriter", "sys.file.SourceText", "sys.process.Command", "sys.file.AtomicReplaceRequest", "sys.path.Path", "sys.directory.Raw", "sys.directory.Entry", "sys.input.mouse.Event"] => names
+        [27, 29, 30, 31, 32, 33, 34, 37, 39, 44] => ids
+        0 => index!
+        index! < (names -> len) -> while {
+            name == names[index!] -> if { ids[index!] -> return }
+            index! + 1 => index!
+        }
+    } else {
+        ["sys.path.Style", "sys.directory.kind.Kind", "sys.directory.RawResult", "sys.directory.ReadResult", "sys.input.mouse.Kind", "sys.input.mouse.OverflowPolicy"] => names
+        [35, 38, 41, 42, 45, 46] => ids
+        0 => index!
+        index! < (names -> len) -> while {
+            name == names[index!] -> if { ids[index!] -> return }
+            index! + 1 => index!
+        }
+    }
+    -1
+}
+
+# The caller supplies validated declarations in the reference compiler's file
+# and lexical order. Structs are registered before enums, as in C#; intrinsic
+# slots retain their enum identity and do not advance FirstUserDefined.
+public registerNominals declarations: ref [NominalDeclaration; ~], strings: ref [UInt8; ~] -> Result<NominalIdentities, Error> {
+    [Int; ~] => ids!
+    strings -> file.borrowBytes => source
+    declarations -> each declaration {
+        declaration.kind != 3 and declaration.kind != 4
+            -> if { Result<NominalIdentities, Error>.Err(Error.InvalidKind) -> return }
+        declaration.nameLength == 0 or declaration.nameStart > UIntSize(strings -> len)
+            or declaration.nameLength > UIntSize(strings -> len) - declaration.nameStart
+            -> if { Result<NominalIdentities, Error>.Err(Error.InvalidSpan) -> return }
+        ids! -> push(-1)
+    }
+    1024 => nextTypeId!
+    [3, 4] -> each kind {
+        0 => index!
+        index! < (declarations -> len) -> while {
+            declarations[index!] => declaration
+            declaration.kind == kind -> if {
+                source -> slice(declaration.nameStart, declaration.nameLength) => name
+                name -> intrinsicIdentity(kind) => intrinsic
+                intrinsic >= 0 -> if { intrinsic } else {
+                    nextTypeId! => assigned
+                    nextTypeId! + 1 => nextTypeId!
+                    assigned
+                } => ids![index!]
+            }
+            index! + 1 => index!
+        }
+    }
+    NominalIdentities { ids: ids!, nextTypeId: nextTypeId! } -> Result<NominalIdentities, Error>.Ok
+}

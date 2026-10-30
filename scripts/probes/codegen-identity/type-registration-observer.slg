@@ -1,0 +1,33 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        argument! + 1 => argument!
+    }
+    paths! -> semanticContext.prepareFiles => prepared
+    prepared.package.ranges -> each range {
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
+            (symbol.kind == 3 or symbol.kind == 4)
+                and symbol.flags / 512 % 2 == 0 and symbol.flags / 65536 % 2 == 0
+                -> if {
+                    prepared.package.sources[range.sourceModule] -> slice(0, prepared.package.sources[range.sourceModule] -> len) => source
+                    prepared.modules[range.sourceModule] => identity
+                    [UInt8; ~] => bytes!
+                    source -> diagnostics.appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, bytes!)
+                    bytes! -> file.borrowBytes => owner
+                    owner -> slice(0, owner -> len) => name
+                    "$(symbol.kind)\t$name\t$(symbol.flags)" -> println
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    }
+}
