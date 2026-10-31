@@ -6233,6 +6233,16 @@ Current backend:
   Effects are read from the signature clause and sorted ordinal UTF-16 without
   examining body text. Synthetic input aliases do not become additional
   parameters. Legacy generic slots retain the first three source generic names.
+  Inferred signatures retain the shared managed inference marker before semantic
+  result inference. Qualified ordinary function paths remain absolute. Constraint
+  metadata retains the primary generic's first trait bound and last associated
+  equality with canonical import/type spelling. Impl method identities compose
+  trait, qualified owner and member; self input/result spelling uses the actual
+  owner type, while methods without self preserve their explicit or absent input.
+  Impl associated-type maps sort ordinal UTF-16. Native alias identities retain
+  alias.member, and status/out interface results wrap the declared success type
+  as Result<success, Int32>. Native headers accept optional try, then optional
+  public, then the actual name; neither modifier creates an input binding.
   An unfinished source projection must reject cache admission until its actual
   managed facts are available; that rejection does not remove supported language
   forms from the compiler parity and final verification requirements.

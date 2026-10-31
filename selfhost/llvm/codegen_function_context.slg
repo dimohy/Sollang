@@ -1,0 +1,108 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.codegen_units as units
+import syntax.generated.slg as grammar
+
+struct FunctionContextFields {
+    owner: Field
+    name: Field
+    associated: [Field; ~]
+}
+
+copyFunctionField field: ref Field -> Field {
+    [UInt8; ~] => bytes!
+    field.bytes -> each byte { bytes! -> push(byte) }
+    Field { bytes: bytes! }
+}
+
+functionContextFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<FunctionContextFields, DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol] => function
+    function.kind != 31 -> if {
+        context -> functionNameField(package) -> when {
+            Ok(field) { Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: textField(""), name: field, associated: [Field; ~] }) -> return }
+            Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) -> return }
+        }
+    }
+    function.parent < 0 -> if { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    package.symbols[range.symbolStart + function.parent] => implementation
+    implementation.kind != 6 -> if { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    package.nodes[range.astStart + implementation.astNode] => node
+    [Int; ~] => first!
+    [Int; ~] => second!
+    false => trait!
+    0 => bracketDepth!
+    context -> nextFunctionToken(package, node.firstToken + 1) => token!
+    token! < node.firstToken + node.tokenCount -> while {
+        package.tokens[range.tokenStart + token!].kind => kind
+        kind == grammar.tokenIdLeftBrace() and bracketDepth! == 0
+            -> if { break }
+        context -> typeTokenText(package, context.sourceModule, token!) => text
+        text == "for" and bracketDepth! == 0 -> if { true => trait! } else {
+            trait! -> if { second! -> push(token!) } else { first! -> push(token!) }
+            kind == grammar.tokenIdLeftBracket() -> if { bracketDepth! + 1 => bracketDepth! }
+            kind == grammar.tokenIdRightBracket() -> if { bracketDepth! - 1 => bracketDepth! }
+        }
+        context -> nextFunctionToken(package, token! + 1) => token!
+    }
+    [UInt8; ~] => traitBytes!
+    trait! -> if {
+        context -> typeTokenField(package, first!) -> when {
+            Ok(field) { field.bytes -> each byte { traitBytes! -> push(byte) }
+                traitBytes! -> push('.') }
+            Err(_) { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+        }
+    }
+    trait! -> if { context -> typeTokenField(package, second!) } else { context -> typeTokenField(package, first!) } -> when {
+        Err(_) { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) }
+        Ok(owner) {
+            false => dotted!
+            owner.bytes -> each byte { byte == '.' -> if { true => dotted! } }
+            [UInt8; ~] => nameBytes!
+            traitBytes! -> each byte { nameBytes! -> push(byte) }
+            ((owner.bytes -> len) > 0 and owner.bytes[0] == '[') or not dotted!
+                -> if {
+                    nameBytes! -> len => before
+                    context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], nameBytes!)
+                    (nameBytes! -> len) > before -> if { nameBytes! -> push('.') }
+                }
+            owner.bytes -> each byte { nameBytes! -> push(byte) }
+            nameBytes! -> push('.')
+            context -> typeTokenText(package, context.sourceModule, function.nameToken) -> appendTypeText(nameBytes!)
+            [Int; ~] => members!
+            0 => index!
+            index! < range.symbolCount -> while {
+                package.symbols[range.symbolStart + index!] => member
+                member.kind == 30 and member.parent == function.parent
+                    -> if {
+                        members! -> len => position!
+                        members! -> push(index!)
+                        position! > 0 -> while {
+                            package.symbols[range.symbolStart + members![position! - 1]] => previous
+                            context -> typeTokenText(package, context.sourceModule, previous.nameToken) => previousName
+                            context -> typeTokenText(package, context.sourceModule, member.nameToken) => name
+                            units.compareIdentityText(previousName, name) <= 0
+                                -> if { break }
+                            members![position! - 1] => members![position!]
+                            position! - 1 => position!
+                        }
+                        index! => members![position!]
+                    }
+                index! + 1 => index!
+            }
+            [Field; ~] => associated!
+            plans.namedTypeFields() => rule
+            members! -> each index {
+                rule.parts -> each part {
+                    context -> sourceMemberField(package, index, part) -> when {
+                        Ok(field) { associated! -> push(field) }
+                        Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) -> return }
+                    }
+                }
+            }
+            Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: owner, name: Field { bytes: nameBytes! }, associated: associated! })
+        }
+    }
+}

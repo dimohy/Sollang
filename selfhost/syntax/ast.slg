@@ -1633,25 +1633,28 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
         declaration!.cstRuleId == grammar.ruleIdNativeFunctionDeclaration()
             -> if {
                 declaration!.flags + 128 => declaration!.flags
-                tokens[declaration!.firstToken] => nativeFirstToken
-                nativeFirstToken.kind == grammar.tokenIdIdentifier()
-                    and nativeFirstToken.span.length == 3
-                    and (source -> byte(nativeFirstToken.span.start)) == 116
-                    and (source -> byte(nativeFirstToken.span.start + 1)) == 114
-                    and (source -> byte(nativeFirstToken.span.start + 2)) == 121
-                    -> if {
-                        declaration!.flags + 32768 => declaration!.flags
-                        declaration!.firstToken + 1 => nativeTryNameToken!
-                        nativeTryNameToken! < declaration!.firstToken + declaration!.tokenCount
-                            -> while {
-                                tokens[nativeTryNameToken!].kind == grammar.tokenIdIdentifier()
-                                    -> if {
-                                        nativeTryNameToken! => declaration!.payloadToken
-                                        declaration!.firstToken + declaration!.tokenCount => nativeTryNameToken!
+                declaration!.firstToken => nativeHeaderToken!
+                declaration!.firstToken + declaration!.tokenCount => nativeHeaderEnd
+                false => nativeNameFound!
+                nativeHeaderToken! < nativeHeaderEnd and not nativeNameFound!
+                    -> while {
+                        tokens[nativeHeaderToken!] => headerToken
+                        headerToken.kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                source -> slice(headerToken.span.start, headerToken.span.length) => headerName
+                                headerName == "try" -> if {
+                                    declaration!.flags + 32768 => declaration!.flags
+                                } else {
+                                    headerName == "public" -> if {
+                                        declaration!.flags / 4 % 2 == 0 -> if { declaration!.flags + 4 => declaration!.flags }
                                     } else {
-                                        nativeTryNameToken! + 1 => nativeTryNameToken!
+                                        nativeHeaderToken! => declaration!.payloadToken
+                                        nativeHeaderToken! + 1 => declarationSignatureHeaderEnd!
+                                        true => nativeNameFound!
                                     }
+                                }
                             }
+                        nativeHeaderToken! + 1 => nativeHeaderToken!
                     }
             }
         declaration!.kind == 1 or declaration!.kind == 2 or declaration!.kind == 6 or declaration!.kind == 7
@@ -1767,7 +1770,7 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
                 }
                 -1 => signatureArrowToken!
                 declaration!.firstToken => signatureToken!
-                declaration!.cstRuleId == grammar.ruleIdFunctionDeclaration()
+                declaration!.cstRuleId == grammar.ruleIdFunctionDeclaration() or declaration!.cstRuleId == grammar.ruleIdNativeFunctionDeclaration()
                     -> if { declarationSignatureHeaderEnd! => signatureToken! }
                 declaration!.firstToken + declaration!.tokenCount => signatureEnd
                 false => afterColon!
@@ -2241,7 +2244,7 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
                         source -> byte(visibilityName.span.start + 5) => publicByte5
                         publicByte0 == 112 and publicByte1 == 117 and publicByte2 == 98 and publicByte3 == 108 and publicByte4 == 105 and publicByte5 == 99
                             -> if {
-                                declaration!.flags + 4 => declaration!.flags
+                                declaration!.flags / 4 % 2 == 0 -> if { declaration!.flags + 4 => declaration!.flags }
                             }
                     }
             }

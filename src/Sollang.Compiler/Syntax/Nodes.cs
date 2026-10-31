@@ -179,7 +179,7 @@ internal sealed record ComFunctionMetadata(
 
 internal static class InferredFunctionType
 {
-    public const string Name = "<inferred>";
+    public const string Name = Shared.TypeNamePolicy.InferredFunctionTypeName;
 }
 
 internal sealed record FunctionParameterDeclaration(

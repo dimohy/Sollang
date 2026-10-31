@@ -318,6 +318,10 @@ native counter from "counter" {
 }
 ```
 
+Native function headers accept `public` visibility. A status/out declaration
+places `try` before `public`, as in `try public read: -> Int32 as "read"`.
+These modifiers belong to the declaration, never to its name or input binding.
+
 Specify symbol, handle cleanup, ownership, error mapping, target availability,
 and ABI layout. Do not silently substitute a different library or portable path
 when a declared native dependency is absent. Wrap raw authority under

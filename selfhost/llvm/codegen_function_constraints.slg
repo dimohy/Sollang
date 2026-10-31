@@ -1,0 +1,88 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import syntax.generated.slg as grammar
+
+struct FunctionConstraintFields {
+    traitBound: Field
+    associatedName: Field
+    associatedType: Field
+}
+
+constraintTokens context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, astIndex: Int -> [Int; ~] {
+    package.ranges[context.sourceModule] => range
+    package.nodes[range.astStart + astIndex] => node
+    [Int; ~] => tokens!
+    node.firstToken => index!
+    index! < node.firstToken + node.tokenCount -> while {
+        package.tokens[range.tokenStart + index!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment() and kind != grammar.tokenIdNewLine()
+            -> if { tokens! -> push(index!) }
+        index! + 1 => index!
+    }
+    tokens!
+}
+
+functionConstraintFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, genericToken: Int -> Result<FunctionConstraintFields, DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol] => function
+    -1 => bound!
+    -1 => equality!
+    -1 => associatedToken!
+    -1 => equalType!
+    0 => index!
+    index! < range.astCount and genericToken >= 0
+        -> while {
+            package.nodes[range.astStart + index!] => constraint
+            constraint.kind == 34 and constraint.parent >= 0
+                -> if {
+                    package.nodes[range.astStart + constraint.parent] => clause
+                    clause.kind == 33 and clause.parent == function.astNode
+                        -> if {
+                            context -> constraintTokens(package, index!) => tokens
+                            (tokens -> len) >= 3 and (context -> typeTokenText(package, context.sourceModule, tokens[0])) == (context -> typeTokenText(package, context.sourceModule, genericToken))
+                                -> if {
+                                    package.tokens[range.tokenStart + tokens[1]].kind == grammar.tokenIdColon()
+                                        -> if {
+                                            bound! < 0 -> if { index! => bound! } else {
+                                                constraint.firstToken < package.nodes[range.astStart + bound!].firstToken
+                                                    -> if { index! => bound! }
+                                            }
+                                        } else {
+                                            (tokens -> len) < 5 or package.tokens[range.tokenStart + tokens[1]].kind != grammar.tokenIdDot()
+                                                -> if { Result<FunctionConstraintFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+                                            true => last!
+                                            equality! >= 0 -> if { constraint.firstToken >= package.nodes[range.astStart + equality!].firstToken => last! }
+                                            last! -> if {
+                                                index! => equality!
+                                                tokens[2] => associatedToken!
+                                                0 => symbolIndex!
+                                                symbolIndex! < range.symbolCount -> while {
+                                                    package.symbols[range.symbolStart + symbolIndex!] => symbol
+                                                    symbol.astNode == index! -> if { symbol.typeNode => equalType! }
+                                                    symbolIndex! + 1 => symbolIndex!
+                                                }
+                                            }
+                                        }
+                                }
+                        }
+                }
+            index! + 1 => index!
+        }
+    equality! >= 0 and equalType! < 0 -> if { Result<FunctionConstraintFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+    context -> optionalFunctionType(package, equalType!) -> when {
+        Err(error) { Result<FunctionConstraintFields, DeclarationFieldError>.Err(error) }
+        Ok(field) {
+            [UInt8; ~] => boundBytes!
+            bound! >= 0 -> if {
+                context -> constraintTokens(package, bound!) => tokens
+                context -> appendTypePath(package, tokens, 2, tokens -> len, false, boundBytes!) -> when {
+                    Ok(_) {}
+                    Err(_) { Result<FunctionConstraintFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+                }
+            }
+            associatedToken! >= 0 -> if { context -> typeTokenText(package, context.sourceModule, associatedToken!) } else { "" } -> textField => associatedName
+            Result<FunctionConstraintFields, DeclarationFieldError>.Ok(FunctionConstraintFields { traitBound: Field { bytes: boundBytes! }, associatedName: associatedName, associatedType: field })
+        }
+    }
+}

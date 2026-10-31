@@ -2,6 +2,7 @@ namespace sollang.compiler.llvm.codegen_cache_keys
 
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_name_policy as names
 import sollang.compiler.llvm.codegen_cache_key_policy as plans
 import sollang.compiler.llvm.codegen_units as units
 import syntax.generated.slg as grammar
@@ -26,16 +27,102 @@ optionalFunctionType context: ref TypeFieldContext, package: ref analysis.Packag
     }
 }
 
-functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<[Binding; ~], DeclarationFieldError> {
+functionNameField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<Field, DeclarationFieldError> {
     package.ranges[context.sourceModule] => range
     package.symbols[range.symbolStart + context.ownerSymbol] => declaration
-    declaration.parent >= 0 or declaration.flags / 32 % 2 == 1 or declaration.flags / 128 % 2 == 1
-        or symbols.hasQualifiedFunctionName(declaration, package.tokens, range.tokenStart, range.tokenCount)
-        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
+    package.nodes[range.astStart + declaration.astNode] => node
+    [UInt8; ~] => bytes!
+    node.cstRuleId == grammar.ruleIdNativeFunctionDeclaration()
+        -> if {
+            node.parent => parent!
+            -1 => aliasToken!
+            parent! >= 0 -> while {
+                package.nodes[range.astStart + parent!] => owner
+                owner.cstRuleId == grammar.ruleIdNativeLibraryDeclaration()
+                    -> if {
+                        owner.payloadToken => aliasToken!
+                        break
+                    }
+                owner.parent => parent!
+            }
+            aliasToken! < 0 -> if { Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+            context -> typeTokenText(package, context.sourceModule, aliasToken!) -> appendTypeText(bytes!)
+            bytes! -> push('.')
+            context -> typeTokenText(package, context.sourceModule, declaration.nameToken) -> appendTypeText(bytes!)
+        } else {
+            symbols.hasQualifiedFunctionName(declaration, package.tokens, range.tokenStart, range.tokenCount)
+                -> if {
+                    declaration.nameToken => token!
+                    context -> typeTokenText(package, context.sourceModule, token!) -> appendTypeText(bytes!)
+                    context -> nextFunctionToken(package, token! + 1) => token!
+                    token! < range.tokenCount and package.tokens[range.tokenStart + token!].kind == grammar.tokenIdDot()
+                        -> while {
+                            bytes! -> push('.')
+                            context -> nextFunctionToken(package, token! + 1) => token!
+                            token! >= range.tokenCount or package.tokens[range.tokenStart + token!].kind != grammar.tokenIdIdentifier()
+                                -> if { Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+                            context -> typeTokenText(package, context.sourceModule, token!) -> appendTypeText(bytes!)
+                            context -> nextFunctionToken(package, token! + 1) => token!
+                        }
+                } else { Result<Field, DeclarationFieldError>.Ok(context -> declarationNameField(package, context.ownerSymbol)) -> return }
+        }
+    Result<Field, DeclarationFieldError>.Ok(Field { bytes: bytes! })
+}
+
+functionSignatureArrow context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Int {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol] => declaration
+    package.nodes[range.astStart + declaration.astNode] => function
+    function.firstToken => token!
+    token! < function.firstToken + function.tokenCount
+        -> while {
+            package.tokens[range.tokenStart + token!].kind == grammar.tokenIdArrow()
+                -> if {
+                    false => insideType!
+                    0 => index!
+                    index! < range.astCount -> while {
+                        package.nodes[range.astStart + index!] => node
+                        node.kind == 12 and node.firstToken <= token! and token! < node.firstToken + node.tokenCount
+                            -> if { true => insideType! }
+                        index! + 1 => index!
+                    }
+                    not insideType! -> if { token! -> return }
+                }
+            token! + 1 => token!
+        }
+    -1
+}
+
+functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<[Binding; ~], DeclarationFieldError> {
+    context -> functionContextFields(package) -> when {
+        Ok(fields) { context -> functionBindingsWithContext(package, fields) }
+        Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) }
+    }
+}
+
+functionBindingsWithContext context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, fields: move FunctionContextFields -> Result<[Binding; ~], DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol] => declaration
+    package.nodes[range.astStart + declaration.astNode] => declarationNode
+    false => selfInput!
+    declaration.kind == 31 and declarationNode.secondaryToken >= 0
+        -> if {
+            (context -> typeTokenText(package, context.sourceModule, declarationNode.secondaryToken)) == "self" => selfInput!
+        }
+    declaration.flags / 32 % 2 == 1 => inferred
     declaration.secondaryTypeNode >= 0 -> if { declaration.secondaryTypeNode } else { declaration.typeNode } => resultNode
-    resultNode < 0 -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
-    package.nodes[range.astStart + resultNode] => resultType
-    context -> nextFunctionToken(package, resultType.firstToken + resultType.tokenCount) => following!
+    -1 => following!
+    inferred -> if {
+        context -> functionSignatureArrow(package) => arrow
+        arrow < 0 -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+        context -> nextFunctionToken(package, arrow + 1) => following!
+        following! < range.tokenCount and (context -> typeTokenText(package, context.sourceModule, following!)) == "async"
+            -> if { context -> nextFunctionToken(package, following! + 1) => following! }
+    } else {
+        resultNode < 0 -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+        package.nodes[range.astStart + resultNode] => resultType
+        context -> nextFunctionToken(package, resultType.firstToken + resultType.tokenCount) => following!
+    }
     [Int; ~] => effectTokens!
     following! < range.tokenCount and (context -> typeTokenText(package, context.sourceModule, following!)) == "uses"
         -> if {
@@ -51,8 +138,6 @@ functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis
                     -> if { context -> nextFunctionToken(package, following! + 1) => following! } else { false => more! }
             }
         }
-    following! < range.tokenCount and (context -> typeTokenText(package, context.sourceModule, following!)) == "where"
-        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
     1 => effectIndex!
     effectIndex! < (effectTokens! -> len) -> while {
         effectTokens![effectIndex!] => selected
@@ -70,28 +155,48 @@ functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis
     }
     [Binding; ~] => bindings!
     [Field; ~] => identity!
-    identity! -> push(context -> declarationNameField(package, context.ownerSymbol))
+    identity! -> push(fields.name)
     bindings! -> push(Binding { part: plans.KeyPart.Identity, fields: identity! })
     [Field; ~] => input!
     plans.ownedTypeFields() => inputRule
     inputRule.parts -> each part {
         part -> plans.partIndex => selected
-        selected == (plans.KeyPart.MemberType -> plans.partIndex) and declaration.secondaryTypeNode < 0
-            -> if { input! -> push(textField("")) } else {
+        selected == (plans.KeyPart.MemberType -> plans.partIndex) and ((inferred and declaration.typeNode < 0) or (not inferred and declaration.secondaryTypeNode < 0))
+            -> if {
+                selfInput! -> if { input! -> push(copyFunctionField(fields.owner)) } else { input! -> push(textField("")) }
+            } else {
                 selected != (plans.KeyPart.MemberType -> plans.partIndex) and selected != (plans.KeyPart.MemberOwnership -> plans.partIndex)
                     -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart) -> return }
-                context -> sourceMemberField(package, context.ownerSymbol, part) -> when {
-                    Ok(field) { input! -> push(field) }
-                    Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
-                }
+                selected == (plans.KeyPart.MemberType -> plans.partIndex) and selfInput!
+                    -> if {
+                        input! -> push(copyFunctionField(fields.owner))
+                    } else {
+                        context -> sourceMemberField(package, context.ownerSymbol, part) -> when {
+                            Ok(field) { input! -> push(field) }
+                            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+                        }
+                    }
             }
     }
     bindings! -> push(Binding { part: plans.KeyPart.FunctionInput, fields: input! })
     [Field; ~] => result!
-    declaration.flags / 64 % 2 == 1 -> if { result! -> push(textField("Unit")) } else {
-        context -> optionalFunctionType(package, resultNode) -> when {
-            Ok(field) { result! -> push(field) }
-            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+    inferred -> if { result! -> push(textField(names.inferredFunctionName())) } else {
+        declaration.flags / 64 % 2 == 1 -> if { result! -> push(textField("Unit")) } else {
+            context -> optionalFunctionType(package, resultNode) -> when {
+                Ok(field) {
+                    declaration.flags / 32768 % 2 == 1 -> if {
+                        [UInt8; ~] => bytes!
+                        "Result<" -> appendTypeText(bytes!)
+                        field.bytes -> each byte { bytes! -> push(byte) }
+                        ", Int32>" -> appendTypeText(bytes!)
+                        result! -> push(Field { bytes: bytes! })
+                    } else {
+                        declaration.kind == 31 and (field.bytes -> len) == 4 and field.bytes[0] == 'S' and field.bytes[1] == 'e' and field.bytes[2] == 'l' and field.bytes[3] == 'f'
+                            -> if { result! -> push(copyFunctionField(fields.owner)) } else { result! -> push(field) }
+                    }
+                }
+                Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+            }
         }
     }
     bindings! -> push(Binding { part: plans.KeyPart.FunctionReturn, fields: result! })
@@ -117,6 +222,7 @@ functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis
     [Field; ~] => generics!
     [Field; ~] => parameters!
     plans.namedOwnedTypeFields() => parameterRule
+    -1 => firstGeneric!
     0 => genericCount!
     0 => index!
     index! < range.symbolCount -> while {
@@ -125,10 +231,8 @@ functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis
             member.kind == 32 and genericCount! < 3 -> if {
                 context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => name
                 generics! -> push(name)
+                genericCount! == 0 -> if { member.nameToken => firstGeneric! }
                 genericCount! + 1 => genericCount!
-            }
-            member.kind == 33 or member.kind == 34 -> if {
-                Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return
             }
             member.kind == 35 and member.astNode != declaration.astNode
                 -> if {
@@ -142,8 +246,16 @@ functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis
         }
         index! + 1 => index!
     }
-    genericCount! < 6 -> while { generics! -> push(textField(""))
+    genericCount! < 3 -> while { generics! -> push(textField(""))
         genericCount! + 1 => genericCount! }
+    context -> functionConstraintFields(package, firstGeneric!) -> when {
+        Ok(fields) {
+            generics! -> push(fields.traitBound)
+            generics! -> push(fields.associatedName)
+            generics! -> push(fields.associatedType)
+        }
+        Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+    }
     bindings! -> push(Binding { part: plans.KeyPart.FunctionGenerics, fields: generics! })
     bindings! -> push(Binding { part: plans.KeyPart.FunctionParameters, fields: parameters! })
     [Field; ~] => effects!
@@ -152,6 +264,6 @@ functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis
         effects! -> push(name)
     }
     bindings! -> push(Binding { part: plans.KeyPart.FunctionEffects, fields: effects! })
-    bindings! -> push(Binding { part: plans.KeyPart.FunctionAssociatedTypes, fields: [Field; ~] })
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionAssociatedTypes, fields: fields.associated })
     Result<[Binding; ~], DeclarationFieldError>.Ok(bindings!)
 }

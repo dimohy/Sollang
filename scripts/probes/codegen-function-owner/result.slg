@@ -1,0 +1,40 @@
+import sys.file as file
+
+struct Field { bytes: [UInt8; ~] }
+struct Facts {
+    owner: Field
+    name: Field
+    associated: [Field; ~]
+}
+struct Binding { fields: [Field; ~] }
+enum Failure { Invalid }
+make: -> Result<Facts, Failure> {
+    [UInt8; ~] => owner!
+    owner! -> push('o')
+    [UInt8; ~] => name!
+    name! -> push('n')
+    Result<Facts, Failure>.Ok(Facts { owner: Field { bytes: owner! }, name: Field { bytes: name! }, associated: [Field; ~] })
+}
+project facts: move Facts -> Result<[Binding; ~], Failure> {
+    [Field; ~] => names!
+    names! -> push(facts.name)
+    [Binding; ~] => bindings!
+    bindings! -> push(Binding { fields: names! })
+    bindings! -> push(Binding { fields: facts.associated })
+    Result<[Binding; ~], Failure>.Ok(bindings!)
+}
+dispatch: -> Result<[Binding; ~], Failure> {
+    make() -> when {
+        Ok(facts) { facts -> project }
+        Err(error) { Result<[Binding; ~], Failure>.Err(error) }
+    }
+}
+main {
+    dispatch() -> when {
+        Ok(bindings) {
+            bindings[0].fields[0].bytes -> file.borrowBytes => text
+            text -> slice(0, text -> len) -> println
+        }
+        Err(_) { "error" -> println }
+    }
+}

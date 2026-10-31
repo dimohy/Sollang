@@ -1,0 +1,82 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+import sys.runtime as runtime
+
+show field: ref keys.Field -> Unit uses Console {
+    field.bytes -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> println
+}
+
+inspect package: ref analysis.PackageAnalysis, context: mut keys.TypeFieldContext -> Unit uses Console, Process {
+    0 => sourceModule!
+    sourceModule! < (package.ranges -> len) -> while {
+        sourceModule! => context.sourceModule
+        package.ranges[sourceModule!] => range
+        0 => index!
+        index! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + index!] => symbol
+            (symbol.kind == 3 or symbol.kind == 4 or symbol.kind == 5 or symbol.kind == 7 or symbol.kind == 31) and symbol.flags / 4 % 2 == 1
+                -> if {
+                    "before $(index!)" -> runtime.eprintln
+                    index! => context.ownerSymbol
+                    context -> keys.declarationBindings(package) -> when {
+                        Err(_) { "invalid-declaration" -> println
+                            process.exit(1) }
+                        Ok(bindings) {
+                            "bindings returned" -> runtime.eprintln
+                            symbol.kind == 3 -> if { plans.structInterface() } else { symbol.kind == 4 -> if { plans.enumInterface() } else { symbol.kind == 5 -> if { plans.traitInterface() } else { plans.functionInterface() } } } => rule
+                            rule.domain -> println
+                            rule.parts -> each part {
+                                0 => bindingIndex!
+                                bindingIndex! < (bindings -> len) -> while {
+                                    (bindings[bindingIndex!].part -> plans.partIndex) == (part -> plans.partIndex)
+                                        -> if {
+                                            0 => fieldIndex!
+                                            fieldIndex! < (bindings[bindingIndex!].fields -> len)
+                                                -> while {
+                                                    bindings[bindingIndex!].fields[fieldIndex!] -> show
+                                                    "field $(bindingIndex!):$(fieldIndex!)" -> runtime.eprintln
+                                                    fieldIndex! + 1 => fieldIndex!
+                                                }
+                                        }
+                                    bindingIndex! + 1 => bindingIndex!
+                                }
+                            }
+                            rule -> keys.hashRule(bindings) -> when {
+                                Ok(hash) { "hash ready" -> runtime.eprintln
+                                    keys.hexField(hash) => field
+                                    field -> show }
+                                Err(_) { "invalid-rule" -> println
+                                    process.exit(1) }
+                            }
+                        }
+                    }
+                }
+            "iteration done" -> runtime.eprintln
+            index! + 1 => index!
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+}
+
+main {
+    process.arguments() => arguments
+    [file.SourceText; ~] => sources!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    "before package" -> runtime.eprintln
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    "package ready" -> runtime.eprintln
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    package -> inspect(context!)
+}

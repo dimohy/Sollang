@@ -225,17 +225,23 @@ public typeAnnotationField context: ref TypeFieldContext, package: ref analysis.
             -> if { tokens! -> push(token!) }
         token! + 1 => token!
     }
+    context -> typeTokenField(package, tokens!)
+}
+
+# Impl owner headers use the same parser spelling without fabricating AST nodes.
+typeTokenField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, tokens: ref [Int; ~] -> Result<Field, TypeFieldError> {
+    package.ranges[context.sourceModule] => range
     [UInt8; ~] => bytes!
     0 => index!
-    index! < (tokens! -> len) -> while {
-        package.tokens[range.tokenStart + tokens![index!]].kind => kind
-        index! + 1 < (tokens! -> len) -> if {
-            package.tokens[range.tokenStart + tokens![index! + 1]].kind
+    index! < (tokens -> len) -> while {
+        package.tokens[range.tokenStart + tokens[index!]].kind => kind
+        index! + 1 < (tokens -> len) -> if {
+            package.tokens[range.tokenStart + tokens[index! + 1]].kind
         } else { -1 } => next
         index! > 0 -> if {
-            package.tokens[range.tokenStart + tokens![index! - 1]].kind
+            package.tokens[range.tokenStart + tokens[index! - 1]].kind
         } else { -1 } => previous
-        context -> typeTokenText(package, context.sourceModule, tokens![index!]) => value
+        context -> typeTokenText(package, context.sourceModule, tokens[index!]) => value
         kind == grammar.tokenIdIdentifier() -> if {
             value == "ref" or value == "box" or value == "dyn"
                 -> if {
@@ -250,14 +256,14 @@ public typeAnnotationField context: ref TypeFieldContext, package: ref analysis.
                             index! + 1 => index!
                         } else {
                             index! + 1 => end!
-                            end! + 1 < (tokens! -> len)
-                                and package.tokens[range.tokenStart + tokens![end!]].kind == grammar.tokenIdDot()
-                                and package.tokens[range.tokenStart + tokens![end! + 1]].kind == grammar.tokenIdIdentifier()
+                            end! + 1 < (tokens -> len)
+                                and package.tokens[range.tokenStart + tokens[end!]].kind == grammar.tokenIdDot()
+                                and package.tokens[range.tokenStart + tokens[end! + 1]].kind == grammar.tokenIdIdentifier()
                                 -> while { end! + 2 => end! }
-                            end! < (tokens! -> len) -> if {
-                                package.tokens[range.tokenStart + tokens![end!]].kind == grammar.tokenIdLess()
+                            end! < (tokens -> len) -> if {
+                                package.tokens[range.tokenStart + tokens[end!]].kind == grammar.tokenIdLess()
                             } else { false } => constructor
-                            context -> appendTypePath(package, tokens!, index!, end!, constructor, bytes!) -> when {
+                            context -> appendTypePath(package, tokens, index!, end!, constructor, bytes!) -> when {
                                 Err(error) { Result<Field, TypeFieldError>.Err(error) -> return }
                                 else { }
                             }

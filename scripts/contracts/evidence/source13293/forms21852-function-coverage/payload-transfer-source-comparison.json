@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "scope": "C775: conditional owned enum payload transferred into a growable container must clear arm cleanup only after completed storage.",
+  "csharpFocused": "records/forms21894-csharp-conditional-payload/result.json",
+  "baselineNative": "records/forms21895-slg-conditional-payload/result.json",
+  "controls": "records/forms21896-conditional-controls/result.json",
+  "heapEvidence": "records/forms21893-heap-audit-history/result.json",
+  "csharpSource": [
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Flow.cs:push",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs:RemoveOwnedLiteralSources",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs:RemoveLocal"
+  ],
+  "slgSource": [
+    "selfhost/llvm/text/containers.slg:emitArrayPush",
+    "selfhost/llvm/text/call_arguments.slg:emitCompletedPatternBindingTransferMarks"
+  ],
+  "decisions": [
+    "Managed push completes container storage, then removes transferred owned literal sources; RemoveLocal clears a retained payload flag.",
+    "Specialized SLG push omitted the existing completed-transfer marker used by regular calls and aggregate constructors. A conditional match payload therefore remained owned and was dropped despite the stored copy.",
+    "Call the existing semantic-move marker at the shared successful append boundary, after element/data/length/capacity are formed and before the optional owner-return path. Borrow-only branches never execute the marker.",
+    "Do not change caller source ownership, clone payloads, or bypass match cleanup."
+  ],
+  "claimsGoalComplete": false
+}
