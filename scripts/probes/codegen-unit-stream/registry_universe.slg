@@ -1,0 +1,77 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_fact_concreteness as concreteness
+import sys.file as file
+
+inspectPreparedUniverseContext context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis -> Int uses Console {
+    context -> preparationIntegrityDiagnosticCount > 0
+        -> if { 1 -> return }
+    context -> preparedRegistrySemantic => semantic
+    [Int; ~] => sizes!
+    context.typeSizes -> each value { sizes! -> push(value) }
+    [Int; ~] => aligns!
+    context.typeAligns -> each value { aligns! -> push(value) }
+    [Int; ~] => statuses!
+    context.typeLayoutStatuses -> each value { statuses! -> push(value) }
+    TypeLayouts { sizes: sizes!, aligns: aligns!, statuses: statuses! } => layouts
+    context -> preparedRegistryNames(0) => names!
+    context.typeRegistration -> when {
+        Err(_) { 2 -> return }
+        Ok(seeds) {
+            names! -> captureCompilationTypeUniverse(package, semantic, layouts, seeds) -> when {
+                Err(_) {
+                    seeds.used -> each identity {
+                        semantic.types[identity] => descriptor!
+                        seeds.declarations -> each declaration {
+                            declaration.typeId == identity -> if { declaration.identity => descriptor! }
+                        }
+                        keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => single!
+                        single! -> captureRegisteredTypeRecord(names!, package, semantic, layouts, identity, descriptor!) -> when {
+                            Err(_) {
+                                "capture-error:$identity:$(descriptor!.kind):$(descriptor!.origin):$(descriptor!.module):$(descriptor!.symbol):$(layouts.statuses[identity])" -> println
+                            }
+                            Ok {}
+                        }
+                    }
+                    3 -> return
+                }
+                Ok(records) {
+                    "universe:$(seeds.used -> len)" -> println
+                    seeds.declarations -> each declaration {
+                        semantic.types[declaration.typeId] => runtime
+                        runtime.kind == 1 and runtime.origin == 1 -> if {
+                            semantic.types -> typeIds.builtinTypeId(runtime.symbol) => builtin
+                            "alias:$builtin:$(declaration.typeId)" -> println
+                        }
+                    }
+                    records.fields -> each field {
+                        field.bytes -> file.borrowBytes => bytes
+                        bytes -> slice(0, bytes -> len) => text
+                        "record:$text" -> println
+                    }
+                }
+            }
+        }
+    }
+    concreteness.classify(semantic.types, semantic.fields) => states
+    0 => identity!
+    semantic.types -> each type {
+        states[identity!] == 0 -> if {
+            names! -> keys.resolvedTypeNameField(package, semantic, identity!) -> when {
+                Err(_) { "name-error:$(identity!)" -> println }
+                Ok(field) {
+                    field.bytes -> file.borrowBytes => bytes
+                    bytes -> slice(0, bytes -> len) => text
+                    "name:$(identity!):$text" -> println
+                }
+            }
+        }
+        identity! + 1 => identity!
+    }
+    0
+}

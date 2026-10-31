@@ -7,7 +7,7 @@ import sollang.compiler.semantic.type_fact_concreteness as concreteness
 import sollang.compiler.semantic.storage_registration as storage
 import sollang.compiler.ir.typed as typedIr
 
-public selectClosedTypeUses types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], declarations: ref [RegisteredDeclaration; ~], roots: ref [Int; ~] -> Result<[Int; ~], TypeRegistryError> {
+public selectClosedTypeUses package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], declarations: ref [RegisteredDeclaration; ~], roots: ref [Int; ~] -> Result<[Int; ~], TypeRegistryError> {
     [Bool; ~] => selected!
     [Bool; ~] => declared!
     types -> each _ { selected! -> push(false)
@@ -47,6 +47,20 @@ public selectClosedTypeUses types: ref [typeIds.SemanticType; ~], fields: ref [t
             declared![identity!] or type.kind == 9 or type.kind == 10 or type.kind == 8
                 or (type.kind == 1 and (type.origin == 0 or type.origin == 2 or type.origin == 16 or (type.origin == 1 and type.symbol == 25)))
                 or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1)) => metadata!
+            type.kind == 1 and (type.origin == 0 or type.origin == 2)
+                -> if {
+                    type.module < 0 or type.module >= (package.ranges -> len)
+                        -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity!)) -> return }
+                    package.ranges[type.module] => sourceRange
+                    type.symbol < 0 or type.symbol >= sourceRange.symbolCount
+                        -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity!)) -> return }
+                    package.symbols[sourceRange.symbolStart + type.symbol].kind => declarationKind
+                    # A bare trait identity is a constraint, not a dyn value.
+                    declarationKind == 5 -> if { false => metadata! } else {
+                        declarationKind != 3 and declarationKind != 4
+                            -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity!)) -> return }
+                    }
+                }
             type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6
                 -> if {
                     types -> storage.sourceStorageRequiresMetadata(identity!) -> when {
@@ -161,7 +175,7 @@ public registerCompilationTypeUses seeds: move RegisteredTypeSeeds, package: ref
                 -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(plan.resultType)) -> return }
         }
     }
-    selectClosedTypeUses(types, fields, seeds.declarations, roots!) -> when {
+    selectClosedTypeUses(package, types, fields, seeds.declarations, roots!) -> when {
         Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(error) }
         Ok(used) {
             seeds => result!

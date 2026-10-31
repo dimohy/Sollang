@@ -25,8 +25,10 @@ def main():
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--verify-source', action='store_true')
     parser.add_argument('--registered-sources', type=Path)
+    parser.add_argument('--include-type-names', action='store_true')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
+    assert not args.include_type_names or args.registered_sources, "type names require registered sources"
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -104,7 +106,7 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      'registered-type-universe-vectors' if args.registered_sources else 'type-universe-vectors'],
+                                      ('registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors'],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
                 if args.registered_sources:

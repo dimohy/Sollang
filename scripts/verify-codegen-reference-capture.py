@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from codegen_universe_comparison import compare_universe
 
 from verification_execution import VerificationExecution
 from verification_contract_lease import VerificationContractLease
@@ -240,7 +241,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog', 'storage-registration', 'prepared-registry'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog', 'storage-registration', 'prepared-registry', 'prepared-universe'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -254,7 +255,8 @@ def main():
                     'boxes': 'scripts/probes/codegen-box-registration',
                     'catalog': 'scripts/probes/codegen-registered-universe',
                     'storage-registration': 'scripts/probes/codegen-storage-registration',
-                    'prepared-registry': 'scripts/probes/codegen-prepared-registry'}[args.probe]
+                    'prepared-registry': 'scripts/probes/codegen-prepared-registry',
+                    'prepared-universe': 'scripts/probes/codegen-prepared-registry'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -266,12 +268,15 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog', 'storage-registration': 'cache.storage_registration', 'prepared-registry': 'cache.prepared_registry'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes', 'prepared-registry') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog', 'storage-registration': 'cache.storage_registration', 'prepared-registry': 'cache.prepared_registry', 'prepared-universe': 'cache.prepared_registry'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes', 'prepared-registry', 'prepared-universe') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.reference_result,
              *fixtures, manifest, *sources, *sorted((ROOT / 'stdlib').rglob('*.slg'))]
+    if args.probe == 'prepared-universe':
+        assert args.emitter and 'typeNames' in reference['cases'][0]['observation']
+        paths += [ROOT / 'scripts/codegen_universe_comparison.py']
     if args.probe == 'prepared-registry':
         assert args.emitter, 'prepared registry requires the current-source emitter'
         paths += sorted((probe / 'minimal-stdlib').glob('*.slg'))
@@ -285,7 +290,7 @@ def main():
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
     with VerificationContractLease(list(map(Path, inputs))):
-        result = dict(schemaVersion=1, status='running', completed=0, total=3 if args.probe == 'prepared-registry' else 2 if args.emitter else 1,
+        result = dict(schemaVersion=1, status='running', completed=0, total=1 if args.probe == 'prepared-universe' else 3 if args.probe == 'prepared-registry' else 2 if args.emitter else 1,
                       cases=[], inputHashes=inputs, claimsGoalComplete=False,
                       scope=f'Actual semantic {args.probe} records bound to Pair declaration; '
                             'compare CSharp registered contract and both executions. Canonical registration selection pending.')
@@ -300,7 +305,15 @@ def main():
 
         try:
             expected = None
-            for backend in (['prepared'] if args.probe == 'prepared-registry' else ['managed', 'slg'] if args.emitter else ['managed']):
+            for backend in (['universe'] if args.probe == 'prepared-universe' else ['prepared'] if args.probe == 'prepared-registry' else ['managed', 'slg'] if args.emitter else ['managed']):
+                if backend == 'universe':
+                    done = run([args.emitter, 'universe-windows', ROOT / 'stdlib', output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures], 'prepared-universe')
+                    comparison = compare_universe(done.stdout.splitlines(), reference['cases'][0]['observation'])
+                    (output / 'comparison.json').write_text(json.dumps(comparison, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+                    result['cases'].append(dict(id='complete-normalized-prepared-universe', passed=comparison['equal'], comparison=str(output / 'comparison.json')))
+                    assert comparison['equal'], {'failureId': 'UNIVERSE_NORMALIZED_RECORD_DIFFERENCE', 'managed': comparison['managedCounts'], 'native': comparison['nativeCounts'], 'missing': len(comparison['missing']), 'extra': len(comparison['extra'])}
+                    result['completed'] += 1
+                    continue
                 if backend == 'prepared':
                     stdlib = ROOT / 'stdlib'
                     done = run([args.emitter, 'registry-windows', stdlib, output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures], 'prepared-full')

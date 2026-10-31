@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -15,7 +15,7 @@ var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache",
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
 
-if (args.Length == 3 && args[2] == "registered-type-universe-vectors")
+if (args.Length == 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
@@ -36,7 +36,25 @@ if (args.Length == 3 && args[2] == "registered-type-universe-vectors")
     var typeIdEnum = assembly.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
     var builtinTypeIds = Enum.GetNames(typeIdEnum).ToDictionary(name => name,
         name => Convert.ToInt32(Enum.Parse(typeIdEnum, name)), StringComparer.Ordinal);
-    Console.WriteLine(JsonSerializer.Serialize(new { hash, records, builtinTypeIds }));
+    if (args[2] == "registered-type-universe-named-vectors")
+    {
+        var identities = new HashSet<int>();
+        void CollectTypeIds(JsonElement element, string? property = null)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+                foreach (var member in element.EnumerateObject()) CollectTypeIds(member.Value, member.Name);
+            else if (element.ValueKind == JsonValueKind.Array)
+                foreach (var item in element.EnumerateArray()) CollectTypeIds(item);
+            else if (element.ValueKind == JsonValueKind.Number && property is "Id" or "Type" or "PayloadType" or "ElementType" or "KeyType" or "ValueType")
+                identities.Add(element.GetInt32());
+        }
+        CollectTypeIds(JsonSerializer.SerializeToElement(records));
+        var format = semanticType.GetMethod("FormatType", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var typeNames = identities.Order().ToDictionary(id => id,
+            id => (string)format.Invoke(semantic, [Enum.ToObject(typeIdEnum, id)])!);
+        Console.WriteLine(JsonSerializer.Serialize(new { hash, records, builtinTypeIds, typeNames }));
+    }
+    else Console.WriteLine(JsonSerializer.Serialize(new { hash, records, builtinTypeIds }));
     return;
 }
 

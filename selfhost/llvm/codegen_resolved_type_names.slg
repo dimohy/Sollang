@@ -72,35 +72,42 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
     }
     type.kind == 10 -> if {
         "(" -> appendTypeText(bytes)
-        type.first => current!
+        0 => memberCount!
+        semantic.fields -> each member {
+            member.ownerType == typeId -> if { memberCount! + 1 => memberCount! }
+        }
+        memberCount! != type.length
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         0 => ordinal!
-        current! >= 0 -> while {
-            current! >= (semantic.types -> len) or ordinal! >= (semantic.types -> len)
-                -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-            semantic.types[current!] => field
-            field.kind != 11 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        ordinal! < type.length -> while {
             ordinal! > 0 -> if { ", " -> appendTypeText(bytes) }
             -1 => label!
             -1 => source!
+            -1 => fieldType!
+            0 => matches!
             semantic.fields -> each member {
                 member.ownerType == typeId and member.ordinal == ordinal!
-                    -> if { member.labelToken => label!
-                        member.sourceModule => source! }
+                    -> if {
+                        member.status != 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                        member.labelToken => label!
+                        member.sourceModule => source!
+                        member.fieldType => fieldType!
+                        matches! + 1 => matches!
+                    }
             }
+            matches! != 1 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
             label! >= 0 -> if {
                 source! < 0 or source! >= (package.ranges -> len)
                     -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
                 context -> typeTokenText(package, source!, label!) -> appendTypeText(bytes)
                 ": " -> appendTypeText(bytes)
             }
-            context -> appendResolvedTypeName(package, semantic, field.first, visiting, bytes) -> when {
+            context -> appendResolvedTypeName(package, semantic, fieldType!, visiting, bytes) -> when {
                 Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                 Ok {}
             }
-            field.second => current!
             ordinal! + 1 => ordinal!
         }
-        ordinal! != type.length -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         ")" -> appendTypeText(bytes)
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
     }

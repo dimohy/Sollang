@@ -4,9 +4,9 @@ import sollang.compiler.llvm.codegen_cache_keys as keys
 import sollang.compiler.llvm.codegen_cache_key_policy as plans
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_registration as registration
 
-captureRegisteredTypeRecord records: mut keys.TypeUniverseRecords, context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, typeId: Int -> Result<Unit, keys.TypeUniverseCaptureError> {
-    semantic.types[typeId] => type
+captureRegisteredTypeRecord records: mut keys.TypeUniverseRecords, context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, typeId: Int, type: typeIds.SemanticType -> Result<Unit, keys.TypeUniverseCaptureError> {
     type.kind == 1 and type.origin == 1 -> if {
         records -> keys.appendBuiltinTypeUniverseRecord(semantic.types, typeId) -> return
     }
@@ -25,7 +25,7 @@ captureRegisteredTypeRecord records: mut keys.TypeUniverseRecords, context: mut 
             }
         context.sourceModule => previous
         type.module => context.sourceModule
-        records -> keys.appendDeclaredTypeUniverseRecord(context, package, semantic, typeId, words!) => result
+        records -> keys.appendDeclaredTypeUniverseRecordWithIdentity(context, package, semantic, typeId, type, words!) => result
         previous => context.sourceModule
         result -> return
     }
@@ -48,6 +48,17 @@ captureRegisteredTypeRecord records: mut keys.TypeUniverseRecords, context: mut 
 # Range is always registered, even if the caller supplies no source identities.
 # Errors discard the private result; no partially captured table is published.
 public captureRegisteredTypeUniverse context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, registeredIds: ref [Int; ~] -> Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError> {
+    [registration.RegisteredDeclaration; ~] => declarations
+    context -> captureRegisteredUniverseWithDeclarations(package, semantic, layouts, registeredIds, declarations)
+}
+
+# Consume the real registry, including source identities whose runtime type
+# was canonicalized. Source names and final field-type identities stay linked.
+public captureCompilationTypeUniverse context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, seeds: ref registration.RegisteredTypeSeeds -> Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError> {
+    context -> captureRegisteredUniverseWithDeclarations(package, semantic, layouts, seeds.used, seeds.declarations)
+}
+
+captureRegisteredUniverseWithDeclarations context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, registeredIds: ref [Int; ~], declarations: ref [registration.RegisteredDeclaration; ~] -> Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError> {
     (layouts.sizes -> len) != (semantic.types -> len) or (layouts.aligns -> len) != (semantic.types -> len) or (layouts.statuses -> len) != (semantic.types -> len)
         -> if { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     [Bool; ~] => seen!
@@ -59,6 +70,17 @@ public captureRegisteredTypeUniverse context: mut keys.TypeFieldContext, package
             -> if { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
         true => seen![typeId]
     }
+    [Int; ~] => declarationByType!
+    semantic.types -> each _ { declarationByType! -> push(-1) }
+    0 => declarationIndex!
+    declarations -> each declaration {
+        declaration.typeId < 0 or declaration.typeId >= (semantic.types -> len)
+            -> if { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        not seen![declaration.typeId] or declarationByType![declaration.typeId] >= 0
+            -> if { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        declarationIndex! => declarationByType![declaration.typeId]
+        declarationIndex! + 1 => declarationIndex!
+    }
     keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
     semantic.types -> typeIds.builtinTypeId(25) => range
     range < 0 -> if { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
@@ -69,7 +91,9 @@ public captureRegisteredTypeUniverse context: mut keys.TypeFieldContext, package
         }
     }
     registeredIds -> each typeId {
-        records! -> captureRegisteredTypeRecord(context, package, semantic, layouts, typeId) -> when {
+        declarationByType![typeId] => selected
+        selected >= 0 -> if { declarations[selected].identity } else { semantic.types[typeId] } => identity
+        records! -> captureRegisteredTypeRecord(context, package, semantic, layouts, typeId, identity) -> when {
             Err(error) { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(error) -> return }
             Ok {}
         }

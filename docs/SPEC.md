@@ -1106,6 +1106,15 @@ seeds. Selection follows child-type and selected-owner field dependencies.
 Uninstantiated template facts do not create concrete definitions; unrelated
 closed entries in a scratch arena do not establish registry membership.
 Invalid selected type coordinates or dependencies fail preparation with S080.
+Bare trait identities used as constraints are not value-type definitions;
+resolved `dyn` values retain their separate trait-object metadata records.
+Product metadata names use the canonical ordered field labels and types,
+including products synthesized in function bodies without a linked type list.
+Missing, duplicate, invalid, or extra canonical fields reject the capture.
+Type-universe capture consumes the committed registry and its retained source
+declaration identities. It validates selected identities and source membership
+before capture, and publishes one owned metadata table only when every record
+succeeds; a failed capture does not publish a partial table.
 
 S059 is a blocking compiler-integrity diagnostic when a binding has a binary
 initializer AST but no corresponding binary Typed IR producer. Consecutive

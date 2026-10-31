@@ -24,6 +24,20 @@ inspectRoots: -> Unit uses Console, File, Process {
         type.status != 0 -> if {
             "open:$(identity!):$(type.kind):$(type.origin):$(type.module):$(type.symbol):$(type.status)" -> println
         }
+        type.kind == 1 and type.origin == 2 and type.module >= 0 and type.module < (package.ranges -> len)
+            -> if {
+                package.ranges[type.module] => range
+                type.symbol >= 0 and type.symbol < range.symbolCount
+                    -> if {
+                        package.symbols[range.symbolStart + type.symbol] => symbol
+                        symbol.kind != 3 and symbol.kind != 4 -> if {
+                            package.tokens[range.tokenStart + symbol.nameToken] => token
+                            package.sources[type.module] -> slice(token.span.start, token.span.length) => name
+                            paths[type.module] -> pathText => sourcePath
+                            "nominal-nonvalue:$(identity!):$(symbol.kind):$name:$sourcePath" -> println
+                        }
+                    }
+            }
         identity! + 1 => identity!
     }
     semantic.fields -> each field {
