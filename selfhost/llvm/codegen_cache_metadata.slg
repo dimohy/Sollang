@@ -14,6 +14,140 @@ public struct ModuleSources {
 
 public enum SourceError { InvalidInput, EmptyPath, DuplicatePath }
 
+public struct CompilationModule {
+    public sourceModule: Int
+    public identity: Field
+    public stableIdentity: UInt64
+    public implementationHash: UInt64
+    public interfaceHash: UInt64
+    public isStandardLibrary: Bool
+    public imports: [Field; ~]
+    public importOrder: [Int; ~]
+}
+
+public struct CompilationModules {
+    public modules: [CompilationModule; ~]
+    public order: [Int; ~]
+}
+
+public enum CompilationModuleError {
+    InvalidInput, Source(SourceError), Declaration(DeclarationFieldError)
+}
+
+logicalIdentityField source: Text, identity: modules.ModuleIdentity, range: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~] -> Field {
+    [UInt64; ~] => words!
+    modules.appendLogicalNameWords(source, identity, range, tokens, words!)
+    [UInt8; ~] => bytes!
+    words! -> each word { bytes! -> push(UInt8(word)) }
+    Field { bytes: bytes! }
+}
+
+# Arrays retain their owned fields; ordinal permutations express the same
+# stable name ordering as C# without moving or cloning owned byte buffers.
+appendModuleImport source: Text, edge: modules.ImportEdge, range: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~], names: mut [Field; ~], order: mut [Int; ~] -> Unit {
+    modules.ModuleIdentity {
+        sourceIndex: edge.sourceModule, pathHash: edge.targetHash,
+        pathStart: edge.pathStart, pathLength: edge.pathLength, importCount: 0
+    } => identity
+    source -> logicalIdentityField(identity, range, tokens) => name
+    names -> each prior {
+        compareFieldText(prior, name) == 0 -> if { return }
+    }
+    names -> len => ordinal
+    names -> push(name)
+    order -> len => position!
+    order -> push(ordinal)
+    position! > 0 -> while {
+        compareFieldText(names[order[position! - 1]], names[ordinal]) <= 0
+            -> if { break }
+        order[position! - 1] => order[position!]
+        position! - 1 => position!
+    }
+    ordinal => order[position!]
+}
+
+captureCompilationModulesCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, paths: ref [Text; ~], standardLibrarySourceCount: Int -> Result<CompilationModules, CompilationModuleError> {
+    (paths -> len) != (package.sources -> len) or (context.identities -> len) != (package.sources -> len)
+        or (package.ranges -> len) != (package.sources -> len)
+        or standardLibrarySourceCount < 0 or standardLibrarySourceCount > (package.sources -> len)
+        -> if { Result<CompilationModules, CompilationModuleError>.Err(CompilationModuleError.InvalidInput) -> return }
+    [Text; ~] => sourceViews!
+    [Field; ~] => sourcePaths!
+    package.sources -> each source {
+        source -> slice(0, source -> len) => view
+        sourceViews! -> push(view)
+    }
+    paths -> each path { sourcePaths! -> push(path -> textField) }
+    [CompilationModule; ~] => captured!
+    [Int; ~] => order!
+    0 => sourceModule!
+    sourceModule! < (package.sources -> len) -> while {
+        false => seen!
+        captured! -> each prior {
+            modules.sameLogicalAnalyzedSource(package.sources, context.identities, prior.sourceModule, sourceModule!, package.tokens, package.ranges)
+                -> if { true => seen! }
+        }
+        not seen! -> if {
+            captureModuleSources(sourceViews!, paths, context.identities, package.tokens, package.ranges, sourceModule!, standardLibrarySourceCount) -> when {
+                Err(error) { Result<CompilationModules, CompilationModuleError>.Err(CompilationModuleError.Source(error)) -> return }
+                Ok(sources) {
+                    sourceModule! => context.sourceModule
+                    context -> moduleInterfaceHash(package, sourcePaths!) -> when {
+                        Err(error) { Result<CompilationModules, CompilationModuleError>.Err(CompilationModuleError.Declaration(error)) -> return }
+                        Ok(interfaceHash) {
+                            sourceViews![sourceModule!] -> logicalIdentityField(context.identities[sourceModule!], package.ranges[sourceModule!], package.tokens) => identity
+                            [UInt64; ~] => identityWords!
+                            identity.bytes -> each byte { identityWords! -> push(UInt64(byte)) }
+                            identityWords! -> units.identityHash(0, identityWords! -> len) => stableIdentity
+                            [Field; ~] => imports!
+                            [Int; ~] => importOrder!
+                            sources.members -> each member {
+                                context.imports -> each edge {
+                                    edge.sourceModule == member -> if {
+                                        appendModuleImport(sourceViews![member], edge, package.ranges[member], package.tokens, imports!, importOrder!)
+                                    }
+                                }
+                            }
+                            captured! -> len => ordinal
+                            captured! -> push(CompilationModule {
+                                sourceModule: sourceModule!, identity: identity, stableIdentity: stableIdentity,
+                                implementationHash: sources.implementationHash, interfaceHash: interfaceHash,
+                                isStandardLibrary: sources.isStandardLibrary, imports: imports!, importOrder: importOrder!
+                            })
+                            order! -> len => position!
+                            order! -> push(ordinal)
+                            position! > 0 -> while {
+                                captured![order![position! - 1]].stableIdentity < stableIdentity
+                                    -> if { break }
+                                captured![order![position! - 1]].stableIdentity == stableIdentity
+                                    and compareFieldText(captured![order![position! - 1]].identity, captured![ordinal].identity) <= 0
+                                    -> if { break }
+                                order![position! - 1] => order![position!]
+                                position! - 1 => position!
+                            }
+                            ordinal => order![position!]
+                        }
+                    }
+                }
+            }
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+    Result<CompilationModules, CompilationModuleError>.Ok(CompilationModules { modules: captured!, order: order! })
+}
+
+# Match IncrementalCodegenCache.Open/CreateModuleIdentity before constructing
+# ambient, dependency and implementation keys. Never leak a declaration cursor
+# into the caller, including when a declaration adapter rejects the input.
+public captureCompilationModules context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, paths: ref [Text; ~], standardLibrarySourceCount: Int -> Result<CompilationModules, CompilationModuleError> {
+    context.sourceModule => sourceModule
+    context.ownerSymbol => ownerSymbol
+    context -> captureCompilationModulesCore(package, paths, standardLibrarySourceCount) => result
+    sourceModule => context.sourceModule
+    ownerSymbol => context.ownerSymbol
+    result
+}
+
 # The checked compilation supplies original source views, resolved paths and
 # parsed identities. Match CreateModuleIdentity, including comments and field
 # boundaries; paths order fields but are not themselves hashed here.

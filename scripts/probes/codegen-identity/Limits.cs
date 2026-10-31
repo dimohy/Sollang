@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -73,7 +73,7 @@ if (args.Length == 3 && args[2] == "function-tuple-rule-vectors")
     return;
 }
 
-if (args.Length == 3 && args[2] == "module-interface-vectors")
+if (args.Length == 3 && args[2] is "module-interface-vectors" or "module-catalog-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var paths = Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal).ToArray();
@@ -87,6 +87,30 @@ if (args.Length == 3 && args[2] == "module-interface-vectors")
     var create = cacheType.GetMethod("CreateModuleIdentity", BindingFlags.NonPublic | BindingFlags.Static)!;
     var fieldsMethod = cacheType.GetMethod("PublicInterfaceFields", BindingFlags.NonPublic | BindingFlags.Static)!;
     var hashMethod = cacheType.GetMethod("HashFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    if (args[2] == "module-catalog-vectors")
+    {
+        var stable = unitType.GetMethod("StableIdentity", [typeof(string)])!;
+        var identities = sources.GroupBy(source =>
+            (string)sourceType.GetProperty("ModuleName")!.GetValue(source)!, StringComparer.Ordinal)
+            .Select(group => {
+                var array = Array.CreateInstance(sourceType, group.Count());
+                var index = 0;
+                foreach (var source in group) array.SetValue(source, index++);
+                return create.Invoke(null, [group.Key, array])!;
+            });
+        object Property(object value, string name) => value.GetType().GetProperty(name)!.GetValue(value)!;
+        foreach (var identity in identities.OrderBy(value => (ulong)stable.Invoke(null, [Property(value, "Identity")])!)
+                     .ThenBy(value => (string)Property(value, "Identity"), StringComparer.Ordinal))
+            Console.WriteLine(JsonSerializer.Serialize(new {
+                name = Property(identity, "Identity"),
+                stableHash = stable.Invoke(null, [Property(identity, "Identity")]),
+                implementationHash = Property(identity, "ImplementationHash"),
+                interfaceHash = Property(identity, "InterfaceHash"),
+                imports = Property(identity, "Imports"),
+                isStandardLibrary = Property(identity, "IsStandardLibrary")
+            }));
+        return;
+    }
     foreach (var group in sources.GroupBy(source =>
                  (string)sourceType.GetProperty("ModuleName")!.GetValue(source)!, StringComparer.Ordinal)
                  .OrderBy(group => group.Key, StringComparer.Ordinal))

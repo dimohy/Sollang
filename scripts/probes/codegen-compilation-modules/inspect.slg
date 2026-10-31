@@ -1,0 +1,54 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+show field: ref keys.Field -> Unit uses Console {
+    field.bytes -> file.borrowBytes => bytes
+    bytes -> slice(0, bytes -> len) -> println
+}
+
+showModule module: ref keys.CompilationModule -> Unit uses Console {
+    module.identity -> show
+    keys.hexField(module.stableIdentity) => stable
+    stable -> show
+    keys.hexField(module.implementationHash) => implementation
+    implementation -> show
+    keys.hexField(module.interfaceHash) => publicInterface
+    publicInterface -> show
+    module.isStandardLibrary -> if { "standard" -> println } else { "user" -> println }
+    module.importOrder -> each ordinal { module.imports[ordinal] -> show }
+    "end-module" -> println
+}
+
+main {
+    process.arguments() => arguments
+    [file.SourceText; ~] => sources!
+    [Text; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    context! -> keys.captureCompilationModules(package, paths!, 0) -> when {
+        Err(_) { "invalid-catalog" -> println
+            process.exit(1) }
+        Ok(catalog) {
+            catalog.order -> each ordinal {
+                catalog.modules[ordinal] -> showModule
+            }
+        }
+    }
+    context!.sourceModule != 0 or context!.ownerSymbol != -1
+        -> if {
+            "changed-cursor" -> println
+            process.exit(1)
+        }
+}
