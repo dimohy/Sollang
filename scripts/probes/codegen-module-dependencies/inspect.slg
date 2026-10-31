@@ -1,0 +1,47 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+show field: ref keys.Field -> Unit uses Console {
+    field.bytes -> file.borrowBytes => bytes
+    bytes -> slice(0, bytes -> len) -> println
+}
+
+main {
+    process.arguments() => arguments
+    arguments[1] != "0" and arguments[1] != "2" -> if { process.exit(2) }
+    0 => standardCount!
+    arguments[1] == "2" -> if { 2 => standardCount! }
+    [file.SourceText; ~] => sources!
+    [Text; ~] => paths!
+    UIntSize(2) => argument!
+    argument! < (arguments -> len) -> while {
+        paths! -> push(arguments[argument!])
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    context! -> keys.captureCompilationModules(package, paths!, standardCount!) -> when {
+        Err(_) { "invalid-catalog" -> println
+            process.exit(1) }
+        Ok(catalog) {
+            catalog -> keys.ambientStandardLibraryHash -> keys.hexField => ambient
+            ambient -> show
+            catalog.order -> each ordinal {
+                catalog.modules[ordinal].identity -> show
+                catalog -> keys.dependencyInterfaceFields(ordinal) -> when {
+                    Err(_) { "invalid-dependency" -> println
+                        process.exit(1) }
+                    Ok(fields) { fields -> each field { field -> show } }
+                }
+                "end-module" -> println
+            }
+        }
+    }
+}

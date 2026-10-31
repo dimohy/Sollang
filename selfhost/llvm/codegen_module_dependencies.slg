@@ -1,0 +1,85 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+
+public enum ModuleDependencyError { InvalidModule }
+
+containsModule modules: ref [Int; ~], selected: Int -> Bool {
+    modules -> each module { module == selected -> if { true -> return } }
+    false
+}
+
+appendDirectDependencies module: ref CompilationModule, catalog: ref CompilationModules, visited: mut [Int; ~] -> Unit {
+    module.imports -> each name {
+        0 => candidate!
+        candidate! < (catalog.modules -> len) -> while {
+            compareFieldText(name, catalog.modules[candidate!].identity) == 0
+                -> if {
+                    visited -> containsModule(candidate!) -> unless { visited -> push(candidate!) }
+                    break
+                }
+            candidate! + 1 => candidate!
+        }
+    }
+}
+
+copyIdentityField field: ref Field -> Field {
+    [UInt8; ~] => bytes!
+    field.bytes -> each byte { bytes! -> push(byte) }
+    Field { bytes: bytes! }
+}
+
+# Match CollectDependencyInterfaces: visit each complete module identity once,
+# omit the owner and unavailable targets, then order the transitive field stream
+# by full ordinal name rather than by its identity hash or traversal order.
+public dependencyInterfaceFields catalog: ref CompilationModules, module: Int -> Result<[Field; ~], ModuleDependencyError> {
+    module < 0 or module >= (catalog.modules -> len)
+        -> if { Result<[Field; ~], ModuleDependencyError>.Err(ModuleDependencyError.InvalidModule) -> return }
+    [Int; ~] => visited!
+    visited! -> push(module)
+    0 => cursor!
+    cursor! < (visited! -> len) -> while {
+        catalog.modules[visited![cursor!]] -> appendDirectDependencies(catalog, visited!)
+        cursor! + 1 => cursor!
+    }
+    [Int; ~] => order!
+    1 => index!
+    index! < (visited! -> len) -> while {
+        visited![index!] => selected
+        order! -> len => position!
+        order! -> push(selected)
+        position! > 0 -> while {
+            compareFieldText(catalog.modules[order![position! - 1]].identity, catalog.modules[selected].identity) <= 0
+                -> if { break }
+            order![position! - 1] => order![position!]
+            position! - 1 => position!
+        }
+        selected => order![position!]
+        index! + 1 => index!
+    }
+    [Field; ~] => fields!
+    order! -> each selected {
+        catalog.modules[selected].identity -> copyIdentityField => name
+        fields! -> push(name)
+        catalog.modules[selected].interfaceHash -> hexField => hash
+        fields! -> push(hash)
+    }
+    Result<[Field; ~], ModuleDependencyError>.Ok(fields!)
+}
+
+appendAmbientModuleHash hash: UInt64, module: ref CompilationModule -> UInt64 {
+    not module.isStandardLibrary -> if { hash -> return }
+    hash -> hashBytes(module.identity.bytes) => identityHash
+    module.interfaceHash -> hexField => interfaceField
+    identityHash -> hashBytes(interfaceField.bytes)
+}
+
+# Open uses the catalog's stable-hash/full-name order and the same continuous
+# HashFields framing as source/interface adapters. There is no extra domain.
+public ambientStandardLibraryHash catalog: ref CompilationModules -> UInt64 {
+    arithmetic.envelopeChecksumSeed() => hash!
+    catalog.order -> each selected {
+        hash! -> appendAmbientModuleHash(catalog.modules[selected]) => hash!
+    }
+    hash!
+}
