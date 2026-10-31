@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "loaded-interface-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -25,14 +25,14 @@ if (args.Length == 3 && args[2] == "type-name-vectors")
     return;
 }
 
-if (args.Length == 3 && args[2] is "interface-vectors" or "loaded-interface-vectors")
+if (args.Length == 3 && args[2] is "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var parse = app.GetMethod("ParseSourceFile", BindingFlags.NonPublic | BindingFlags.Static)!;
     var fieldsMethod = cacheType.GetMethod("PublicInterfaceFields", BindingFlags.NonPublic | BindingFlags.Static)!;
     var hashMethod = cacheType.GetMethod("HashFields", BindingFlags.NonPublic | BindingFlags.Static)!;
     var paths = Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal).ToArray();
-    if (args[2] == "loaded-interface-vectors")
+    if (args[2] is "loaded-interface-vectors" or "declaration-vectors")
     {
         var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
         var loaded = app.GetMethod("LoadProgram", BindingFlags.NonPublic | BindingFlags.Static)!
@@ -47,6 +47,28 @@ if (args.Length == 3 && args[2] is "interface-vectors" or "loaded-interface-vect
                 ((System.Collections.IEnumerable)owner.GetType().GetProperty(property)!.GetValue(owner)!).Cast<object>();
             string Text(object owner, string property) => (string)owner.GetType().GetProperty(property)!.GetValue(owner)!;
             bool Public(object owner) => (bool)owner.GetType().GetProperty("IsPublic")!.GetValue(owner)!;
+            if (args[2] == "declaration-vectors")
+            {
+                var constructor = program.GetType().GetConstructors().Single();
+                var parameters = constructor.GetParameters();
+                foreach (var category in new[] { "Structs", "Enums", "Traits", "Functions" })
+                    foreach (var declaration in Items(program, category).Where(Public)
+                                 .OrderBy(value => Text(value, "Name"), StringComparer.Ordinal))
+                    {
+                        var arguments = parameters.Select(parameter =>
+                            (object)Array.CreateInstance(parameter.ParameterType.GetGenericArguments()[0], 0)).ToArray();
+                        var slot = Array.FindIndex(parameters, parameter =>
+                            string.Equals(parameter.Name, category, StringComparison.OrdinalIgnoreCase));
+                        var singleton = Array.CreateInstance(parameters[slot].ParameterType.GetGenericArguments()[0], 1);
+                        singleton.SetValue(declaration, 0);
+                        arguments[slot] = singleton;
+                        var isolated = constructor.Invoke(arguments);
+                        var declarationFields = ((IEnumerable<string>)fieldsMethod.Invoke(null, [isolated])!).ToArray();
+                        Console.WriteLine(JsonSerializer.Serialize(new { category, name = Text(declaration, "Name"),
+                            fields = declarationFields, hash = (ulong)hashMethod.Invoke(null, [declarationFields])! }));
+                    }
+                continue;
+            }
             var types = Items(program, "Structs").Where(Public).OrderBy(value => Text(value, "Name"), StringComparer.Ordinal)
                 .SelectMany(value => Items(value, "Fields").Select(field => Text(field, "TypeName")))
                 .Concat(Items(program, "Enums").Where(Public).OrderBy(value => Text(value, "Name"), StringComparer.Ordinal)

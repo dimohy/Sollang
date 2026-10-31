@@ -1,0 +1,90 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+public enum DeclarationFieldError { InvalidInput, UnsupportedDeclaration, InvalidType }
+
+# Names retain every parsed namespace and containing type segment. Parent and
+# symbol indexes remain local to their source, exactly like the type adapter.
+declarationNameField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, declaration: Int -> Field {
+    package.ranges[context.sourceModule] => range
+    [UInt8; ~] => bytes!
+    context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], bytes!)
+    [Int; ~] => owners!
+    declaration => owner!
+    owner! >= 0 -> while {
+        owners! -> push(owner!)
+        package.symbols[range.symbolStart + owner!].parent => owner!
+    }
+    (owners! -> len) - 1 => index!
+    index! >= 0 -> while {
+        (bytes! -> len) > 0 -> if { bytes! -> push('.') }
+        package.symbols[range.symbolStart + owners![index!]].nameToken => nameToken
+        context -> typeTokenText(package, context.sourceModule, nameToken) -> appendTypeText(bytes!)
+        index! - 1 => index!
+    }
+    Field { bytes: bytes! }
+}
+
+# Supply real declaration facts; the generated rule selects their order. A
+# future rule requesting another fact fails through the existing MissingPart
+# contract rather than silently omitting it from an interface fingerprint.
+public declarationBindings context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<[Binding; ~], DeclarationFieldError> {
+    context.sourceModule < 0 or context.sourceModule >= (package.ranges -> len)
+        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    package.ranges[context.sourceModule] => range
+    context.ownerSymbol < 0 or context.ownerSymbol >= range.symbolCount
+        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    package.symbols[range.symbolStart + context.ownerSymbol] => declaration
+    declaration.kind != 3 and declaration.kind != 4
+        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
+    declaration.flags / 4 % 2 == 0 or declaration.nameToken < 0
+        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    declaration.parent >= 0 -> if {
+        package.symbols[range.symbolStart + declaration.parent].kind != 3
+            -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
+    }
+    [Binding; ~] => bindings!
+    [Field; ~] => identity!
+    context -> declarationNameField(package, context.ownerSymbol) => name
+    identity! -> push(name)
+    bindings! -> push(Binding { part: plans.KeyPart.Identity, fields: identity! })
+    [Field; ~] => visibility!
+    visibility! -> push(textField("public"))
+    bindings! -> push(Binding { part: plans.KeyPart.Visibility, fields: visibility! })
+    declaration.kind == 3 -> if {
+        [Field; ~] => container!
+        declaration.parent >= 0 -> if {
+            context -> declarationNameField(package, declaration.parent) => owner
+            container! -> push(owner)
+        } else { container! -> push(textField("")) }
+        bindings! -> push(Binding { part: plans.KeyPart.DeclarationContainer, fields: container! })
+    }
+    [Field; ~] => members!
+    0 => index!
+    index! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + index!] => member
+        member.parent == context.ownerSymbol
+            and ((declaration.kind == 3 and member.kind == 26) or (declaration.kind == 4 and member.kind == 27))
+            -> if {
+                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => memberName
+                members! -> push(memberName)
+                member.typeNode < 0 -> if {
+                    declaration.kind == 3 -> if {
+                        Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return
+                    }
+                    members! -> push(textField(""))
+                } else {
+                    context -> typeAnnotationField(package, member.typeNode) -> when {
+                        Ok(field) { members! -> push(field) }
+                        Err(_) { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+                    }
+                }
+            }
+        index! + 1 => index!
+    }
+    declaration.kind == 3 -> if { plans.KeyPart.StructFields } else { plans.KeyPart.EnumVariants } => part
+    bindings! -> push(Binding { part: part, fields: members! })
+    Result<[Binding; ~], DeclarationFieldError>.Ok(bindings!)
+}

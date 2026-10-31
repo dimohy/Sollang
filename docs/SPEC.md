@@ -6211,6 +6211,11 @@ Current backend:
   The source package retains its owners while returned field bytes are owned.
   Type-field projection alone does not establish complete declaration projection
   or module-interface cache admission.
+  Public struct and enum declaration facts retain complete containing names,
+  every struct field irrespective of member visibility, source member order,
+  and an empty payload field for payload-free variants. Fact adapters bind
+  generated rule parts; unsupported declaration categories must fail explicitly
+  rather than masquerade as a complete module interface.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash
