@@ -126,14 +126,55 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
     Result<RegisteredBoxes, BoxRegistrationError>.Ok(result)
 }
 
-public enum TypeRegistryError { Storage(storage.StorageRegistrationError), Boxes(BoxRegistrationError) }
-public struct RegisteredTypeSeeds { public storage: [Int; ~], public boxes: [Int; ~] }
-
-public emptyRegisteredTypeSeeds: -> RegisteredTypeSeeds {
-    RegisteredTypeSeeds { storage: [Int; ~], boxes: [Int; ~] }
+public enum TypeRegistryError { Storage(storage.StorageRegistrationError), Boxes(BoxRegistrationError), DeclarationIdentity }
+public struct RegisteredDeclaration { public typeId: Int, public identity: typeIds.SemanticType }
+public struct RegisteredTypeSeeds {
+    public declarations: [RegisteredDeclaration; ~]
+    public storage: [Int; ~]
+    public boxes: [Int; ~]
 }
 
-public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, types: mut [typeIds.SemanticType; ~] -> Result<RegisteredTypeSeeds, TypeRegistryError> {
+public emptyRegisteredTypeSeeds: -> RegisteredTypeSeeds {
+    RegisteredTypeSeeds { declarations: [RegisteredDeclaration; ~], storage: [Int; ~], boxes: [Int; ~] }
+}
+
+# Expression resolution preserves arena indices while canonicalizing some
+# source declarations to builtin runtime representations. Keep their original
+# declaration identities separately; cache metadata still describes the source.
+public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, declaredTypes: ref [typeIds.SemanticType; ~], types: mut [typeIds.SemanticType; ~] -> Result<RegisteredTypeSeeds, TypeRegistryError> {
+    [Int; ~] => declarationBySymbol!
+    package.symbols -> each _ { declarationBySymbol! -> push(-1) }
+    0 => index!
+    declaredTypes -> each identity {
+        (identity.kind == 1 and (identity.origin == 0 or identity.origin == 2)) or identity.kind == 9
+            -> if {
+                identity.module < 0 or identity.module >= (package.ranges -> len) or index! >= (types -> len)
+                    -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.DeclarationIdentity) -> return }
+                package.ranges[identity.module] => range
+                identity.symbol < 0 or identity.symbol >= range.symbolCount or types[index!].kind != identity.kind
+                    -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.DeclarationIdentity) -> return }
+                index! => declarationBySymbol![range.symbolStart + identity.symbol]
+            }
+        index! + 1 => index!
+    }
+    [RegisteredDeclaration; ~] => declarations!
+    [3, 4] -> each kind {
+        0 => source!
+        source! < (package.ranges -> len) -> while {
+            package.ranges[source!] => range
+            0 => symbol!
+            symbol! < range.symbolCount -> while {
+                package.symbols[range.symbolStart + symbol!].kind == kind
+                    -> if {
+                        declarationBySymbol![range.symbolStart + symbol!] => identity
+                        identity < 0 -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.DeclarationIdentity) -> return }
+                        declarations! -> push(RegisteredDeclaration { typeId: identity, identity: declaredTypes[identity] })
+                    }
+                symbol! + 1 => symbol!
+            }
+            source! + 1 => source!
+        }
+    }
     storage.registerPredeclaredStorageTypes(package, types) -> when {
         Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.Storage(error)) -> return }
         Ok(value) { value }
@@ -142,6 +183,6 @@ public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, types
         Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.Boxes(error)) -> return }
         Ok(value) { value }
     } => boxes
-    RegisteredTypeSeeds { storage: storageTypes.ids, boxes: boxes.ids } => seeds
+    RegisteredTypeSeeds { declarations: declarations!, storage: storageTypes.ids, boxes: boxes.ids } => seeds
     Result<RegisteredTypeSeeds, TypeRegistryError>.Ok(seeds)
 }

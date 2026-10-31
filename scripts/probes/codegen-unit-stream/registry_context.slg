@@ -2,8 +2,59 @@ namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
 
-inspectPreparedRegistryContext context: ref emitterContext.EmitContext, standardCount: Int -> Int uses Console {
+inspectCanonicalDeclaration context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis, identity: typeIds.SemanticType, typeId: Int -> Int uses Console {
+    [typeIds.SemanticType; ~] => types!
+    context.types -> each type { types! -> push(type) }
+    [typeIds.TypeReference; ~] => references!
+    context.typeReferences -> each reference { references! -> push(reference) }
+    [typeIds.NominalField; ~] => fields!
+    context.fields -> each field { fields! -> push(field) }
+    typeIds.SemanticTypeSet { types: types!, references: references!, fields: fields! } => semantic
+    [modules.ModuleIdentity; ~] => identities!
+    context.modules -> each module { identities! -> push(module) }
+    [modules.ImportEdge; ~] => imports!
+    context.imports -> each edge { imports! -> push(edge) }
+    keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: identity.module, ownerSymbol: -1 } => names
+    keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+    records! -> keys.appendDeclaredTypeUniverseRecordWithIdentity(names, package, semantic, typeId, identity, -1) -> when {
+        Err(_) { 8 -> return }
+        Ok {}
+    }
+    package.ranges[identity.module] => range
+    -1 => other!
+    0 => symbol!
+    symbol! < range.symbolCount and other! < 0 -> while {
+        package.symbols[range.symbolStart + symbol!].kind == 3 and symbol! != identity.symbol
+            -> if { symbol! => other! }
+        symbol! + 1 => symbol!
+    }
+    other! < 0 -> if { 10 -> return }
+    identity => wrong!
+    other! => wrong!.symbol
+    keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => invalid!
+    invalid! -> keys.appendDeclaredTypeUniverseRecordWithIdentity(names, package, semantic, typeId, wrong!, -1) -> when {
+        Err(_) { }
+        Ok { 11 -> return }
+    }
+    typeIds.builtinSymbolByName("UInt64") => storageSymbol
+    context.types -> typeIds.builtinTypeId(storageSymbol) => storageType
+    "builtin:UInt64:$storageType" -> println
+    records!.fields -> each field {
+        field.bytes -> file.borrowBytes => bytes
+        bytes -> slice(0, bytes -> len) -> println
+    }
+    "end-definition" -> println
+    0
+}
+
+inspectPreparedRegistryContext context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis, standardCount: Int -> Int uses Console {
     context -> preparationIntegrityDiagnosticCount => failures
     failures > 0 -> if { 1 -> return }
     (context.types -> len) => count
@@ -23,14 +74,27 @@ inspectPreparedRegistryContext context: ref emitterContext.EmitContext, standard
                 identity < 0 or identity >= count or context.types[identity].kind != 6
                     -> if { 5 -> return }
             }
+            "declarations:$(seeds.declarations -> len)" -> println
+            0 => canonical!
+            seeds.declarations -> each declaration {
+                context.types[declaration.typeId] => runtime
+                runtime.origin == 1 and declaration.identity.origin != 1
+                    -> if {
+                        context -> inspectCanonicalDeclaration(package, declaration.identity, declaration.typeId) => failure
+                        failure > 0 -> if { failure -> return }
+                        canonical! + 1 => canonical!
+                    }
+            }
+            standardCount > 0 and canonical! != 1 -> if { 9 -> return }
         }
     }
     0
 }
 
 public inspectPreparedRegistry sources: move [Text; ~], standardCount: Int -> Int uses Console {
+    sources -> analysis.analyze => package
     llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
     request -> prepare => context
-    context -> inspectPreparedRegistryContext(standardCount)
+    context -> inspectPreparedRegistryContext(package, standardCount)
 }

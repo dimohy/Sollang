@@ -99,9 +99,18 @@ nominalLayoutMemberField records: mut TypeUniverseRecords, category: plans.KeyPa
 }
 
 public appendDeclaredTypeUniverseRecord records: mut TypeUniverseRecords, context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, payloadWords: Int -> Result<Unit, TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (semantic.types -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    records -> appendDeclaredTypeUniverseRecordWithIdentity(context, package, semantic, typeId, semantic.types[typeId], payloadWords)
+}
+
+# A registered declaration retains its source identity even when its runtime
+# descriptor was canonicalized to a builtin. Field types use the final arena.
+public appendDeclaredTypeUniverseRecordWithIdentity records: mut TypeUniverseRecords, context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, type: typeIds.SemanticType, payloadWords: Int -> Result<Unit, TypeUniverseCaptureError> {
     typeId < 0 or typeId >= (semantic.types -> len) or context.sourceModule < 0 or context.sourceModule >= (package.ranges -> len)
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    semantic.types[typeId] => type
+    semantic.types[typeId].kind != type.kind or semantic.types[typeId].status != 0 or semantic.types[typeId].containsParameter
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     package.ranges[context.sourceModule] => range
     (type.kind != 1 and type.kind != 9) or type.status != 0 or type.containsParameter or type.module != context.sourceModule or type.symbol < 0 or type.symbol >= range.symbolCount
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
@@ -131,7 +140,7 @@ public appendDeclaredTypeUniverseRecord records: mut TypeUniverseRecords, contex
     declaration.kind == 3 -> if {
         semantic.fields -> each field {
             field.ownerType == typeId -> if {
-                field.status != 0 or field.fieldSymbol < 0 or field.fieldSymbol >= range.symbolCount or field.fieldType < 0 or field.fieldType >= (semantic.types -> len)
+                field.status != 0 or field.sourceModule != type.module or field.ownerSymbol != type.symbol or field.fieldSymbol < 0 or field.fieldSymbol >= range.symbolCount or field.fieldType < 0 or field.fieldType >= (semantic.types -> len)
                     -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
                 package.symbols[range.symbolStart + field.fieldSymbol] => member
                 records -> nominalLayoutMember(context, package, category!, typeId, field.ordinal, member.nameToken, field.fieldType) -> when {

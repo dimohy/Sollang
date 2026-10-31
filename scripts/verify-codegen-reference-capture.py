@@ -313,10 +313,14 @@ def main():
                     named.update((builtin['Text'], builtin['Int'], builtin['Bool']))
                     expected_boxes = [r for r in records['Boxes'] if r['ElementType'] in named]
                     assert int(box_count) == len(expected_boxes), (box_count, len(expected_boxes))
-                    assert len(lines) == 6
+                    assert len(lines) == 11
+                    assert lines[6] == "declarations:" + str(sum(bool(r["ModuleName"]) for group in ("Structs", "Enums") for r in records[group]))
+                    source_text = [r for r in records["Structs"] if r["Name"] == "sys.file.SourceText"]
+                    assert len(source_text) == 1
+                    verify_resolved_definitions(lines[7:], source_text, builtin)
                     storage_ids = set()
                     roles = ['FixedUInt8Array12', 'FixedUInt8Array16', 'FixedUInt8Array32', 'DynamicUInt8Array', 'DynamicDirectoryEntryArray']
-                    for line, role in zip(lines[1:], roles):
+                    for line, role in zip(lines[1:6], roles):
                         prefix, identity, kind, element, length, size, align = line.split(':')
                         assert prefix == 'storage' and int(identity) not in storage_ids
                         storage_ids.add(int(identity))
@@ -328,7 +332,7 @@ def main():
                     result['cases'].append(dict(id='production-full-stdlib-registry', passed=True, stdout=done.stdout))
                     result['completed'] += 1
                     lite = run([args.emitter, 'registry-lite-windows', stdlib, output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures], 'prepared-standalone')
-                    assert lite.stdout == 'registry:0:0:0\n', lite.stdout
+                    assert lite.stdout == 'registry:0:0:0\ndeclarations:0\n', lite.stdout
                     result['cases'].append(dict(id='standalone-boundary', passed=True, stdout=lite.stdout))
                     result['completed'] += 1
                     rejected = execution.run(list(map(str, [args.emitter, 'registry-windows', probe / 'minimal-stdlib', output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures])), output / 'prepared-rejected', timeout=180)

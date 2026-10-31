@@ -1094,6 +1094,11 @@ scratch boxes are not named registration seeds. Standalone prepared APIs with
 no standard-library source range have no complete-registry or cache-universe
 claim; their explicit lightweight boundary does not authorize suppressing a
 registration failure in a standard-library compilation.
+Source declaration identities are retained separately from canonical runtime
+descriptors at the same arena indices. Type metadata uses the retained source
+module and declaration coordinates with final field types; builtin runtime
+canonicalization does not erase a source definition from the registry. Nominal
+field ownership must match those retained coordinates.
 
 S059 is a blocking compiler-integrity diagnostic when a binding has a binary
 initializer AST but no corresponding binary Typed IR producer. Consecutive
