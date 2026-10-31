@@ -1,0 +1,152 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+# Declaration coordinates select source facts. Runtime ABI coordinates and the
+# finalized enum payload word count belong to the caller's committed arena.
+nominalLayoutHeader records: mut TypeUniverseRecords, context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, category: plans.KeyPart, typeId: Int, symbol: Int, payloadWords: Int -> Result<Unit, TypeUniverseCaptureError> {
+    context -> declarationNameField(package, symbol) => declaredName
+    [UInt8; ~] => moduleBytes!
+    context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], moduleBytes!)
+    Field { bytes: moduleBytes! } => module
+    category -> typeUniverseRecordRule(-1) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+        Ok(rule) {
+            [Binding; ~] => bindings!
+            rule.parts -> each part {
+                part -> plans.partIndex => index
+                index == (plans.KeyPart.TypeId -> plans.partIndex)
+                    -> if {
+                        typeId -> integerLayoutField => field
+                        bindings! -> push(Binding { part: part, fields: [field,; ~] })
+                    } else {
+                        index == (plans.KeyPart.TypePayloadWords -> plans.partIndex)
+                            -> if {
+                                payloadWords -> integerLayoutField => field
+                                bindings! -> push(Binding { part: part, fields: [field,; ~] })
+                            } else {
+                                index == (plans.KeyPart.TypeModule -> plans.partIndex)
+                                    -> if {
+                                        module -> copyIdentityField => field
+                                        bindings! -> push(Binding { part: part, fields: [field,; ~] })
+                                    } else {
+                                        index != (plans.KeyPart.TypeName -> plans.partIndex)
+                                            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart) -> return }
+                                        [UInt8; ~] => nameBytes!
+                                        # Match SemanticCompiler's canonical dyn trait name:
+                                        # module + '.' + declaration.Name when non-empty.
+                                        (category -> plans.partIndex) == (plans.KeyPart.TypeDynTraits -> plans.partIndex) and (module.bytes -> len) > 0
+                                            -> if {
+                                                module.bytes -> each byte { nameBytes! -> push(byte) }
+                                                nameBytes! -> push('.')
+                                            }
+                                        declaredName.bytes -> each byte { nameBytes! -> push(byte) }
+                                        Field { bytes: nameBytes! } => field
+                                        bindings! -> push(Binding { part: part, fields: [field,; ~] })
+                                    }
+                            }
+                    }
+            }
+            records -> appendTypeUniverseRecord(category, typeId, -1, bindings!) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+                Ok {}
+            }
+        }
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}
+
+nominalLayoutMember records: mut TypeUniverseRecords, context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, category: plans.KeyPart, typeId: Int, ordinal: Int, nameToken: Int, memberType: Int -> Result<Unit, TypeUniverseCaptureError> {
+    context -> typeTokenText(package, context.sourceModule, nameToken) -> textField => name
+    category -> typeUniverseRecordRule(ordinal) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+        Ok(rule) {
+            [Binding; ~] => bindings!
+            rule.parts -> each part {
+                part -> plans.partIndex => index
+                index == (plans.KeyPart.MemberName -> plans.partIndex)
+                    -> if {
+                        name -> copyIdentityField => field
+                        bindings! -> push(Binding { part: part, fields: [field,; ~] })
+                    } else {
+                        memberType => value!
+                        index == (plans.KeyPart.TypeFieldIndex -> plans.partIndex) or index == (plans.KeyPart.TypeVariantTag -> plans.partIndex)
+                            -> if { ordinal => value! } else {
+                                index != (plans.KeyPart.MemberType -> plans.partIndex)
+                                    -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart) -> return }
+                            }
+                        value! -> integerLayoutField => field
+                        bindings! -> push(Binding { part: part, fields: [field,; ~] })
+                    }
+            }
+            records -> appendTypeUniverseRecord(category, typeId, ordinal, bindings!) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+                Ok {}
+            }
+        }
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}
+
+public appendDeclaredTypeUniverseRecord records: mut TypeUniverseRecords, context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, payloadWords: Int -> Result<Unit, TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (semantic.types -> len) or context.sourceModule < 0 or context.sourceModule >= (package.ranges -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    semantic.types[typeId] => type
+    package.ranges[context.sourceModule] => range
+    type.kind != 1 or type.status != 0 or type.containsParameter or type.module != context.sourceModule or type.symbol < 0 or type.symbol >= range.symbolCount
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    package.symbols[range.symbolStart + type.symbol] => declaration
+    plans.KeyPart.TypeStructs => category!
+    type.origin == 16 and declaration.kind == 5 -> if { plans.KeyPart.TypeDynTraits => category! } else {
+        type.origin != 0 and type.origin != 2 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        declaration.kind != 3 -> if {
+            declaration.kind != 4 or payloadWords < 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            plans.KeyPart.TypeEnums => category!
+        }
+    }
+    records -> nominalLayoutHeader(context, package, category!, typeId, type.symbol, payloadWords) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+        Ok {}
+    }
+    declaration.kind == 3 -> if {
+        semantic.fields -> each field {
+            field.ownerType == typeId -> if {
+                field.status != 0 or field.fieldSymbol < 0 or field.fieldSymbol >= range.symbolCount or field.fieldType < 0 or field.fieldType >= (semantic.types -> len)
+                    -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                package.symbols[range.symbolStart + field.fieldSymbol] => member
+                records -> nominalLayoutMember(context, package, category!, typeId, field.ordinal, member.nameToken, field.fieldType) -> when {
+                    Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                    Ok {}
+                }
+            }
+        }
+    }
+    declaration.kind == 4 -> if {
+        0 => ordinal!
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => variant
+            variant.kind == 27 and variant.parent == type.symbol
+                -> if {
+                    -1 => payload!
+                    variant.typeNode >= 0 -> if {
+                        semantic.references -> each reference {
+                            reference.sourceModule == type.module and reference.typeAst == variant.typeNode and reference.status == 0
+                                -> if { reference.typeId => payload! }
+                        }
+                        payload! < 0 or payload! >= (semantic.types -> len)
+                            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                    }
+                    records -> nominalLayoutMember(context, package, category!, typeId, ordinal!, variant.nameToken, payload!) -> when {
+                        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                        Ok {}
+                    }
+                    ordinal! + 1 => ordinal!
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}

@@ -1,0 +1,86 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [file.SourceText; ~] => sources!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> typeIds.resolveAnalyzed => semantic
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context
+    [typeIds.SemanticType; ~] => layoutTypes!
+    semantic.types -> each type { layoutTypes! -> push(type) }
+    [typeIds.NominalField; ~] => layoutFields!
+    semantic.fields -> each field { layoutFields! -> push(field) }
+    llvm.TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: 64 } -> llvm.layoutsFor => layouts
+    "builtin:Bool:$(typeIds.builtinTypeId(semantic.types, 23))" -> println
+    "builtin:Int64:$(typeIds.builtinTypeId(semantic.types, 6))" -> println
+    "builtin:Int:$(typeIds.builtinTypeId(semantic.types, 2))" -> println
+    0 => captured!
+    0 => typeIndex!
+    typeIndex! < (semantic.types -> len) -> while {
+        semantic.types[typeIndex!] => type
+        type.kind == 1 and type.module == 0 and type.symbol >= 0 and type.status == 0
+            -> if {
+                package.symbols[package.ranges[0].symbolStart + type.symbol] => declaration
+                declaration.kind == 3 or declaration.kind == 4 or declaration.kind == 5
+                    -> if {
+                        package.tokens[package.ranges[0].tokenStart + declaration.nameToken] => token
+                        package.sources[0] -> slice(token.span.start, token.span.length) => name
+                        -1 => words!
+                        declaration.kind == 4 -> if {
+                            # Exercise real resolved variant payloads and known primitive/
+                            # struct inline layouts. Production supplies its finalized
+                            # recursive enum ABI word count; that consumer is pending.
+                            0 => payloadBytes!
+                            0 => variantIndex!
+                            variantIndex! < package.ranges[0].symbolCount
+                                -> while {
+                                    package.symbols[package.ranges[0].symbolStart + variantIndex!] => variant
+                                    variant.kind == 27 and variant.parent == type.symbol and variant.typeNode >= 0
+                                        -> if {
+                                            -1 => payload!
+                                            semantic.references -> each reference {
+                                                reference.sourceModule == 0 and reference.typeAst == variant.typeNode and reference.status == 0
+                                                    -> if { reference.typeId => payload! }
+                                            }
+                                            payload! < 0 or layouts.statuses[payload!] != 0
+                                                -> if { process.exit(2) }
+                                            semantic.types[payload!] -> llvm.aggregateFieldLayout(layouts.sizes[payload!], layouts.aligns[payload!]) => layout
+                                            layout.size > payloadBytes! -> if { layout.size => payloadBytes! }
+                                        }
+                                    variantIndex! + 1 => variantIndex!
+                                }
+                            (payloadBytes! + 7) / 8 => words!
+                        }
+                        keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+                        records! -> keys.appendDeclaredTypeUniverseRecord(context, package, semantic, typeIndex!, words!) -> when {
+                            Err(_) { process.exit(3) }
+                            Ok {}
+                        }
+                        "definition:$name:$(typeIndex!)" -> println
+                        records!.fields -> each field {
+                            field.bytes -> file.borrowBytes => bytes
+                            bytes -> slice(0, bytes -> len) -> println
+                        }
+                        "end-definition" -> println
+                        captured! + 1 => captured!
+                    }
+            }
+        typeIndex! + 1 => typeIndex!
+    }
+    captured! != 3 -> if { process.exit(4) }
+}

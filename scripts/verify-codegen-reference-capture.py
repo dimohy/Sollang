@@ -17,32 +17,84 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
 
 
+def verify_nominal(lines, records, builtin_ids):
+    prefix = 'cache.nominal.'
+    native_ids = {}
+    blocks = {}
+    current = None
+    for line in lines:
+        if line.startswith('builtin:'):
+            _, name, identity = line.split(':')
+            native_ids[int(identity)] = builtin_ids[name]
+        elif line.startswith('definition:'):
+            _, name, identity = line.split(':')
+            assert name not in blocks
+            if name == 'Value':
+                rows = [r for r in records['DynTraits'] if r['TraitName'].endswith(prefix + name)]
+            else:
+                rows = [r for r in records['Structs' if name == 'Pair' else 'Enums']
+                        if r['Name'] == prefix + name]
+            assert len(rows) == 1
+            native_ids[int(identity)] = rows[0]['Id']
+            blocks[name] = dict(reference=rows[0], observed=[])
+            current = blocks[name]['observed']
+        elif line == 'end-definition':
+            assert current is not None
+            current = None
+        else:
+            assert current is not None
+            current.append(line.split(':'))
+    assert set(blocks) == {'Pair', 'Choice', 'Value'} and current is None
+    native_ids[-1] = -1
+    for name, block in blocks.items():
+        reference, observed = block['reference'], block['observed']
+        for row in observed:
+            coordinate = 1 if row[0] in ('struct', 'enum', 'dyn') else 3
+            row[coordinate] = str(native_ids[int(row[coordinate])])
+        if name == 'Pair':
+            expected = [['struct', reference['Id'], reference['Name'], reference['ModuleName']]]
+            expected += [['field', f['Index'], f['Name'], f['Type']]
+                         for f in sorted(reference['Fields'], key=lambda f: f['Index'])]
+        elif name == 'Choice':
+            expected = [['enum', reference['Id'], reference['Name'], reference['ModuleName'], reference['PayloadWords']]]
+            expected += [['variant', v['Tag'], v['Name'], v['PayloadType'] if v['PayloadType'] is not None else -1]
+                         for v in sorted(reference['Variants'], key=lambda v: v['Tag'])]
+        else:
+            expected = [['dyn', reference['Id'], reference['TraitName']]]
+        assert observed == [[str(part) for part in row] for row in expected], (name, observed, expected)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
-    parser.add_argument('--probe', choices=['reference', 'storage'], default='reference')
+    parser.add_argument('--fixture-directory', type=Path)
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     compiler, output = args.compiler.resolve(), args.output.resolve()
-    probe = ROOT / ('scripts/probes/codegen-registered-types' if args.probe == 'reference'
-                    else 'scripts/probes/codegen-storage-capture')
-    fixture = probe / 'input.slg'
+    probe = ROOT / {'reference': 'scripts/probes/codegen-registered-types',
+                    'storage': 'scripts/probes/codegen-storage-capture',
+                    'nominal': 'scripts/probes/codegen-nominal-capture'}[args.probe]
+    fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
+    assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
     sources = [ROOT / s for s in manifest.read_text(encoding='utf-8-sig').splitlines() if s]
     reference = json.loads(args.reference_result.read_text(encoding='utf-8'))
     assert reference['status'] == 'passed' and reference['completed'] == reference['total'] == 1
     assert reference['inputsStable'] and reference['processesStopped']
-    assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
+    for fixture in fixtures:
+        assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
-    declaration = ('cache.registered' if args.probe == 'reference' else 'cache.storage') + '.Pair'
+    declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
+                   'nominal': 'cache.nominal'}[args.probe] + '.Pair'
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.reference_result,
-             fixture, manifest, *sources, *sorted((ROOT / 'stdlib').rglob('*.slg'))]
+             *fixtures, manifest, *sources, *sorted((ROOT / 'stdlib').rglob('*.slg'))]
     if args.emitter:
         producer_path = args.emitter.parent / 'result.json'
         producer = json.loads(producer_path.read_text(encoding='utf-8'))
@@ -81,11 +133,13 @@ def main():
                     run([ROOT / '.tools/llvm-22.1.8/bin/llvm-as.exe', llvm, '-o', output / 'program.bc'], 'assemble')
                     run([ROOT / '.tools/llvm-22.1.8/bin/clang.exe', llvm, '-O0', '-Wno-override-module',
                          '-o', executable, '-lkernel32', '-lshell32', '-lws2_32', '-lbcrypt'], 'link')
-                done = run([executable, fixture], backend + '-run', 20)
+                done = run([executable, *fixtures], backend + '-run', 20)
                 lines = done.stdout.splitlines()
                 if args.probe == 'reference':
                     assert len(lines) == 2 and re.fullmatch(r'reference:\d+:\d+', lines[0])
                     assert lines[0] == lines[1], lines
+                elif args.probe == 'nominal':
+                    verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
                 else:
                     assert len(lines) == 8, lines
                     observed = {}

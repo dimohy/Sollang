@@ -33,7 +33,10 @@ if (args.Length == 3 && args[2] == "registered-type-universe-vectors")
         records[name] = types.GetType().GetProperty(name)!.GetValue(types)!;
     var hash = cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!
         .Invoke(null, [types]);
-    Console.WriteLine(JsonSerializer.Serialize(new { hash, records }));
+    var typeIdEnum = assembly.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+    var builtinTypeIds = Enum.GetNames(typeIdEnum).ToDictionary(name => name,
+        name => Convert.ToInt32(Enum.Parse(typeIdEnum, name)), StringComparer.Ordinal);
+    Console.WriteLine(JsonSerializer.Serialize(new { hash, records, builtinTypeIds }));
     return;
 }
 
