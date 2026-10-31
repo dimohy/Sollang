@@ -152,6 +152,46 @@ primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mu
     -1
 }
 
+publishPrimaryBlockRoleRead prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, role: symbols.Symbol, readAst: Int -> Bool {
+    prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role) => roleTypeId
+    roleTypeId < 0 -> if { false -> return }
+    prepared.package.ranges[sourceIndex].astStart + readAst => globalAst
+    expressionIndexByAst[globalAst] => existing
+    existing >= 0 -> if {
+        expressions[existing].typeId == roleTypeId and expressions[existing].status == 0
+            -> if { false -> return }
+    }
+    ExpressionTypeId { sourceModule: sourceIndex, astNode: readAst, typeId: roleTypeId, status: 0 } => exactType
+    existing >= 0 -> if {
+        exactType => expressions[existing]
+    } else {
+        expressions -> len => expressionIndex
+        expressions -> push(exactType)
+        expressionIndex => expressionIndexByAst[globalAst]
+    }
+    true
+}
+
+resolveDeclaredBlockRoleReads prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~] -> Bool {
+    # Additional arguments can become concrete after initial expression typing.
+    # Publish the specialized declaration before dependent member paths resolve.
+    false => changed!
+    0..<(prepared.package.ranges -> len) -> each sourceIndex {
+        prepared.package.ranges[sourceIndex] => range
+        0..<range.nameCount -> each nameIndex {
+            prepared.package.names[range.nameStart + nameIndex] => name
+            name.symbol >= 0 -> if {
+                prepared.package.symbols[range.symbolStart + name.symbol] => role
+                role.kind == 35 -> if {
+                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role, name.astNode)
+                        -> if { true => changed! }
+                }
+            }
+        }
+    }
+    changed!
+}
+
 # Arithmetic returns the resolved left operand type. The canonical result
 # belongs to the operator AST, before bindings and conversion arguments read it.
 resolveArithmeticExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Bool {
@@ -1768,18 +1808,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                 foldRoleExpression => expressionIndexByAst[sourceRange.astStart + resolvedName.astNode]
                             }
                         }
-                    prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex!, valueSymbol) => roleTypeId
-                    roleTypeId >= 0 -> if {
-                        expressionIndexByAst[sourceRange.astStart + resolvedName.astNode] => roleExpressionIndex!
-                        ExpressionTypeId { sourceModule: sourceIndex!, astNode: resolvedName.astNode, typeId: roleTypeId, status: 0 } => roleExactType
-                        roleExpressionIndex! >= 0 -> if {
-                            roleExactType => expressions[roleExpressionIndex!]
-                        } else {
-                            expressions -> len => roleExpressionIndex!
-                            expressions -> push(roleExactType)
-                            roleExpressionIndex! => expressionIndexByAst[sourceRange.astStart + resolvedName.astNode]
-                        }
-                    }
+                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex!, valueSymbol, resolvedName.astNode) => initialRoleReadChanged
                     valueSymbol.typeNode >= 0 -> if {
                         referenceIndexByTypeAst[sourceRange.astStart + valueSymbol.typeNode] => referenceIndex
                         referenceIndex >= 0 -> if {

@@ -14,6 +14,22 @@ main {
     initialPrepared -> expressionTypeIds.resolveCallContext => resolved
     resolved.prepared => prepared
     resolved.types => types
+    0..<(types.types -> len) -> each typeIndex {
+        types.types[typeIndex] => type
+        "type $(typeIndex) $(type.kind) $(type.origin) $(type.module) $(type.symbol) $(type.first) $(type.second) $(type.containsParameter)" -> println
+    }
+    0..<(prepared.package.symbols -> len) -> each symbolIndex {
+        prepared.package.symbols[symbolIndex] => symbol
+        symbol.kind == 35 -> if {
+            "lexical $(symbolIndex) $(symbol.astNode) $(symbol.parent) $(symbol.nameToken) $(symbol.typeNode) $(types.lexicalBindingTypeBySymbol[symbolIndex])" -> println
+        }
+    }
+    prepared.calls -> each call {
+        "call $(call.sourceModule) $(call.callAst) $(call.targetSourceModule) $(call.functionSymbol) $(call.status)" -> println
+    }
+    types.callArguments -> each argument {
+        "argument $(argument.sourceModule) $(argument.callAst) $(argument.argumentAst) $(argument.parameterSymbol) $(argument.parameterOrdinal) $(argument.expectedTypeId) $(argument.actualTypeId) $(argument.status)" -> println
+    }
     prepared.package.ranges[0] => range
     0 => astIndex!
     astIndex! < range.astCount -> while {
@@ -24,9 +40,9 @@ main {
     types.expressions -> each expression {
         expression.sourceModule == 0 and expression.typeId >= 0
             -> if {
-            types.types[expression.typeId] => type
-            "semantic $(expression.astNode) $(expression.typeId) $(type.kind) $(type.origin) $(type.module) $(type.symbol)" -> println
-        }
+                types.types[expression.typeId] => type
+                "semantic $(expression.astNode) $(expression.typeId) $(type.kind) $(type.origin) $(type.module) $(type.symbol)" -> println
+            }
     }
     [0, 3] -> each phase {
         prepared -> typedIr.profileResolvedContext(types, phase) => ir
