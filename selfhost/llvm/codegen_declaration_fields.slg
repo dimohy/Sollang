@@ -27,6 +27,73 @@ declarationNameField context: ref TypeFieldContext, package: ref analysis.Packag
     Field { bytes: bytes! }
 }
 
+# Numeric metadata uses the managed invariant decimal spelling and owns bytes.
+unsignedDeclarationField value: UInt64 -> Field {
+    [UInt8; ~] => reversed!
+    value => remaining!
+    remaining! == 0 -> if { reversed! -> push('0') }
+    remaining! > 0 -> while {
+        reversed! -> push(UInt8(48 + remaining! % 10))
+        remaining! / 10 => remaining!
+    }
+    [UInt8; ~] => bytes!
+    (reversed! -> len) - 1 => index!
+    index! >= 0 -> while {
+        bytes! -> push(reversed![index!])
+        index! - 1 => index!
+    }
+    Field { bytes: bytes! }
+}
+
+struct TraitFields {
+    associated: [Field; ~]
+    methods: [Field; ~]
+}
+
+traitDeclarationFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<TraitFields, DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    [Field; ~] => associated!
+    [Field; ~] => methods!
+    0 => index!
+    index! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + index!] => member
+        member.parent == context.ownerSymbol -> if {
+            member.kind == 28 -> if {
+                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => name
+                associated! -> push(name)
+            }
+            member.kind == 29 -> if {
+                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => name
+                methods! -> push(name)
+                methods! -> push(unsignedDeclarationField(UInt64(member.flags % 4)))
+                context -> typeAnnotationField(package, member.typeNode) -> when {
+                    Ok(field) { methods! -> push(field) }
+                    Err(_) { Result<TraitFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+                }
+                [Int; ~] => parameters!
+                0 => parameterIndex!
+                parameterIndex! < range.symbolCount -> while {
+                    package.symbols[range.symbolStart + parameterIndex!] => parameter
+                    parameter.kind == 35 and parameter.parent == index! and parameter.astNode != member.astNode
+                        -> if { parameters! -> push(parameterIndex!) }
+                    parameterIndex! + 1 => parameterIndex!
+                }
+                methods! -> push(unsignedDeclarationField(UInt64(parameters! -> len)))
+                parameters! -> each parameterIndex {
+                    package.symbols[range.symbolStart + parameterIndex] => parameter
+                    context -> typeAnnotationField(package, parameter.typeNode) -> when {
+                        Ok(field) { methods! -> push(field) }
+                        Err(_) { Result<TraitFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+                    }
+                    methods! -> push(unsignedDeclarationField(UInt64(parameter.flags % 4)))
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+    Result<TraitFields, DeclarationFieldError>.Ok(TraitFields { associated: associated!, methods: methods! })
+}
+
 # Supply real declaration facts; the generated rule selects their order. A
 # future rule requesting another fact fails through the existing MissingPart
 # contract rather than silently omitting it from an interface fingerprint.
@@ -37,7 +104,7 @@ public declarationBindings context: ref TypeFieldContext, package: ref analysis.
     context.ownerSymbol < 0 or context.ownerSymbol >= range.symbolCount
         -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
     package.symbols[range.symbolStart + context.ownerSymbol] => declaration
-    declaration.kind != 3 and declaration.kind != 4
+    declaration.kind != 3 and declaration.kind != 4 and declaration.kind != 5
         -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
     declaration.flags / 4 % 2 == 0 or declaration.nameToken < 0
         -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
@@ -50,6 +117,16 @@ public declarationBindings context: ref TypeFieldContext, package: ref analysis.
     context -> declarationNameField(package, context.ownerSymbol) => name
     identity! -> push(name)
     bindings! -> push(Binding { part: plans.KeyPart.Identity, fields: identity! })
+    declaration.kind == 5 -> if {
+        context -> traitDeclarationFields(package) -> when {
+            Ok(fields) {
+                bindings! -> push(Binding { part: plans.KeyPart.TraitAssociatedTypes, fields: fields.associated })
+                bindings! -> push(Binding { part: plans.KeyPart.TraitMethods, fields: fields.methods })
+                Result<[Binding; ~], DeclarationFieldError>.Ok(bindings!) -> return
+            }
+            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+        }
+    }
     [Field; ~] => visibility!
     visibility! -> push(textField("public"))
     bindings! -> push(Binding { part: plans.KeyPart.Visibility, fields: visibility! })

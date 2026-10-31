@@ -6216,6 +6216,12 @@ Current backend:
   and an empty payload field for payload-free variants. Fact adapters bind
   generated rule parts; unsupported declaration categories must fail explicitly
   rather than masquerade as a complete module interface.
+  Trait facts retain associated-type and method source order. A method records
+  its name, self ownership, return type, additional parameter count, and each
+  additional parameter's type and ownership. Synthetic self symbols do not enter
+  that count. Empty traits still bind the required empty groups; parameter names
+  do not enter the trait method interface. Numeric metadata uses invariant decimal
+  spelling, with Default, Move and MutableBorrow represented by 0, 1 and 2.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash
