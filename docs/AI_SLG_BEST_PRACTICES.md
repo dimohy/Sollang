@@ -1814,9 +1814,14 @@ their generated module and source path. C# callers use the compiled method;
 SLG callers import its generated module. The C# build exports the complete
 Boolean input table, so a method-body change updates SLG without a second rule
 implementation. Keep representation-specific origin discovery in each compiler
-and pass explicit facts into the shared decision. Only static deterministic
-Boolean methods with at most six Boolean inputs are supported; unsupported
-signatures fail instead of retaining an old rule. Do not edit generated SLG.
+and pass explicit facts into the shared decision. Static deterministic Boolean
+methods support at most six Boolean inputs. Pure `UInt64` arithmetic methods
+support at most six `UInt64` inputs and lower their compiled straight-line
+unchecked addition, subtraction and multiplication. Preserve all 64 literal
+bits. Calls, branches, locals, exception regions, checked arithmetic and
+unsupported signatures fail instead of retaining an old rule. This arithmetic
+path shares cache checksums and key fingerprints without a second handwritten
+equation. Do not edit generated SLG.
 Before compiling self-host sources, run `selfhost-sync --root <repository>
 --check` with the selected managed compiler. A source change requires rebuilding
 that compiler; a generated-source change requires regeneration. Both checks

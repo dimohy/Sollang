@@ -676,13 +676,10 @@ internal sealed class IncrementalCodegenCache
         return hash;
     }
 
-    private static ulong Mix(ulong hash, ulong value) => unchecked(
-        (hash + 11400714819323198485UL) * (hash + 13787848793156543929UL)
-        + (value + 10723151780598845931UL) * (value + 7146057691288625177UL)
-        + 1099511628211UL);
+    private static ulong Mix(ulong hash, ulong value) => Shared.CodegenCachePolicy.ChecksumMix(hash, value);
 
     private static ulong FingerprintMix(ulong hash, ulong value) =>
-        unchecked(hash * 1099511628211UL + value + 97UL);
+        Shared.CodegenCachePolicy.FingerprintMix(hash, value);
 
     private static ulong HashFields(IEnumerable<string> fields)
     {

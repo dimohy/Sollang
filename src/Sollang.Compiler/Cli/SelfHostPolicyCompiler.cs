@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,8 +8,8 @@ using Sollang.Compiler.Shared;
 
 namespace Sollang.Compiler.Cli;
 
-// A finite Boolean decision is exported from the actual compiled C# method.
-// Every possible input is enumerated; no independently maintained SLG rule exists.
+// Boolean decisions enumerate every input. UInt64 arithmetic is lowered from
+// the actual compiled method's straight-line IL, with unsupported IL rejected.
 internal static class SelfHostPolicyCompiler
 {
     internal static void CheckGeneratedInputs(IReadOnlyList<string> sourcePaths)
@@ -91,6 +92,7 @@ internal static class SelfHostPolicyCompiler
 
     internal static string RenderDecision(MethodInfo method)
     {
+        if (method.ReturnType == typeof(ulong)) return RenderArithmetic(method);
         var parameters = method.GetParameters();
         if (!method.IsStatic || method.IsGenericMethod || method.ReturnType != typeof(bool)
             || parameters.Length > 6 || parameters.Any(parameter => parameter.ParameterType != typeof(bool)
@@ -115,6 +117,80 @@ internal static class SelfHostPolicyCompiler
             result.Append("    ").Append(parameters[bit].Name).Append(" -> if { decision! / ")
                 .Append((1UL << (1 << bit)).ToString(CultureInfo.InvariantCulture)).Append(" => decision! }\n");
         return result.Append("    decision! % 2 == 1\n}\n").ToString();
+    }
+
+    private static string RenderArithmetic(MethodInfo method)
+    {
+        var parameters = method.GetParameters();
+        if (!method.IsStatic || method.IsGenericMethod || !Identifier(method.Name)
+            || parameters.Length > 6 || parameters.Any(parameter => parameter.ParameterType != typeof(ulong)
+                || parameter.IsOptional || parameter.Name is null || !Identifier(parameter.Name)))
+            throw new SollangException("SELFHOST_POLICY_UINT64_SIGNATURE_REQUIRED: " + method.Name);
+        var body = method.GetMethodBody();
+        var code = body?.GetILAsByteArray();
+        if (body is null || code is null || code.Length > 1024
+            || body.LocalVariables.Count != 0 || body.ExceptionHandlingClauses.Count != 0)
+            throw new SollangException("SELFHOST_POLICY_UINT64_BODY_UNSUPPORTED: " + method.Name);
+        var stack = new List<string>();
+        var cursor = 0;
+        SollangException Invalid() => new("SELFHOST_POLICY_UINT64_IL_UNSUPPORTED: " + method.Name
+            + " at " + cursor.ToString(CultureInfo.InvariantCulture));
+        void Literal(ulong value) => stack.Add(value.ToString(CultureInfo.InvariantCulture));
+        while (cursor < code.Length)
+        {
+            var op = code[cursor++];
+            if (op == 0x00) continue; // nop
+            if (op is >= 0x02 and <= 0x05 || op == 0x0E) // ldarg.0..3 / ldarg.s
+            {
+                var index = op == 0x0E ? cursor < code.Length ? code[cursor++] : -1 : op - 0x02;
+                if (index < 0 || index >= parameters.Length) throw Invalid();
+                stack.Add(parameters[index].Name!);
+            }
+            else if (op == 0x21) // ldc.i8: preserve all 64 bits, including high-bit literals
+            {
+                if (code.Length - cursor < 8) throw Invalid();
+                Literal(BinaryPrimitives.ReadUInt64LittleEndian(code.AsSpan(cursor, 8)));
+                cursor += 8;
+            }
+            else if (op is >= 0x15 and <= 0x20) // ldc.i4 followed by an explicit widening
+            {
+                int value;
+                if (op <= 0x1E) value = op - 0x16;
+                else if (op == 0x1F)
+                {
+                    if (cursor == code.Length) throw Invalid();
+                    value = unchecked((sbyte)code[cursor++]);
+                }
+                else
+                {
+                    if (code.Length - cursor < 4) throw Invalid();
+                    value = BinaryPrimitives.ReadInt32LittleEndian(code.AsSpan(cursor, 4));
+                    cursor += 4;
+                }
+                if (cursor == code.Length) throw Invalid();
+                var conversion = code[cursor++];
+                if (conversion is not (0x6A or 0x6E)) throw Invalid(); // conv.i8 / conv.u8
+                if (conversion == 0x6E && value < 0) throw Invalid();
+                Literal(conversion == 0x6A ? unchecked((ulong)(long)value) : unchecked((uint)value));
+            }
+            else if (op is 0x58 or 0x59 or 0x5A) // unchecked add / sub / mul
+            {
+                if (stack.Count < 2) throw Invalid();
+                var right = stack[^1]; var left = stack[^2];
+                stack.RemoveRange(stack.Count - 2, 2);
+                stack.Add("(" + left + (op == 0x58 ? " + " : op == 0x59 ? " - " : " * ") + right + ")");
+            }
+            else if (op == 0x2A) // ret; no hidden work may follow it
+            {
+                if (cursor != code.Length || stack.Count != 1) throw Invalid();
+                var name = char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
+                var inputs = parameters.Length == 0 ? ":" : " " + string.Join(", ",
+                    parameters.Select(parameter => parameter.Name + ": UInt64"));
+                return "public " + name + inputs + " -> UInt64 {\n    " + stack[0] + "\n}\n";
+            }
+            else throw Invalid();
+        }
+        throw Invalid();
     }
 
     private static bool Identifier(string value) => value.Length > 0 && char.IsAsciiLetter(value[0])

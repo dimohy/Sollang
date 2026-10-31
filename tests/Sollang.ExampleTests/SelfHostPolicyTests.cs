@@ -51,6 +51,23 @@ internal static class SelfHostPolicyTests
             Check("non-boolean-rejected", Rejected(nameof(UnsupportedPolicy), "SELFHOST_POLICY_BOOLEAN_SIGNATURE_REQUIRED"));
             Check("nondeterminism-rejected", Rejected(nameof(UnstablePolicy), "SELFHOST_POLICY_NONDETERMINISTIC"));
 
+            var numeric = compiler.GetType("Sollang.Compiler.Shared.CodegenCachePolicy", true)!;
+            var checksum = Emit(numeric.GetMethod("ChecksumMix")!);
+            var fingerprint = Emit(numeric.GetMethod("FingerprintMix")!);
+            var changedNumeric = Emit(typeof(SelfHostPolicyTests).GetMethod(nameof(ChangedArithmetic),
+                BindingFlags.NonPublic | BindingFlags.Static)!);
+            Check("arithmetic-source-body-controls-output", changedNumeric != fingerprint
+                && changedNumeric.Contains("hash * 3", StringComparison.Ordinal));
+            Check("u64-high-bit-constant-retained", checksum.Contains("11400714819323198485", StringComparison.Ordinal));
+            Check("u64-fingerprint-constants-retained", fingerprint.Contains("1099511628211", StringComparison.Ordinal)
+                && fingerprint.Contains("97", StringComparison.Ordinal));
+            Check("u64-checked-rejected", Rejected(nameof(CheckedArithmetic), "SELFHOST_POLICY_UINT64_IL_UNSUPPORTED"));
+            Check("u64-call-rejected", Rejected(nameof(CallArithmetic), "SELFHOST_POLICY_UINT64_IL_UNSUPPORTED"));
+            Check("u64-branch-rejected", Rejected(nameof(BranchArithmetic), "SELFHOST_POLICY_UINT64_IL_UNSUPPORTED"));
+            Check("u64-other-input-rejected", Rejected(nameof(OtherArithmetic), "SELFHOST_POLICY_UINT64_SIGNATURE_REQUIRED"));
+            Check("u64-subtraction-lowered", Emit(typeof(SelfHostPolicyTests).GetMethod(nameof(SubtractArithmetic),
+                BindingFlags.NonPublic | BindingFlags.Static)!).Contains("hash - value", StringComparison.Ordinal));
+
             var root = FindRoot();
             var mirror = Path.Combine(directory, "policy-input");
             Directory.CreateDirectory(mirror);
@@ -91,7 +108,7 @@ internal static class SelfHostPolicyTests
         catch (Exception error) { failure = error.ToString(); }
         finally { context.Unload(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new { status = failure is null ? "passed" : "failed",
-            completed = cases.Count, total = 24, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
+            completed = cases.Count, total = 32, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;
     }
 
@@ -107,4 +124,10 @@ internal static class SelfHostPolicyTests
     private static bool UnsupportedPolicy(int value) => value == 0;
     private static bool _toggle;
     private static bool UnstablePolicy(bool value) { _toggle = !_toggle; return _toggle == value; }
+    private static ulong ChangedArithmetic(ulong hash, ulong value) => unchecked(hash * 3 + value);
+    private static ulong CheckedArithmetic(ulong hash, ulong value) => checked(hash + value);
+    private static ulong CallArithmetic(ulong hash, ulong value) => Math.Max(hash, value);
+    private static ulong BranchArithmetic(ulong hash, ulong value) => hash > value ? hash : value;
+    private static ulong OtherArithmetic(ulong hash, int value) => unchecked(hash + (ulong)value);
+    private static ulong SubtractArithmetic(ulong hash, ulong value) => unchecked(hash - value);
 }

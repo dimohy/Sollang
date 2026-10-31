@@ -2,8 +2,8 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records"))
-    throw new ArgumentException("compiler assembly, artifact directory, and optional declared-lengths/declared-records mode required");
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors"))
+    throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
 Directory.CreateDirectory(directory);
@@ -14,6 +14,29 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "hash-vectors")
+{
+    var policy = assembly.GetType("Sollang.Compiler.Shared.CodegenCachePolicy", true)!;
+    var checksum = policy.GetMethod("ChecksumMix")!;
+    var fingerprint = policy.GetMethod("FingerprintMix")!;
+    var render = assembly.GetType("Sollang.Compiler.Cli.SelfHostPolicyCompiler", true)!
+        .GetMethod("RenderDecision", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var smoke = "namespace cache.hash.smoke\n";
+    foreach (var method in typeof(ArithmeticSmoke).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        smoke += "\n" + (string)render.Invoke(null, [method])!;
+    File.WriteAllText(Path.Combine(directory, "arithmetic-smoke.slg"), smoke);
+    ulong[] values = [0, 1, 255, uint.MaxValue, (ulong)uint.MaxValue + 1,
+        long.MaxValue, (ulong)long.MaxValue + 1, ulong.MaxValue];
+    foreach (var hash in values)
+    foreach (var value in values)
+        Console.WriteLine(JsonSerializer.Serialize(new { hash, value,
+            checksum = (ulong)checksum.Invoke(null, [hash, value])!,
+            fingerprint = (ulong)fingerprint.Invoke(null, [hash, value])!,
+            subtraction = ArithmeticSmoke.Subtract(hash, value),
+            changed = ArithmeticSmoke.Changed(hash, value) }));
+    return;
+}
 
 if (args.Length == 3 && args[2] == "declared-lengths")
 {
@@ -134,4 +157,10 @@ foreach (var length in new[] { 0, 1, 1048576, 1048577 })
         diagnostic = error.InnerException.Message;
     }
     Console.WriteLine(JsonSerializer.Serialize(new { length, accepted, diagnostic }));
+}
+
+internal static class ArithmeticSmoke
+{
+    public static ulong Subtract(ulong hash, ulong value) => unchecked(hash - value);
+    public static ulong Changed(ulong hash, ulong value) => unchecked(hash * 3 + value);
 }
