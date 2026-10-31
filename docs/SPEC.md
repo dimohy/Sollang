@@ -1103,6 +1103,12 @@ Concrete registry membership is selected from final type annotations,
 expression and lexical-binding facts, Typed IR and instantiated generic call
 arguments/results, together with the required declaration, box and storage
 seeds. Selection follows child-type and selected-owner field dependencies.
+Successful array-literal facts retain their source coordinates and original
+backing type as well as the converted value type. Active concrete backing
+types remain registered when contextual conversion produces a growable value.
+Backing facts are committed after call and enum argument types are finalized.
+Untyped empty array values retain the expected element type in readonly numeric
+returns and compatible enum payloads.
 Numeric literals in declared array returns inherit the element type, including
 readonly array views, before their backing storage is registered. The literal's
 extent and independently typed elements retain their own contracts.

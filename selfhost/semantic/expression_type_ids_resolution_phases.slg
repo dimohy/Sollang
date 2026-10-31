@@ -2624,6 +2624,49 @@ public internArrayLiteralType types: mut [typeIds.SemanticType; ~], kind: Int, e
     found!
 }
 
+# A contextual literal can produce a growable value after registering fixed
+# backing storage. Preserve the same allocation decision as C# inference.
+registerArrayBackingFacts prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~] -> [ExpressionTypeId; ~] {
+    prepared.package -> indexContextualRecords => index
+    [ExpressionTypeId; ~] => facts!
+    prepared.package.ranges -> each range {
+        0 => astNode!
+        astNode! < range.astCount -> while {
+            range.astStart + astNode! => global
+            prepared.package.nodes[global].kind == 37 -> if {
+                -1 => context!
+                expressionIndexByAst[global] >= 0
+                    -> if { expressions[expressionIndexByAst[global]].typeId => context! }
+                context! >= 0 and context! < (types -> len)
+                    -> if {
+                        types[context!] => container
+                        (container.kind == 2 or container.kind == 3 or container.kind == 4 or container.kind == 12)
+                            and container.first >= 0 and container.first < (types -> len)
+                            -> if {
+                                prepared.package -> typeIds.arrayStorageSyntax(range.sourceModule, astNode!) => storage
+                                not storage.dynamic and not storage.bounded -> if {
+                                    0 => length!
+                                    index.firstChild[global] => child!
+                                    child! >= 0 -> while {
+                                        prepared.package.nodes[child!].kind != 12 and prepared.package.nodes[child!].kind != 16
+                                            -> if { length! + 1 => length! }
+                                        index.nextChild[child!] => child!
+                                    }
+                                    storage.isRepeat -> if { storage.length => length! }
+                                    length! >= 0 -> if {
+                                        types -> internArrayLiteralType(4, container.first, length!) => backing
+                                        facts! -> push(ExpressionTypeId { sourceModule: range.sourceModule, astNode: astNode!, typeId: backing, status: 0 })
+                                    }
+                                }
+                            }
+                    }
+            }
+            astNode! + 1 => astNode!
+        }
+    }
+    facts!
+}
+
 resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Unit {
     # Build recursive IDs for composite literals bottom-up. This makes literal
     # arguments available to the same generic unifier as annotated names.

@@ -1,0 +1,38 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.source_root as sourceRoot
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+inspect: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
+    [file.SourceText; ~] => owners!
+    paths -> each current { current -> pathText -> file.mapText => owner
+        owners! -> push(owner) }
+    arguments[2] -> file.mapText => fixture
+    owners! -> push(fixture)
+    [Text; ~] => sources!
+    owners! -> each owner { owner -> slice(0, owner -> len) => source
+        sources! -> push(source) }
+    sources! -> semanticContext.prepare => prepared
+    prepared -> expressions.resolveContext => semantic
+    "facts:$(semantic.arrayBackingFacts -> len)" -> println
+    semantic.types -> typeIds.builtinTypeId(2) => integer
+    semantic.arrayBackingFacts -> each fact {
+        semantic.types[fact.typeId] => type
+        type.kind == 4 and type.first == integer
+            and (type.length == 0 or type.length == 1 or type.length == 2 or type.length == 12)
+            -> if {
+                prepared.package.ranges[fact.sourceModule] => range
+                prepared.package.nodes[range.astStart + fact.astNode] => node
+                prepared.package.sources[fact.sourceModule] -> slice(node.start, node.length) => source
+                fact.sourceModule < Int(paths -> len)
+                    -> if { paths[fact.sourceModule] -> pathText } else { arguments[2] } => sourcePath
+                "backing:$(type.length):$sourcePath:$(node.start):$source" -> println
+            }
+    }
+}
+main { inspect() }

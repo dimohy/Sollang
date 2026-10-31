@@ -203,6 +203,7 @@ public struct InterpolationMethodDecision {
 # 15 dependent nested failure (the original nested diagnostic remains authoritative).
 # diagnosticNode/contextNode are global interpolation indices; valueAst is source-local.
 public struct InterpolationArrayFact {
+    public sourceModule: Int
     public typeId: Int
     public elementTypeId: Int
     public valueAst: Int
@@ -223,6 +224,7 @@ public struct ExpressionTypeIdSet {
     public references: [typeIds.TypeReference; ~]
     public fields: [typeIds.NominalField; ~]
     public expressions: [ExpressionTypeId; ~]
+    public arrayBackingFacts: [ExpressionTypeId; ~]
     # Current validated external call facts; never cache-restored source owners.
     public externalCallResults: [ExpressionTypeId; ~]
     public callArguments: [ResolvedCallArgument; ~]
@@ -1191,7 +1193,7 @@ public interpolationFunctionTarget prepared: ref semanticContext.SemanticSnapsho
 # The parser retains the constructor type AST and exact variant span. Its
 # canonical TypeReference is resolved with ordinary source types, before this pass.
 emptyInterpolationArrayFact: -> InterpolationArrayFact {
-    InterpolationArrayFact { typeId: -1, elementTypeId: -1, valueAst: -1,
+    InterpolationArrayFact { sourceModule: -1, typeId: -1, elementTypeId: -1, valueAst: -1,
         dynamic: false, bounded: false, storageLength: -1, elementCount: 0,
         status: 1, diagnosticNode: -1, diagnosticContext: 0, contextNode: -1, expectedTypeId: -1, actualTypeId: -1 }
 }
@@ -1218,6 +1220,7 @@ resolveInterpolationArrayLiteral prepared: ref semanticContext.SemanticSnapshot,
     prepared.package.ranges[sourceModule] => range
     array.kind != 16 or array.valueAst < 0 or array.valueAst >= range.astCount
         -> if { result! -> return }
+    sourceModule => result!.sourceModule
     array.valueAst => result!.valueAst
     nodeIndex => result!.diagnosticNode
     expectedTypeId => result!.expectedTypeId
@@ -2882,6 +2885,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
         references: references!
         fields: fields!
         expressions: expressions!
+        arrayBackingFacts: [ExpressionTypeId; ~]
         externalCallResults: externalCallResults!
         callArguments: [ResolvedCallArgument; ~]
         userBlockContracts: userBlockContracts
@@ -3405,6 +3409,62 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
 completeCallAndEnumFacts prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet -> Unit {
     resolveSemanticCallArguments(prepared, resolved)
     resolveEnumConstructorArguments(prepared, resolved)
+    completeArrayBackingFacts(prepared, resolved)
+}
+
+completeArrayBackingFacts prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet -> Unit {
+    [Int; ~] => expressionByAst!
+    prepared.package.nodes -> each _ { expressionByAst! -> push(-1) }
+    0 => expressionIndex!
+    resolved.expressions -> each expression {
+        prepared.package.ranges[expression.sourceModule] => range
+        expressionIndex! => expressionByAst![range.astStart + expression.astNode]
+        expressionIndex! + 1 => expressionIndex!
+    }
+    prepared.package -> indexContextualRecords => context
+    [Int; ~] => expectedByAst!
+    prepared.package.nodes -> each _ { expectedByAst! -> push(-1) }
+    prepared.package -> declaredNumericReturnContextByAst(resolved.types, resolved.references) => returns
+    prepared.package.ranges -> each range {
+        0 => astNode!
+        astNode! < range.astCount -> while {
+            returns[range.astStart + astNode!] => expected
+            contextualizeEmptyArrayValue(prepared, resolved, expressionByAst!, context, expectedByAst!, range.sourceModule, astNode!, expected) => returnChanged
+            astNode! + 1 => astNode!
+        }
+    }
+    0 => argumentIndex!
+    argumentIndex! < (resolved.enumConstructorArguments -> len)
+        -> while {
+            resolved.enumConstructorArguments[argumentIndex!] => argument!
+            contextualizeEmptyArrayValue(prepared, resolved, expressionByAst!, context, expectedByAst!, argument!.sourceModule, argument!.argumentAst, argument!.expectedTypeId)
+                -> if {
+                    prepared.package.ranges[argument!.sourceModule] => range
+                    resolved.expressions[expressionByAst![range.astStart + argument!.argumentAst]].typeId => argument!.actualTypeId
+                    replaceEnumConstructorFact(resolved.enumConstructorArguments, argumentIndex!, argument!)
+                }
+            argumentIndex! + 1 => argumentIndex!
+        }
+    prepared -> registerArrayBackingFacts(resolved.types, resolved.expressions, expressionByAst!) => facts
+    facts => resolved.arrayBackingFacts
+}
+
+replaceEnumConstructorFact arguments: mut [ResolvedEnumConstructorArgument; ~], index: Int, fact: ResolvedEnumConstructorArgument -> Unit {
+    fact => arguments[index]
+}
+
+contextualizeEmptyArrayValue prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], source: Int, astNode: Int, expected: Int -> Bool {
+    source < 0 or source >= (prepared.package.ranges -> len) or expected < 0 or expected >= (resolved.types -> len)
+        -> if { false -> return }
+    prepared.package.ranges[source] => range
+    astNode < 0 or astNode >= range.astCount
+        -> if { false -> return }
+    prepared.package.nodes[range.astStart + astNode] => node
+    node.kind != 37 or node.tokenCount != 2
+        -> if { false -> return }
+    resolved.types[expected].kind != 2 and resolved.types[expected].kind != 3
+        -> if { false -> return }
+    contextualizeArrayCallArgument(prepared, resolved, expressionByAst, index, expectedByAst, source, astNode, expected)
 }
 
 public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTypeIdSet {
@@ -3419,6 +3479,7 @@ resolveContextWithCallArgumentBindings prepared: semanticContext.SemanticSnapsho
     prepared -> resolveContextCoreWithCallArgumentBindings(bindings, seeds, externalResults) => resolved!
     resolveSemanticCallArgumentBindingsSeeded(prepared, resolved!, bindings, seeds)
     resolveEnumConstructorArguments(prepared, resolved!)
+    completeArrayBackingFacts(prepared, resolved!)
     resolved!
 }
 

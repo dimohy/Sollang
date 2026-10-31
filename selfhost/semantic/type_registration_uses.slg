@@ -7,6 +7,21 @@ import sollang.compiler.semantic.type_fact_concreteness as concreteness
 import sollang.compiler.semantic.storage_registration as storage
 import sollang.compiler.ir.typed as typedIr
 
+appendActiveSourceFacts package: ref analysis.PackageAnalysis, activity: ref [Bool; ~], states: ref [Int; ~], roots: mut [Int; ~], facts: ref [expressions.ExpressionTypeId; ~] -> Result<Unit, TypeRegistryError> {
+    facts -> each value {
+        value.status == 0 -> if {
+            value.sourceModule < 0 or value.sourceModule >= (package.ranges -> len)
+                -> if { Result<Unit, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+            package.ranges[value.sourceModule] => range
+            value.astNode < 0 or value.astNode >= range.astCount
+                -> if { Result<Unit, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+            activity[range.astStart + value.astNode] and not concreteness.appendConcreteFact(states, roots, value.typeId)
+                -> if { Result<Unit, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+        }
+    }
+    Result<Unit, TypeRegistryError>.Ok
+}
+
 public selectClosedTypeUses package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], declarations: ref [RegisteredDeclaration; ~], roots: ref [Int; ~] -> Result<[Int; ~], TypeRegistryError> {
     [Bool; ~] => selected!
     [Bool; ~] => declared!
@@ -120,15 +135,25 @@ public registerCompilationTypeUses seeds: move RegisteredTypeSeeds, package: ref
         reference.status == 0 and not concreteness.appendConcreteFact(concreteStates, roots!, reference.typeId)
             -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(reference.typeId)) -> return }
     }
-    semantic.expressions -> each value {
-        value.status == 0 -> if {
-            value.sourceModule < 0 or value.sourceModule >= (package.ranges -> len)
-                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
-            package.ranges[value.sourceModule] => range
-            value.astNode < 0 or value.astNode >= range.astCount
-                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
-            sourceActivity[range.astStart + value.astNode] and not concreteness.appendConcreteFact(concreteStates, roots!, value.typeId)
-                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+    appendActiveSourceFacts(package, sourceActivity, concreteStates, roots!, semantic.expressions) -> when {
+        Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(error) -> return }
+        Ok {}
+    }
+    appendActiveSourceFacts(package, sourceActivity, concreteStates, roots!, semantic.arrayBackingFacts) -> when {
+        Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(error) -> return }
+        Ok {}
+    }
+    # Contextual conversion can return a growable value while retaining a
+    # registered fixed backing type. Consume that existing committed fact.
+    semantic.interpolationArrayByNode -> each array {
+        array.status == 0 -> if {
+            array.sourceModule < 0 or array.sourceModule >= (package.ranges -> len)
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(array.actualTypeId)) -> return }
+            package.ranges[array.sourceModule] => sourceRange
+            array.valueAst < 0 or array.valueAst >= sourceRange.astCount
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(array.actualTypeId)) -> return }
+            sourceActivity[sourceRange.astStart + array.valueAst] and not concreteness.appendConcreteFact(concreteStates, roots!, array.actualTypeId)
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(array.actualTypeId)) -> return }
         }
     }
     package.ranges -> each range {
