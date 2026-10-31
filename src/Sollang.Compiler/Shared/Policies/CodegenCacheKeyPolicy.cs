@@ -11,7 +11,22 @@ internal enum CodegenKeyPart
     ModuleInterfaces,
     ModuleImplementations,
     WholeInterface,
-    WholeImplementation
+    WholeImplementation,
+    DeclarationContainer,
+    Visibility,
+    StructFields,
+    EnumVariants,
+    TraitAssociatedTypes,
+    TraitMethods,
+    FunctionInput,
+    FunctionReturn,
+    FunctionBlock,
+    FunctionStream,
+    FunctionAsync,
+    FunctionGenerics,
+    FunctionEffects,
+    FunctionParameters,
+    FunctionAssociatedTypes
 }
 
 internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<CodegenKeyPart> Parts);
@@ -21,6 +36,22 @@ internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<Code
     "src/Sollang.Compiler/Shared/Policies/CodegenCacheKeyPolicy.cs")]
 internal static class CodegenCacheKeyPolicy
 {
+    public static CodegenKeyRule StructInterface() => new("struct",
+        [CodegenKeyPart.Identity, CodegenKeyPart.DeclarationContainer,
+            CodegenKeyPart.Visibility, CodegenKeyPart.StructFields]);
+
+    public static CodegenKeyRule EnumInterface() => new("enum",
+        [CodegenKeyPart.Identity, CodegenKeyPart.Visibility, CodegenKeyPart.EnumVariants]);
+
+    public static CodegenKeyRule TraitInterface() => new("trait",
+        [CodegenKeyPart.Identity, CodegenKeyPart.TraitAssociatedTypes, CodegenKeyPart.TraitMethods]);
+
+    public static CodegenKeyRule FunctionInterface() => new("function",
+        [CodegenKeyPart.Identity, CodegenKeyPart.FunctionInput, CodegenKeyPart.FunctionReturn,
+            CodegenKeyPart.FunctionBlock, CodegenKeyPart.FunctionStream, CodegenKeyPart.FunctionAsync,
+            CodegenKeyPart.FunctionGenerics, CodegenKeyPart.FunctionEffects,
+            CodegenKeyPart.FunctionParameters, CodegenKeyPart.FunctionAssociatedTypes]);
+
     public static CodegenKeyRule ModuleImplementation() => new("module-implementation",
         [CodegenKeyPart.Identity, CodegenKeyPart.SourceImplementation,
             CodegenKeyPart.AmbientStandardLibrary, CodegenKeyPart.TypeUniverse,

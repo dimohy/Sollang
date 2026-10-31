@@ -548,84 +548,66 @@ internal sealed class IncrementalCodegenCache
     {
         foreach (var structure in program.Structs.Where(static value => value.IsPublic)
                      .OrderBy(static value => value.Name, StringComparer.Ordinal))
-        {
-            yield return "struct";
-            yield return structure.Name;
-            yield return structure.DeclaringTypeName ?? "";
-            yield return structure.IsPublic ? "public" : "private";
-            foreach (var field in structure.Fields)
+            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.StructInterface(), part => part switch
             {
-                yield return field.Name;
-                yield return field.TypeName;
-            }
-        }
+                Shared.CodegenKeyPart.Identity => [structure.Name],
+                Shared.CodegenKeyPart.DeclarationContainer => [structure.DeclaringTypeName ?? ""],
+                Shared.CodegenKeyPart.Visibility => [structure.IsPublic ? "public" : "private"],
+                Shared.CodegenKeyPart.StructFields => structure.Fields.SelectMany(static field => new[] { field.Name, field.TypeName }),
+                _ => throw UnexpectedKeyPart(part)
+            })) yield return field;
         foreach (var enumeration in program.Enums.Where(static value => value.IsPublic)
                      .OrderBy(static value => value.Name, StringComparer.Ordinal))
-        {
-            yield return "enum";
-            yield return enumeration.Name;
-            yield return enumeration.IsPublic ? "public" : "private";
-            foreach (var variant in enumeration.Variants)
+            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.EnumInterface(), part => part switch
             {
-                yield return variant.Name;
-                yield return variant.PayloadType ?? "";
-            }
-        }
+                Shared.CodegenKeyPart.Identity => [enumeration.Name],
+                Shared.CodegenKeyPart.Visibility => [enumeration.IsPublic ? "public" : "private"],
+                Shared.CodegenKeyPart.EnumVariants => enumeration.Variants.SelectMany(static variant => new[] { variant.Name, variant.PayloadType ?? "" }),
+                _ => throw UnexpectedKeyPart(part)
+            })) yield return field;
         foreach (var trait in program.Traits.Where(static value => value.IsPublic)
                      .OrderBy(static value => value.Name, StringComparer.Ordinal))
-        {
-            yield return "trait";
-            yield return trait.Name;
-            foreach (var associated in trait.AssociatedTypes)
+            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.TraitInterface(), part => part switch
             {
-                yield return associated.Name;
-            }
-            foreach (var method in trait.Methods)
-            {
-                yield return method.Name;
-                yield return ((int)method.SelfOwnership).ToString(CultureInfo.InvariantCulture);
-                yield return method.ReturnType;
-                yield return method.AdditionalParameters.Count.ToString(CultureInfo.InvariantCulture);
-                foreach (var parameter in method.AdditionalParameters)
-                {
-                    yield return parameter.TypeName;
-                    yield return ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture);
-                }
-            }
-        }
+                Shared.CodegenKeyPart.Identity => [trait.Name],
+                Shared.CodegenKeyPart.TraitAssociatedTypes => trait.AssociatedTypes.Select(static associated => associated.Name),
+                Shared.CodegenKeyPart.TraitMethods => TraitMethodFields(trait),
+                _ => throw UnexpectedKeyPart(part)
+            })) yield return field;
         foreach (var function in program.Functions.Where(static value => value.IsPublic)
                      .OrderBy(static value => value.Name, StringComparer.Ordinal))
+            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.FunctionInterface(), part => part switch
+            {
+                Shared.CodegenKeyPart.Identity => [function.Name],
+                Shared.CodegenKeyPart.FunctionInput => [function.InputType ?? "", ((int)function.InputOwnership).ToString(CultureInfo.InvariantCulture)],
+                Shared.CodegenKeyPart.FunctionReturn => [function.ReturnType],
+                Shared.CodegenKeyPart.FunctionBlock => [function.BlockInputType ?? "", function.BlockResultType ?? ""],
+                Shared.CodegenKeyPart.FunctionStream => [function.StreamElementType ?? ""],
+                Shared.CodegenKeyPart.FunctionAsync => [function.IsAsync ? "async" : "sync"],
+                Shared.CodegenKeyPart.FunctionGenerics => [function.GenericParameterName ?? "", function.SecondaryGenericParameterName ?? "",
+                    function.TertiaryGenericParameterName ?? "", function.GenericTraitBound ?? "",
+                    function.GenericAssociatedTypeName ?? "", function.GenericAssociatedTypeConstraint ?? ""],
+                Shared.CodegenKeyPart.FunctionEffects => (function.Effects ?? []).Order(StringComparer.Ordinal),
+                Shared.CodegenKeyPart.FunctionParameters => (function.AdditionalParameters ?? []).SelectMany(static parameter => new[]
+                    { parameter.Name, parameter.TypeName, ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture) }),
+                Shared.CodegenKeyPart.FunctionAssociatedTypes => (function.ImplAssociatedTypes ?? new Dictionary<string, string>())
+                    .OrderBy(static pair => pair.Key, StringComparer.Ordinal).SelectMany(static pair => new[] { pair.Key, pair.Value }),
+                _ => throw UnexpectedKeyPart(part)
+            })) yield return field;
+    }
+
+    private static IEnumerable<string> TraitMethodFields(TraitDeclaration trait)
+    {
+        foreach (var method in trait.Methods)
         {
-            yield return "function";
-            yield return function.Name;
-            yield return function.InputType ?? "";
-            yield return ((int)function.InputOwnership).ToString(CultureInfo.InvariantCulture);
-            yield return function.ReturnType;
-            yield return function.BlockInputType ?? "";
-            yield return function.BlockResultType ?? "";
-            yield return function.StreamElementType ?? "";
-            yield return function.IsAsync ? "async" : "sync";
-            yield return function.GenericParameterName ?? "";
-            yield return function.SecondaryGenericParameterName ?? "";
-            yield return function.TertiaryGenericParameterName ?? "";
-            yield return function.GenericTraitBound ?? "";
-            yield return function.GenericAssociatedTypeName ?? "";
-            yield return function.GenericAssociatedTypeConstraint ?? "";
-            foreach (var effect in (function.Effects ?? []).Order(StringComparer.Ordinal))
+            yield return method.Name;
+            yield return ((int)method.SelfOwnership).ToString(CultureInfo.InvariantCulture);
+            yield return method.ReturnType;
+            yield return method.AdditionalParameters.Count.ToString(CultureInfo.InvariantCulture);
+            foreach (var parameter in method.AdditionalParameters)
             {
-                yield return effect;
-            }
-            foreach (var parameter in function.AdditionalParameters ?? [])
-            {
-                yield return parameter.Name;
                 yield return parameter.TypeName;
                 yield return ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture);
-            }
-            foreach (var associated in (function.ImplAssociatedTypes ?? new Dictionary<string, string>())
-                         .OrderBy(static pair => pair.Key, StringComparer.Ordinal))
-            {
-                yield return associated.Key;
-                yield return associated.Value;
             }
         }
     }
@@ -711,15 +693,14 @@ internal sealed class IncrementalCodegenCache
     private static InvalidOperationException UnexpectedKeyPart(Shared.CodegenKeyPart part) =>
         new("codegen key rule requests an unavailable input: " + part);
 
-    private static ulong HashRule(Shared.CodegenKeyRule rule, Func<Shared.CodegenKeyPart, IEnumerable<string>> resolve)
+    private static ulong HashRule(Shared.CodegenKeyRule rule, Func<Shared.CodegenKeyPart, IEnumerable<string>> resolve) =>
+        HashFields(RuleFields(rule, resolve));
+
+    private static IEnumerable<string> RuleFields(Shared.CodegenKeyRule rule, Func<Shared.CodegenKeyPart, IEnumerable<string>> resolve)
     {
-        IEnumerable<string> Fields()
-        {
-            yield return rule.Domain;
-            foreach (var part in rule.Parts)
-                foreach (var field in resolve(part)) yield return field;
-        }
-        return HashFields(Fields());
+        yield return rule.Domain;
+        foreach (var part in rule.Parts)
+            foreach (var field in resolve(part)) yield return field;
     }
 
     private static ulong HashBinaryFields(IEnumerable<byte[]> fields)

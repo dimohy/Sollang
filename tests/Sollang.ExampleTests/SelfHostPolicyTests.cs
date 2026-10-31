@@ -104,7 +104,7 @@ internal static class SelfHostPolicyTests
             Check("rule-enum-and-struct-schema-exported", Enum.GetNames(keyPart).All(name => ruleTypes.Contains(name, StringComparison.Ordinal))
                 && ruleTypes.Contains("public parts: [KeyPart; ~]", StringComparison.Ordinal));
             var rules = keyPolicies.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
-            Check("all-nine-key-rules-exported", rules.Length == 9 && rules.All(method => Emit(method).Contains("KeyRule {", StringComparison.Ordinal)));
+            Check("all-thirteen-key-rules-exported", rules.Length == 13 && rules.All(method => Emit(method).Contains("KeyRule {", StringComparison.Ordinal)));
 
             var root = FindRoot();
             var mirror = Path.Combine(directory, "policy-input");

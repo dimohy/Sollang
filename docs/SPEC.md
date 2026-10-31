@@ -6190,6 +6190,13 @@ Current backend:
   sequence is distinct from a missing input. Layout generation does not replace
   discovery of current source, interface, dependency, type-universe and emission
   facts or prove production cache consumption.
+  Public struct, enum, trait and function interface fields use these same
+  compiled rules. Current declaration adapters supply complete declaration names,
+  parser type spelling, visibility, ordered members and signature facts; the
+  generated layouts select their order without embedding another SLG field
+  sequence. Private bodies and comments do not enter these public interface
+  fields. Live declaration discovery and complete module-interface hashing
+  remain required independently of layout generation.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash

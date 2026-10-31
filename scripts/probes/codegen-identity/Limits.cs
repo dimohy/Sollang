@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "interface-rule-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,23 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "interface-vectors")
+{
+    var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
+    var parse = app.GetMethod("ParseSourceFile", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var fieldsMethod = cacheType.GetMethod("PublicInterfaceFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var hashMethod = cacheType.GetMethod("HashFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    foreach (var path in Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal))
+    {
+        var parsed = parse.Invoke(null, [path, false, null])!;
+        var program = parsed.GetType().GetProperty("Program")!.GetValue(parsed)!;
+        var fields = ((IEnumerable<string>)fieldsMethod.Invoke(null, [program])!).ToArray();
+        var hash = (ulong)hashMethod.Invoke(null, [fields])!;
+        Console.WriteLine(JsonSerializer.Serialize(new { name = Path.GetFileNameWithoutExtension(path), fields, hash }));
+    }
+    return;
+}
 
 if (args.Length == 3 && args[2] == "module-source-vectors")
 {
@@ -53,7 +70,7 @@ if (args.Length == 3 && args[2] == "module-source-vectors")
     return;
 }
 
-if (args.Length == 3 && args[2] == "key-rule-vectors")
+if (args.Length == 3 && args[2] is "key-rule-vectors" or "interface-rule-vectors")
 {
     var policies = assembly.GetType("Sollang.Compiler.Shared.CodegenCacheKeyPolicy", true)!;
     var ruleType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
@@ -68,13 +85,23 @@ if (args.Length == 3 && args[2] == "key-rule-vectors")
         [0] = ["cache.한글.𐀀"], [1] = [Hex(1)], [2] = [Hex(ulong.MaxValue)],
         [3] = [Hex(1UL << 63)], [4] = [Hex(0)],
         [5] = ["alpha", Hex(2), "beta", Hex(3)], [6] = ["cache.한글.𐀀", Hex(4)],
-        [7] = ["cache.한글.𐀀", Hex(5), Hex(6)], [8] = [Hex(7)], [9] = [Hex(8)]
+        [7] = ["cache.한글.𐀀", Hex(5), Hex(6)], [8] = [Hex(7)], [9] = [Hex(8)],
+        [10] = ["Parent"], [11] = ["public"], [12] = ["first", "Int", "second", "Text"],
+        [13] = ["None", "", "Some", "Text"], [14] = ["Item"],
+        [15] = ["read", "0", "Item", "1", "Text", "0"],
+        [16] = ["Int", "0"], [17] = ["Text"], [18] = ["Int", "Text"], [19] = ["Int"],
+        [20] = ["sync"], [21] = ["T", "U", "V", "Display", "Item", "Int"],
+        [22] = ["Console", "File"], [23] = ["count", "Int", "0"], [24] = ["Item", "Text"]
     };
     void Output(string name, object rule, Dictionary<int, string[]> input) => Console.WriteLine(
         JsonSerializer.Serialize(new { name, hash = (ulong)invoke.Invoke(null, [apply, rule, input])! }));
-    foreach (var name in new[] { "ModuleImplementation", "SyntheticInterface", "SyntheticImplementation",
-        "WholeInterface", "WholeImplementation", "PrefixInterface", "PrefixImplementation", "SuffixInterface", "SuffixImplementation" })
+    var names = args[2] == "interface-rule-vectors"
+        ? new[] { "StructInterface", "EnumInterface", "TraitInterface", "FunctionInterface" }
+        : new[] { "ModuleImplementation", "SyntheticInterface", "SyntheticImplementation",
+            "WholeInterface", "WholeImplementation", "PrefixInterface", "PrefixImplementation", "SuffixInterface", "SuffixImplementation" };
+    foreach (var name in names)
         Output(name, policies.GetMethod(name)!.Invoke(null, null)!, fields);
+    if (args[2] == "interface-rule-vectors") return;
     object Rule(string domain, params int[] parts)
     {
         var values = Array.CreateInstance(partType, parts.Length);
