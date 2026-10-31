@@ -1,0 +1,285 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_name_policy as names
+import syntax.generated.slg as grammar
+
+public struct TypeFieldContext {
+    public identities: [modules.ModuleIdentity; ~]
+    public imports: [modules.ImportEdge; ~]
+    public sourceModule: Int
+    public ownerSymbol: Int
+}
+
+public enum TypeFieldError { InvalidInput, AmbiguousName }
+
+typeTokenText context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, sourceModule: Int, tokenIndex: Int -> Text {
+    package.tokens[package.ranges[sourceModule].tokenStart + tokenIndex].span => span
+    package.sources[sourceModule] -> slice(span.start, span.length)
+}
+
+appendTypeText value: Text, bytes: mut [UInt8; ~] -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+appendTypeNamespace context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, sourceModule: Int, identity: modules.ModuleIdentity, bytes: mut [UInt8; ~] -> Unit {
+    package.sources[sourceModule] -> slice(0, package.sources[sourceModule] -> len) => source
+    [UInt64; ~] => words!
+    modules.appendLogicalNameWords(source, identity, package.ranges[sourceModule], package.tokens, words!)
+    words! -> each word { bytes -> push(UInt8(word)) }
+}
+
+activeTypeParameter context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, name: Text -> Bool {
+    context.ownerSymbol => owner!
+    package.ranges[context.sourceModule] => range
+    owner! >= 0 -> while {
+        0 => index!
+        index! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + index!] => candidate
+            (candidate.kind == 32 or candidate.kind == 28) and candidate.parent == owner!
+                and candidate.nameToken >= 0
+                and (context -> typeTokenText(package, context.sourceModule, candidate.nameToken)) == name
+                -> if { true -> return }
+            index! + 1 => index!
+        }
+        package.symbols[range.symbolStart + owner!].parent => owner!
+    }
+    false
+}
+
+hasLocalTypeSpelling context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, name: Text -> Bool {
+    0 => source!
+    source! < (package.sources -> len) -> while {
+        modules.sameLogicalAnalyzedSource(package.sources, context.identities,
+        context.sourceModule, source!, package.tokens, package.ranges)
+            -> if {
+                package.ranges[source!] => range
+                0 => index!
+                index! < range.symbolCount -> while {
+                    package.symbols[range.symbolStart + index!] => candidate
+                    candidate.nameToken >= 0 and ((candidate.kind >= 3 and candidate.kind <= 5 and candidate.parent < 0)
+                        or (candidate.kind == 7 and not symbols.hasQualifiedFunctionName(candidate, package.tokens, range.tokenStart, range.tokenCount)))
+                        and (context -> typeTokenText(package, source!, candidate.nameToken)) == name
+                        -> if { true -> return }
+                    index! + 1 => index!
+                }
+            }
+        source! + 1 => source!
+    }
+    false
+}
+
+openTypeSource context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, name: Text -> Result<Int, TypeFieldError> {
+    context -> hasLocalTypeSpelling(package, name)
+        -> if { Result<Int, TypeFieldError>.Ok(-1) -> return }
+    -1 => selected!
+    context.imports -> each edge {
+        edge.sourceModule == context.sourceModule -> if {
+            0 => source!
+            source! < (package.sources -> len) -> while {
+                modules.importTargetsAnalyzedModule(package, context.identities, edge, source!)
+                    -> if {
+                        package.ranges[source!] => range
+                        0 => index!
+                        index! < range.symbolCount -> while {
+                            package.symbols[range.symbolStart + index!] => candidate
+                            candidate.parent < 0 and candidate.kind >= 3 and candidate.kind <= 7
+                                and candidate.kind != 6 and candidate.flags / 4 % 2 == 1
+                                and (candidate.kind != 7 or not symbols.hasQualifiedFunctionName(candidate, package.tokens, range.tokenStart, range.tokenCount))
+                                and candidate.nameToken >= 0
+                                and (context -> typeTokenText(package, source!, candidate.nameToken)) == name
+                                -> if {
+                                    selected! >= 0 and not modules.sameLogicalAnalyzedSource(package.sources,
+                                    context.identities, selected!, source!, package.tokens, package.ranges)
+                                        -> if { Result<Int, TypeFieldError>.Err(TypeFieldError.AmbiguousName) -> return }
+                                    source! => selected!
+                                }
+                            index! + 1 => index!
+                        }
+                    }
+                source! + 1 => source!
+            }
+        }
+    }
+    Result<Int, TypeFieldError>.Ok(selected!)
+}
+
+appendNestedTypePath context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, name: Text, before: UIntSize, bytes: mut [UInt8; ~] -> Bool {
+    package.ranges[context.sourceModule] => range
+    context.ownerSymbol => owner!
+    owner! >= 0 -> while {
+        package.symbols[range.symbolStart + owner!] => scope
+        scope.kind == 3 -> if {
+            0 => index!
+            index! < range.symbolCount -> while {
+                package.symbols[range.symbolStart + index!] => candidate
+                candidate.kind == 3 and candidate.parent == owner! and candidate.nameToken >= 0
+                    and package.nodes[range.astStart + candidate.astNode].start < before
+                    and (context -> typeTokenText(package, context.sourceModule, candidate.nameToken)) == name
+                    -> if {
+                        [Int; ~] => ancestors!
+                        index! => current!
+                        current! >= 0 -> while {
+                            package.symbols[range.symbolStart + current!] => ancestor
+                            ancestor.kind == 3 -> if { ancestors! -> push(current!) }
+                            ancestor.parent => current!
+                        }
+                        bytes -> len => original
+                        context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], bytes)
+                        (bytes -> len) > original -> if { bytes -> push('.') }
+                        ancestors! -> len => remaining!
+                        remaining! > 0 -> while {
+                            remaining! - 1 => remaining!
+                            package.symbols[range.symbolStart + ancestors![remaining!]].nameToken => token
+                            context -> typeTokenText(package, context.sourceModule, token) -> appendTypeText(bytes)
+                            remaining! > 0 -> if { bytes -> push('.') }
+                        }
+                        true -> return
+                    }
+                index! + 1 => index!
+            }
+        }
+        scope.parent => owner!
+    }
+    false
+}
+
+# All names passed here are the complete significant path, not a hash or a
+# semantic numeric type alias. Explicit import aliases precede builtin tests.
+appendTypePath context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, tokens: ref [Int; ~], start: Int, end: Int, constructor: Bool, bytes: mut [UInt8; ~] -> Result<Unit, TypeFieldError> {
+    context -> typeTokenText(package, context.sourceModule, tokens[start]) => first
+    constructor -> if {
+        start => cursor!
+        cursor! < end -> while {
+            context -> typeTokenText(package, context.sourceModule, tokens[cursor!]) -> appendTypeText(bytes)
+            cursor! + 1 => cursor!
+        }
+        Result<Unit, TypeFieldError>.Ok -> return
+    }
+    false => explicit!
+    context.imports -> each edge {
+        edge.sourceModule == context.sourceModule and edge.aliasToken >= 0
+            and (context -> typeTokenText(package, context.sourceModule, edge.aliasToken)) == first
+            -> if {
+                modules.ModuleIdentity { sourceIndex: context.sourceModule, pathHash: edge.targetHash,
+                    pathStart: edge.pathStart, pathLength: edge.pathLength, importCount: 0 } => identity
+                context -> appendTypeNamespace(package, context.sourceModule, identity, bytes)
+                true => explicit!
+            }
+    }
+    not explicit! and end == start + 1 -> if {
+        context -> openTypeSource(package, first) -> when {
+            Ok(source) { source }
+            Err(error) { Result<Unit, TypeFieldError>.Err(error) -> return }
+        } => imported
+        imported >= 0 -> if {
+            bytes -> len => before
+            context -> appendTypeNamespace(package, imported, context.identities[imported], bytes)
+            (bytes -> len) > before -> if { bytes -> push('.') }
+        } else {
+            not (first -> names.isBuiltin) -> if {
+                package.tokens[package.ranges[context.sourceModule].tokenStart + tokens[start]].span.start => position
+                context -> appendNestedTypePath(package, first, position, bytes)
+                    -> if { Result<Unit, TypeFieldError>.Ok -> return }
+                not (context -> activeTypeParameter(package, first))
+                    -> if {
+                        bytes -> len => before
+                        context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], bytes)
+                        (bytes -> len) > before -> if { bytes -> push('.') }
+                    }
+            }
+        }
+    }
+    explicit! -> if { start + 1 } else { start } => cursor!
+    cursor! < end -> while {
+        context -> typeTokenText(package, context.sourceModule, tokens[cursor!]) -> appendTypeText(bytes)
+        cursor! + 1 => cursor!
+    }
+    Result<Unit, TypeFieldError>.Ok
+}
+
+public typeAnnotationField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, typeAst: Int -> Result<Field, TypeFieldError> {
+    context.sourceModule < 0 or context.sourceModule >= (package.ranges -> len)
+        or context.sourceModule >= (context.identities -> len)
+        -> if { Result<Field, TypeFieldError>.Err(TypeFieldError.InvalidInput) -> return }
+    package.ranges[context.sourceModule] => range
+    context.ownerSymbol < -1 or context.ownerSymbol >= range.symbolCount
+        -> if { Result<Field, TypeFieldError>.Err(TypeFieldError.InvalidInput) -> return }
+    typeAst < 0 or typeAst >= range.astCount
+        -> if { Result<Field, TypeFieldError>.Err(TypeFieldError.InvalidInput) -> return }
+    package.nodes[range.astStart + typeAst] => node
+    node.kind != 12 or node.firstToken < 0 or node.tokenCount <= 0
+        or node.firstToken > range.tokenCount - node.tokenCount
+        -> if { Result<Field, TypeFieldError>.Err(TypeFieldError.InvalidInput) -> return }
+    [Int; ~] => tokens!
+    node.firstToken => token!
+    token! < node.firstToken + node.tokenCount -> while {
+        package.tokens[range.tokenStart + token!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment() and kind != grammar.tokenIdNewLine()
+            -> if { tokens! -> push(token!) }
+        token! + 1 => token!
+    }
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < (tokens! -> len) -> while {
+        package.tokens[range.tokenStart + tokens![index!]].kind => kind
+        index! + 1 < (tokens! -> len) -> if {
+            package.tokens[range.tokenStart + tokens![index! + 1]].kind
+        } else { -1 } => next
+        index! > 0 -> if {
+            package.tokens[range.tokenStart + tokens![index! - 1]].kind
+        } else { -1 } => previous
+        context -> typeTokenText(package, context.sourceModule, tokens![index!]) => value
+        kind == grammar.tokenIdIdentifier() -> if {
+            value == "ref" or value == "box" or value == "dyn"
+                -> if {
+                    value -> appendTypeText(bytes!)
+                    bytes! -> push(' ')
+                    index! + 1 => index!
+                } else {
+                    previous == grammar.tokenIdSemicolon()
+                        or (next == grammar.tokenIdColon() and (previous == grammar.tokenIdLeftParen() or previous == grammar.tokenIdComma()))
+                        -> if {
+                            value -> appendTypeText(bytes!)
+                            index! + 1 => index!
+                        } else {
+                            index! + 1 => end!
+                            end! + 1 < (tokens! -> len)
+                                and package.tokens[range.tokenStart + tokens![end!]].kind == grammar.tokenIdDot()
+                                and package.tokens[range.tokenStart + tokens![end! + 1]].kind == grammar.tokenIdIdentifier()
+                                -> while { end! + 2 => end! }
+                            end! < (tokens! -> len) -> if {
+                                package.tokens[range.tokenStart + tokens![end!]].kind == grammar.tokenIdLess()
+                            } else { false } => constructor
+                            context -> appendTypePath(package, tokens!, index!, end!, constructor, bytes!) -> when {
+                                Err(error) { Result<Field, TypeFieldError>.Err(error) -> return }
+                                else { }
+                            }
+                            end! => index!
+                        }
+                }
+        } else {
+            kind == grammar.tokenIdNumber() -> if {
+                UIntSize(0) => digit!
+                digit! + 1 < (value -> len) and (value -> byte(digit!)) == '0'
+                    -> while { digit! + 1 => digit! }
+                value -> slice(digit!, (value -> len) - digit!) -> appendTypeText(bytes!)
+            } else {
+                not (kind == grammar.tokenIdComma() and next == grammar.tokenIdRightParen())
+                    -> if {
+                        value -> appendTypeText(bytes!)
+                        kind == grammar.tokenIdComma() or kind == grammar.tokenIdColon() or kind == grammar.tokenIdSemicolon()
+                            -> if { bytes! -> push(' ') }
+                    }
+            }
+            index! + 1 => index!
+        }
+    }
+    Result<Field, TypeFieldError>.Ok(Field { bytes: bytes! })
+}

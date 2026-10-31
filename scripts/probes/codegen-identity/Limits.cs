@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "loaded-interface-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -25,13 +25,43 @@ if (args.Length == 3 && args[2] == "type-name-vectors")
     return;
 }
 
-if (args.Length == 3 && args[2] == "interface-vectors")
+if (args.Length == 3 && args[2] is "interface-vectors" or "loaded-interface-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var parse = app.GetMethod("ParseSourceFile", BindingFlags.NonPublic | BindingFlags.Static)!;
     var fieldsMethod = cacheType.GetMethod("PublicInterfaceFields", BindingFlags.NonPublic | BindingFlags.Static)!;
     var hashMethod = cacheType.GetMethod("HashFields", BindingFlags.NonPublic | BindingFlags.Static)!;
-    foreach (var path in Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal))
+    var paths = Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal).ToArray();
+    if (args[2] == "loaded-interface-vectors")
+    {
+        var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
+        var loaded = app.GetMethod("LoadProgram", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [paths, null, target])!;
+        var sources = (System.Collections.IEnumerable)loaded.GetType().GetProperty("Sources")!.GetValue(loaded)!;
+        foreach (var source in sources.Cast<object>().Where(source =>
+                     paths.Contains((string)source.GetType().GetProperty("Path")!.GetValue(source)!, StringComparer.Ordinal)))
+        {
+            var program = source.GetType().GetProperty("Program")!.GetValue(source)!;
+            var path = (string)source.GetType().GetProperty("Path")!.GetValue(source)!;
+            IEnumerable<object> Items(object owner, string property) =>
+                ((System.Collections.IEnumerable)owner.GetType().GetProperty(property)!.GetValue(owner)!).Cast<object>();
+            string Text(object owner, string property) => (string)owner.GetType().GetProperty(property)!.GetValue(owner)!;
+            bool Public(object owner) => (bool)owner.GetType().GetProperty("IsPublic")!.GetValue(owner)!;
+            var types = Items(program, "Structs").Where(Public).OrderBy(value => Text(value, "Name"), StringComparer.Ordinal)
+                .SelectMany(value => Items(value, "Fields").Select(field => Text(field, "TypeName")))
+                .Concat(Items(program, "Enums").Where(Public).OrderBy(value => Text(value, "Name"), StringComparer.Ordinal)
+                    .SelectMany(value => Items(value, "Variants").Select(variant => Text(variant, "PayloadType"))).Where(value => value is not null))
+                .Concat(Items(program, "Traits").Where(Public).OrderBy(value => Text(value, "Name"), StringComparer.Ordinal)
+                    .SelectMany(value => Items(value, "Methods").Select(method => Text(method, "ReturnType"))))
+                .Concat(Items(program, "Functions").Where(Public).OrderBy(value => Text(value, "Name"), StringComparer.Ordinal)
+                    .Select(value => Text(value, "InputType") ?? Text(value, "ReturnType"))).ToArray();
+            var fields = ((IEnumerable<string>)fieldsMethod.Invoke(null, [program])!).ToArray();
+            Console.WriteLine(JsonSerializer.Serialize(new { name = Path.GetFileNameWithoutExtension(path), types, fields,
+                hash = (ulong)hashMethod.Invoke(null, [fields])! }));
+        }
+        return;
+    }
+    foreach (var path in paths)
     {
         var parsed = parse.Invoke(null, [path, false, null])!;
         var program = parsed.GetType().GetProperty("Program")!.GetValue(parsed)!;

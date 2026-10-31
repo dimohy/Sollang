@@ -1,0 +1,53 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+show field: move keys.Field -> Unit uses Console {
+    field.bytes -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> println
+}
+
+inspect package: ref analysis.PackageAnalysis, context: mut keys.TypeFieldContext -> Unit uses Console, Process {
+    0 => sourceModule!
+    sourceModule! < (package.ranges -> len) -> while {
+        sourceModule! => context.sourceModule
+        package.ranges[sourceModule!] => range
+        0 => index!
+        index! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + index!] => symbol
+            false => selected!
+            (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 29) and symbol.parent >= 0
+                -> if { package.symbols[range.symbolStart + symbol.parent].flags / 4 % 2 == 1 => selected! }
+            symbol.kind == 7 and symbol.flags / 4 % 2 == 1
+                -> if { true => selected! }
+            selected! and symbol.typeNode >= 0 -> if {
+                index! => context.ownerSymbol
+                context -> keys.typeAnnotationField(package, symbol.typeNode) -> when {
+                    Ok(field) { field -> show }
+                    Err(_) { "invalid-type-field" -> println
+                        process.exit(1) }
+                }
+            }
+            index! + 1 => index!
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+}
+
+main {
+    process.arguments() => arguments
+    [file.SourceText; ~] => sources!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    package -> inspect(context!)
+}

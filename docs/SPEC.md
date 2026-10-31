@@ -6204,6 +6204,13 @@ Current backend:
   zero-input methods whose compiled body is a literal `ldstr` followed by `ret`,
   with printable ASCII content of at most 4096 characters. Unsupported bodies,
   control characters and non-ASCII literals are rejected before source generation.
+  Source type fields retain the parser's canonical type spelling: punctuation
+  spacing, normalized decimal extents, product labels, imported paths and current
+  generic or associated names. Open imports respect declarations in every file of
+  the current logical namespace; ambiguous candidates cannot supply a type field.
+  The source package retains its owners while returned field bytes are owned.
+  Type-field projection alone does not establish complete declaration projection
+  or module-interface cache admission.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash
