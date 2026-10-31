@@ -13,6 +13,8 @@ from verification_build_stdout import validate_build_stdout, validate_policy
 
 
 ROOT = Path(__file__).resolve().parent.parent
+SEMANTIC_POLICY_SOURCES = ["src/Sollang.Compiler/Shared",
+                           "src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs"]
 PHASE_SCOPES = {
     "parsing": {
         "managed": ["src/Sollang.Compiler/Parsing",
@@ -28,16 +30,16 @@ PHASE_SCOPES = {
                      "selfhost/llvm/text/entrypoints.slg", "selfhost/cli_grammar.slg",
                      "selfhost/cli_format.slg", "selfhost/cli_language_server.slg"],
     },
-    "semantic-analysis": {"managed": ["src/Sollang.Compiler/Semantics"],
+    "semantic-analysis": {"managed": ["src/Sollang.Compiler/Semantics", *SEMANTIC_POLICY_SOURCES],
                           "selfhost": ["selfhost/semantic", "selfhost/llvm/emitter/diagnostics.slg"]},
-    "type-commit": {"managed": ["src/Sollang.Compiler/Semantics"],
+    "type-commit": {"managed": ["src/Sollang.Compiler/Semantics", *SEMANTIC_POLICY_SOURCES],
                     "selfhost": ["selfhost/semantic", "selfhost/ir/typed"]},
     "expression-lowering": {"managed": ["src/Sollang.Compiler/CodeGen"],
                             "selfhost": ["selfhost/ir"]},
     "control-flow": {"managed": ["src/Sollang.Compiler/CodeGen"],
                      "selfhost": ["selfhost/ir/typed", "selfhost/llvm/text/function_scheduling.slg",
                                   "selfhost/llvm/text/control_regions.slg", "selfhost/llvm/text/function_expressions.slg"]},
-    "ownership": {"managed": ["src/Sollang.Compiler/Semantics", "src/Sollang.Compiler/CodeGen"],
+    "ownership": {"managed": ["src/Sollang.Compiler/Semantics", "src/Sollang.Compiler/CodeGen", *SEMANTIC_POLICY_SOURCES],
                   "selfhost": ["selfhost/semantic", "selfhost/ir/typed", "selfhost/llvm/text/ownership.slg"]},
     "llvm-generation": {"managed": ["src/Sollang.Compiler/CodeGen"], "selfhost": ["selfhost/llvm"]},
 }

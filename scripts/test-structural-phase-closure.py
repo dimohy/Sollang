@@ -843,6 +843,23 @@ class PhaseClosureTests(unittest.TestCase):
 
 
 class OwnershipSourceScopeTests(unittest.TestCase):
+    def test_shared_policy_and_exporter_are_in_every_semantic_scope(self):
+        required = {"src/Sollang.Compiler/Shared/Policies/BorrowedTextReturnPolicy.cs",
+                    "src/Sollang.Compiler/Shared/SelfHostPolicyAttribute.cs",
+                    "src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs"}
+        root = Path(__file__).resolve().parent.parent
+        for phase in ("semantic-analysis", "type-commit", "ownership"):
+            sources = set()
+            for scope in MODULE.PHASE_SCOPES[phase]["managed"]:
+                path = root / scope
+                sources.update([scope] if path.is_file() else
+                               (item.relative_to(root).as_posix() for item in path.rglob("*.cs")))
+            with self.subTest(phase=phase):
+                self.assertTrue(required.issubset(sources))
+                row = next(item for item in MODULE.read("scripts/contracts/structural-parity-detail.json")["phaseProgress"]
+                           if item["phase"] == phase)
+                self.assertEqual(row["decisionInventory"]["sourceScopes"], MODULE.PHASE_SCOPES[phase])
+
     def setUp(self):
         self.root = Path(__file__).resolve().parent.parent
         self.detail = MODULE.read("scripts/contracts/structural-parity-detail.json")

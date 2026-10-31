@@ -789,11 +789,15 @@ internal sealed partial class LlvmEmitter
                 "mouse event streams are unavailable on wasm32-browser; "
                 + "browser events require host-driven callback lowering");
         }
-        var moduleGroups = GetEmittableUserFunctions()
+        var emittableFunctions = GetEmittableUserFunctions();
+        var functionIdentities = SemanticStableIdentity.IndexFunctions(
+            _program.Types, _program.Functions.Values, emittableFunctions);
+        var moduleGroups = emittableFunctions
             .GroupBy(static function => function.ModuleName ?? "", StringComparer.Ordinal)
             .OrderBy(static group => LlvmCodegenUnit.StableIdentity(group.Key))
             .ThenBy(static group => group.Key, StringComparer.Ordinal)
-            .Select(static group => new ModuleFunctionGroup(group.Key, group.ToArray()))
+            .Select(group => new ModuleFunctionGroup(group.Key,
+                group.OrderBy(function => functionIdentities[function], StringComparer.Ordinal).ToArray()))
             .ToArray();
         _usesAes128CpuSpecialization = moduleGroups
             .SelectMany(static group => group.Functions)

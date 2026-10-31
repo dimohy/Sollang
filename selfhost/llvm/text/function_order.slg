@@ -1,0 +1,72 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.codegen_units as codegenUnits
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+# Prepared declaration and specialization names are complete ASCII encodings.
+# Their coordinates are lookup slots only and never participate in ordering.
+codegenIdentityOrder left: Text, right: Text -> Int {
+    UIntSize(0) => index!
+    index! < (left -> len) and index! < (right -> len)
+        -> while {
+            left -> byte(index!) => a
+            right -> byte(index!) => b
+            a < b -> if { -1 -> return }
+            a > b -> if { 1 -> return }
+            index! + 1 => index!
+        }
+    (left -> len) < (right -> len) -> if { -1 -> return }
+    (left -> len) > (right -> len) -> if { 1 -> return }
+    0
+}
+
+codegenFunctionOrder left: Int, right: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ir[left] => a
+    context.ir[right] => b
+    a.sourceModule -> functionSymbolName(a.symbol, context) => leftDeclaration
+    b.sourceModule -> functionSymbolName(b.symbol, context) => rightDeclaration
+    leftDeclaration -> codegenIdentityOrder(rightDeclaration) => order
+    order != 0 -> if { order -> return }
+    context -> emitterContext.isGenericInstance(left)
+        -> if { left -> genericInstanceName(context) } else { "" } => leftEnvironment
+    context -> emitterContext.isGenericInstance(right)
+        -> if { right -> genericInstanceName(context) } else { "" } => rightEnvironment
+    leftEnvironment -> codegenIdentityOrder(rightEnvironment)
+}
+
+# Sort emission metadata only. planFunctions keeps its supplied-order contract.
+sortCodegenFunctions functions: mut [codegenUnits.ModuleFunction; ~], context: ref emitterContext.EmitContext -> Unit {
+    functions -> len => count
+    count < 2 -> if { return }
+    [codegenUnits.ModuleFunction; ~] => scratch!
+    functions -> each function { scratch! -> push(function) }
+    1 => width!
+    width! < count -> while {
+        0 => first!
+        first! < count -> while {
+            count - first! < width! -> if { count } else { first! + width! } => middle
+            count - middle < width! -> if { count } else { middle + width! } => end
+            first! => left!
+            middle => right!
+            first! => destination!
+            destination! < end -> while {
+                right! >= end or (left! < middle and (functions[left!].functionIndex -> codegenFunctionOrder(functions[right!].functionIndex, context)) <= 0)
+                    -> if {
+                        functions[left!] => scratch![destination!]
+                        left! + 1 => left!
+                    } else {
+                        functions[right!] => scratch![destination!]
+                        right! + 1 => right!
+                    }
+                destination! + 1 => destination!
+            }
+            end => first!
+        }
+        0 => index!
+        index! < count -> while {
+            scratch![index!] => functions[index!]
+            index! + 1 => index!
+        }
+        width! > count / 2 -> if { count => width! } else { width! * 2 => width! }
+    }
+}

@@ -1828,6 +1828,13 @@ validation. Decode scalars across packed-word boundaries and honor the declared
 byte length. Share scalar rules with identity decoding; valid empty fragments
 and supplementary scalars remain accepted.
 
+Order production function emission within a logical module by complete stable
+function identity, including lexical owner and concrete generic environment.
+Physical declaration, source, IR and type-registration positions are lookup
+coordinates, not ordering keys. Keep semantic evaluation and diagnostic order
+unchanged. Prepare this order before the module grouping helper, whose public
+contract continues to preserve the order supplied by its caller.
+
 Library interface producers and integrity validation share the canonical ABI
 and signature material helpers. Preserve qualified-name ordering, NUL field
 separators, complete SHA-256 hashes, and lowercase hexadecimal bytes.
