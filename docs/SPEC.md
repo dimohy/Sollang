@@ -1103,6 +1103,9 @@ Concrete registry membership is selected from final type annotations,
 expression and lexical-binding facts, Typed IR and instantiated generic call
 arguments/results, together with the required declaration, box and storage
 seeds. Selection follows child-type and selected-owner field dependencies.
+Numeric literals in declared array returns inherit the element type, including
+readonly array views, before their backing storage is registered. The literal's
+extent and independently typed elements retain their own contracts.
 Uninstantiated template facts do not create concrete definitions; unrelated
 closed entries in a scratch arena do not establish registry membership.
 Invalid selected type coordinates or dependencies fail preparation with S080.

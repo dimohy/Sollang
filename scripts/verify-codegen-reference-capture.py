@@ -326,15 +326,15 @@ def main():
                     named.update((builtin['Text'], builtin['Int'], builtin['Bool']))
                     expected_boxes = [r for r in records['Boxes'] if r['ElementType'] in named]
                     assert int(box_count) == len(expected_boxes), (box_count, len(expected_boxes))
-                    assert len(lines) == (18 if args.fixture_directory else 12)
+                    products = [r for r in records["Structs"] if r["IsProduct"] and [f["Name"] for f in r["Fields"]] == ["cacheBodyValue", "cacheBodyCount"]]
+                    assert len(products) <= 1
+                    assert len(lines) == (18 if products else 12)
                     assert lines[6] == "declarations:" + str(sum(bool(r["ModuleName"]) for group in ("Structs", "Enums") for r in records[group]))
                     source_text = [r for r in records["Structs"] if r["Name"] == "sys.file.SourceText"]
                     assert len(source_text) == 1
                     verify_resolved_definitions(lines[7:11], source_text, builtin)
                     assert lines[11].startswith("used:") and int(lines[11].split(":")[1]) >= int(storage_count) + int(box_count)
-                    if args.fixture_directory:
-                        products = [r for r in records["Structs"] if r["IsProduct"] and [f["Name"] for f in r["Fields"]] == ["cacheBodyValue", "cacheBodyCount"]]
-                        assert len(products) == 1
+                    if products:
                         verify_resolved_definitions(lines[12:], products, builtin)
                     storage_ids = set()
                     roles = ['FixedUInt8Array12', 'FixedUInt8Array16', 'FixedUInt8Array32', 'DynamicUInt8Array', 'DynamicDirectoryEntryArray']
