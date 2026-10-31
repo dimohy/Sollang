@@ -5527,6 +5527,65 @@ contextualArithmeticArgumentDiagnostic package: ref analysis.PackageAnalysis, pr
     selected!
 }
 
+firstQualifiedBlockReceiverDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~] -> ExpressionOperandDiagnostic {
+    prepared.calls -> each call {
+        call.status == 7 and call.sourceModule >= 0 -> if {
+            prepared.package.ranges[call.sourceModule] => caller
+            prepared.package.nodes[caller.astStart + call.callAst] => invocation
+            invocation.kind == 48 -> if {
+                prepared.qualified -> each qualified {
+                    qualified.sourceModule == call.sourceModule and qualified.status == 0 and qualified.targetModule >= 0
+                        -> if {
+                            prepared.package.nodes[caller.astStart + qualified.pathAst] => path
+                            path.firstToken <= invocation.payloadToken and invocation.payloadToken < path.firstToken + path.tokenCount
+                                and (prepared.package -> semanticContext.declarationAncestor(call.sourceModule, call.callAst, qualified.pathAst))
+                                -> if {
+                                    prepared.modules[qualified.targetModule].sourceIndex => targetSource
+                                    prepared.package.ranges[targetSource] => target
+                                    prepared.package.symbols[target.symbolStart + qualified.targetSymbol] => method
+                                    method.kind == 31 and method.parent >= 0 and method.blockTypeNode >= 0
+                                        -> if {
+                                            prepared.package.nodes[target.astStart + method.astNode] => declaration
+                                            declaration.secondaryToken >= 0 -> if {
+                                                prepared.package.tokens[target.tokenStart + declaration.secondaryToken] => inputName
+                                                prepared.package.sources[targetSource] -> slice(inputName.span.start, inputName.span.length) => inputText
+                                                inputText == "self" -> if {
+                                                    prepared.package.symbols[target.symbolStart + method.parent] => implementation
+                                                    prepared.package -> typeIds.implOwnerTypeAst(targetSource, implementation.astNode) => ownerAst
+                                                    ownerAst >= 0 -> if {
+                                                        resolved.referenceIndexByTypeAst[target.astStart + ownerAst] => ownerReference
+                                                        ownerReference >= 0 and resolved.references[ownerReference].status == 0
+                                                            -> if {
+                                                                resolved.references[ownerReference].typeId => ownerType
+                                                                ownerType >= 0 and not resolved.types[ownerType].containsParameter
+                                                                    -> if {
+                                                                        ir -> each node {
+                                                                            node.kind == 6 and node.sourceModule == call.sourceModule and node.astNode == call.callAst
+                                                                                and node.operand0 >= 0 and node.operand0 < (ir -> len)
+                                                                                -> if {
+                                                                                    resolved.types -> typeIds.materializedReadTypeId(ir[node.operand0].typeId) => receiver
+                                                                                    receiver >= 0 and receiver < (resolved.types -> len) and not resolved.types[receiver].containsParameter
+                                                                                        and not (resolved.types -> calls.typedMethodOwnerMatches(receiver, ownerType, false))
+                                                                                        -> if {
+                                                                                            ExpressionOperandDiagnostic { code: 76, sourceModule: call.sourceModule, astNode: call.callAst, operandAst: qualified.pathAst, operatorKind: targetSource, locationOffset: invocation.start, operandTypeSymbol: qualified.targetSymbol, operandTypeId: receiver, firstTypeId: ownerType } -> return
+                                                                                        }
+                                                                                }
+                                                                        }
+                                                                    }
+                                                            }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                }
+                        }
+                }
+            }
+        }
+    }
+    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 }
+}
+
 public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], mutableNames: ref [UnresolvedMutableNameDiagnostic; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
     # C# binds every declaration (including local declarations) before bodies.
     prepared -> effects.indexDeclaredEffects => declaredEffects
@@ -5559,6 +5618,8 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
             firstTypeId: -1
         } -> return
     }
+    firstQualifiedBlockReceiverDiagnostic(prepared, resolved, ir) => receiverDiagnostic
+    receiverDiagnostic.code > 0 -> if { receiverDiagnostic -> return }
     # A producer's declared yield input is checked before its caller callback.
     # Instantiated source facts are captured before callback role remapping.
     resolved.userBlockYieldInputs -> each input {

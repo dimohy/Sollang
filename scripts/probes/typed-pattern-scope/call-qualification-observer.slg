@@ -1,0 +1,37 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    (arguments -> len) != 2 -> if { process.exit(1) }
+    [Text; ~] => paths!
+    paths! -> push(arguments[1])
+    paths! -> semanticContext.prepareFiles => initial!
+    0 => initial!.standardLibrarySourceCount
+    initial! -> freeze => snapshot
+    snapshot -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    prepared.package.ranges[0] => range
+    prepared.package.sources[0] -> len => sourceLength
+    prepared.package.sources[0] -> slice(UIntSize(0), sourceLength) => source
+    0..<range.symbolCount -> each index {
+        prepared.package.symbols[range.symbolStart + index] => symbol
+        symbol.nameToken >= 0 -> if {
+            prepared.package.tokens[range.tokenStart + symbol.nameToken] => name
+            source -> slice(name.span.start, name.span.length) => text
+            "symbol $index $(symbol.kind) $(symbol.parent) $(symbol.astNode) $text" -> println
+        }
+    }
+    prepared.qualified -> each qualified {
+        prepared.package.nodes[range.astStart + qualified.pathAst] => node
+        source -> slice(node.start, node.length) => text
+        "qualified $(qualified.pathAst) $(node.kind) $(node.parent) $(qualified.status) $(qualified.targetModule) $(qualified.targetSymbol) $text" -> println
+    }
+    prepared.calls -> each call {
+        prepared.package.nodes[range.astStart + call.callAst] => node
+        source -> slice(node.start, node.length) => text
+        "call $(call.callAst) $(node.kind) $(node.payloadToken) $(call.status) $(call.targetSourceModule) $(call.functionSymbol) $text" -> println
+    }
+    "observed-qualification=1" -> println
+}
