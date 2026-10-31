@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.codegen_cache_keys
 
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
 import sollang.compiler.llvm.codegen_cache_key_policy as plans
 
 public enum DeclarationFieldError { InvalidInput, UnsupportedDeclaration, InvalidType, UnavailablePart }
@@ -10,20 +11,8 @@ public enum DeclarationFieldError { InvalidInput, UnsupportedDeclaration, Invali
 declarationNameField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, declaration: Int -> Field {
     package.ranges[context.sourceModule] => range
     [UInt8; ~] => bytes!
-    context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], bytes!)
-    [Int; ~] => owners!
-    declaration => owner!
-    owner! >= 0 -> while {
-        owners! -> push(owner!)
-        package.symbols[range.symbolStart + owner!].parent => owner!
-    }
-    (owners! -> len) - 1 => index!
-    index! >= 0 -> while {
-        (bytes! -> len) > 0 -> if { bytes! -> push('.') }
-        package.symbols[range.symbolStart + owners![index!]].nameToken => nameToken
-        context -> typeTokenText(package, context.sourceModule, nameToken) -> appendTypeText(bytes!)
-        index! - 1 => index!
-    }
+    package.sources[context.sourceModule] -> slice(0, package.sources[context.sourceModule] -> len) => source
+    modules.appendDeclarationNameBytes(source, context.identities[context.sourceModule], range, package.tokens, package.symbols, declaration, bytes!)
     Field { bytes: bytes! }
 }
 

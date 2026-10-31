@@ -1,0 +1,133 @@
+namespace sollang.compiler.semantic.type_registration
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_name_policy as policy
+import sys.file as file
+
+public enum BoxRegistrationError { PrimitiveName, MissingDeclaration, InvalidType }
+public struct RegisteredBoxes { public ids: [Int; ~] }
+
+containsPolicyName table: Text, name: Text -> Bool {
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    cursor! <= (table -> len) -> while {
+        cursor! == (table -> len) or (table -> byte(cursor!)) == '|'
+            -> if {
+                (table -> slice(start!, cursor! - start!)) == name
+                    -> if { true -> return }
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    false
+}
+
+appendRegisteredBox types: mut [typeIds.SemanticType; ~], ids: mut [Int; ~], available: mut [Int; ~], next: ref [Int; ~], claimed: mut [Bool; ~], element: Int -> Unit {
+    available[element] => identity!
+    identity! >= 0 -> if {
+        next[identity!] => available[element]
+        true => claimed[identity!]
+    } else {
+        (types -> len) => identity!
+        types -> push(typeIds.SemanticType {
+            kind: 6, origin: -1, module: -1, symbol: -1,
+            first: element, second: -1, length: -1, lengthHash: 0,
+            containsParameter: types[element].containsParameter, status: 0
+        })
+    }
+    ids -> push(identity!)
+}
+
+# The catalog consumes committed declaration identities, not all scratch kinds.
+# Existing box identities are reused, including alias multiplicity, before new
+# canonical boxes are appended. Other already registered boxes are retained.
+public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typeIds.SemanticType; ~] -> Result<RegisteredBoxes, BoxRegistrationError> {
+    (types -> len) => originalCount
+    [Int; ~] => available!
+    [Int; ~] => next!
+    [Bool; ~] => claimed!
+    types -> each _ { available! -> push(-1)
+        next! -> push(-1)
+        claimed! -> push(false) }
+    originalCount - 1 => index!
+    index! >= 0 -> while {
+        types[index!] => type
+        type.kind == 6 and type.status == 0 -> if {
+            type.first < 0 or type.first >= originalCount
+                -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.InvalidType) -> return }
+            available![type.first] => next![index!]
+            index! => available![type.first]
+        }
+        index! - 1 => index!
+    }
+    [Int; ~] => ids!
+    policy.primitiveBoxNames() => primitives
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    cursor! <= (primitives -> len) -> while {
+        cursor! == (primitives -> len) or (primitives -> byte(cursor!)) == '|'
+            -> if {
+                primitives -> slice(start!, cursor! - start!) -> typeIds.builtinSymbolByName => symbol
+                symbol < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.PrimitiveName) -> return }
+                types -> typeIds.builtinTypeId(symbol) => element
+                element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.InvalidType) -> return }
+                policy.canRegisterBoxName(true, false, false, false, false)
+                    -> if {
+                        types -> appendRegisteredBox(ids!, available!, next!, claimed!, element)
+                    }
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    [Int; ~] => declared!
+    package.symbols -> each _ { declared! -> push(-1) }
+    0 => typeIndex!
+    typeIndex! < originalCount -> while {
+        types[typeIndex!] => type
+        ((type.kind == 1 and (type.origin == 0 or type.origin == 2)) or type.kind == 9) and type.status == 0 and type.module >= 0 and type.module < (package.ranges -> len)
+            -> if {
+                package.ranges[type.module] => range
+                type.symbol >= 0 and type.symbol < range.symbolCount
+                    -> if { typeIndex! => declared![range.symbolStart + type.symbol] }
+            }
+        typeIndex! + 1 => typeIndex!
+    }
+    package -> modules.identitiesAnalyzed => identities
+    [3, 4] -> each kind {
+        0 => source!
+        source! < (package.ranges -> len) -> while {
+            package.ranges[source!] => range
+            package.sources[source!] -> slice(0, package.sources[source!] -> len) => text
+            0 => symbol!
+            symbol! < range.symbolCount -> while {
+                package.symbols[range.symbolStart + symbol!].kind == kind
+                    -> if {
+                        declared![range.symbolStart + symbol!] => element
+                        element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.MissingDeclaration) -> return }
+                        [UInt8; ~] => name!
+                        modules.appendDeclarationNameBytes(text, identities[source!], range, package.tokens, package.symbols, symbol!, name!)
+                        name! -> file.borrowBytes => bytes
+                        bytes -> slice(0, bytes -> len) => qualified
+                        policy.boxExcludedStructNames() -> containsPolicyName(qualified) => excludedStructure
+                        policy.boxExcludedNominalNames() -> containsPolicyName(qualified) => excludedNominal
+                        policy.canRegisterBoxName(false, kind == 3, kind == 4, excludedStructure, excludedNominal)
+                            -> if {
+                                types -> appendRegisteredBox(ids!, available!, next!, claimed!, element)
+                            }
+                    }
+                symbol! + 1 => symbol!
+            }
+            source! + 1 => source!
+        }
+    }
+    0 => remaining!
+    remaining! < originalCount -> while {
+        types[remaining!].kind == 6 and types[remaining!].status == 0 and not claimed![remaining!]
+            -> if { ids! -> push(remaining!) }
+        remaining! + 1 => remaining!
+    }
+    RegisteredBoxes { ids: ids! } => result
+    Result<RegisteredBoxes, BoxRegistrationError>.Ok(result)
+}

@@ -1,0 +1,96 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_registration as registration
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+inspectBoxes: -> Unit uses Console, File, Process {
+    [
+    """
+    namespace sys.path
+    struct Path { value: Int }
+    enum Style { Native, Portable }
+    """,
+    """
+    namespace sys.file
+    struct File { value: Int }
+    """; ~
+    ] -> analysis.analyze => excludedPackage
+    excludedPackage -> typeIds.resolveAnalyzed => excluded!
+    registration.registerNamedBoxes(excludedPackage, excluded!.types) -> when {
+        Err(_) { process.exit(7) }
+        Ok(boxes) { (boxes.ids -> len) != 4 -> if { process.exit(8) } }
+    }
+    process.arguments() => arguments
+    arguments[1] -> file.mapText => owner
+    [owner,; ~] -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> typeIds.resolveAnalyzed => semantic!
+    registration.registerNamedBoxes(package, semantic!.types) -> when {
+        Err(_) { process.exit(1) -> return }
+        Ok(boxes) { boxes }
+    } => boxes
+    (semantic!.types -> len) => count
+    registration.registerNamedBoxes(package, semantic!.types) -> when {
+        Err(_) { process.exit(2) }
+        Ok(repeated) {
+            (semantic!.types -> len) != count or (repeated.ids -> len) != (boxes.ids -> len)
+                -> if { process.exit(3) }
+            0 => index!
+            index! < (boxes.ids -> len) -> while {
+                boxes.ids[index!] != repeated.ids[index!] -> if { process.exit(4) }
+                index! + 1 => index!
+            }
+        }
+    }
+    [typeIds.SemanticType; ~] => layoutTypes!
+    semantic!.types -> each type { layoutTypes! -> push(type) }
+    [typeIds.NominalField; ~] => layoutFields!
+    semantic!.fields -> each field { layoutFields! -> push(field) }
+    llvm.TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: 64 } -> llvm.layoutsFor => layouts!
+    [Int; ~] => referenceIndex!
+    package.nodes -> each _ { referenceIndex! -> push(-1) }
+    0 => reference!
+    semantic!.references -> each current {
+        current.typeAst >= 0 -> if { reference! => referenceIndex![package.ranges[current.sourceModule].astStart + current.typeAst] }
+        reference! + 1 => reference!
+    }
+    typeIds.enumPayloadEdges(semantic!.types, semantic!.references, package.ranges, package.symbols, referenceIndex!) => edges
+    typeIds.classifyWithPayloads(semantic!.types, semantic!.fields, edges) => traits!
+    semantic!.types -> llvm.refineDeclaredTypeLayouts(semantic!.fields, semantic!.references, package.ranges, package.symbols, package.nodes, referenceIndex!, layouts!.sizes, layouts!.aligns, layouts!.statuses, traits!)
+    "builtin:Text:$(typeIds.builtinTypeId(semantic!.types, 1))" -> println
+    "builtin:Int:$(typeIds.builtinTypeId(semantic!.types, 2))" -> println
+    "builtin:Bool:$(typeIds.builtinTypeId(semantic!.types, 23))" -> println
+    0 => index!
+    index! < (semantic!.types -> len) -> while {
+        semantic!.types[index!] => type
+        type.kind == 1 and type.module == 0 and type.symbol >= 0 and (type.origin == 0 or type.origin == 2)
+            -> if {
+                [UInt8; ~] => name!
+                package -> modules.identitiesAnalyzed => identities
+                package.sources[0] -> slice(0, package.sources[0] -> len) => source
+                modules.appendDeclarationNameBytes(source, identities[0], package.ranges[0], package.tokens, package.symbols, type.symbol, name!)
+                name! -> file.borrowBytes => bytes
+                bytes -> slice(0, bytes -> len) => text
+                "declared:$text:$(index!)" -> println
+            }
+        index! + 1 => index!
+    }
+    (boxes.ids -> len) != 8 -> if { process.exit(5) }
+    keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+    boxes.ids -> each identity {
+        records! -> llvm.appendStorageTypeUniverseRecord(semantic!.types, layouts!, identity) -> when {
+            Err(_) { process.exit(6) }
+            Ok {}
+        }
+    }
+    records!.fields -> each field {
+        field.bytes -> file.borrowBytes => bytes
+        bytes -> slice(0, bytes -> len) -> println
+    }
+}
+
+main { inspectBoxes() }

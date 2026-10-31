@@ -15468,16 +15468,15 @@ internal sealed partial class SemanticCompiler
         var predeclaredBoundedDictionariesByShape = new Dictionary<(TypeId KeyType, TypeId ValueType, int MaxEntries), TypeId>();
         var predeclaredDictionaries = new Dictionary<TypeId, (TypeId KeyType, TypeId ValueType)>();
         var predeclaredDictionariesByShape = new Dictionary<(TypeId KeyType, TypeId ValueType), TypeId>();
+        var declaredStructIds = structTypes.Values.ToHashSet();
+        var declaredEnumIds = enumTypes.Values.ToHashSet();
+        var declaredNames = structTypes.Select(item => KeyValuePair.Create(item.Value, item.Key.Name))
+            .Concat(enumTypes.Select(item => KeyValuePair.Create(item.Value, item.Key.Name)))
+            .ToDictionary(item => item.Key, item => item.Value);
         var boxableTypes = names
-            .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
-                || (structTypes.Values.Contains(item.Value)
-                    && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
-                && item.Value is not (TypeId.ProcessCommand or TypeId.AtomicReplaceRequest)
-                || enumTypes.Values.Contains(item.Value))
-            .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle
-                or TypeId.DirectoryRaw or TypeId.DirectoryEntryKind or TypeId.DirectoryEntry
-                or TypeId.DirectoryRawResult or TypeId.DirectoryReadResult
-                or TypeId.MouseEvent or TypeId.MouseEventKind or TypeId.EventOverflowPolicy))
+            .Where(item => SemanticTypeRegistrationNames.BoxName(item.Key,
+                declaredStructIds.Contains(item.Value), declaredEnumIds.Contains(item.Value),
+                declaredNames.GetValueOrDefault(item.Value, string.Empty)))
             .OrderBy(item => (int)item.Value)
             .ToArray();
         foreach (var (name, elementType) in boxableTypes)

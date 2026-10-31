@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.modules
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.syntax as syntax
 import sys.file as file
 import syntax.generated.slg as grammar
@@ -13,6 +14,32 @@ public struct ModuleIdentity {
     public pathStart: UIntSize
     public pathLength: UIntSize
     public importCount: Int
+}
+
+# Complete namespace and containing declaration path, shared by metadata and
+# semantic registration. Source symbol coordinates stay local to their file.
+public appendDeclarationNameBytes source: Text, identity: ModuleIdentity, range: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~], declarations: ref [symbols.Symbol; ~], declaration: Int, bytes: mut [UInt8; ~] -> Unit {
+    [UInt64; ~] => words!
+    appendLogicalNameWords(source, identity, range, tokens, words!)
+    words! -> each word { bytes -> push(UInt8(word)) }
+    [Int; ~] => owners!
+    declaration => owner!
+    owner! >= 0 -> while {
+        owners! -> push(owner!)
+        declarations[range.symbolStart + owner!].parent => owner!
+    }
+    (owners! -> len) - 1 => index!
+    index! >= 0 -> while {
+        (bytes -> len) > 0 -> if { bytes -> push('.') }
+        declarations[range.symbolStart + owners![index!]].nameToken => nameToken
+        tokens[range.tokenStart + nameToken].span => span
+        UIntSize(0) => byte!
+        byte! < span.length -> while {
+            bytes -> push(source -> byte(span.start + byte!))
+            byte! + 1 => byte!
+        }
+        index! - 1 => index!
+    }
 }
 
 public struct ImportEdge {

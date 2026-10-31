@@ -21,4 +21,13 @@ internal static class TypeNamePolicy
 
     public static string OptionVariantNames() => "None|Some";
     public static string ResultVariantNames() => "Ok|Err";
+
+    public static string PrimitiveBoxNames() => "Text|Int|Int32|Bool";
+    public static string BoxExcludedStructNames() =>
+        "sys.file.File|sys.file.FileWriter|sys.file.SourceText|sys.process.Command|sys.file.AtomicReplaceRequest";
+    public static string BoxExcludedNominalNames() =>
+        "sys.path.Path|sys.path.Style|sys.directory.Raw|sys.directory.kind.Kind|sys.directory.Entry|sys.directory.RawResult|sys.directory.ReadResult|sys.input.mouse.Event|sys.input.mouse.Kind|sys.input.mouse.OverflowPolicy";
+    public static bool CanRegisterBoxName(bool primitive, bool structure, bool enumeration,
+        bool excludedStructure, bool excludedNominal) =>
+        (primitive || structure && !excludedStructure || enumeration) && !excludedNominal;
 }

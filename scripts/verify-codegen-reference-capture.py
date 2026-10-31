@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+from collections import Counter
 
 from verification_execution import VerificationExecution
 from verification_contract_lease import VerificationContractLease
@@ -136,7 +137,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -146,7 +147,8 @@ def main():
                     'nominal': 'scripts/probes/codegen-nominal-capture',
                     'synthetic': 'scripts/probes/codegen-synthetic-capture',
                     'finaltypes': 'scripts/probes/codegen-final-type-capture',
-                    'registration': 'scripts/probes/codegen-registration-capture'}[args.probe]
+                    'registration': 'scripts/probes/codegen-registration-capture',
+                    'boxes': 'scripts/probes/codegen-box-registration'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -158,7 +160,7 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration'}[args.probe] + ('.Used' if args.probe == 'registration' else '.Wide' if args.probe == 'finaltypes' else '.Pair')
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
@@ -209,6 +211,31 @@ def main():
                     assert lines[0] == lines[1], lines
                 elif args.probe == 'nominal':
                     verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
+                elif args.probe == 'boxes':
+                    builtin = reference['cases'][0]['observation']['builtinTypeIds']
+                    named = {r['Name']: r['Id'] for group in ('Structs', 'Enums')
+                             for r in records[group] if r['ModuleName'] == 'cache.boxregistration'}
+                    assert len(named) == 4
+                    identities = {}
+                    observed = []
+                    box_ids = set()
+                    for line in lines:
+                        if line.startswith('builtin:'):
+                            _, name, identity = line.split(':')
+                            identities[int(identity)] = builtin[name]
+                        elif line.startswith('declared:'):
+                            _, name, identity = line.split(':')
+                            identities[int(identity)] = named[name]
+                        else:
+                            kind, identity, element, size, alignment = line.split(':')
+                            assert kind == 'box' and int(identity) not in box_ids
+                            box_ids.add(int(identity))
+                            observed.append((identities[int(element)], int(size), int(alignment)))
+                    elements = {*named.values(), builtin['Text'], builtin['Int'], builtin['Bool']}
+                    expected_boxes = [(r['ElementType'], r['Size'], r['Alignment'])
+                                      for r in records['Boxes'] if r['ElementType'] in elements]
+                    assert len(observed) == len(expected_boxes) == 8
+                    assert Counter(observed) == Counter(expected_boxes), (observed, expected_boxes)
                 elif args.probe in ('finaltypes', 'registration'):
                     builtin = reference['cases'][0]['observation']['builtinTypeIds']
                     namespace = 'cache.finaltypes' if args.probe == 'finaltypes' else 'cache.registration'
