@@ -6316,6 +6316,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     # A named region result transfers its local owner. An owner declared in an
     # enclosing region cannot acquire a second cleanup point through that result.
     # Formal move inputs keep their separate function-result ownership checks.
+    # Pattern payloads retain this guard only when their matched subject borrows.
     0 => ownedRegionIndex!
     ownedRegionIndex! < (typed -> len) -> while {
         typed[ownedRegionIndex!] => ownedRegion
@@ -6332,7 +6333,9 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                     -> if {
                         typed -> resolvedPlaceRootBinding(ownedRegionResultIr) => ownedRegionBindingIr
                         ownedRegionBindingIr >= 0 and ownedRegionBindingIr < (typed -> len)
-                            and typed[ownedRegionBindingIr].kind == 17
+                            and (typed[ownedRegionBindingIr].kind == 17
+                            or (typed[ownedRegionBindingIr].kind == 29
+                            and (ownedRegionResultIr -> borrowedMoveSourceBinding(parameterIrBySymbol!)) >= 0))
                             and not (ownedRegionBindingIr -> nodeBelongsTo(ownedRegionIndex!))
                             and (ownedRegionBindingIr -> moveSourceFunction) == (ownedRegionResultIr -> moveSourceFunction)
                             and ownedRegionResult.sourceModule >= 0

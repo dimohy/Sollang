@@ -3510,6 +3510,9 @@ An enum-pattern payload containing owned storage is a borrow unless the match
 subject itself is a named owner or a fresh owned temporary. Re-wrapping a
 borrowed payload in an owned aggregate, or passing it to a `move` input, is a
 semantic error rather than an implicit pointer copy.
+Returning a borrowed payload as an owning arm result is also rejected, including
+inside an unused function declaration. Result checks preserve transfer authority
+from named owners, fresh owned temporaries and explicitly moved inputs.
 The transferable case also permits `Ok(payload) { payload => owner!; ... }`:
 this creates a new mutable owner by one explicit move, not a copy or a wholesale
 replacement of an existing mutable container. The old payload and consumed

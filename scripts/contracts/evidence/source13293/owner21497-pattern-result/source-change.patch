@@ -1,0 +1,37 @@
+diff --git a/docs/SPEC.md b/docs/SPEC.md
+index 13c00cae2..4cf8f1913 100644
+--- a/docs/SPEC.md
++++ b/docs/SPEC.md
+@@ -3510,6 +3510,9 @@ An enum-pattern payload containing owned storage is a borrow unless the match
+ subject itself is a named owner or a fresh owned temporary. Re-wrapping a
+ borrowed payload in an owned aggregate, or passing it to a `move` input, is a
+ semantic error rather than an implicit pointer copy.
++Returning a borrowed payload as an owning arm result is also rejected, including
++inside an unused function declaration. Result checks preserve transfer authority
++from named owners, fresh owned temporaries and explicitly moved inputs.
+ The transferable case also permits `Ok(payload) { payload => owner!; ... }`:
+ this creates a new mutable owner by one explicit move, not a copy or a wholesale
+ replacement of an existing mutable container. The old payload and consumed
+diff --git a/selfhost/semantic/ownership_check.slg b/selfhost/semantic/ownership_check.slg
+index 8b8e18a55..c6f552f48 100644
+--- a/selfhost/semantic/ownership_check.slg
++++ b/selfhost/semantic/ownership_check.slg
+@@ -6316,6 +6316,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
+     # A named region result transfers its local owner. An owner declared in an
+     # enclosing region cannot acquire a second cleanup point through that result.
+     # Formal move inputs keep their separate function-result ownership checks.
++    # Pattern payloads retain this guard only when their matched subject borrows.
+     0 => ownedRegionIndex!
+     ownedRegionIndex! < (typed -> len) -> while {
+         typed[ownedRegionIndex!] => ownedRegion
+@@ -6332,7 +6333,9 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
+                     -> if {
+                         typed -> resolvedPlaceRootBinding(ownedRegionResultIr) => ownedRegionBindingIr
+                         ownedRegionBindingIr >= 0 and ownedRegionBindingIr < (typed -> len)
+-                            and typed[ownedRegionBindingIr].kind == 17
++                            and (typed[ownedRegionBindingIr].kind == 17
++                            or (typed[ownedRegionBindingIr].kind == 29
++                            and (ownedRegionResultIr -> borrowedMoveSourceBinding(parameterIrBySymbol!)) >= 0))
+                             and not (ownedRegionBindingIr -> nodeBelongsTo(ownedRegionIndex!))
+                             and (ownedRegionBindingIr -> moveSourceFunction) == (ownedRegionResultIr -> moveSourceFunction)
+                             and ownedRegionResult.sourceModule >= 0
