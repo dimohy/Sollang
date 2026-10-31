@@ -5972,6 +5972,10 @@ values, type layouts, private globals or specialization arguments.
 SSA value and label ordinals are local to the emitted function partition.
 Program-wide auxiliary symbols use a separate naming domain; resetting local
 counters must not merge string literals, static storage or callback symbols.
+String literal globals retain a complete lexical declaration scope and a local
+literal ordinal. Physical source/token positions only locate that scope and
+ordinal. Inlined and generic copies of the same immutable lexical literal share
+one definition; the emitter owns the encoded name storage for all borrowed views.
 
 Checked compilation admits syntax and library declarations before semantic
 lowering. A rejected function signature stops before call-context resolution

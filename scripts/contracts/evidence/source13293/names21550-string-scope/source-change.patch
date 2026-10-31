@@ -1,0 +1,578 @@
+diff --git a/docs/SPEC.md b/docs/SPEC.md
+index 4dfe53037..7cce5b202 100644
+--- a/docs/SPEC.md
++++ b/docs/SPEC.md
+@@ -5972,6 +5972,10 @@ values, type layouts, private globals or specialization arguments.
+ SSA value and label ordinals are local to the emitted function partition.
+ Program-wide auxiliary symbols use a separate naming domain; resetting local
+ counters must not merge string literals, static storage or callback symbols.
++String literal globals retain a complete lexical declaration scope and a local
++literal ordinal. Physical source/token positions only locate that scope and
++ordinal. Inlined and generic copies of the same immutable lexical literal share
++one definition; the emitter owns the encoded name storage for all borrowed views.
+ 
+ Checked compilation admits syntax and library declarations before semantic
+ lowering. A rejected function signature stops before call-context resolution
+diff --git a/selfhost/llvm/scoped_names.slg b/selfhost/llvm/scoped_names.slg
+index f5fd9d086..a41588ab2 100644
+--- a/selfhost/llvm/scoped_names.slg
++++ b/selfhost/llvm/scoped_names.slg
+@@ -76,3 +76,8 @@ public view names: ref Names, symbolSlot: Int -> Text {
+     names.bytes -> file.borrowBytes => text
+     text -> slice(UIntSize(names.starts[symbolSlot]), UIntSize(names.lengths[symbolSlot]))
+ }
++
++public appendOrdinalSuffix ordinal: UInt64, bytes: mut [UInt8; ~] -> Unit {
++    bytes -> push(95)
++    ordinal -> appendWord(bytes)
++}
+diff --git a/selfhost/llvm/text/call_arguments.slg b/selfhost/llvm/text/call_arguments.slg
+index 1768615d3..a4a431962 100644
+--- a/selfhost/llvm/text/call_arguments.slg
++++ b/selfhost/llvm/text/call_arguments.slg
+@@ -965,7 +965,7 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal:
+                                                     } else {
+                                                         argument -> sourceToken(context, state) => textArgumentToken
+                                                         Int(TextLiteralRequest { sourceModule: argument.sourceModule, token: textArgumentToken } -> textLiteralLength(context, state)) => textArgumentLength
+-                                                        "{ ptr @sollang_str_$(argumentIndex -> globalValueNameId(state)), i64 $textArgumentLength }" -> print
++                                                        "{ ptr @sollang_str_$(argumentIndex -> stringGlobalName(state)), i64 $textArgumentLength }" -> print
+                                                     }
+                                             } else {
+                                                 argument.kind == 3 or argument.kind == 4 -> if {
+diff --git a/selfhost/llvm/text/container_control.slg b/selfhost/llvm/text/container_control.slg
+index db3b03824..93594b97a 100644
+--- a/selfhost/llvm/text/container_control.slg
++++ b/selfhost/llvm/text/container_control.slg
+@@ -74,7 +74,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
+                 value.kind == 2 -> if {
+                     value -> sourceToken(context, state) => whileTextToken
+                     Int(TextLiteralRequest { sourceModule: value.sourceModule, token: whileTextToken } -> textLiteralLength(context, state)) => whileTextLength
+-                    "{ ptr @sollang_str_$(request.nodeIndex -> globalValueNameId(state)), i64 $whileTextLength }" -> print
++                    "{ ptr @sollang_str_$(request.nodeIndex -> stringGlobalName(state)), i64 $whileTextLength }" -> print
+                 } else {
+                     value.kind == 3 or value.kind == 4 -> if {
+                         value -> sourceToken(context, state) => valueToken
+diff --git a/selfhost/llvm/text/containers.slg b/selfhost/llvm/text/containers.slg
+index 3819bee4e..b3d52a9b6 100644
+--- a/selfhost/llvm/text/containers.slg
++++ b/selfhost/llvm/text/containers.slg
+@@ -1687,7 +1687,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
+                 materializeInterpolations[materializeCopyIndex] => materializeCopyRoot
+                 "  %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_target = getelementptr i8, ptr %materialize$(materializeIndex -> valueNameId(state))_target, i64 %materialize$(materializeIndex -> valueNameId(state))_copy_offset" -> print
+                 materializeCopyOrdinal! * 2 -> writeDecimalLine
+-                "  %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> globalValueNameId(state)), i64 $(materializeCopyRoot.literalStart)" -> println
++                "  %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> stringGlobalName(state)), i64 $(materializeCopyRoot.literalStart)" -> println
+                 "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_target, ptr %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_source, i64 $(materializeCopyRoot.literalLength), i1 false)" -> println
+                 "  %materialize$(materializeIndex -> valueNameId(state))_copy_offset" -> print
+                 materializeCopyOrdinal! * 2 + 1 -> writeDecimal
+@@ -1709,7 +1709,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
+         materializeSuffixRawLength - materializeSuffixStart! => materializeSuffixLength
+         "  %materialize$(materializeIndex -> valueNameId(state))_suffix_target = getelementptr i8, ptr %materialize$(materializeIndex -> valueNameId(state))_target, i64 %materialize$(materializeIndex -> valueNameId(state))_copy_offset" -> print
+         materializeRootCount * 2 -> writeDecimalLine
+-        "  %materialize$(materializeIndex -> valueNameId(state))_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> globalValueNameId(state)), i64 $(materializeSuffixStart!)" -> println
++        "  %materialize$(materializeIndex -> valueNameId(state))_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> stringGlobalName(state)), i64 $(materializeSuffixStart!)" -> println
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex -> valueNameId(state))_suffix_target, ptr %materialize$(materializeIndex -> valueNameId(state))_suffix_source, i64 $(materializeSuffixLength), i1 false)" -> println
+     } else {
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex -> valueNameId(state))_target, ptr %materialize$(materializeIndex -> valueNameId(state))_source_ptr, i64 %materialize$(materializeIndex -> valueNameId(state))_source_length, i1 false)" -> println
+diff --git a/selfhost/llvm/text/control_region_expressions.slg b/selfhost/llvm/text/control_region_expressions.slg
+index 49ae26a48..958696d23 100644
+--- a/selfhost/llvm/text/control_region_expressions.slg
++++ b/selfhost/llvm/text/control_region_expressions.slg
+@@ -239,7 +239,7 @@ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrde
+     regionNode.kind == 2 -> if {
+         regionNode -> sourceToken(context, state) => regionTextToken
+         TextLiteralRequest { sourceModule: regionNode.sourceModule, token: regionTextToken } -> textLiteralLength(context, state) => regionTextLength
+-        "  %v$(regionNodeIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex -> globalValueNameId(state)), 0" -> println
++        "  %v$(regionNodeIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex -> stringGlobalName(state)), 0" -> println
+         "  %v$(regionNodeIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(regionNodeIndex -> valueNameId(state))_ptr, i64 $regionTextLength, 1" -> println
+         regionNodeIndex -> emitComparisonTextProducer(ownerIndex, context, state)
+     }
+@@ -485,7 +485,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
+                         } else { regionEmittedFieldValue.kind == 2 -> if {
+                                 regionEmittedFieldValue -> sourceToken(context, state) => regionFieldTextToken
+                                 Int(TextLiteralRequest { sourceModule: regionEmittedFieldValue.sourceModule, token: regionFieldTextToken } -> textLiteralLength(context, state)) => regionFieldTextLength
+-                                "{ ptr @sollang_str_$(regionEmittedFieldIndex -> globalValueNameId(state)), i64 $regionFieldTextLength }" -> print
++                                "{ ptr @sollang_str_$(regionEmittedFieldIndex -> stringGlobalName(state)), i64 $regionFieldTextLength }" -> print
+                             } else {
+                                 regionEmittedFieldValue.kind == 3 or regionEmittedFieldValue.kind == 4
+                                     -> if {
+@@ -1959,7 +1959,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
+             regionReadPrompt.kind == 2 -> if {
+                 regionReadPrompt -> sourceToken(context, state) => regionReadPromptToken
+                 Int(TextLiteralRequest { sourceModule: regionReadPrompt.sourceModule, token: regionReadPromptToken } -> textLiteralLength(context, state)) => regionReadPromptLength
+-                "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex -> globalValueNameId(state)), i64 $regionReadPromptLength)" -> println
++                "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex -> stringGlobalName(state)), i64 $regionReadPromptLength)" -> println
+             } else {
+                 "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+             }
+@@ -2007,7 +2007,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                     regionExpressionInterpolation[regionExpressionRootSearch!] => regionExpressionRoot
+                                     regionExpressionRoot.sourceToken == regionArgument.payloadToken and regionExpressionRoot.parent < 0
+                                         -> if {
+-                                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $(regionExpressionRoot.literalStart)" -> println
++                                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> stringGlobalName(state)), i64 $(regionExpressionRoot.literalStart)" -> println
+                                             regionNode.symbol == -116 or regionNode.symbol == -117
+                                                 -> if {
+                                                     "  call void @sollang_runtime_eprint(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!), i64 $(regionExpressionRoot.literalLength), i1 false)" -> println
+@@ -2385,15 +2385,15 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                     regionExpressionRootSearch! + 1 => regionExpressionRootSearch!
+                                 }
+                             UIntSize(regionArgumentLength) - regionExpressionSuffixStart! => regionExpressionSuffixLength
+-                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $(regionExpressionSuffixStart!)" -> println
++                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> stringGlobalName(state)), i64 $(regionExpressionSuffixStart!)" -> println
+                             regionNode.symbol == -116 or regionNode.symbol == -117
+                                 -> if { "  call void @sollang_runtime_eprint(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print } else {
+                                     "  call void @sollang_runtime_print(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print
+                                 }
+                         } else {
+                             regionNode.symbol == -116 or regionNode.symbol == -117
+-                                -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $regionArgumentLength, i1 " -> print } else {
+-                                    "  call void @sollang_runtime_print(ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $regionArgumentLength, i1 " -> print
++                                -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(regionArgumentIndex -> stringGlobalName(state)), i64 $regionArgumentLength, i1 " -> print } else {
++                                    "  call void @sollang_runtime_print(ptr @sollang_str_$(regionArgumentIndex -> stringGlobalName(state)), i64 $regionArgumentLength, i1 " -> print
+                                 }
+                         }
+                         regionNode.symbol == -102 or regionNode.symbol == -116
+diff --git a/selfhost/llvm/text/core_calls.slg b/selfhost/llvm/text/core_calls.slg
+index a74c6f31f..fd70c5545 100644
+--- a/selfhost/llvm/text/core_calls.slg
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -3166,7 +3166,7 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
+             roots[copyOrdinal!] => copyIndex
+             interpolations[copyIndex] => copyRoot
+             "  %$(prefix)_literal$(copyOrdinal!)_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(copyOrdinal! * 2)" -> println
+-            "  %$(prefix)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex -> globalValueNameId(state)), i64 $(copyRoot.literalStart)" -> println
++            "  %$(prefix)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex -> stringGlobalName(state)), i64 $(copyRoot.literalStart)" -> println
+             "  call void @llvm.memcpy.p0.p0.i64(ptr %$(prefix)_literal$(copyOrdinal!)_target, ptr %$(prefix)_literal$(copyOrdinal!)_source, i64 $(copyRoot.literalLength), i1 false)" -> println
+             "  %$(prefix)_offset$(copyOrdinal! * 2 + 1) = add i64 %$(prefix)_offset$(copyOrdinal! * 2), $(copyRoot.literalLength)" -> println
+             "  %$(prefix)_root$(copyOrdinal!)_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(copyOrdinal! * 2 + 1)" -> println
+@@ -3176,7 +3176,7 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
+         }
+         rawLength - suffixStart! => suffixLength
+         "  %$(prefix)_suffix_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(rootCount * 2)" -> println
+-        "  %$(prefix)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex -> globalValueNameId(state)), i64 $(suffixStart!)" -> println
++        "  %$(prefix)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex -> stringGlobalName(state)), i64 $(suffixStart!)" -> println
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %$(prefix)_suffix_target, ptr %$(prefix)_suffix_source, i64 $(suffixLength), i1 false)" -> println
+         "  %$(prefix)_value0 = insertvalue %sollang.text poison, ptr %$(prefix)_buffer, 0" -> println
+         "  %$(prefix) = insertvalue %sollang.text %$(prefix)_value0, i64 %$(prefix)_length$(rootCount), 1" -> println
+@@ -4412,7 +4412,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
+     UIntSize(0) => suffixStart!
+     roots -> each root {
+         fragments[root] => fragment
+-        "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex -> globalValueNameId(state)), i64 $(fragment.literalStart)" -> println
++        "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex -> stringGlobalName(state)), i64 $(fragment.literalStart)" -> println
+         "  call void @$(writer)(ptr %$(prefix)_literal$(root), i64 $(fragment.literalLength), i1 false)" -> println
+         root -> deferredTextCaptureType(fragments, leaf.sourceModule, ownerIndex, leafIndex, context, state) => typeId
+         "  %$(prefix)_root$(root)_value = load " -> print
+@@ -4424,7 +4424,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
+     leaf -> sourceToken(context, state) => token
+     TextLiteralRequest { sourceModule: leaf.sourceModule, token: token } -> textLiteralLength(context, state) => rawLength
+     rawLength - suffixStart! => suffixLength
+-    "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex -> globalValueNameId(state)), i64 $(suffixStart!)" -> println
++    "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex -> stringGlobalName(state)), i64 $(suffixStart!)" -> println
+     "  call void @$(writer)(ptr %$(prefix)_suffix, i64 $(suffixLength), i1 " -> print
+     newline -> if { "true)" -> println } else { "false)" -> println }
+ }
+diff --git a/selfhost/llvm/text/core_prepare.slg b/selfhost/llvm/text/core_prepare.slg
+index 083801290..333b30d33 100644
+--- a/selfhost/llvm/text/core_prepare.slg
++++ b/selfhost/llvm/text/core_prepare.slg
+@@ -587,6 +587,7 @@ prepareCoreEmitterStateWithRoots context: ref emitterContext.EmitContext, roots:
+     CoreEmitterState {
+         frozenValueNames: context -> prepareValueNames
+         frozenGlobalValueNames: context -> prepareGlobalValueNames
++        frozenStringNames: context -> prepareStringNames
+         frozenCanonicalInterpolationRootByIr: canonicalRootByIr!
+         frozenDeferredTextValues: [Bool; ~]
+         frozenDeferredTextCaptureLeaves: [Bool; ~]
+diff --git a/selfhost/llvm/text/entry_expressions.slg b/selfhost/llvm/text/entry_expressions.slg
+index be910a7c4..74162d7c8 100644
+--- a/selfhost/llvm/text/entry_expressions.slg
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -1344,7 +1344,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+     entryExpression.kind == 2 -> if {
+         entryExpression -> sourceToken(context, state) => entryExpressionToken
+         TextLiteralRequest { sourceModule: entryExpression.sourceModule, token: entryExpressionToken } -> textLiteralLength(context, state) => entryExpressionLength
+-        "  %v$(entryExpressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex -> globalValueNameId(state)), 0" -> println
++        "  %v$(entryExpressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex -> stringGlobalName(state)), 0" -> println
+         "  %v$(entryExpressionIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(entryExpressionIndex -> valueNameId(state))_ptr, i64 $entryExpressionLength, 1" -> println
+         entryExpressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
+     }
+@@ -1466,7 +1466,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+                                 -> if {
+                                     entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
+                                     Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
+-                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex -> globalValueNameId(state)), i64 $entryFieldTextLength }" -> print
++                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex -> stringGlobalName(state)), i64 $entryFieldTextLength }" -> print
+                                 } else {
+                                     entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
+                                         -> if {
+@@ -2550,7 +2550,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+             entryReadPrompt.kind == 2 -> if {
+                 entryReadPrompt -> sourceToken(context, state) => entryReadPromptToken
+                 Int(TextLiteralRequest { sourceModule: entryReadPrompt.sourceModule, token: entryReadPromptToken } -> textLiteralLength(context, state)) => entryReadPromptLength
+-                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex -> globalValueNameId(state)), i64 $entryReadPromptLength)" -> println
++                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex -> stringGlobalName(state)), i64 $entryReadPromptLength)" -> println
+             } else {
+                 "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+             }
+@@ -2695,7 +2695,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                             entryExpressionInterpolation[entryExpressionRootSearch!] => entryExpressionRoot
+                                             entryExpressionRoot.sourceToken == runtimeArgument.payloadToken and entryExpressionRoot.parent < 0
+                                                 -> if {
+-                                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $(entryExpressionRoot.literalStart)" -> println
++                                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $(entryExpressionRoot.literalStart)" -> println
+                                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                                         -> if {
+                                                             "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!), i64 $(entryExpressionRoot.literalLength), i1 false)" -> println
+@@ -3148,7 +3148,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                             entryExpressionRootSearch! + 1 => entryExpressionRootSearch!
+                                         }
+                                     UIntSize(runtimeArgumentLength) - entryExpressionSuffixStart! => entryExpressionSuffixLength
+-                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $(entryExpressionSuffixStart!)" -> println
++                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $(entryExpressionSuffixStart!)" -> println
+                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                         -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print } else {
+                                             "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print
+@@ -3218,7 +3218,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                         interpolationBindingIr! >= 0 -> if {
+                                             Int(interpolationSegmentStart! - interpolationContentStart) => interpolationPartOffset
+                                             Int(interpolationMatchStart! - interpolationSegmentStart!) => interpolationPartLength
+-                                            "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $interpolationPartOffset" -> println
++                                            "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $interpolationPartOffset" -> println
+                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                                 -> if {
+                                                     "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!), i64 $interpolationPartLength, i1 false)" -> println
+@@ -3241,15 +3241,15 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                     emittedInterpolation! -> if {
+                                         Int(interpolationSegmentStart! - interpolationContentStart) => interpolationSuffixOffset
+                                         Int(interpolationContentEnd - interpolationSegmentStart!) => interpolationSuffixLength
+-                                        "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $interpolationSuffixOffset" -> println
++                                        "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $interpolationSuffixOffset" -> println
+                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                             -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print } else {
+                                                 "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print
+                                             }
+                                     } else {
+                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
+-                                            -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
+-                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
++                                            -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
++                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print
+                                             }
+                                     }
+                                 }
+diff --git a/selfhost/llvm/text/foundation.slg b/selfhost/llvm/text/foundation.slg
+index afcdd7fed..9321f283a 100644
+--- a/selfhost/llvm/text/foundation.slg
++++ b/selfhost/llvm/text/foundation.slg
+@@ -470,6 +470,7 @@ struct BodySchedulePlan {
+ struct CoreEmitterState {
+     frozenValueNames: [UInt64; ~]
+     frozenGlobalValueNames: [UInt64; ~]
++    frozenStringNames: StringNames
+     frozenCanonicalInterpolationRootByIr: [Int; ~]
+     frozenDeferredTextValues: [Bool; ~]
+     frozenDeferredTextCaptureLeaves: [Bool; ~]
+diff --git a/selfhost/llvm/text/function_calls.slg b/selfhost/llvm/text/function_calls.slg
+index 5cb9a5671..9d3845ce1 100644
+--- a/selfhost/llvm/text/function_calls.slg
++++ b/selfhost/llvm/text/function_calls.slg
+@@ -115,7 +115,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+             readPrompt.kind == 2 -> if {
+                 readPrompt -> sourceToken(context, state) => readPromptToken
+                 Int(TextLiteralRequest { sourceModule: readPrompt.sourceModule, token: readPromptToken } -> textLiteralLength(context, state)) => readPromptLength
+-                "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex -> globalValueNameId(state)), i64 $readPromptLength)" -> println
++                "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex -> stringGlobalName(state)), i64 $readPromptLength)" -> println
+             } else {
+                 "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+             }
+@@ -178,7 +178,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                                     functionExpressionInterpolation[functionExpressionRootIndex] => functionExpressionRoot
+                                     functionExpressionRoot.sourceToken == runtimeArgument.payloadToken and functionExpressionRoot.parent < 0
+                                         -> if {
+-                                            "  %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $(functionExpressionRoot.literalStart)" -> println
++                                            "  %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> stringGlobalName(state)), i64 $(functionExpressionRoot.literalStart)" -> println
+                                             expression.symbol == -116 or expression.symbol == -117
+                                                 -> if {
+                                                     "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
+@@ -473,7 +473,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                                     functionExpressionRootSearch! + 1 => functionExpressionRootSearch!
+                                 }
+                             UIntSize(runtimeArgumentLength) - functionExpressionSuffixStart! => functionExpressionSuffixLength
+-                            "  %v$(expressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $(functionExpressionSuffixStart!)" -> println
++                            "  %v$(expressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> stringGlobalName(state)), i64 $(functionExpressionSuffixStart!)" -> println
+                             expression.symbol == -116 or expression.symbol == -117
+                                 -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print } else {
+                                     "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print
+@@ -581,7 +581,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                                     -> if {
+                                         Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationPartOffset
+                                         Int(functionInterpolationMatchStart! - functionInterpolationSegmentStart!) => functionInterpolationPartLength
+-                                        "  %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $functionInterpolationPartOffset" -> println
++                                        "  %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> stringGlobalName(state)), i64 $functionInterpolationPartOffset" -> println
+                                         expression.symbol == -116 or expression.symbol == -117
+                                             -> if {
+                                                 "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
+@@ -608,15 +608,15 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                             functionEmittedInterpolation! -> if {
+                                 Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationSuffixOffset
+                                 Int(functionInterpolationContentEnd - functionInterpolationSegmentStart!) => functionInterpolationSuffixLength
+-                                "  %v$(expressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $functionInterpolationSuffixOffset" -> println
++                                "  %v$(expressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> stringGlobalName(state)), i64 $functionInterpolationSuffixOffset" -> println
+                                 expression.symbol == -116 or expression.symbol == -117
+                                     -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print } else {
+                                         "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print
+                                     }
+                             } else {
+                                 expression.symbol == -116 or expression.symbol == -117
+-                                    -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
+-                                        "  call void @sollang_runtime_print(ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
++                                    -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(runtimeArgumentIndex -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
++                                        "  call void @sollang_runtime_print(ptr @sollang_str_$(runtimeArgumentIndex -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print
+                                     }
+                             }
+                         }
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index abc99e740..3de6c649f 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -903,7 +903,7 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
+                         } else { emittedFieldValue.kind == 2 -> if {
+                                 emittedFieldValue -> sourceToken(context, state) => fieldTextToken
+                                 Int(TextLiteralRequest { sourceModule: emittedFieldValue.sourceModule, token: fieldTextToken } -> textLiteralLength(context, state)) => fieldTextLength
+-                                "{ ptr @sollang_str_$(emittedFieldIndex -> globalValueNameId(state)), i64 $fieldTextLength }" -> print
++                                "{ ptr @sollang_str_$(emittedFieldIndex -> stringGlobalName(state)), i64 $fieldTextLength }" -> print
+                             } else {
+                                 emittedFieldValue.kind == 3 or emittedFieldValue.kind == 4
+                                     -> if {
+diff --git a/selfhost/llvm/text/functions.slg b/selfhost/llvm/text/functions.slg
+index dfd903d49..523be60fb 100644
+--- a/selfhost/llvm/text/functions.slg
++++ b/selfhost/llvm/text/functions.slg
+@@ -1688,7 +1688,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+                     expression.kind == 2 -> if {
+                         expression -> sourceToken(context, state) => expressionToken
+                         TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
+-                        "  %v$(expressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex -> globalValueNameId(state)), 0" -> println
++                        "  %v$(expressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex -> stringGlobalName(state)), 0" -> println
+                         "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(expressionIndex -> valueNameId(state))_ptr, i64 $expressionLength, 1" -> println
+                         expressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
+                     }
+diff --git a/selfhost/llvm/text/platform_io.slg b/selfhost/llvm/text/platform_io.slg
+index 5e0f8582a..224fc4e0c 100644
+--- a/selfhost/llvm/text/platform_io.slg
++++ b/selfhost/llvm/text/platform_io.slg
+@@ -2514,7 +2514,7 @@ writeFileScalarArgument request: WhileValueRequest, pathIndex: Int, context: ref
+     path.kind == 2 -> if {
+         path -> sourceToken(context, state) => token
+         Int(TextLiteralRequest { sourceModule: path.sourceModule, token: token } -> textLiteralLength(context, state)) => length
+-        "{ ptr @sollang_str_$(pathIndex -> globalValueNameId(state)), i64 $length }" -> print
++        "{ ptr @sollang_str_$(pathIndex -> stringGlobalName(state)), i64 $length }" -> print
+     } else {
+         request.whileIndex >= 0 -> if {
+             WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: pathIndex } -> writeWhileValue(context, state)
+diff --git a/selfhost/llvm/text/runtime_preamble.slg b/selfhost/llvm/text/runtime_preamble.slg
+index a81d4dcc1..a90c8c105 100644
+--- a/selfhost/llvm/text/runtime_preamble.slg
++++ b/selfhost/llvm/text/runtime_preamble.slg
+@@ -5,6 +5,8 @@ import sollang.compiler.llvm.runtime as llvmRuntime
+ import sollang.compiler.llvm.emitter.context as emitterContext
+ import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+ import syntax.generated.slg as grammar
++import sys.process as process
++import sys.runtime as runtimeConsole
+ 
+ struct CoreRuntimePreambleResult {
+     usesArguments: Bool
+@@ -39,6 +41,10 @@ usesDirectTextEqualityRuntime context: ref emitterContext.EmitContext -> Bool {
+ }
+ 
+ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, requiresEarlyTextType: Bool, usesComputePool: Bool, usesAsyncRuntime: Bool, usesDirectoryTraversal: Bool, usesOwnedDropRuntime: Bool, usesSourceText: Bool, usesStandardInputSourceText: Bool, usesText: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> CoreRuntimePreambleResult uses Console, Process {
++    state.frozenStringNames.failureIr >= 0 -> if {
++        "sollang: internal string-global declaration provenance is missing at IR $(state.frozenStringNames.failureIr)" -> runtimeConsole.eprintln
++        process.exit(1)
++    }
+     "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)" -> println
+     "declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)" -> println
+     context -> emitStreamJunctionRuntimes(state)
+@@ -689,13 +695,14 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+         0 => textGlobalIndex!
+         textGlobalIndex! < (context.ir -> len) -> while {
+             context.ir[textGlobalIndex!] => textConstant
+-            textConstant.kind == 2 -> if {
+-                textConstant -> sourceToken(context, state) => textToken
+-                TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
+-                textLiteralRequest -> textLiteralLength(context, state) => textLength
+-                "@sollang_str_$(textGlobalIndex! -> globalValueNameId(state)) = private unnamed_addr constant [$textLength x i8] " -> print
+-                textLiteralRequest -> emitTextLiteralConstant(context, state)
+-            }
++            textConstant.kind == 2 and state.frozenStringNames.representativeByIr[textGlobalIndex!] == textGlobalIndex!
++                -> if {
++                    textConstant -> sourceToken(context, state) => textToken
++                    TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
++                    textLiteralRequest -> textLiteralLength(context, state) => textLength
++                    "@sollang_str_$(textGlobalIndex! -> stringGlobalName(state)) = private unnamed_addr constant [$textLength x i8] " -> print
++                    textLiteralRequest -> emitTextLiteralConstant(context, state)
++                }
+             textGlobalIndex! + 1 => textGlobalIndex!
+         }
+     }
+diff --git a/selfhost/llvm/text/value_names.slg b/selfhost/llvm/text/value_names.slg
+index 6b676aae6..ae4336aa4 100644
+--- a/selfhost/llvm/text/value_names.slg
++++ b/selfhost/llvm/text/value_names.slg
+@@ -47,3 +47,153 @@ globalValueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
+ functionSymbolName sourceModule: Int, symbol: Int, context: ref emitterContext.EmitContext -> Text {
+     context.symbolNames -> scopedNames.view(context.ranges[sourceModule].symbolStart + symbol)
+ }
++
++struct StringNames {
++    names: scopedNames.Names
++    representativeByIr: [Int; ~]
++    failureIr: Int
++}
++
++recordStringScope source: Int, astIndex: Int, scope: Int, scopes: mut [Int; ~], widths: mut [Int; ~], context: ref emitterContext.EmitContext -> Unit {
++    context.ranges[source] => range
++    context.nodes[range.astStart + astIndex] => declaration
++    declaration.firstToken < 0 or declaration.tokenCount <= 0
++        or declaration.firstToken > range.tokenCount
++        or declaration.tokenCount > range.tokenCount - declaration.firstToken
++        -> if { return }
++    range.tokenStart + declaration.firstToken => first
++    first => cursor!
++    cursor! < first + declaration.tokenCount -> while {
++        declaration.tokenCount < widths[cursor!] -> if {
++            scope => scopes[cursor!]
++            declaration.tokenCount => widths[cursor!]
++        }
++        cursor! + 1 => cursor!
++    }
++}
++
++stringLiteralTokenSlot nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
++    context.ir[nodeIndex] => node
++    node.sourceModule < 0 or node.sourceModule >= (context.ranges -> len)
++        -> if { -1 -> return }
++    context.ranges[node.sourceModule] => range
++    node.payloadToken < 0 or node.payloadToken >= range.tokenCount
++        -> if { -1 -> return }
++    range.tokenStart + node.payloadToken
++}
++
++prepareStringNames context: ref emitterContext.EmitContext -> StringNames {
++    [Int; ~] => scopes!
++    [Int; ~] => widths!
++    [Int; ~] => firstByToken!
++    context.tokens -> each {
++        scopes! -> push(-1)
++        widths! -> push((context.tokens -> len) + 1)
++        firstByToken! -> push(-1)
++    }
++    0 => source!
++    source! < (context.ranges -> len) -> while {
++        context.ranges[source!] => range
++        0 => astIndex!
++        astIndex! < range.astCount -> while {
++            context.nodes[range.astStart + astIndex!].kind == 8
++                -> if {
++                    source! -> recordStringScope(astIndex!, -2, scopes!, widths!, context)
++                }
++            astIndex! + 1 => astIndex!
++        }
++        0 => symbol!
++        symbol! < range.symbolCount -> while {
++            range.symbolStart + symbol! => slot
++            context.symbols[slot] => declaration
++            declaration.kind != 35 and context.symbolNames.starts[slot] >= 0
++                and declaration.astNode >= 0 and declaration.astNode < range.astCount
++                -> if {
++                    source! -> recordStringScope(declaration.astNode, slot, scopes!, widths!, context)
++                }
++            symbol! + 1 => symbol!
++        }
++        source! + 1 => source!
++    }
++    -1 => failure!
++    0 => nodeIndex!
++    nodeIndex! < (context.ir -> len) and failure! < 0
++        -> while {
++            context.ir[nodeIndex!].kind == 2 -> if {
++                nodeIndex! -> stringLiteralTokenSlot(context) => tokenSlot
++                tokenSlot < 0 -> if { nodeIndex! => failure! } else {
++                    scopes![tokenSlot] == -1 -> if { nodeIndex! => failure! } else {
++                        firstByToken![tokenSlot] < 0 -> if { nodeIndex! => firstByToken![tokenSlot] }
++                    }
++                }
++            }
++            nodeIndex! + 1 => nodeIndex!
++        }
++    [UInt64; ~] => counters!
++    0 => counter!
++    counter! <= (context.symbols -> len) -> while {
++        counters! -> push(0)
++        counter! + 1 => counter!
++    }
++    [Int; ~] => tokenStarts!
++    [Int; ~] => tokenLengths!
++    [UInt8; ~] => bytes!
++    0 => tokenSlot!
++    tokenSlot! < (context.tokens -> len) -> while {
++        tokenStarts! -> push(-1)
++        tokenLengths! -> push(0)
++        failure! < 0 and firstByToken![tokenSlot!] >= 0
++            -> if {
++                scopes![tokenSlot!] => scope
++                (scope == -2 -> if { 0 } else { scope + 1 }) => counterSlot
++                bytes! -> len => start
++                scope == -2 -> if {
++                    bytes! -> push('e')
++                    bytes! -> push('n')
++                    bytes! -> push('t')
++                    bytes! -> push('r')
++                    bytes! -> push('y')
++                } else {
++                    context.symbolNames.starts[scope] => first
++                    first => cursor!
++                    cursor! < first + context.symbolNames.lengths[scope]
++                        -> while {
++                            bytes! -> push(context.symbolNames.bytes[cursor!])
++                            cursor! + 1 => cursor!
++                        }
++                }
++                counters![counterSlot] -> scopedNames.appendOrdinalSuffix(bytes!)
++                start => tokenStarts![tokenSlot!]
++                (bytes! -> len) - start => tokenLengths![tokenSlot!]
++                counters![counterSlot] + 1 => counters![counterSlot]
++            }
++        tokenSlot! + 1 => tokenSlot!
++    }
++    [Int; ~] => starts!
++    [Int; ~] => lengths!
++    [Int; ~] => representatives!
++    0 => value!
++    value! < (context.ir -> len) -> while {
++        starts! -> push(-1)
++        lengths! -> push(0)
++        representatives! -> push(-1)
++        failure! < 0 and context.ir[value!].kind == 2
++            -> if {
++                value! -> stringLiteralTokenSlot(context) => slot
++                tokenStarts![slot] => starts![value!]
++                tokenLengths![slot] => lengths![value!]
++                firstByToken![slot] => representatives![value!]
++            }
++        value! + 1 => value!
++    }
++    StringNames {
++        names: scopedNames.Names { starts: starts!, lengths: lengths!, bytes: bytes!, status: failure! < 0
++                -> if { 0 } else { 1 } }
++        representativeByIr: representatives!
++        failureIr: failure!
++    }
++}
++
++stringGlobalName nodeIndex: Int, state: ref CoreEmitterState -> Text {
++    state.frozenStringNames.names -> scopedNames.view(nodeIndex)
++}

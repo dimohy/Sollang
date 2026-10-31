@@ -47,3 +47,153 @@ globalValueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
 functionSymbolName sourceModule: Int, symbol: Int, context: ref emitterContext.EmitContext -> Text {
     context.symbolNames -> scopedNames.view(context.ranges[sourceModule].symbolStart + symbol)
 }
+
+struct StringNames {
+    names: scopedNames.Names
+    representativeByIr: [Int; ~]
+    failureIr: Int
+}
+
+recordStringScope source: Int, astIndex: Int, scope: Int, scopes: mut [Int; ~], widths: mut [Int; ~], context: ref emitterContext.EmitContext -> Unit {
+    context.ranges[source] => range
+    context.nodes[range.astStart + astIndex] => declaration
+    declaration.firstToken < 0 or declaration.tokenCount <= 0
+        or declaration.firstToken > range.tokenCount
+        or declaration.tokenCount > range.tokenCount - declaration.firstToken
+        -> if { return }
+    range.tokenStart + declaration.firstToken => first
+    first => cursor!
+    cursor! < first + declaration.tokenCount -> while {
+        declaration.tokenCount < widths[cursor!] -> if {
+            scope => scopes[cursor!]
+            declaration.tokenCount => widths[cursor!]
+        }
+        cursor! + 1 => cursor!
+    }
+}
+
+stringLiteralTokenSlot nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ir[nodeIndex] => node
+    node.sourceModule < 0 or node.sourceModule >= (context.ranges -> len)
+        -> if { -1 -> return }
+    context.ranges[node.sourceModule] => range
+    node.payloadToken < 0 or node.payloadToken >= range.tokenCount
+        -> if { -1 -> return }
+    range.tokenStart + node.payloadToken
+}
+
+prepareStringNames context: ref emitterContext.EmitContext -> StringNames {
+    [Int; ~] => scopes!
+    [Int; ~] => widths!
+    [Int; ~] => firstByToken!
+    context.tokens -> each {
+        scopes! -> push(-1)
+        widths! -> push((context.tokens -> len) + 1)
+        firstByToken! -> push(-1)
+    }
+    0 => source!
+    source! < (context.ranges -> len) -> while {
+        context.ranges[source!] => range
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            context.nodes[range.astStart + astIndex!].kind == 8
+                -> if {
+                    source! -> recordStringScope(astIndex!, -2, scopes!, widths!, context)
+                }
+            astIndex! + 1 => astIndex!
+        }
+        0 => symbol!
+        symbol! < range.symbolCount -> while {
+            range.symbolStart + symbol! => slot
+            context.symbols[slot] => declaration
+            declaration.kind != 35 and context.symbolNames.starts[slot] >= 0
+                and declaration.astNode >= 0 and declaration.astNode < range.astCount
+                -> if {
+                    source! -> recordStringScope(declaration.astNode, slot, scopes!, widths!, context)
+                }
+            symbol! + 1 => symbol!
+        }
+        source! + 1 => source!
+    }
+    -1 => failure!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) and failure! < 0
+        -> while {
+            context.ir[nodeIndex!].kind == 2 -> if {
+                nodeIndex! -> stringLiteralTokenSlot(context) => tokenSlot
+                tokenSlot < 0 -> if { nodeIndex! => failure! } else {
+                    scopes![tokenSlot] == -1 -> if { nodeIndex! => failure! } else {
+                        firstByToken![tokenSlot] < 0 -> if { nodeIndex! => firstByToken![tokenSlot] }
+                    }
+                }
+            }
+            nodeIndex! + 1 => nodeIndex!
+        }
+    [UInt64; ~] => counters!
+    0 => counter!
+    counter! <= (context.symbols -> len) -> while {
+        counters! -> push(0)
+        counter! + 1 => counter!
+    }
+    [Int; ~] => tokenStarts!
+    [Int; ~] => tokenLengths!
+    [UInt8; ~] => bytes!
+    0 => tokenSlot!
+    tokenSlot! < (context.tokens -> len) -> while {
+        tokenStarts! -> push(-1)
+        tokenLengths! -> push(0)
+        failure! < 0 and firstByToken![tokenSlot!] >= 0
+            -> if {
+                scopes![tokenSlot!] => scope
+                (scope == -2 -> if { 0 } else { scope + 1 }) => counterSlot
+                bytes! -> len => start
+                scope == -2 -> if {
+                    bytes! -> push('e')
+                    bytes! -> push('n')
+                    bytes! -> push('t')
+                    bytes! -> push('r')
+                    bytes! -> push('y')
+                } else {
+                    context.symbolNames.starts[scope] => first
+                    first => cursor!
+                    cursor! < first + context.symbolNames.lengths[scope]
+                        -> while {
+                            bytes! -> push(context.symbolNames.bytes[cursor!])
+                            cursor! + 1 => cursor!
+                        }
+                }
+                counters![counterSlot] -> scopedNames.appendOrdinalSuffix(bytes!)
+                start => tokenStarts![tokenSlot!]
+                (bytes! -> len) - start => tokenLengths![tokenSlot!]
+                counters![counterSlot] + 1 => counters![counterSlot]
+            }
+        tokenSlot! + 1 => tokenSlot!
+    }
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [Int; ~] => representatives!
+    0 => value!
+    value! < (context.ir -> len) -> while {
+        starts! -> push(-1)
+        lengths! -> push(0)
+        representatives! -> push(-1)
+        failure! < 0 and context.ir[value!].kind == 2
+            -> if {
+                value! -> stringLiteralTokenSlot(context) => slot
+                tokenStarts![slot] => starts![value!]
+                tokenLengths![slot] => lengths![value!]
+                firstByToken![slot] => representatives![value!]
+            }
+        value! + 1 => value!
+    }
+    StringNames {
+        names: scopedNames.Names { starts: starts!, lengths: lengths!, bytes: bytes!, status: failure! < 0
+                -> if { 0 } else { 1 } }
+        representativeByIr: representatives!
+        failureIr: failure!
+    }
+}
+
+stringGlobalName nodeIndex: Int, state: ref CoreEmitterState -> Text {
+    state.frozenStringNames.names -> scopedNames.view(nodeIndex)
+}

@@ -5,6 +5,8 @@ import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.diagnostics as diagnostics
 import syntax.generated.slg as grammar
+import sys.process as process
+import sys.runtime as runtimeConsole
 
 struct CoreRuntimePreambleResult {
     usesArguments: Bool
@@ -39,6 +41,10 @@ usesDirectTextEqualityRuntime context: ref emitterContext.EmitContext -> Bool {
 }
 
 emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, requiresEarlyTextType: Bool, usesComputePool: Bool, usesAsyncRuntime: Bool, usesDirectoryTraversal: Bool, usesOwnedDropRuntime: Bool, usesSourceText: Bool, usesStandardInputSourceText: Bool, usesText: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> CoreRuntimePreambleResult uses Console, Process {
+    state.frozenStringNames.failureIr >= 0 -> if {
+        "sollang: internal string-global declaration provenance is missing at IR $(state.frozenStringNames.failureIr)" -> runtimeConsole.eprintln
+        process.exit(1)
+    }
     "declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)" -> println
     "declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)" -> println
     context -> emitStreamJunctionRuntimes(state)
@@ -689,13 +695,14 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         0 => textGlobalIndex!
         textGlobalIndex! < (context.ir -> len) -> while {
             context.ir[textGlobalIndex!] => textConstant
-            textConstant.kind == 2 -> if {
-                textConstant -> sourceToken(context, state) => textToken
-                TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
-                textLiteralRequest -> textLiteralLength(context, state) => textLength
-                "@sollang_str_$(textGlobalIndex! -> globalValueNameId(state)) = private unnamed_addr constant [$textLength x i8] " -> print
-                textLiteralRequest -> emitTextLiteralConstant(context, state)
-            }
+            textConstant.kind == 2 and state.frozenStringNames.representativeByIr[textGlobalIndex!] == textGlobalIndex!
+                -> if {
+                    textConstant -> sourceToken(context, state) => textToken
+                    TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
+                    textLiteralRequest -> textLiteralLength(context, state) => textLength
+                    "@sollang_str_$(textGlobalIndex! -> stringGlobalName(state)) = private unnamed_addr constant [$textLength x i8] " -> print
+                    textLiteralRequest -> emitTextLiteralConstant(context, state)
+                }
             textGlobalIndex! + 1 => textGlobalIndex!
         }
     }
