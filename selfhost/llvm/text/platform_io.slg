@@ -3473,12 +3473,12 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder: 
     "  store i64 %v$(request.expressionIndex -> valueNameId(state))_length, ptr %v$(request.expressionIndex -> valueNameId(state))_failure_limit_slot, align 8" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_index_slot = alloca i64, align 8" -> println
     "  store i64 0, ptr %v$(request.expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
-    "  br label %tryparallel$(request.expressionIndex)_sequential_header" -> println
-    "tryparallel$(request.expressionIndex)_sequential_header:" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_header" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_header:" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_index = load i64, ptr %v$(request.expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_done = icmp eq i64 %v$(request.expressionIndex -> valueNameId(state))_index, %v$(request.expressionIndex -> valueNameId(state))_length" -> println
-    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_done, label %tryparallel$(request.expressionIndex)_sequential_collect, label %tryparallel$(request.expressionIndex)_sequential_body" -> println
-    "tryparallel$(request.expressionIndex)_sequential_body:" -> println
+    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_done, label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_collect, label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_body" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_body:" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_input_ptr = getelementptr " -> print
     source -> writeArrayElementType(context, state)
     ", ptr %v$(request.expressionIndex -> valueNameId(state))_input, i64 %v$(request.expressionIndex -> valueNameId(state))_index" -> println
@@ -3519,15 +3519,15 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder: 
     callback -> writeIrType(context, state)
     " %v$(request.expressionIndex -> valueNameId(state))_mapped, 0" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_mapped_error = icmp eq i32 %v$(request.expressionIndex -> valueNameId(state))_mapped_tag, 1" -> println
-    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_mapped_error, label %tryparallel$(request.expressionIndex)_sequential_error, label %tryparallel$(request.expressionIndex)_sequential_next" -> println
-    "tryparallel$(request.expressionIndex)_sequential_error:" -> println
+    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_mapped_error, label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_error, label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_next" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_error:" -> println
     "  store atomic i64 %v$(request.expressionIndex -> valueNameId(state))_index, ptr %v$(request.expressionIndex -> valueNameId(state))_failure_limit_slot release, align 8" -> println
-    "  br label %tryparallel$(request.expressionIndex)_sequential_collect" -> println
-    "tryparallel$(request.expressionIndex)_sequential_next:" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_collect" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_next:" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_next = add i64 %v$(request.expressionIndex -> valueNameId(state))_index, 1" -> println
     "  store i64 %v$(request.expressionIndex -> valueNameId(state))_next, ptr %v$(request.expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
-    "  br label %tryparallel$(request.expressionIndex)_sequential_header" -> println
-    "tryparallel$(request.expressionIndex)_sequential_collect:" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_header" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_sequential_collect:" -> println
     source.kind == 14 -> if {
         "  call void @sollang_free(ptr %v$(request.expressionIndex -> valueNameId(state))_input)" -> println
     }
@@ -3545,8 +3545,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     context.typeAligns[okTypeId] => okAlign
     "  %v$(request.expressionIndex -> valueNameId(state))_failure_limit = load atomic i64, ptr %v$(request.expressionIndex -> valueNameId(state))_failure_limit_slot acquire, align 8" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_has_failure = icmp ult i64 %v$(request.expressionIndex -> valueNameId(state))_failure_limit, %v$(request.expressionIndex -> valueNameId(state))_length" -> println
-    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_has_failure, label %tryparallel$(request.expressionIndex)_error, label %tryparallel$(request.expressionIndex)_success" -> println
-    "tryparallel$(request.expressionIndex)_error:" -> println
+    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_has_failure, label %tryparallel$(request.expressionIndex -> valueNameId(state))_error, label %tryparallel$(request.expressionIndex -> valueNameId(state))_success" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_error:" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_selected_offset = mul i64 %v$(request.expressionIndex -> valueNameId(state))_failure_limit, " -> print
     callbackStride -> writeDecimalLine
     "  %v$(request.expressionIndex -> valueNameId(state))_selected_ptr = getelementptr i8, ptr %v$(request.expressionIndex -> valueNameId(state))_callback_results, i64 %v$(request.expressionIndex -> valueNameId(state))_selected_offset" -> println
@@ -3573,20 +3573,20 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_result_slot = alloca " -> print
             request.callbackTypeId -> writeSemanticTypeId(context, state)
             ", align 8" -> println
-            "  br label %tryparallel$(request.expressionIndex)_cleanup_header" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_header:" -> println
-            "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_index = phi i64 [ 0, %tryparallel$(request.expressionIndex)_error ], [ %v$(request.expressionIndex -> valueNameId(state))_cleanup_next_index, %tryparallel$(request.expressionIndex)_cleanup_next ]" -> println
+            "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_header" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_header:" -> println
+            "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_index = phi i64 [ 0, %tryparallel$(request.expressionIndex -> valueNameId(state))_error ], [ %v$(request.expressionIndex -> valueNameId(state))_cleanup_next_index, %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_next ]" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_in_range = icmp ult i64 %v$(request.expressionIndex -> valueNameId(state))_cleanup_index, %v$(request.expressionIndex -> valueNameId(state))_length" -> println
-            "  br i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_in_range, label %tryparallel$(request.expressionIndex)_cleanup_check, label %tryparallel$(request.expressionIndex)_cleanup_done" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_check:" -> println
+            "  br i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_in_range, label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_check, label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_done" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_check:" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_initialized_ptr = getelementptr i8, ptr %v$(request.expressionIndex -> valueNameId(state))_initialized, i64 %v$(request.expressionIndex -> valueNameId(state))_cleanup_index" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_initialized = load atomic i8, ptr %v$(request.expressionIndex -> valueNameId(state))_cleanup_initialized_ptr acquire, align 1" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_has_value = icmp ne i8 %v$(request.expressionIndex -> valueNameId(state))_cleanup_initialized, 0" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_is_selected = icmp eq i64 %v$(request.expressionIndex -> valueNameId(state))_cleanup_index, %v$(request.expressionIndex -> valueNameId(state))_failure_limit" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_not_selected = xor i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_is_selected, true" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_should_drop = and i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_has_value, %v$(request.expressionIndex -> valueNameId(state))_cleanup_not_selected" -> println
-            "  br i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_should_drop, label %tryparallel$(request.expressionIndex)_cleanup_drop, label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_drop:" -> println
+            "  br i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_should_drop, label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_drop, label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_next" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_drop:" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_offset = mul i64 %v$(request.expressionIndex -> valueNameId(state))_cleanup_index, " -> print
             callbackStride -> writeDecimalLine
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_ptr = getelementptr i8, ptr %v$(request.expressionIndex -> valueNameId(state))_callback_results, i64 %v$(request.expressionIndex -> valueNameId(state))_cleanup_offset" -> println
@@ -3604,22 +3604,22 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
             request.callbackTypeId -> writeSemanticTypeId(context, state)
             ", ptr %v$(request.expressionIndex -> valueNameId(state))_cleanup_result_slot, i32 0, i32 1" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_is_ok = icmp eq i32 %v$(request.expressionIndex -> valueNameId(state))_cleanup_tag, 0" -> println
-            "  br i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_is_ok, label %tryparallel$(request.expressionIndex)_cleanup_ok, label %tryparallel$(request.expressionIndex)_cleanup_error" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_ok:" -> println
+            "  br i1 %v$(request.expressionIndex -> valueNameId(state))_cleanup_is_ok, label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_ok, label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_error" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_ok:" -> println
             okTypeId -> semanticTypeOwns(context, state) -> if {
                 EnumPayloadDropRequest { enumTypeId: request.callbackTypeId, payloadTypeId: okTypeId, nameRoot: partialDropRoot * 10 + 1, pointerRoot: partialDropRoot, bindingIndex: -1, regionIndex: -1 } -> emitEnumPayloadDrop(context, state)
             }
-            "  br label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_error:" -> println
+            "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_next" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_error:" -> println
             errorTypeId -> semanticTypeOwns(context, state)
                 -> if {
                     EnumPayloadDropRequest { enumTypeId: request.callbackTypeId, payloadTypeId: errorTypeId, nameRoot: partialDropRoot * 10 + 2, pointerRoot: partialDropRoot, bindingIndex: -1, regionIndex: -1 } -> emitEnumPayloadDrop(context, state)
                 }
-            "  br label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_next:" -> println
+            "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_next" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_next:" -> println
             "  %v$(request.expressionIndex -> valueNameId(state))_cleanup_next_index = add i64 %v$(request.expressionIndex -> valueNameId(state))_cleanup_index, 1" -> println
-            "  br label %tryparallel$(request.expressionIndex)_cleanup_header" -> println
-            "tryparallel$(request.expressionIndex)_cleanup_done:" -> println
+            "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_header" -> println
+            "tryparallel$(request.expressionIndex -> valueNameId(state))_cleanup_done:" -> println
         }
     "  call void @sollang_free(ptr %v$(request.expressionIndex -> valueNameId(state))_callback_results)" -> println
     "  call void @sollang_free(ptr %v$(request.expressionIndex -> valueNameId(state))_initialized)" -> println
@@ -3644,14 +3644,14 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     "  %v$(request.expressionIndex -> valueNameId(state))_error_result = load " -> print
     request.outerTypeId -> writeSemanticTypeId(context, state)
     ", ptr %v$(request.expressionIndex -> valueNameId(state))_error_slot, align 8" -> println
-    "  br label %tryparallel$(request.expressionIndex)_merge" -> println
-    "tryparallel$(request.expressionIndex)_success:" -> println
-    "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
-    "tryparallel$(request.expressionIndex)_copy_header:" -> println
-    "  %v$(request.expressionIndex -> valueNameId(state))_copy_index = phi i64 [ 0, %tryparallel$(request.expressionIndex)_success ], [ %v$(request.expressionIndex -> valueNameId(state))_copy_next, %tryparallel$(request.expressionIndex)_copy_body ]" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_merge" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_success:" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_copy_header" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_copy_header:" -> println
+    "  %v$(request.expressionIndex -> valueNameId(state))_copy_index = phi i64 [ 0, %tryparallel$(request.expressionIndex -> valueNameId(state))_success ], [ %v$(request.expressionIndex -> valueNameId(state))_copy_next, %tryparallel$(request.expressionIndex -> valueNameId(state))_copy_body ]" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_copy_in_range = icmp ult i64 %v$(request.expressionIndex -> valueNameId(state))_copy_index, %v$(request.expressionIndex -> valueNameId(state))_length" -> println
-    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_copy_in_range, label %tryparallel$(request.expressionIndex)_copy_body, label %tryparallel$(request.expressionIndex)_copy_done" -> println
-    "tryparallel$(request.expressionIndex)_copy_body:" -> println
+    "  br i1 %v$(request.expressionIndex -> valueNameId(state))_copy_in_range, label %tryparallel$(request.expressionIndex -> valueNameId(state))_copy_body, label %tryparallel$(request.expressionIndex -> valueNameId(state))_copy_done" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_copy_body:" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_copy_result_offset = mul i64 %v$(request.expressionIndex -> valueNameId(state))_copy_index, " -> print
     callbackStride -> writeDecimalLine
     "  %v$(request.expressionIndex -> valueNameId(state))_copy_result_ptr = getelementptr i8, ptr %v$(request.expressionIndex -> valueNameId(state))_callback_results, i64 %v$(request.expressionIndex -> valueNameId(state))_copy_result_offset" -> println
@@ -3680,8 +3680,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     " %v$(request.expressionIndex -> valueNameId(state))_copy_payload, ptr %v$(request.expressionIndex -> valueNameId(state))_copy_output_ptr, align " -> print
     okAlign -> writeDecimalLine
     "  %v$(request.expressionIndex -> valueNameId(state))_copy_next = add i64 %v$(request.expressionIndex -> valueNameId(state))_copy_index, 1" -> println
-    "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
-    "tryparallel$(request.expressionIndex)_copy_done:" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_copy_header" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_copy_done:" -> println
     "  call void @sollang_free(ptr %v$(request.expressionIndex -> valueNameId(state))_callback_results)" -> println
     "  call void @sollang_free(ptr %v$(request.expressionIndex -> valueNameId(state))_initialized)" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_array0 = insertvalue %sollang.array.i32 poison, ptr %v$(request.expressionIndex -> valueNameId(state))_data, 0" -> println
@@ -3704,14 +3704,14 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     "  %v$(request.expressionIndex -> valueNameId(state))_success_result = load " -> print
     request.outerTypeId -> writeSemanticTypeId(context, state)
     ", ptr %v$(request.expressionIndex -> valueNameId(state))_success_slot, align 8" -> println
-    "  br label %tryparallel$(request.expressionIndex)_merge" -> println
-    "tryparallel$(request.expressionIndex)_merge:" -> println
+    "  br label %tryparallel$(request.expressionIndex -> valueNameId(state))_merge" -> println
+    "tryparallel$(request.expressionIndex -> valueNameId(state))_merge:" -> println
     "  %v$(request.expressionIndex -> valueNameId(state)) = phi " -> print
     request.outerTypeId -> writeSemanticTypeId(context, state)
-    " [ %v$(request.expressionIndex -> valueNameId(state))_error_result, %tryparallel$(request.expressionIndex)_" -> print
+    " [ %v$(request.expressionIndex -> valueNameId(state))_error_result, %tryparallel$(request.expressionIndex -> valueNameId(state))_" -> print
     (okTypeId -> semanticTypeOwns(context, state)) or (errorTypeId -> semanticTypeOwns(context, state))
         -> if { "cleanup_done" -> print } else { "error" -> print }
-    " ], [ %v$(request.expressionIndex -> valueNameId(state))_success_result, %tryparallel$(request.expressionIndex)_copy_done ]" -> println
+    " ], [ %v$(request.expressionIndex -> valueNameId(state))_success_result, %tryparallel$(request.expressionIndex -> valueNameId(state))_copy_done ]" -> println
 }
 arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     node -> typeQueries.arrayElementTypeId(context)

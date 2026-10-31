@@ -34,12 +34,12 @@ import syntax.generated.slg as grammar
 
 # As in C# Range each, decide completion from the current item. The computed
 # next value is never selected after the last inclusive endpoint.
-emitEntryRangeAdvance terminal: Int, inner: Bool -> Unit uses Console {
+emitEntryRangeAdvance terminal: Int, inner: Bool, state: ref CoreEmitterState -> Unit uses Console {
     inner -> if { "_inner" } else { "" } => suffix
-    "  %stream$(terminal)$(suffix)_current = load i32, ptr %stream$(terminal)$(suffix)_index_slot, align 4" -> println
-    "  %stream$(terminal)$(suffix)_last = icmp sge i32 %stream$(terminal)$(suffix)_current, %stream$(terminal)$(suffix)_end" -> println
-    "  %stream$(terminal)$(suffix)_next = add i32 %stream$(terminal)$(suffix)_current, 1" -> println
-    "  store i32 %stream$(terminal)$(suffix)_next, ptr %stream$(terminal)$(suffix)_index_slot, align 4" -> println
+    "  %stream$(terminal -> valueNameId(state))$(suffix)_current = load i32, ptr %stream$(terminal -> valueNameId(state))$(suffix)_index_slot, align 4" -> println
+    "  %stream$(terminal -> valueNameId(state))$(suffix)_last = icmp sge i32 %stream$(terminal -> valueNameId(state))$(suffix)_current, %stream$(terminal -> valueNameId(state))$(suffix)_end" -> println
+    "  %stream$(terminal -> valueNameId(state))$(suffix)_next = add i32 %stream$(terminal -> valueNameId(state))$(suffix)_current, 1" -> println
+    "  store i32 %stream$(terminal -> valueNameId(state))$(suffix)_next, ptr %stream$(terminal -> valueNameId(state))$(suffix)_index_slot, align 4" -> println
 }
 
 # Every branching/looping root can contain a visible mutation or effect. Use
@@ -1017,28 +1017,28 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
             -> if {
                 "partition$(context.streamPlan.junctions[entryOpeningPartitionJunction!].junctionIr)_route$(context.streamPlan.partitionRoutes[entryOpeningPartitionRoute].ordinal):" -> println
                 context.types[context.ir[entryOpeningSource!].typeId] => entryOpeningPartitionSourceType
-                "  %stream$(entryExpressionIndex)_item = freeze " -> print
+                "  %stream$(entryExpressionIndex -> valueNameId(state))_item = freeze " -> print
                 entryOpeningPartitionSourceType.first -> writeSemanticTypeId(context, state)
-                " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                " %stream$(entryOpeningSharedTerminal! -> valueNameId(state))_item" -> println
             }
         entryOpeningPartitionRoute < 0 or entryExpressionIndex == entryOpeningSharedTerminal!
             -> if {
                 entryOpeningStatus! == 3 -> unless {
                     entryOpeningStatus! == 0 -> if {
-                        "  %stream$(entryExpressionIndex)_index_slot = alloca i32, align 4" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_index_slot = alloca i32, align 4" -> println
                     } else {
                         entryOpeningSource! -> producerValueIndex(context, state) => entryOpeningProducerValue
                         context.ir[entryOpeningProducerValue] => entryOpeningProducer
                         context.types[entryOpeningProducer.typeId] => entryOpeningProducerType
                         "%sollang.stream" => entryOpeningProducerLlvmType!
                         entryOpeningPipeline.status == 2 -> if { "%sollang.event_stream" => entryOpeningProducerLlvmType! }
-                        "  %stream$(entryExpressionIndex)_producer_item_slot = alloca " -> print
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_producer_item_slot = alloca " -> print
                         entryOpeningProducerType.first -> writeSemanticTypeId(context, state)
                         ", align " -> print
                         context.typeAligns[entryOpeningProducerType.first] -> writeDecimalLine
-                        "  %stream$(entryExpressionIndex)_producer_context = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue -> valueNameId(state)), 0" -> println
-                        "  %stream$(entryExpressionIndex)_producer_next = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue -> valueNameId(state)), 1" -> println
-                        "  %stream$(entryExpressionIndex)_producer_drop = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue -> valueNameId(state)), 2" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_producer_context = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue -> valueNameId(state)), 0" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_producer_next = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue -> valueNameId(state)), 1" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_producer_drop = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue -> valueNameId(state)), 2" -> println
                     }
                 }
             }
@@ -1048,11 +1048,11 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                 context.streamPlan.stages[entryOpeningStateStageIndex!] => entryOpeningStateStage
                 entryOpeningStateStage.flags == 1 or entryOpeningStateStage.flags == 2
                     -> if {
-                        "  %stream$(entryExpressionIndex)_slice$(entryOpeningStateStageIndex!)_slot = alloca i32, align 4" -> println
-                        "  store i32 0, ptr %stream$(entryExpressionIndex)_slice$(entryOpeningStateStageIndex!)_slot, align 4" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_slice$(entryOpeningStateStageIndex!)_slot = alloca i32, align 4" -> println
+                        "  store i32 0, ptr %stream$(entryExpressionIndex -> valueNameId(state))_slice$(entryOpeningStateStageIndex!)_slot, align 4" -> println
                     }
                 entryOpeningStateStage.flags == 3 -> if {
-                    "  %stream$(entryExpressionIndex)_inner_index_slot = alloca i32, align 4" -> println
+                    "  %stream$(entryExpressionIndex -> valueNameId(state))_inner_index_slot = alloca i32, align 4" -> println
                 }
                 context.ir[entryOpeningStateStage.callIr] => entryOpeningStateCall
                 context.ranges[entryOpeningStateCall.sourceModule] => entryOpeningStateRange
@@ -1076,13 +1076,13 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                     }
                 entryOpeningStateRoleCount! > 1 and entryOpeningStateStage.argument0 >= 0 and entryOpeningStateStage.flags != 3
                     -> if {
-                        "  %stream$(entryExpressionIndex)_state$(entryOpeningStateStageIndex!) = alloca " -> print
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_state$(entryOpeningStateStageIndex!) = alloca " -> print
                         entryOpeningStateCall -> writeIrType(context, state)
                         ", align " -> print
                         entryOpeningStateCall -> storageAlign(context, state) -> writeDecimalLine
                         "  store " -> print
                         entryOpeningStateCall -> writeIrType(context, state)
-                        " zeroinitializer, ptr %stream$(entryExpressionIndex)_state$(entryOpeningStateStageIndex!), align " -> print
+                        " zeroinitializer, ptr %stream$(entryExpressionIndex -> valueNameId(state))_state$(entryOpeningStateStageIndex!), align " -> print
                         entryOpeningStateCall -> storageAlign(context, state) -> writeDecimalLine
                     }
                 entryOpeningStateStageIndex! + 1 => entryOpeningStateStageIndex!
@@ -1090,33 +1090,33 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
         entryOpeningPartitionRoute < 0 or entryExpressionIndex == entryOpeningSharedTerminal!
             -> if {
                 entryOpeningStatus! == 3 -> if {
-                    "  br label %stream$(entryExpressionIndex)_body" -> println
-                    "stream$(entryExpressionIndex)_body:" -> println
+                    "  br label %stream$(entryExpressionIndex -> valueNameId(state))_body" -> println
+                    "stream$(entryExpressionIndex -> valueNameId(state))_body:" -> println
                 } else { entryOpeningStatus! == 0 -> if {
                         "  store i32 " -> print
                         WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPipeline.source0 } -> writeWhileValue(context, state)
-                        ", ptr %stream$(entryExpressionIndex)_index_slot, align 4" -> println
-                        "  %stream$(entryExpressionIndex)_end = add i32 " -> print
+                        ", ptr %stream$(entryExpressionIndex -> valueNameId(state))_index_slot, align 4" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_end = add i32 " -> print
                         WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPipeline.source1 } -> writeWhileValue(context, state)
                         ", 0" -> println
-                        "  br label %stream$(entryExpressionIndex)_header" -> println
-                        "stream$(entryExpressionIndex)_header:" -> println
-                        "  %stream$(entryExpressionIndex)_item = load i32, ptr %stream$(entryExpressionIndex)_index_slot, align 4" -> println
-                        "  %stream$(entryExpressionIndex)_done = icmp " -> print
+                        "  br label %stream$(entryExpressionIndex -> valueNameId(state))_header" -> println
+                        "stream$(entryExpressionIndex -> valueNameId(state))_header:" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_item = load i32, ptr %stream$(entryExpressionIndex -> valueNameId(state))_index_slot, align 4" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_done = icmp " -> print
                         entryOpeningPipeline.flags % 2 == 1 -> if { "sge" -> print } else { "sgt" -> print }
-                        " i32 %stream$(entryExpressionIndex)_item, %stream$(entryExpressionIndex)_end" -> println
-                        "  br i1 %stream$(entryExpressionIndex)_done, label %stream$(entryExpressionIndex)_exit, label %stream$(entryExpressionIndex)_body" -> println
-                        "stream$(entryExpressionIndex)_body:" -> println
+                        " i32 %stream$(entryExpressionIndex -> valueNameId(state))_item, %stream$(entryExpressionIndex -> valueNameId(state))_end" -> println
+                        "  br i1 %stream$(entryExpressionIndex -> valueNameId(state))_done, label %stream$(entryExpressionIndex -> valueNameId(state))_exit, label %stream$(entryExpressionIndex -> valueNameId(state))_body" -> println
+                        "stream$(entryExpressionIndex -> valueNameId(state))_body:" -> println
                     } else {
                         context.types[context.ir[entryOpeningSource!].typeId] => entryOpeningBodyProducerType
-                        "  br label %stream$(entryExpressionIndex)_header" -> println
-                        "stream$(entryExpressionIndex)_header:" -> println
-                        "  %stream$(entryExpressionIndex)_has_item = call i1 %stream$(entryExpressionIndex)_producer_next(ptr %stream$(entryExpressionIndex)_producer_context, ptr %stream$(entryExpressionIndex)_producer_item_slot)" -> println
-                        "  br i1 %stream$(entryExpressionIndex)_has_item, label %stream$(entryExpressionIndex)_body, label %stream$(entryExpressionIndex)_exit" -> println
-                        "stream$(entryExpressionIndex)_body:" -> println
-                        "  %stream$(entryExpressionIndex)_item = load " -> print
+                        "  br label %stream$(entryExpressionIndex -> valueNameId(state))_header" -> println
+                        "stream$(entryExpressionIndex -> valueNameId(state))_header:" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_has_item = call i1 %stream$(entryExpressionIndex -> valueNameId(state))_producer_next(ptr %stream$(entryExpressionIndex -> valueNameId(state))_producer_context, ptr %stream$(entryExpressionIndex -> valueNameId(state))_producer_item_slot)" -> println
+                        "  br i1 %stream$(entryExpressionIndex -> valueNameId(state))_has_item, label %stream$(entryExpressionIndex -> valueNameId(state))_body, label %stream$(entryExpressionIndex -> valueNameId(state))_exit" -> println
+                        "stream$(entryExpressionIndex -> valueNameId(state))_body:" -> println
+                        "  %stream$(entryExpressionIndex -> valueNameId(state))_item = load " -> print
                         entryOpeningBodyProducerType.first -> writeSemanticTypeId(context, state)
-                        ", ptr %stream$(entryExpressionIndex)_producer_item_slot, align " -> print
+                        ", ptr %stream$(entryExpressionIndex -> valueNameId(state))_producer_item_slot, align " -> print
                         context.typeAligns[entryOpeningBodyProducerType.first] -> writeDecimalLine
                     }
                 }
@@ -1129,26 +1129,26 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                 entryOpeningPrefixStage.flags == 1 or entryOpeningPrefixStage.flags == 2
                     -> if {
                         entryOpeningPrefixStage.flags == 1 -> if {
-                            "  %stream$(entryExpressionIndex)_taken$(entryOpeningPrefixStageIndex!) = load i32, ptr %stream$(entryExpressionIndex)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
-                            "  %stream$(entryExpressionIndex)_take_open$(entryOpeningPrefixStageIndex!) = icmp slt i32 %stream$(entryExpressionIndex)_taken$(entryOpeningPrefixStageIndex!), " -> print
+                            "  %stream$(entryExpressionIndex -> valueNameId(state))_taken$(entryOpeningPrefixStageIndex!) = load i32, ptr %stream$(entryExpressionIndex -> valueNameId(state))_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                            "  %stream$(entryExpressionIndex -> valueNameId(state))_take_open$(entryOpeningPrefixStageIndex!) = icmp slt i32 %stream$(entryExpressionIndex -> valueNameId(state))_taken$(entryOpeningPrefixStageIndex!), " -> print
                             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPrefixStage.argument0 } -> writeWhileValue(context, state)
                             "" -> println
-                            "  br i1 %stream$(entryExpressionIndex)_take_open$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex)_take_pass$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex)_exit" -> println
-                            "stream$(entryExpressionIndex)_take_pass$(entryOpeningPrefixStageIndex!):" -> println
-                            "  %stream$(entryExpressionIndex)_taken_next$(entryOpeningPrefixStageIndex!) = add i32 %stream$(entryExpressionIndex)_taken$(entryOpeningPrefixStageIndex!), 1" -> println
-                            "  store i32 %stream$(entryExpressionIndex)_taken_next$(entryOpeningPrefixStageIndex!), ptr %stream$(entryExpressionIndex)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                            "  br i1 %stream$(entryExpressionIndex -> valueNameId(state))_take_open$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex -> valueNameId(state))_take_pass$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex -> valueNameId(state))_exit" -> println
+                            "stream$(entryExpressionIndex -> valueNameId(state))_take_pass$(entryOpeningPrefixStageIndex!):" -> println
+                            "  %stream$(entryExpressionIndex -> valueNameId(state))_taken_next$(entryOpeningPrefixStageIndex!) = add i32 %stream$(entryExpressionIndex -> valueNameId(state))_taken$(entryOpeningPrefixStageIndex!), 1" -> println
+                            "  store i32 %stream$(entryExpressionIndex -> valueNameId(state))_taken_next$(entryOpeningPrefixStageIndex!), ptr %stream$(entryExpressionIndex -> valueNameId(state))_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
                         }
                         entryOpeningPrefixStage.flags == 2 -> if {
-                            "  %stream$(entryExpressionIndex)_skipped$(entryOpeningPrefixStageIndex!) = load i32, ptr %stream$(entryExpressionIndex)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
-                            "  %stream$(entryExpressionIndex)_skip_open$(entryOpeningPrefixStageIndex!) = icmp slt i32 %stream$(entryExpressionIndex)_skipped$(entryOpeningPrefixStageIndex!), " -> print
+                            "  %stream$(entryExpressionIndex -> valueNameId(state))_skipped$(entryOpeningPrefixStageIndex!) = load i32, ptr %stream$(entryExpressionIndex -> valueNameId(state))_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                            "  %stream$(entryExpressionIndex -> valueNameId(state))_skip_open$(entryOpeningPrefixStageIndex!) = icmp slt i32 %stream$(entryExpressionIndex -> valueNameId(state))_skipped$(entryOpeningPrefixStageIndex!), " -> print
                             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPrefixStage.argument0 } -> writeWhileValue(context, state)
                             "" -> println
-                            "  br i1 %stream$(entryExpressionIndex)_skip_open$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex)_skip_drop$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex)_skip_pass$(entryOpeningPrefixStageIndex!)" -> println
-                            "stream$(entryExpressionIndex)_skip_drop$(entryOpeningPrefixStageIndex!):" -> println
-                            "  %stream$(entryExpressionIndex)_skipped_next$(entryOpeningPrefixStageIndex!) = add i32 %stream$(entryExpressionIndex)_skipped$(entryOpeningPrefixStageIndex!), 1" -> println
-                            "  store i32 %stream$(entryExpressionIndex)_skipped_next$(entryOpeningPrefixStageIndex!), ptr %stream$(entryExpressionIndex)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
-                            "  br label %stream$(entryExpressionIndex)_continue" -> println
-                            "stream$(entryExpressionIndex)_skip_pass$(entryOpeningPrefixStageIndex!):" -> println
+                            "  br i1 %stream$(entryExpressionIndex -> valueNameId(state))_skip_open$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex -> valueNameId(state))_skip_drop$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex -> valueNameId(state))_skip_pass$(entryOpeningPrefixStageIndex!)" -> println
+                            "stream$(entryExpressionIndex -> valueNameId(state))_skip_drop$(entryOpeningPrefixStageIndex!):" -> println
+                            "  %stream$(entryExpressionIndex -> valueNameId(state))_skipped_next$(entryOpeningPrefixStageIndex!) = add i32 %stream$(entryExpressionIndex -> valueNameId(state))_skipped$(entryOpeningPrefixStageIndex!), 1" -> println
+                            "  store i32 %stream$(entryExpressionIndex -> valueNameId(state))_skipped_next$(entryOpeningPrefixStageIndex!), ptr %stream$(entryExpressionIndex -> valueNameId(state))_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                            "  br label %stream$(entryExpressionIndex -> valueNameId(state))_continue" -> println
+                            "stream$(entryExpressionIndex -> valueNameId(state))_skip_pass$(entryOpeningPrefixStageIndex!):" -> println
                         }
                         entryOpeningPrefixStageIndex! + 1 => entryOpeningPrefixStageIndex!
                     } else { false => entryOpeningPrefixOpen! }
@@ -1171,33 +1171,33 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
             context.streamPlan.stages[entryOpeningFlatMapStage!] => entryOpeningFlatMap
             context.ir[entryOpeningFlatMap.callIr] => entryOpeningFlatMapCall
             entryOpeningBeforeEachStage! >= 0 -> if {
-                "  br label %stream$(entryExpressionIndex)_before_each" -> println
+                "  br label %stream$(entryExpressionIndex -> valueNameId(state))_before_each" -> println
             } else {
-                "  br label %stream$(entryExpressionIndex)_inner_init" -> println
+                "  br label %stream$(entryExpressionIndex -> valueNameId(state))_inner_init" -> println
             }
-            "stream$(entryExpressionIndex)_inner_init:" -> println
+            "stream$(entryExpressionIndex -> valueNameId(state))_inner_init:" -> println
             "  store i32 " -> print
             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningFlatMap.argument0 } -> writeWhileValue(context, state)
-            ", ptr %stream$(entryExpressionIndex)_inner_index_slot, align 4" -> println
-            "  %stream$(entryExpressionIndex)_inner_end = add i32 " -> print
+            ", ptr %stream$(entryExpressionIndex -> valueNameId(state))_inner_index_slot, align 4" -> println
+            "  %stream$(entryExpressionIndex -> valueNameId(state))_inner_end = add i32 " -> print
             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningFlatMap.argument1 } -> writeWhileValue(context, state)
             ", 0" -> println
-            "  br label %stream$(entryExpressionIndex)_inner_header" -> println
-            "stream$(entryExpressionIndex)_inner_header:" -> println
-            "  %stream$(entryExpressionIndex)_inner_item = load i32, ptr %stream$(entryExpressionIndex)_inner_index_slot, align 4" -> println
-            "  %stream$(entryExpressionIndex)_inner_done = icmp " -> print
+            "  br label %stream$(entryExpressionIndex -> valueNameId(state))_inner_header" -> println
+            "stream$(entryExpressionIndex -> valueNameId(state))_inner_header:" -> println
+            "  %stream$(entryExpressionIndex -> valueNameId(state))_inner_item = load i32, ptr %stream$(entryExpressionIndex -> valueNameId(state))_inner_index_slot, align 4" -> println
+            "  %stream$(entryExpressionIndex -> valueNameId(state))_inner_done = icmp " -> print
             entryOpeningFlatMap.rangeFlags % 2 == 1 -> if { "sge" -> print } else { "sgt" -> print }
-            " i32 %stream$(entryExpressionIndex)_inner_item, %stream$(entryExpressionIndex)_inner_end" -> println
-            "  br i1 %stream$(entryExpressionIndex)_inner_done, label %stream$(entryExpressionIndex)_" -> print
+            " i32 %stream$(entryExpressionIndex -> valueNameId(state))_inner_item, %stream$(entryExpressionIndex -> valueNameId(state))_inner_end" -> println
+            "  br i1 %stream$(entryExpressionIndex -> valueNameId(state))_inner_done, label %stream$(entryExpressionIndex -> valueNameId(state))_" -> print
             entryOpeningAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
-            ", label %stream$(entryExpressionIndex)_inner_body" -> println
+            ", label %stream$(entryExpressionIndex -> valueNameId(state))_inner_body" -> println
             entryOpeningBeforeEachStage! >= 0 -> if {
-                "stream$(entryExpressionIndex)_before_each:" -> println
+                "stream$(entryExpressionIndex -> valueNameId(state))_before_each:" -> println
             } else {
                 entryOpeningAfterEachStage! >= 0 -> if {
-                    "stream$(entryExpressionIndex)_after_each:" -> println
+                    "stream$(entryExpressionIndex -> valueNameId(state))_after_each:" -> println
                 } else {
-                    "stream$(entryExpressionIndex)_inner_body:" -> println
+                    "stream$(entryExpressionIndex -> valueNameId(state))_inner_body:" -> println
                 }
             }
             context.ranges[entryOpeningFlatMapCall.sourceModule] => entryOpeningFlatMapRange
@@ -1231,10 +1231,10 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                                                     -> if {
                                                         context.ir[entryOpeningInput] -> writeIrType(context, state)
                                                     } else { entryOpeningFlatMapUse -> writeIrType(context, state) }
-                                                entryOpeningFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryExpressionIndex)_inner_item" -> println } else {
+                                                entryOpeningFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryExpressionIndex -> valueNameId(state))_inner_item" -> println } else {
                                                     entryOpeningInput >= 0 -> if { " " -> print
                                                         entryOpeningInput -> writeValue(functionIndex, context, state)
-                                                        "" -> println } else { " %stream$(entryOpeningSharedTerminal!)_item" -> println }
+                                                        "" -> println } else { " %stream$(entryOpeningSharedTerminal! -> valueNameId(state))_item" -> println }
                                                 }
                                             }
                                         entryOpeningFlatMapUseSearch! + 1 => entryOpeningFlatMapUseSearch!
@@ -1269,7 +1269,7 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                         -> if {
                             "  %v$(entryFirstStageUseSearch! -> valueNameId(state)) = freeze " -> print
                             entryFirstStageUse -> writeIrType(context, state)
-                            " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                            " %stream$(entryOpeningSharedTerminal! -> valueNameId(state))_item" -> println
                         }
                     entryFirstStageUseSearch! + 1 => entryFirstStageUseSearch!
                 }
@@ -1293,7 +1293,7 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                     -> if {
                         "  %v$(entryOpeningTerminalUseSearch! -> valueNameId(state)) = freeze " -> print
                         entryOpeningTerminalUse -> writeIrType(context, state)
-                        " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                        " %stream$(entryOpeningSharedTerminal! -> valueNameId(state))_item" -> println
                     }
                 entryOpeningTerminalUseSearch! + 1 => entryOpeningTerminalUseSearch!
             }
@@ -1319,7 +1319,7 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                         -> if {
                             "  %v$(entryOpeningPartitionUseSearch! -> valueNameId(state)) = freeze " -> print
                             entryOpeningPartitionUse -> writeIrType(context, state)
-                            " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                            " %stream$(entryOpeningSharedTerminal! -> valueNameId(state))_item" -> println
                         }
                     entryOpeningPartitionUseSearch! + 1 => entryOpeningPartitionUseSearch!
                 }
@@ -2201,7 +2201,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                 -> if { "icmp sgt" => entryFlowOperation! }
             entryExpression.opcode == grammar.tokenIdGreaterEqual()
                 -> if { "icmp sge" => entryFlowOperation! }
-            "  %v$(entryExpressionIndex -> valueNameId(state)) = $(entryFlowOperation!) i32 %stream$(entryFlowTerminalIr)_item, " -> print
+            "  %v$(entryExpressionIndex -> valueNameId(state)) = $(entryFlowOperation!) i32 %stream$(entryFlowTerminalIr -> valueNameId(state))_item, " -> print
             entryFlowRight.kind == 3 -> if {
                 entryFlowRight -> writeIntegerLiteral(context, state)
                 "" -> println
@@ -2604,7 +2604,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                         runtimeReferenceTypeId! -> writeAggregateFieldTypeId(context, state)
                         ", ptr " -> print
                         entryRuntimeStreamDirect! -> if {
-                            "%stream$(entryRuntimeStreamTerminalIr!)_item" -> print
+                            "%stream$(entryRuntimeStreamTerminalIr! -> valueNameId(state))_item" -> print
                         } else {
                             functionIndex -> writeForwardedReferenceValue(entryRuntimeArgumentIndex!, context, state)
                         }
@@ -2627,7 +2627,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                         "%v$(entryExpressionIndex -> valueNameId(state))_runtime_reference_value" -> print
                                     } else {
                                         entryRuntimeStreamDirect! -> if {
-                                            "%stream$(entryRuntimeStreamTerminalIr!)_item" -> print
+                                            "%stream$(entryRuntimeStreamTerminalIr! -> valueNameId(state))_item" -> print
                                         } else {
                                             entryRuntimeArgumentIndex! -> writeValue(functionIndex, context, state)
                                         }
@@ -2658,7 +2658,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                         "%v$(entryExpressionIndex -> valueNameId(state))_runtime_reference_value" -> print
                                     } else {
                                         entryRuntimeStreamDirect! -> if {
-                                            "%stream$(entryRuntimeStreamTerminalIr!)_item" -> print
+                                            "%stream$(entryRuntimeStreamTerminalIr! -> valueNameId(state))_item" -> print
                                         } else {
                                             entryRuntimeArgumentIndex! -> writeValue(functionIndex, context, state)
                                         }
@@ -2991,7 +2991,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                                     entryExpressionMemberBaseTypeId! -> writeSemanticTypeId(context, state)
                                                                     " " -> print
                                                                     entryExpressionMemberStreamDirect! -> if {
-                                                                        "%stream$(entryExpressionMemberStreamTerminalIr!)_item" -> print
+                                                                        "%stream$(entryExpressionMemberStreamTerminalIr! -> valueNameId(state))_item" -> print
                                                                     } else {
                                                                         "%v$(entryExpressionMemberBaseIr! -> valueNameId(state))" -> print
                                                                     }
@@ -3118,7 +3118,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                                                 } else {
                                                                                     entryExpressionRoot.kind == 1 -> if {
                                                                                         entryExpressionRootStreamDirect! > 0 -> if {
-                                                                                            entryExpressionRootStreamDirect! == 2 -> if { "%stream$(entryExpressionRootStreamTerminalIr!)_inner_item" -> print } else { "%stream$(entryExpressionRootStreamTerminalIr!)_item" -> print }
+                                                                                            entryExpressionRootStreamDirect! == 2 -> if { "%stream$(entryExpressionRootStreamTerminalIr! -> valueNameId(state))_inner_item" -> print } else { "%stream$(entryExpressionRootStreamTerminalIr! -> valueNameId(state))_item" -> print }
                                                                                         } else {
                                                                                             entryExpressionRootStreamValue! >= 0 -> if {
                                                                                                 entryExpressionRootStreamValue! -> writeValue(functionIndex, context, state)
@@ -3367,7 +3367,7 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                 -> if {
                                     false => entryBoundaryEmitFlatMapBody!
                                     entryBoundaryStage.flags == 4 -> if {
-                                        "  br label %stream$(entryBoundaryPipeline.terminalIr)_inner_init" -> println
+                                        "  br label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_inner_init" -> println
                                         false => entryBoundaryHasAfterEach!
                                         entryBoundaryPipeline.stageStart => entryBoundaryAfterSearch!
                                         entryBoundaryAfterSearch! < entryBoundaryPipeline.stageStart + entryBoundaryPipeline.stageCount
@@ -3378,14 +3378,14 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                                 entryBoundaryAfterSearch! + 1 => entryBoundaryAfterSearch!
                                             }
                                         entryBoundaryHasAfterEach! -> if {
-                                            "stream$(entryBoundaryPipeline.terminalIr)_after_each:" -> println
+                                            "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_after_each:" -> println
                                         } else {
-                                            "stream$(entryBoundaryPipeline.terminalIr)_inner_body:" -> println
+                                            "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_inner_body:" -> println
                                             true => entryBoundaryEmitFlatMapBody!
                                         }
                                     } else {
-                                        "  br label %stream$(entryBoundaryPipeline.terminalIr)_outer_continue" -> println
-                                        "stream$(entryBoundaryPipeline.terminalIr)_inner_body:" -> println
+                                        "  br label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_outer_continue" -> println
+                                        "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_inner_body:" -> println
                                         true => entryBoundaryEmitFlatMapBody!
                                     }
                                     entryBoundaryEmitFlatMapBody! -> if {
@@ -3428,8 +3428,8 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                                                             -> if {
                                                                                 context.ir[entryBoundaryInput] -> writeIrType(context, state)
                                                                             } else { entryBoundaryFlatMapUse -> writeIrType(context, state) }
-                                                                        entryBoundaryFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryBoundaryPipeline.terminalIr)_inner_item" -> println } else {
-                                                                            entryBoundaryInput >= 0 -> if { " %v$(entryBoundaryInput -> valueNameId(state))" -> println } else { " %stream$(entryBoundaryPipeline.terminalIr)_item" -> println }
+                                                                        entryBoundaryFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_inner_item" -> println } else {
+                                                                            entryBoundaryInput >= 0 -> if { " %v$(entryBoundaryInput -> valueNameId(state))" -> println } else { " %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_item" -> println }
                                                                         }
                                                                     }
                                                                 entryBoundaryFlatMapUseSearch! + 1 => entryBoundaryFlatMapUseSearch!
@@ -3470,7 +3470,7 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                                     entryBoundaryStageCall -> writeIrType(context, state)
                                                     " " -> print
                                                     entryExpressionIndex -> aggregateValueIndex(context, state) -> writeValue(functionIndex, context, state)
-                                                    ", ptr %stream$(entryBoundaryPipeline.terminalIr)_state$(entryBoundaryStageIndex!), align " -> print
+                                                    ", ptr %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_state$(entryBoundaryStageIndex!), align " -> print
                                                     entryBoundaryStageCall -> storageAlign(context, state) -> writeDecimalLine
                                                 }
                                         }
@@ -3481,34 +3481,34 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                         -> if {
                                             "  br i1 " -> print
                                             entryExpressionIndex -> writeValue(functionIndex, context, state)
-                                            ", label %stream$(entryBoundaryPipeline.terminalIr)_stage$(entryBoundaryStageIndex!)_pass, label %stream$(entryBoundaryPipeline.terminalIr)_continue" -> println
-                                            "stream$(entryBoundaryPipeline.terminalIr)_stage$(entryBoundaryStageIndex!)_pass:" -> println
+                                            ", label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_stage$(entryBoundaryStageIndex!)_pass, label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_continue" -> println
+                                            "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_stage$(entryBoundaryStageIndex!)_pass:" -> println
                                         }
                                     entryBoundaryStageIndex! + 1 => entryNextStreamStageIndex!
                                     entryNextStreamStageIndex! < entryBoundaryPipeline.stageStart + entryBoundaryPipeline.stageCount and context.streamPlan.stages[entryNextStreamStageIndex!].callbackRoot < 0
                                         -> while {
                                             context.streamPlan.stages[entryNextStreamStageIndex!] => entryStateOnlyStage
                                             entryStateOnlyStage.flags == 1 -> if {
-                                                "  %stream$(entryBoundaryPipeline.terminalIr)_taken$(entryNextStreamStageIndex!) = load i32, ptr %stream$(entryBoundaryPipeline.terminalIr)_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
-                                                "  %stream$(entryBoundaryPipeline.terminalIr)_take_open$(entryNextStreamStageIndex!) = icmp slt i32 %stream$(entryBoundaryPipeline.terminalIr)_taken$(entryNextStreamStageIndex!), " -> print
+                                                "  %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_taken$(entryNextStreamStageIndex!) = load i32, ptr %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
+                                                "  %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_take_open$(entryNextStreamStageIndex!) = icmp slt i32 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_taken$(entryNextStreamStageIndex!), " -> print
                                                 WhileValueRequest { whileIndex: entryBoundaryPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryStateOnlyStage.argument0 } -> writeWhileValue(context, state)
                                                 "" -> println
-                                                "  br i1 %stream$(entryBoundaryPipeline.terminalIr)_take_open$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr)_take_pass$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr)_exit" -> println
-                                                "stream$(entryBoundaryPipeline.terminalIr)_take_pass$(entryNextStreamStageIndex!):" -> println
-                                                "  %stream$(entryBoundaryPipeline.terminalIr)_taken_next$(entryNextStreamStageIndex!) = add i32 %stream$(entryBoundaryPipeline.terminalIr)_taken$(entryNextStreamStageIndex!), 1" -> println
-                                                "  store i32 %stream$(entryBoundaryPipeline.terminalIr)_taken_next$(entryNextStreamStageIndex!), ptr %stream$(entryBoundaryPipeline.terminalIr)_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
+                                                "  br i1 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_take_open$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_take_pass$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_exit" -> println
+                                                "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_take_pass$(entryNextStreamStageIndex!):" -> println
+                                                "  %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_taken_next$(entryNextStreamStageIndex!) = add i32 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_taken$(entryNextStreamStageIndex!), 1" -> println
+                                                "  store i32 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_taken_next$(entryNextStreamStageIndex!), ptr %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
                                             }
                                             entryStateOnlyStage.flags == 2 -> if {
-                                                "  %stream$(entryBoundaryPipeline.terminalIr)_skipped$(entryNextStreamStageIndex!) = load i32, ptr %stream$(entryBoundaryPipeline.terminalIr)_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
-                                                "  %stream$(entryBoundaryPipeline.terminalIr)_skip_open$(entryNextStreamStageIndex!) = icmp slt i32 %stream$(entryBoundaryPipeline.terminalIr)_skipped$(entryNextStreamStageIndex!), " -> print
+                                                "  %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skipped$(entryNextStreamStageIndex!) = load i32, ptr %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
+                                                "  %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skip_open$(entryNextStreamStageIndex!) = icmp slt i32 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skipped$(entryNextStreamStageIndex!), " -> print
                                                 WhileValueRequest { whileIndex: entryBoundaryPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryStateOnlyStage.argument0 } -> writeWhileValue(context, state)
                                                 "" -> println
-                                                "  br i1 %stream$(entryBoundaryPipeline.terminalIr)_skip_open$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr)_skip_drop$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr)_skip_pass$(entryNextStreamStageIndex!)" -> println
-                                                "stream$(entryBoundaryPipeline.terminalIr)_skip_drop$(entryNextStreamStageIndex!):" -> println
-                                                "  %stream$(entryBoundaryPipeline.terminalIr)_skipped_next$(entryNextStreamStageIndex!) = add i32 %stream$(entryBoundaryPipeline.terminalIr)_skipped$(entryNextStreamStageIndex!), 1" -> println
-                                                "  store i32 %stream$(entryBoundaryPipeline.terminalIr)_skipped_next$(entryNextStreamStageIndex!), ptr %stream$(entryBoundaryPipeline.terminalIr)_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
-                                                "  br label %stream$(entryBoundaryPipeline.terminalIr)_continue" -> println
-                                                "stream$(entryBoundaryPipeline.terminalIr)_skip_pass$(entryNextStreamStageIndex!):" -> println
+                                                "  br i1 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skip_open$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skip_drop$(entryNextStreamStageIndex!), label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skip_pass$(entryNextStreamStageIndex!)" -> println
+                                                "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skip_drop$(entryNextStreamStageIndex!):" -> println
+                                                "  %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skipped_next$(entryNextStreamStageIndex!) = add i32 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skipped$(entryNextStreamStageIndex!), 1" -> println
+                                                "  store i32 %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skipped_next$(entryNextStreamStageIndex!), ptr %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_slice$(entryNextStreamStageIndex!)_slot, align 4" -> println
+                                                "  br label %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_continue" -> println
+                                                "stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_skip_pass$(entryNextStreamStageIndex!):" -> println
                                             }
                                             entryNextStreamStageIndex! + 1 => entryNextStreamStageIndex!
                                         }
@@ -3560,15 +3560,14 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                                                             -> if {
                                                                                 "  %v$(entryNextStreamUseSearch! -> valueNameId(state)) = load " -> print
                                                                                 entryNextStreamUse -> writeIrType(context, state)
-                                                                                ", ptr %stream$(entryBoundaryPipeline.terminalIr)_state$(entryNextStreamStageIndex!), align " -> print
+                                                                                ", ptr %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_state$(entryNextStreamStageIndex!), align " -> print
                                                                                 entryNextStreamUse -> storageAlign(context, state) -> writeDecimalLine
                                                                             } else {
                                                                                 entryNextStreamStage.flags != 3 and entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] >= 0
                                                                                     -> if {
                                                                                         "  %v$(entryNextStreamUseSearch! -> valueNameId(state)) = freeze " -> print
                                                                                         entryNextStreamUse -> writeIrType(context, state)
-                                                                                        " %v" -> print
-                                                                                        entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] -> writeDecimalLine
+                                                                                        " %v$(entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] -> valueNameId(state))" -> println
                                                                                     }
                                                                             }
                                                                     }
@@ -3612,10 +3611,9 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                                                 }
                                                             entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] >= 0
                                                                 -> if {
-                                                                    " %v" -> print
-                                                                    entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] -> writeDecimalLine
+                                                                    " %v$(entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] -> valueNameId(state))" -> println
                                                                 } else {
-                                                                    " %stream$(entryBoundaryPipeline.terminalIr)_item" -> println
+                                                                    " %stream$(entryBoundaryPipeline.terminalIr -> valueNameId(state))_item" -> println
                                                                 }
                                                         }
                                                     }
@@ -3715,21 +3713,21 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                 entryClosePartitionJunction -> partitionFirstTerminal(context, state) => entryClosePartitionFirstTerminal
                                 entryStreamStops![entryActiveStreamSize! - 1] == 1
                                     -> if {
-                                        "  br label %stream$(entryClosePartitionFirstTerminal)_exit" -> println
+                                        "  br label %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_exit" -> println
                                     } else {
-                                        "  br label %stream$(entryClosePartitionFirstTerminal)_continue" -> println
+                                        "  br label %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_continue" -> println
                                     }
                                 entryCloseStreamPipeline.terminalIr == entryClosePartitionFirstTerminal
                                     -> if {
-                                        "stream$(entryClosePartitionFirstTerminal)_continue:" -> println
-                                        "  br label %stream$(entryClosePartitionFirstTerminal)_header" -> println
-                                        "stream$(entryClosePartitionFirstTerminal)_exit:" -> println
-                                        "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
-                                        "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
-                                        "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
-                                        "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
-                                        "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
-                                        "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
+                                        "stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_continue:" -> println
+                                        "  br label %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_header" -> println
+                                        "stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_exit:" -> println
+                                        "  %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_producer_drop, null" -> println
+                                        "  br i1 %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_has_drop, label %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_drop, label %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_drop_done" -> println
+                                        "stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_drop:" -> println
+                                        "  call void %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_producer_context, i1 true)" -> println
+                                        "  br label %stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_drop_done" -> println
+                                        "stream$(entryClosePartitionFirstTerminal -> valueNameId(state))_drop_done:" -> println
                                         "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
                                     }
                                 entryClosePartitionRoute == entryClosePartition.routeStart + entryClosePartition.routeCount - 1
@@ -3753,61 +3751,61 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                     }
                                 entryStreamStops![entryActiveStreamSize! - 1] == 1
                                     -> if {
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit" -> println
                                     } else {
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_continue" -> println
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_continue" -> println
                                     }
-                                "stream$(entryCloseStreamPipeline.terminalIr)_continue:" -> println
+                                "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_continue:" -> println
                                 entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
                                     -> if {
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_header" -> println
                                     } else {
                                         entryCloseFlatMapStage! >= 0 -> if {
-                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true)
+                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true, state)
                                             entryCloseTakeStage! >= 0 -> if {
                                                 context.streamPlan.stages[entryCloseTakeStage!] => entryCloseInnerTake
-                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
-                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_slice$(entryCloseTakeStage!)_slot, align 4" -> println
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done_value, " -> print
                                                 WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseInnerTake.argument0 } -> writeWhileValue(context, state)
                                                 "" -> println
-                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue" -> println
-                                                "stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue:" -> println
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_inner_range_continue" -> println
+                                                "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_inner_range_continue:" -> println
                                             }
-                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr)_" -> print
+                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_" -> print
                                             entryCloseAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
-                                            ", label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
-                                            "stream$(entryCloseStreamPipeline.terminalIr)_inner_exit:" -> println
-                                            "  br label %stream$(entryCloseStreamPipeline.terminalIr)_outer_continue" -> println
-                                            "stream$(entryCloseStreamPipeline.terminalIr)_outer_continue:" -> println
+                                            ", label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_inner_header" -> println
+                                            "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_inner_exit:" -> println
+                                            "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_outer_continue" -> println
+                                            "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_outer_continue:" -> println
                                             entryCloseStreamPipeline.status == 3 -> if {
-                                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
+                                                "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit" -> println
                                             } else {
-                                                entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
-                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                                entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false, state)
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_last, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_header" -> println
                                             }
                                         } else {
-                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
+                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false, state)
                                             entryCloseTakeStage! >= 0 -> if {
                                                 context.streamPlan.stages[entryCloseTakeStage!] => entryCloseTake
-                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
-                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_slice$(entryCloseTakeStage!)_slot, align 4" -> println
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done_value, " -> print
                                                 WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseTake.argument0 } -> writeWhileValue(context, state)
                                                 "" -> println
-                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_range_continue" -> println
-                                                "stream$(entryCloseStreamPipeline.terminalIr)_range_continue:" -> println
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_range_continue" -> println
+                                                "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_range_continue:" -> println
                                             }
-                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_last, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_header" -> println
                                         }
                                     }
-                                "stream$(entryCloseStreamPipeline.terminalIr)_exit:" -> println
+                                "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit:" -> println
                                 entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
                                     -> if {
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
-                                        "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
-                                        "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
-                                        "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
+                                        "  %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_producer_drop, null" -> println
+                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_drop, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_drop_done" -> println
+                                        "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_drop:" -> println
+                                        "  call void %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_producer_context, i1 true)" -> println
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_drop_done" -> println
+                                        "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_drop_done:" -> println
                                     }
                             }
                             entryCloseStreamPipeline.terminalIr -> emitStorageLifetimeEndsAfter(false, context)

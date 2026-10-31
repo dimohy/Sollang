@@ -869,7 +869,7 @@ writeResolvedCallTarget nodeIndex: Int, node: typedIr.TypedIrNode, context: ref 
         }
         " @sollang_m$(resolvedTargetModule!)_s$(resolvedTargetSymbol!)" -> print
         context -> emitterContext.genericFunctionForCall(nodeIndex) => genericFunction
-        genericFunction >= 0 -> if { "_g$(genericFunction)" -> print }
+        genericFunction >= 0 -> if { "_g$(genericFunction -> valueNameId(state))" -> print }
         "(" -> print
     }
 }
@@ -2139,9 +2139,9 @@ captureBindingIsLocal request: CaptureValueRequest, context: ref emitterContext.
     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
 }
 
-captureTransportPrefix request: CaptureValueRequest, storage: mut Arena -> Text {
+captureTransportPrefix request: CaptureValueRequest, storage: mut Arena, state: ref CoreEmitterState -> Text {
     request.interpolationIndex >= 0 -> if {
-        "interpolation$(request.callIndex)_expression$(request.interpolationIndex)_capture$(request.captureIndex)" -> materialize(storage) -> return
+        "interpolation$(request.callIndex -> valueNameId(state))_expression$(request.interpolationIndex)_capture$(request.captureIndex)" -> materialize(storage) -> return
     }
     "callenv$(request.callIndex)_capture$(request.captureIndex)" -> materialize(storage)
 }
@@ -2161,7 +2161,7 @@ emitBoundedCaptureTransport request: CaptureValueRequest, context: ref emitterCo
     binding -> boundedArrayValueTypeId(context, state) => boundedType
     boundedType < 0 -> if { return }
     Arena(0) => prefixStorage!
-    request -> captureTransportPrefix(prefixStorage!) => prefix
+    request -> captureTransportPrefix(prefixStorage!, state) => prefix
     binding.kind == 10 and binding.flags / 2 % 2 == 1
         -> if {
             request -> captureParameterOrdinal(context, state) => ordinal
@@ -2207,7 +2207,7 @@ emitCaptureTransport request: CaptureValueRequest, context: ref emitterContext.E
     request -> captureBindingIsLocal(context, state)
         -> unless { return }
     Arena(0) => prefixStorage!
-    request -> captureTransportPrefix(prefixStorage!) => prefix
+    request -> captureTransportPrefix(prefixStorage!, state) => prefix
     binding.kind == 10 and binding.flags / 2 % 2 == 1
         -> if {
             request -> captureParameterOrdinal(context, state) => ordinal
@@ -2247,7 +2247,7 @@ emitCaptureTransport request: CaptureValueRequest, context: ref emitterContext.E
 
 writeCaptureArgumentValue request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     Arena(0) => prefixStorage!
-    request -> captureTransportPrefix(prefixStorage!) => prefix
+    request -> captureTransportPrefix(prefixStorage!, state) => prefix
     context.ir[request.bindingIndex] => binding
     binding -> captureUsesBorrowAbi(context, state)
         -> if {
@@ -2263,7 +2263,7 @@ writeCaptureArgumentValue request: CaptureValueRequest, context: ref emitterCont
 
 emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     Arena(0) => prefixStorage!
-    request -> captureTransportPrefix(prefixStorage!) => prefix
+    request -> captureTransportPrefix(prefixStorage!, state) => prefix
     request.callerIndex -> functionEnd(context, state) => callerEnd
     context.ir[request.bindingIndex] => binding
     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
@@ -2294,7 +2294,7 @@ emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.Emi
 }
 emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     Arena(0) => prefixStorage!
-    request -> captureTransportPrefix(prefixStorage!) => prefix
+    request -> captureTransportPrefix(prefixStorage!, state) => prefix
     context.ir[request.callerIndex] => caller
     context.ir[request.bindingIndex] => binding
     request.callerIndex -> functionEnd(context, state) => callerEnd
@@ -5330,13 +5330,13 @@ emitDiagnosticSnapshotRecord label: Text, snapshotType: Int, context: ref emitte
 }
 
 emitDiagnosticSnapshotRow label: Text, nodeIndex: Int, row: Int, snapshotType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    "  %$(label)_present = icmp ugt i64 %snap$(nodeIndex)_count, $(row)" -> println
+    "  %$(label)_present = icmp ugt i64 %snap$(nodeIndex -> valueNameId(state))_count, $(row)" -> println
     "  br i1 %$(label)_present, label %$(label)_write, label %$(label)_next" -> println
     "$(label)_write:" -> println
-    "  %$(label)_record = getelementptr i8, ptr %snap$(nodeIndex)_records, i64 $(row * 112)" -> println
+    "  %$(label)_record = getelementptr i8, ptr %snap$(nodeIndex -> valueNameId(state))_records, i64 $(row * 112)" -> println
     "  %$(label)_destination = getelementptr " -> print
     snapshotType -> writeSemanticTypeId(context, state)
-    ", ptr %snap$(nodeIndex)_output, i64 $(row)" -> println
+    ", ptr %snap$(nodeIndex -> valueNameId(state))_output, i64 $(row)" -> println
     label -> emitDiagnosticSnapshotRecord(snapshotType, context, state)
     "  br label %$(label)_next" -> println
     "$(label)_next:" -> println
@@ -5356,40 +5356,40 @@ emitDiagnosticSnapshotCall nodeIndex: Int, ownerIndex: Int, context: ref emitter
         "; sollang internal error: diagnostic snapshot mutable parameter is unresolved" -> println
         process.exit(1)
     }
-    "snap$(nodeIndex)_output" -> emitMutableBorrowPlace(outputParameter, outputIndex, ownerIndex, context, state)
-    "  %snap$(nodeIndex)_token = extractvalue " -> print
+    "snap$(nodeIndex -> valueNameId(state))_output" -> emitMutableBorrowPlace(outputParameter, outputIndex, ownerIndex, context, state)
+    "  %snap$(nodeIndex -> valueNameId(state))_token = extractvalue " -> print
     context.ir[node.operand0] -> writeIrType(context, state)
     " " -> print
     node.operand0 -> writeValue(ownerIndex, context, state)
     ", 0" -> println
-    "  %snap$(nodeIndex)_session = inttoptr i64 %snap$(nodeIndex)_token to ptr" -> println
-    "snap$(nodeIndex)_count" -> emitDiagnosticRecordLoad("snap$(nodeIndex)_session", 16, "i64")
-    "snap$(nodeIndex)_records" -> emitDiagnosticRecordLoad("snap$(nodeIndex)_session", 32, "ptr")
+    "  %snap$(nodeIndex -> valueNameId(state))_session = inttoptr i64 %snap$(nodeIndex -> valueNameId(state))_token to ptr" -> println
+    "snap$(nodeIndex -> valueNameId(state))_count" -> emitDiagnosticRecordLoad("snap$(nodeIndex -> valueNameId(state))_session", 16, "i64")
+    "snap$(nodeIndex -> valueNameId(state))_records" -> emitDiagnosticRecordLoad("snap$(nodeIndex -> valueNameId(state))_session", 32, "ptr")
     0 => row!
     row! < capacity -> while {
-        "snap$(nodeIndex)_row$(row!)" -> emitDiagnosticSnapshotRow(nodeIndex, row!, snapshotType, context, state)
+        "snap$(nodeIndex -> valueNameId(state))_row$(row!)" -> emitDiagnosticSnapshotRow(nodeIndex, row!, snapshotType, context, state)
         row! + 1 => row!
     }
-    "snap$(nodeIndex)_id" -> emitDiagnosticRecordLoad("snap$(nodeIndex)_session", 0, "i64")
-    "  %snap$(nodeIndex)_truncated = icmp ugt i64 %snap$(nodeIndex)_count, $(capacity)" -> println
-    "  %snap$(nodeIndex)_written = select i1 %snap$(nodeIndex)_truncated, i64 $(capacity), i64 %snap$(nodeIndex)_count" -> println
+    "snap$(nodeIndex -> valueNameId(state))_id" -> emitDiagnosticRecordLoad("snap$(nodeIndex -> valueNameId(state))_session", 0, "i64")
+    "  %snap$(nodeIndex -> valueNameId(state))_truncated = icmp ugt i64 %snap$(nodeIndex -> valueNameId(state))_count, $(capacity)" -> println
+    "  %snap$(nodeIndex -> valueNameId(state))_written = select i1 %snap$(nodeIndex -> valueNameId(state))_truncated, i64 $(capacity), i64 %snap$(nodeIndex -> valueNameId(state))_count" -> println
     0 => summaryField!
     summaryField! < 4 -> while {
-        "  %snap$(nodeIndex)_summary$(summaryField!) = insertvalue " -> print
+        "  %snap$(nodeIndex -> valueNameId(state))_summary$(summaryField!) = insertvalue " -> print
         node -> writeIrType(context, state)
-        summaryField! == 0 -> if { " zeroinitializer" -> print } else { " %snap$(nodeIndex)_summary$(summaryField! - 1)" -> print }
+        summaryField! == 0 -> if { " zeroinitializer" -> print } else { " %snap$(nodeIndex -> valueNameId(state))_summary$(summaryField! - 1)" -> print }
         summaryField! -> when {
-            == 0 { ", i64 %snap$(nodeIndex)_id" -> print }
-            == 1 { ", i64 %snap$(nodeIndex)_written" -> print }
-            == 2 { ", i64 %snap$(nodeIndex)_count" -> print }
-            else { ", i1 %snap$(nodeIndex)_truncated" -> print }
+            == 0 { ", i64 %snap$(nodeIndex -> valueNameId(state))_id" -> print }
+            == 1 { ", i64 %snap$(nodeIndex -> valueNameId(state))_written" -> print }
+            == 2 { ", i64 %snap$(nodeIndex -> valueNameId(state))_count" -> print }
+            else { ", i1 %snap$(nodeIndex -> valueNameId(state))_truncated" -> print }
         }
         ", $(summaryField!)" -> println
         summaryField! + 1 => summaryField!
     }
     "  %v$(nodeIndex -> valueNameId(state)) = freeze " -> print
     node -> writeIrType(context, state)
-    " %snap$(nodeIndex)_summary3" -> println
+    " %snap$(nodeIndex -> valueNameId(state))_summary3" -> println
 }
 
 

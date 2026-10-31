@@ -27,11 +27,11 @@ emitFoldRoleValue valueIndex: Int, ownerIndex: Int, context: ref emitterContext.
                     role -> symbols.implicitFoldRole => implicitRole
                     role.nameToken == foldAst.secondaryToken or implicitRole == 0
                         -> if {
-                            "  %v$(valueIndex -> valueNameId(state)) = load i32, ptr %fold$(ownerIndex)_acc_slot, align 4" -> println
+                            "  %v$(valueIndex -> valueNameId(state)) = load i32, ptr %fold$(ownerIndex -> valueNameId(state))_acc_slot, align 4" -> println
                         }
                     role.nameToken == foldAst.tertiaryToken or implicitRole == 1
                         -> if {
-                            "  %v$(valueIndex -> valueNameId(state)) = freeze i32 %fold$(ownerIndex)_item" -> println
+                            "  %v$(valueIndex -> valueNameId(state)) = freeze i32 %fold$(ownerIndex -> valueNameId(state))_item" -> println
                         }
                 }
             }
@@ -44,7 +44,7 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     foldSource -> typeQueries.isRange(context) => isRangeFold
     foldSource -> effectiveTypeId(context, state) => foldStorageTypeId
     context.types -> typeIds.materializedReadTypeId(foldStorageTypeId) => foldReadTypeId
-    "  %fold$(expressionIndex)_source = " -> print
+    "  %fold$(expressionIndex -> valueNameId(state))_source = " -> print
     (foldSource -> referenceValueTypeId(context, state)) >= 0
         and not (expression.operand0 -> referenceParameterValueIsMaterialized(functionIndex, context, state))
         -> if {
@@ -58,43 +58,43 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
             expression.operand0 -> writeReadOperand(functionIndex, context, state)
             "" -> println
         }
-    "  %fold$(expressionIndex)_acc_slot = alloca i32, align 4" -> println
+    "  %fold$(expressionIndex -> valueNameId(state))_acc_slot = alloca i32, align 4" -> println
     isRangeFold -> if {
-        "  %fold$(expressionIndex)_first = extractvalue { i32, i32 } %fold$(expressionIndex)_source, 0" -> println
-        "  %fold$(expressionIndex)_last = extractvalue { i32, i32 } %fold$(expressionIndex)_source, 1" -> println
-        "  %fold$(expressionIndex)_item_slot = alloca i32, align 4" -> println
-        "  store i32 %fold$(expressionIndex)_first, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_first = extractvalue { i32, i32 } %fold$(expressionIndex -> valueNameId(state))_source, 0" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_last = extractvalue { i32, i32 } %fold$(expressionIndex -> valueNameId(state))_source, 1" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_item_slot = alloca i32, align 4" -> println
+        "  store i32 %fold$(expressionIndex -> valueNameId(state))_first, ptr %fold$(expressionIndex -> valueNameId(state))_item_slot, align 4" -> println
     } else {
         context.types[foldReadTypeId].kind == 2 or context.types[foldReadTypeId].kind == 4 => foldSourceIsView
-        "  %fold$(expressionIndex)_data = extractvalue " -> print
+        "  %fold$(expressionIndex -> valueNameId(state))_data = extractvalue " -> print
         foldSourceIsView
             -> if { "%sollang.int_slice" -> print } else { "%sollang.array.i32" -> print }
-        " %fold$(expressionIndex)_source, 0" -> println
-        "  %fold$(expressionIndex)_length = extractvalue " -> print
+        " %fold$(expressionIndex -> valueNameId(state))_source, 0" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_length = extractvalue " -> print
         foldSourceIsView
             -> if { "%sollang.int_slice" -> print } else { "%sollang.array.i32" -> print }
-        " %fold$(expressionIndex)_source, 1" -> println
-        "  %fold$(expressionIndex)_index_slot = alloca i64, align 8" -> println
-        "  store i64 0, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
+        " %fold$(expressionIndex -> valueNameId(state))_source, 1" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_index_slot = alloca i64, align 8" -> println
+        "  store i64 0, ptr %fold$(expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
     }
     "  store i32 " -> print
     expression.operand1 -> writeValue(functionIndex, context, state)
-    ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
-    "  br label %fold$(expressionIndex)_header" -> println
-    "fold$(expressionIndex)_header:" -> println
+    ", ptr %fold$(expressionIndex -> valueNameId(state))_acc_slot, align 4" -> println
+    "  br label %fold$(expressionIndex -> valueNameId(state))_header" -> println
+    "fold$(expressionIndex -> valueNameId(state))_header:" -> println
     isRangeFold -> if {
-        "  %fold$(expressionIndex)_item = load i32, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
-        "  %fold$(expressionIndex)_done = icmp sgt i32 %fold$(expressionIndex)_item, %fold$(expressionIndex)_last" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_item = load i32, ptr %fold$(expressionIndex -> valueNameId(state))_item_slot, align 4" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_done = icmp sgt i32 %fold$(expressionIndex -> valueNameId(state))_item, %fold$(expressionIndex -> valueNameId(state))_last" -> println
     } else {
-        "  %fold$(expressionIndex)_index = load i64, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
-        "  %fold$(expressionIndex)_done = icmp eq i64 %fold$(expressionIndex)_index, %fold$(expressionIndex)_length" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_index = load i64, ptr %fold$(expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_done = icmp eq i64 %fold$(expressionIndex -> valueNameId(state))_index, %fold$(expressionIndex -> valueNameId(state))_length" -> println
     }
-    "  br i1 %fold$(expressionIndex)_done, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_body" -> println
-    "fold$(expressionIndex)_body:" -> println
-    "  %fold$(expressionIndex)_acc = load i32, ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+    "  br i1 %fold$(expressionIndex -> valueNameId(state))_done, label %fold$(expressionIndex -> valueNameId(state))_exit, label %fold$(expressionIndex -> valueNameId(state))_body" -> println
+    "fold$(expressionIndex -> valueNameId(state))_body:" -> println
+    "  %fold$(expressionIndex -> valueNameId(state))_acc = load i32, ptr %fold$(expressionIndex -> valueNameId(state))_acc_slot, align 4" -> println
     not isRangeFold -> if {
-        "  %fold$(expressionIndex)_item_ptr = getelementptr i32, ptr %fold$(expressionIndex)_data, i64 %fold$(expressionIndex)_index" -> println
-        "  %fold$(expressionIndex)_item = load i32, ptr %fold$(expressionIndex)_item_ptr, align 4" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_item_ptr = getelementptr i32, ptr %fold$(expressionIndex -> valueNameId(state))_data, i64 %fold$(expressionIndex -> valueNameId(state))_index" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_item = load i32, ptr %fold$(expressionIndex -> valueNameId(state))_item_ptr, align 4" -> println
     }
     functionIndex + 1 => foldRoleUse!
     foldRoleUse! < expressionEnd -> while {
@@ -111,20 +111,20 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     expression.nextOperand -> regionResultValueIndex(context, state) => foldBodyResult
     "  store i32 " -> print
     foldBodyResult -> writeValue(functionIndex, context, state)
-    ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+    ", ptr %fold$(expressionIndex -> valueNameId(state))_acc_slot, align 4" -> println
     isRangeFold -> if {
-        "  %fold$(expressionIndex)_at_last = icmp sge i32 %fold$(expressionIndex)_item, %fold$(expressionIndex)_last" -> println
-        "  br i1 %fold$(expressionIndex)_at_last, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_advance" -> println
-        "fold$(expressionIndex)_advance:" -> println
-        "  %fold$(expressionIndex)_next = add i32 %fold$(expressionIndex)_item, 1" -> println
-        "  store i32 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_at_last = icmp sge i32 %fold$(expressionIndex -> valueNameId(state))_item, %fold$(expressionIndex -> valueNameId(state))_last" -> println
+        "  br i1 %fold$(expressionIndex -> valueNameId(state))_at_last, label %fold$(expressionIndex -> valueNameId(state))_exit, label %fold$(expressionIndex -> valueNameId(state))_advance" -> println
+        "fold$(expressionIndex -> valueNameId(state))_advance:" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_next = add i32 %fold$(expressionIndex -> valueNameId(state))_item, 1" -> println
+        "  store i32 %fold$(expressionIndex -> valueNameId(state))_next, ptr %fold$(expressionIndex -> valueNameId(state))_item_slot, align 4" -> println
     } else {
-        "  %fold$(expressionIndex)_next = add i64 %fold$(expressionIndex)_index, 1" -> println
-        "  store i64 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
+        "  %fold$(expressionIndex -> valueNameId(state))_next = add i64 %fold$(expressionIndex -> valueNameId(state))_index, 1" -> println
+        "  store i64 %fold$(expressionIndex -> valueNameId(state))_next, ptr %fold$(expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
     }
-    "  br label %fold$(expressionIndex)_header" -> println
-    "fold$(expressionIndex)_exit:" -> println
-    "  %v$(expressionIndex -> valueNameId(state)) = load i32, ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+    "  br label %fold$(expressionIndex -> valueNameId(state))_header" -> println
+    "fold$(expressionIndex -> valueNameId(state))_exit:" -> println
+    "  %v$(expressionIndex -> valueNameId(state)) = load i32, ptr %fold$(expressionIndex -> valueNameId(state))_acc_slot, align 4" -> println
 }
 
 emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
@@ -143,7 +143,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             requestedFunctionIndex -> emitAsyncFunction(context, state)
         } else {
             context -> emitterContext.isGenericInstance(requestedFunctionIndex)
-                -> if { requestedFunctionIndex -> emitFunctionNamed("_g$(requestedFunctionIndex)", context, state) } else {
+                -> if { requestedFunctionIndex -> emitFunctionNamed("_g$(requestedFunctionIndex -> valueNameId(state))", context, state) } else {
                     requestedFunctionIndex -> emitFunctionNamed("", context, state)
                 }
         }
@@ -997,7 +997,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     context.ir[requestedFunctionIndex] => function
     Arena(0) => instanceNameStorage!
     context -> emitterContext.isGenericInstance(requestedFunctionIndex)
-        -> if { "_g$(requestedFunctionIndex)" } else { "" } -> materialize(instanceNameStorage!) => instanceSuffix
+        -> if { "_g$(requestedFunctionIndex -> valueNameId(state))" } else { "" } -> materialize(instanceNameStorage!) => instanceSuffix
     context -> usesReachableAsyncDiagnostics(state) => diagnosticsEnabled
     diagnosticsEnabled -> if {
         requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => headerOffset
