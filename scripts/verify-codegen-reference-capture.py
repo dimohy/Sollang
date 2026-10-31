@@ -136,7 +136,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -145,7 +145,8 @@ def main():
                     'storage': 'scripts/probes/codegen-storage-capture',
                     'nominal': 'scripts/probes/codegen-nominal-capture',
                     'synthetic': 'scripts/probes/codegen-synthetic-capture',
-                    'finaltypes': 'scripts/probes/codegen-final-type-capture'}[args.probe]
+                    'finaltypes': 'scripts/probes/codegen-final-type-capture',
+                    'registration': 'scripts/probes/codegen-registration-capture'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -157,7 +158,7 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes'}[args.probe] + ('.Wide' if args.probe == 'finaltypes' else '.Pair')
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration'}[args.probe] + ('.Used' if args.probe == 'registration' else '.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
@@ -208,16 +209,20 @@ def main():
                     assert lines[0] == lines[1], lines
                 elif args.probe == 'nominal':
                     verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
-                elif args.probe == 'finaltypes':
+                elif args.probe in ('finaltypes', 'registration'):
                     builtin = reference['cases'][0]['observation']['builtinTypeIds']
+                    namespace = 'cache.finaltypes' if args.probe == 'finaltypes' else 'cache.registration'
                     declared = [r for group in ('Structs', 'Enums') for r in records[group]
-                                if r['ModuleName'] == 'cache.finaltypes']
+                                if r['ModuleName'] == namespace]
                     assert len(declared) == 4
-                    outer = next(r for r in declared if r['Name'] == 'cache.finaltypes.Outer')
-                    optional = [r for r in records['Enums']
-                                if [v['PayloadType'] for v in r['Variants']] == [None, outer['Id']]]
-                    dynamic = [r for r in records['DynTraits'] if r['TraitName'].endswith('cache.finaltypes.Value')]
-                    assert len(optional) == len(dynamic) == 1
+                    optional = []
+                    if args.probe == 'finaltypes':
+                        outer = next(r for r in declared if r['Name'] == namespace + '.Outer')
+                        optional = [r for r in records['Enums']
+                                    if [v['PayloadType'] for v in r['Variants']] == [None, outer['Id']]]
+                        assert len(optional) == 1
+                    dynamic = [r for r in records['DynTraits'] if r['TraitName'].endswith(namespace + '.Value')]
+                    assert len(dynamic) == 1
                     layouts = {}
                     for definition in declared:
                         boxes = [r for r in records['Boxes'] if r['ElementType'] == definition['Id']]

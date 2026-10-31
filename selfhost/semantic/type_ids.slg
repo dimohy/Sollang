@@ -1588,6 +1588,44 @@ public classifyWithResources sourceTypes: ref [SemanticType; ~], sourceFields: r
 }
 
 # Resolves and globally interns recursive annotation types across source files.
+# Register declaration identities before resolving uses, including unused empty
+# structs and payload-free enums. Keep supplied and affine identities intact.
+seedDeclaredNominalTypes package: ref analysis.PackageAnalysis, types: mut [SemanticType; ~] -> Unit {
+    [Bool; ~] => registered!
+    package.symbols -> each _ { registered! -> push(false) }
+    types -> each known {
+        ((known.kind == 1 and (known.origin == 0 or known.origin == 2)) or known.kind == 9)
+            and known.module >= 0 and known.module < (package.ranges -> len) and known.status == 0
+            -> if {
+                package.ranges[known.module] => range
+                known.symbol >= 0 and known.symbol < range.symbolCount
+                    -> if {
+                        true => registered![range.symbolStart + known.symbol]
+                    }
+            }
+    }
+    [3, 4] -> each kind {
+        0 => source!
+        source! < (package.ranges -> len) -> while {
+            package.ranges[source!] => range
+            0 => symbol!
+            symbol! < range.symbolCount -> while {
+                package.symbols[range.symbolStart + symbol!].kind == kind and not registered![range.symbolStart + symbol!]
+                    -> if {
+                        types -> push(SemanticType {
+                            kind: 1, origin: 0, module: source!, symbol: symbol!,
+                            first: -1, second: -1, length: -1, lengthHash: 0,
+                            containsParameter: false, status: 0
+                        })
+                        true => registered![range.symbolStart + symbol!]
+                    }
+                symbol! + 1 => symbol!
+            }
+            source! + 1 => source!
+        }
+    }
+}
+
 # Nominal equality uses declaration identity, not source spelling.
 public resolve sources: [Text; ~] -> SemanticTypeSet {
     sources -> analysis.analyze => package
@@ -1681,6 +1719,8 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
                 }
             comTypeSourceIndex! + 1 => comTypeSourceIndex!
         }
+
+    package -> seedDeclaredNominalTypes(semanticTypes!)
 
     # A trait object has its own canonical identity and two-pointer storage.
     # Seed declarations before parsing uses so conversions and signatures share it.

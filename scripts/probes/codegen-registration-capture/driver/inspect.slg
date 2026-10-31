@@ -1,0 +1,123 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+main {
+    """
+    native handleFixture from "handle_fixture" {
+        handle Counter drop "counter_drop"
+        create initial: Int32 -> handleFixture.Counter as "counter_create"
+        add self: ref handleFixture.Counter, amount: Int32 -> Int32 as "counter_add"
+    }
+    main { }
+    """ => affineSource
+    [affineSource,; ~] -> analysis.analyze => affinePackage
+    affinePackage -> typeIds.resolveAnalyzed => affine
+    0 => handleCount!
+    affine.types -> each handle {
+        handle.kind == 9 -> if {
+            handleCount! + 1 => handleCount!
+            0 => identities!
+            affine.types -> each candidate {
+                (candidate.kind == 1 or candidate.kind == 9) and candidate.module == handle.module and candidate.symbol == handle.symbol
+                    -> if { identities! + 1 => identities! }
+            }
+            identities! != 1 -> if { process.exit(7) }
+        }
+    }
+    handleCount! != 1 -> if { process.exit(8) }
+    process.arguments() => arguments
+    arguments[1] -> file.mapText => owner
+    [owner,; ~] -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> typeIds.resolveAnalyzed => semantic
+    package -> typeIds.resolveAnalyzedSeeded(semantic) => resumed
+    (resumed.types -> len) != (semantic.types -> len)
+        -> if { process.exit(5) }
+    0 => seedIndex!
+    seedIndex! < (semantic.types -> len) -> while {
+        semantic.types[seedIndex!] => expected
+        resumed.types[seedIndex!] => actual
+        actual.kind != expected.kind or actual.origin != expected.origin or actual.module != expected.module or actual.symbol != expected.symbol or actual.first != expected.first or actual.second != expected.second or actual.length != expected.length or actual.lengthHash != expected.lengthHash or (actual.containsParameter and not expected.containsParameter) or (not actual.containsParameter and expected.containsParameter) or actual.status != expected.status
+            -> if { process.exit(6) }
+        seedIndex! + 1 => seedIndex!
+    }
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    [typeIds.SemanticType; ~] => layoutTypes!
+    semantic.types -> each type { layoutTypes! -> push(type) }
+    [typeIds.NominalField; ~] => layoutFields!
+    semantic.fields -> each field { layoutFields! -> push(field) }
+    llvm.TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: 64 } -> llvm.layoutsFor => layouts!
+    [Int; ~] => referenceIndex!
+    package.nodes -> each _ { referenceIndex! -> push(-1) }
+    0 => referenceOrdinal!
+    semantic.references -> each reference {
+        reference.typeAst >= 0 -> if {
+            referenceOrdinal! => referenceIndex![package.ranges[reference.sourceModule].astStart + reference.typeAst]
+        }
+        referenceOrdinal! + 1 => referenceOrdinal!
+    }
+    typeIds.enumPayloadEdges(semantic.types, semantic.references, package.ranges, package.symbols, referenceIndex!) => payloadEdges
+    typeIds.classifyWithPayloads(semantic.types, semantic.fields, payloadEdges) => traits!
+    semantic.types -> llvm.refineDeclaredTypeLayouts(semantic.fields, semantic.references, package.ranges, package.symbols, package.nodes, referenceIndex!, layouts!.sizes, layouts!.aligns, layouts!.statuses, traits!)
+    "builtin:Bool:$(typeIds.builtinTypeId(semantic.types, 23))" -> println
+    "builtin:Int64:$(typeIds.builtinTypeId(semantic.types, 6))" -> println
+    "builtin:Int:$(typeIds.builtinTypeId(semantic.types, 2))" -> println
+    0 => captured!
+    0 => index!
+    index! < (semantic.types -> len) -> while {
+        semantic.types[index!] => type
+        type.kind == 1 and type.module == 0 and type.symbol >= 0 and type.status == 0
+            -> if {
+                package.symbols[package.ranges[0].symbolStart + type.symbol] => declaration
+                declaration.kind == 3 or declaration.kind == 4 or declaration.kind == 5
+                    -> if {
+                        -1 => words!
+                        declaration.kind == 4 -> if { (layouts!.sizes[index!] - 8) / 8 => words! }
+                        keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+                        records! -> keys.appendDeclaredTypeUniverseRecord(context!, package, semantic, index!, words!) -> when {
+                            Err(_) { process.exit(1) }
+                            Ok {}
+                        }
+                        records!.fields -> each field {
+                            field.bytes -> file.borrowBytes => bytes
+                            bytes -> slice(0, bytes -> len) -> println
+                        }
+                        "end-definition" -> println
+                        declaration.kind != 5 -> if {
+                            context! -> keys.resolvedTypeNameField(package, semantic, index!) -> when {
+                                Err(_) { process.exit(2) }
+                                Ok(name) {
+                                    name.bytes -> file.borrowBytes => bytes
+                                    bytes -> slice(0, bytes -> len) => text
+                                    "layout:$text:$(layouts!.sizes[index!]):$(layouts!.aligns[index!])" -> println
+                                }
+                            }
+                        }
+                        captured! + 1 => captured!
+                    }
+            }
+        type.kind == 7 and type.origin == 4 and type.symbol == 0 and type.status == 0 and not type.containsParameter
+            -> if {
+                keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+                records! -> keys.appendSyntheticTypeUniverseRecord(context!, package, semantic, index!, layouts!.sizes, layouts!.statuses) -> when {
+                    Err(_) { process.exit(3) }
+                    Ok {}
+                }
+                records!.fields -> each field {
+                    field.bytes -> file.borrowBytes => bytes
+                    bytes -> slice(0, bytes -> len) -> println
+                }
+                "end-definition" -> println
+                captured! + 1 => captured!
+            }
+        index! + 1 => index!
+    }
+    captured! != 5 -> if { process.exit(4) }
+}
