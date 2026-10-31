@@ -68,6 +68,15 @@ internal static class SelfHostPolicyTests
             Check("u64-subtraction-lowered", Emit(typeof(SelfHostPolicyTests).GetMethod(nameof(SubtractArithmetic),
                 BindingFlags.NonPublic | BindingFlags.Static)!).Contains("hash - value", StringComparison.Ordinal));
 
+            var textPolicy = compiler.GetType("Sollang.Compiler.Shared.TypeNamePolicy", true)!.GetMethod("BuiltinNames")!;
+            Check("compiled-text-catalog-exported", Emit(textPolicy).Contains((string)textPolicy.Invoke(null, null)!, StringComparison.Ordinal));
+            Check("text-literal-escaped", Emit(typeof(SelfHostPolicyTests).GetMethod(nameof(EscapedText), BindingFlags.NonPublic | BindingFlags.Static)!)
+                .Contains("a\\\"b\\\\c", StringComparison.Ordinal));
+            Check("text-call-rejected", Rejected(nameof(CallText), "SELFHOST_POLICY_TEXT_CONSTANT_REQUIRED"));
+            Check("text-input-rejected", Rejected(nameof(InputText), "SELFHOST_POLICY_TEXT_SIGNATURE_REQUIRED"));
+            Check("text-nonascii-rejected", Rejected(nameof(NonAsciiText), "SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED"));
+            Check("text-control-rejected", Rejected(nameof(ControlText), "SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED"));
+
             var keyPolicies = compiler.GetType("Sollang.Compiler.Shared.CodegenCacheKeyPolicy", true)!;
             var keyRule = compiler.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
             var keyPart = compiler.GetType("Sollang.Compiler.Shared.CodegenKeyPart", true)!;
@@ -146,7 +155,7 @@ internal static class SelfHostPolicyTests
         catch (Exception error) { failure = error.ToString(); }
         finally { context.Unload(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new { status = failure is null ? "passed" : "failed",
-            completed = cases.Count, total = 44, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
+            completed = cases.Count, total = 50, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;
     }
 
@@ -157,6 +166,11 @@ internal static class SelfHostPolicyTests
         throw new DirectoryNotFoundException("Sollang repository");
     }
 
+    private static string EscapedText() => "a\"b\\c";
+    private static string CallText() => string.Concat(Environment.NewLine, "x");
+    private static string InputText(string value) => value;
+    private static string NonAsciiText() => "한글";
+    private static string ControlText() => "\n";
     private static bool ChangedPolicy(bool outerParameter, bool movesOwner, bool ownsStorage) =>
         outerParameter || (movesOwner && ownsStorage);
     private static bool UnsupportedPolicy(int value) => value == 0;

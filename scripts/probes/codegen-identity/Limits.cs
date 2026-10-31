@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "interface-rule-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,16 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "type-name-vectors")
+{
+    var parser = assembly.GetType("Sollang.Compiler.Parsing.Parser", true)!;
+    var builtin = parser.GetMethod("IsBuiltinTypeName", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var names = "Unit|Text|Bool|Self|Int|Long|Int8|Int16|Int32|Int64|UInt8|UInt16|UInt32|UInt64|Size|UIntSize|CodePoint|Arena|Arguments|SourceText|MappedBytes|MutableMappedBytes|Float|Double|Float32|Float64|Range|Option|Result|Unknown|cache.Int".Split('|');
+    foreach (var name in names)
+        Console.WriteLine(JsonSerializer.Serialize(new { name, builtin = (bool)builtin.Invoke(null, [name])! }));
+    return;
+}
 
 if (args.Length == 3 && args[2] == "interface-vectors")
 {

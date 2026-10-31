@@ -1,0 +1,26 @@
+namespace sollang.compiler.semantic.type_name_policy
+
+# Parser type spelling has its own contract: Self is unqualified, while Range
+# is not a parser builtin. Do not substitute semantic numeric type identities.
+# The name list is generated from the same compiled C# source as the parser.
+public isBuiltin name: Text -> Bool {
+    builtinNames() => names
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    cursor! <= (names -> len) -> while {
+        cursor! == (names -> len) or (names -> byte(cursor!)) == '|'
+            -> if {
+                cursor! - start! == (name -> len) => equal!
+                UIntSize(0) => index!
+                equal! and index! < (name -> len) -> while {
+                    (names -> byte(start! + index!)) != (name -> byte(index!))
+                        -> if { false => equal! }
+                    index! + 1 => index!
+                }
+                equal! -> if { true -> return }
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    false
+}

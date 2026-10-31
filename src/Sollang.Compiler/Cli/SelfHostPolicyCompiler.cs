@@ -95,6 +95,7 @@ internal static class SelfHostPolicyCompiler
     internal static string RenderDecision(MethodInfo method)
     {
         if (method.ReturnType == typeof(CodegenKeyRule)) return RenderKeyRuleDecision(method);
+        if (method.ReturnType == typeof(string)) return RenderTextConstant(method);
         if (method.ReturnType == typeof(ulong)) return RenderArithmetic(method);
         var parameters = method.GetParameters();
         if (!method.IsStatic || method.IsGenericMethod || method.ReturnType != typeof(bool)
@@ -120,6 +121,22 @@ internal static class SelfHostPolicyCompiler
             result.Append("    ").Append(parameters[bit].Name).Append(" -> if { decision! / ")
                 .Append((1UL << (1 << bit)).ToString(CultureInfo.InvariantCulture)).Append(" => decision! }\n");
         return result.Append("    decision! % 2 == 1\n}\n").ToString();
+    }
+
+    private static string RenderTextConstant(MethodInfo method)
+    {
+        if (!method.IsStatic || method.IsGenericMethod || method.GetParameters().Length != 0 || !Identifier(method.Name))
+            throw new SollangException("SELFHOST_POLICY_TEXT_SIGNATURE_REQUIRED: " + method.Name);
+        var body = method.GetMethodBody();
+        var code = body?.GetILAsByteArray();
+        if (body is null || code is null || code.Length != 6 || code[0] != 0x72 || code[5] != 0x2A
+            || body.LocalVariables.Count != 0 || body.ExceptionHandlingClauses.Count != 0)
+            throw new SollangException("SELFHOST_POLICY_TEXT_CONSTANT_REQUIRED: " + method.Name);
+        var text = method.Module.ResolveString(BinaryPrimitives.ReadInt32LittleEndian(code.AsSpan(1, 4)));
+        if (text.Length > 4096 || text.Any(character => character < 32 || character > 126))
+            throw new SollangException("SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED: " + method.Name);
+        var name = char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
+        return "public " + name + ": -> Text {\n    \"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"\n}\n";
     }
 
     private static string RenderArithmetic(MethodInfo method)

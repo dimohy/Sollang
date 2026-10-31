@@ -6197,6 +6197,13 @@ Current backend:
   sequence. Private bodies and comments do not enter these public interface
   fields. Live declaration discovery and complete module-interface hashing
   remain required independently of layout generation.
+  Parser builtin type-name classification uses one compiled C# catalog shared
+  with parser source generation and the generated SLG policy. This classification
+  preserves parser spelling and qualification decisions; it is distinct from
+  semantic builtin numeric identities. Text policy export accepts only static,
+  zero-input methods whose compiled body is a literal `ldstr` followed by `ret`,
+  with printable ASCII content of at most 4096 characters. Unsupported bodies,
+  control characters and non-ASCII literals are rejected before source generation.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash
