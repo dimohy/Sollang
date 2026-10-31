@@ -40,7 +40,7 @@ def verify_nominal(lines, records, builtin_ids):
     assert len(expected) == len(affine) and resolved == expected
 
 
-def verify_synthetic(lines, records, builtin, pair):
+def synthetic_definitions(records, builtin, pair):
     definitions = []
     for labels, types in [(['head', 'tail'], [builtin['Int64'], builtin['Float32']]),
                           (['_0', '_1'], [builtin['Int'], builtin['Bool']])]:
@@ -50,10 +50,15 @@ def verify_synthetic(lines, records, builtin, pair):
         assert len(rows) == 1
         definitions += rows
     for payloads in ([None, pair], [pair, builtin['Bool']]):
-        rows = [r for r in records['Enums'] if [v['PayloadType'] for v in r['Variants']] == payloads]
+        rows = [r for r in records['Enums'] if r['ModuleName'] == ''
+                and [v['PayloadType'] for v in r['Variants']] == payloads]
         assert len(rows) == 1
         definitions += rows
-    verify_resolved_definitions(lines, definitions, builtin, {'Pair': pair})
+    return definitions
+
+
+def verify_synthetic(lines, records, builtin, pair):
+    verify_resolved_definitions(lines, synthetic_definitions(records, builtin, pair), builtin, {'Pair': pair})
 
 
 def verify_resolved_definitions(lines, definitions, builtin, declared=None, expected_layouts=None):
@@ -106,13 +111,92 @@ def verify_resolved_definitions(lines, definitions, builtin, declared=None, expe
         assert rows == [[str(p) for p in row] for row in target], (name, rows, target)
 
 
+def verify_catalog(lines, records, builtin):
+    declared = [r for r in records['Structs'] if r['ModuleName'] == 'cache.catalog']
+    assert len(declared) == 1
+    pair = declared[0]['Id']
+    ranges = [r for r in records['Structs'] if r['Id'] == builtin['Range']]
+    dynamic = [r for r in records['DynTraits'] if r['TraitName'].startswith('cache.catalog.')]
+    assert len(ranges) == len(dynamic) == 1
+    enumerations = [r for r in records['Enums'] if r['ModuleName'] == 'cache.catalog']
+    definitions = [*declared, *enumerations, *ranges, *dynamic, *synthetic_definitions(records, builtin, pair)]
+    by_name = {r.get('Name', r.get('TraitName')): r for r in definitions}
+    identities = {}
+    meta = []
+    storage = []
+    current = False
+    range_names = []
+    for line in lines:
+        if line.startswith('builtin:'):
+            _, name, identity = line.split(':')
+            identities[int(identity)] = builtin[name]
+            meta.append(line)
+            continue
+        if line.startswith('range-name:'):
+            range_names.append(line[len('range-name:'):])
+            continue
+        assert line.startswith('record:')
+        raw = line[len('record:'):]
+        parts = raw.split(':')
+        if parts[0] in ('struct', 'enum', 'dyn'):
+            if current:
+                meta.append('end-definition')
+            kind, identity, rest = raw.split(':', 2)
+            name = rest if kind == 'dyn' else rest.rsplit(':', 1 if kind == 'struct' else 2)[0]
+            identities[int(identity)] = by_name[name]['Id']
+            meta.append(raw)
+            current = True
+        elif parts[0] in ('field', 'variant'):
+            assert current
+            meta.append(raw)
+        else:
+            if current:
+                meta.append('end-definition')
+                current = False
+            storage.append(parts)
+    if current:
+        meta.append('end-definition')
+    assert range_names == [ranges[0]['Name']]
+    verify_resolved_definitions(meta, definitions, builtin)
+    elements = {pair, *(r['Id'] for r in enumerations), builtin['Text'], builtin['Int'], builtin['Bool']}
+    expected = []
+    for group, prefix, attributes in [
+        ('Boxes', 'box', ['ElementType', 'Size', 'Alignment']),
+        ('References', 'reference', ['ElementType']),
+        ('StaticArrays', 'static-array', ['ElementType', 'ElementSize', 'ElementAlignment', 'FixedLength']),
+        ('DynamicArrays', 'dynamic-array', ['ElementType', 'ElementSize', 'ElementAlignment']),
+        ('Dictionaries', 'dictionary', ['KeyType', 'ValueType', 'KeySize', 'KeyAlignment', 'ValueOffset', 'ValueSize', 'ValueAlignment', 'EntryStride'])]:
+        rows = records[group]
+        if group == 'Boxes': rows = [r for r in rows if r['ElementType'] in elements]
+        elif group == 'References': rows = [r for r in rows if r['ElementType'] == pair]
+        elif group == 'StaticArrays': rows = [r for r in rows if r['ElementType'] == builtin['Int'] and r['FixedLength'] == 3]
+        elif group == 'DynamicArrays': rows = [r for r in rows if r['ElementType'] == pair]
+        else: rows = [r for r in rows if r['KeyType'] == builtin['Int'] and r['ValueType'] == builtin['Bool']]
+        if group == 'DynamicArrays':
+            assert len(rows) <= 1
+        else:
+            assert len(rows) == (5 + len(enumerations) if group == 'Boxes' else 1), (group, len(rows))
+        expected += [(prefix, *(r[a] for a in attributes)) for r in rows]
+    observed = []
+    observed_ids = set()
+    for row in storage:
+        prefix, identity, *values = row
+        assert int(identity) not in observed_ids
+        observed_ids.add(int(identity))
+        values = list(map(int, values))
+        values[0] = identities[values[0]]
+        if prefix == 'dictionary': values[1] = identities[values[1]]
+        observed.append((prefix, *values))
+    assert Counter(observed) == Counter(expected), (observed, expected)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -123,7 +207,8 @@ def main():
                     'synthetic': 'scripts/probes/codegen-synthetic-capture',
                     'finaltypes': 'scripts/probes/codegen-final-type-capture',
                     'registration': 'scripts/probes/codegen-registration-capture',
-                    'boxes': 'scripts/probes/codegen-box-registration'}[args.probe]
+                    'boxes': 'scripts/probes/codegen-box-registration',
+                    'catalog': 'scripts/probes/codegen-registered-universe'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -135,7 +220,7 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
@@ -186,6 +271,8 @@ def main():
                     assert lines[0] == lines[1], lines
                 elif args.probe == 'nominal':
                     verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
+                elif args.probe == 'catalog':
+                    verify_catalog(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
                 elif args.probe == 'boxes':
                     builtin = reference['cases'][0]['observation']['builtinTypeIds']
                     named = {r['Name']: r['Id'] for group in ('Structs', 'Enums')

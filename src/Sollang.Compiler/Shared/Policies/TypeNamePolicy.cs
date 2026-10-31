@@ -22,6 +22,8 @@ internal static class TypeNamePolicy
     public static string OptionVariantNames() => "None|Some";
     public static string ResultVariantNames() => "Ok|Err";
 
+    public static string RangeDefinition() => "Range|start:Int|endInclusive:Int";
+
     public static string AffineStorageFieldName() => "handle";
     public static string AffineStorageFieldType() => "UInt64";
 

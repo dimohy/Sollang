@@ -15497,16 +15497,7 @@ internal sealed partial class SemanticCompiler
         var resultsByShape = new Dictionary<(TypeId Ok, TypeId Error), TypeId>();
         var structs = new Dictionary<TypeId, BoundStructDefinition>
         {
-            [TypeId.Range] = new BoundStructDefinition(
-                TypeId.Range,
-                "Range",
-                [
-                    new BoundStructField("start", TypeId.Int, 0, 0, 0),
-                    new BoundStructField("endInclusive", TypeId.Int, 1, 0, 0)
-                ],
-                0,
-                0,
-                IsPublic: true)
+            [TypeId.Range] = BuiltinTypeDefinitions.Range()
         };
         var declaredProducts = new Dictionary<string, TypeId>(StringComparer.Ordinal);
 

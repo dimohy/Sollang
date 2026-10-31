@@ -1,0 +1,50 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_name_policy as names
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+# The managed compiler registers this definition even without source uses.
+# Both its name and ordered fields come from the compiled managed schema.
+public appendBuiltinTypeUniverseRecord records: mut TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], typeId: Int -> Result<Unit, TypeUniverseCaptureError> {
+    types -> typeIds.builtinTypeId(25) => range
+    typeId != range or range < 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    names.rangeDefinition() => schema
+    UIntSize(0) => separator!
+    separator! < (schema -> len) and (schema -> byte(separator!)) != '|'
+        -> while { separator! + 1 => separator! }
+    separator! == 0 or separator! == (schema -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    typeId -> integerLayoutField => identity
+    schema -> slice(0, separator!) -> textField => name
+    "" -> textField => module
+    [Binding { part: plans.KeyPart.TypeId, fields: [identity,; ~] }, Binding { part: plans.KeyPart.TypeName, fields: [name,; ~] }, Binding { part: plans.KeyPart.TypeModule, fields: [module,; ~] }; ~] => header
+    records -> appendTypeUniverseRecord(plans.KeyPart.TypeStructs, typeId, -1, header) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+        Ok {}
+    }
+    separator! + 1 => start!
+    0 => ordinal!
+    start! < (schema -> len) -> while {
+        start! => end!
+        end! < (schema -> len) and (schema -> byte(end!)) != '|'
+            -> while { end! + 1 => end! }
+        start! => colon!
+        colon! < end! and (schema -> byte(colon!)) != ':'
+            -> while { colon! + 1 => colon! }
+        colon! == start! or colon! + 1 >= end!
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        schema -> slice(colon! + 1, end! - colon! - 1) -> typeIds.builtinSymbolByName => symbol
+        symbol < 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        types -> typeIds.builtinTypeId(symbol) => memberType
+        memberType < 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        schema -> slice(start!, colon! - start!) -> textField => memberName
+        records -> nominalLayoutMemberField(plans.KeyPart.TypeStructs, typeId, ordinal!, memberName, memberType) -> when {
+            Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+            Ok {}
+        }
+        ordinal! + 1 => ordinal!
+        end! + 1 => start!
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}

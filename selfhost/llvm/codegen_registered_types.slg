@@ -16,30 +16,30 @@ public captureRecordError error: TypeUniverseError -> TypeUniverseCaptureError =
 # Read the committed semantic arena. Coordinates remain the current compiler's
 # ABI identities; source-local ordinals and compatibility diagnostic IDs cannot
 # replace either the reference identity or its registered element identity.
+public appendReferenceTypeUniverseRecord records: mut TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], typeId: Int -> Result<Unit, TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (types -> len) -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    types[typeId] => type
+    type.kind != 8 or type.status != 0 or type.containsParameter or type.first < 0 or type.first >= (types -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    types[type.first].status != 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    typeId -> integerLayoutField => identity
+    type.first -> integerLayoutField => element
+    [Binding { part: plans.KeyPart.TypeId, fields: [identity,; ~] }, Binding { part: plans.KeyPart.TypeElement, fields: [element,; ~] }; ~] => bindings
+    records -> appendTypeUniverseRecord(plans.KeyPart.TypeReferences, typeId, -1, bindings) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+        Ok {}
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}
+
 public appendReferenceTypeUniverse records: mut TypeUniverseRecords, types: ref [typeIds.SemanticType; ~] -> Result<Unit, TypeUniverseCaptureError> {
     0 => index!
     index! < (types -> len) -> while {
         types[index!] => type
         type.kind == 8 and type.status == 0 and not type.containsParameter
             -> if {
-                type.first < 0 or type.first >= (types -> len) or types[type.first].status != 0
-                    -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-                plans.referenceLayoutFields() => rule
-                [Binding; ~] => bindings!
-                rule.parts -> each part {
-                    (part -> plans.partIndex) == (plans.KeyPart.TypeId -> plans.partIndex)
-                        -> if {
-                            index!
-                        } else {
-                            (part -> plans.partIndex) != (plans.KeyPart.TypeElement -> plans.partIndex)
-                                -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart) -> return }
-                            type.first
-                        } => valueId
-                    valueId -> integerLayoutField => value
-                    bindings! -> push(Binding { part: part, fields: [value,; ~] })
-                }
-                records -> appendTypeUniverseRecord(plans.KeyPart.TypeReferences, index!, -1, bindings!) -> when {
-                    Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+                records -> appendReferenceTypeUniverseRecord(types, index!) -> when {
+                    Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                     Ok {}
                 }
             }

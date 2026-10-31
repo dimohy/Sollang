@@ -9,6 +9,16 @@ appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, Typ
     symbol -> typeIds.canonicalBuiltinSymbol => canonical
     canonical < 0 or canonical >= (spellings -> len)
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    canonical == 25 -> if {
+        names.rangeDefinition() => schema
+        UIntSize(0) => end!
+        end! < (schema -> len) and (schema -> byte(end!)) != '|'
+            -> while { end! + 1 => end! }
+        end! == 0 or end! == (schema -> len)
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        schema -> slice(0, end!) -> appendTypeText(bytes)
+        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+    }
     spellings[canonical] => spelling
     names.builtinDisplayOverrides() => table
     UIntSize(0) => start!
