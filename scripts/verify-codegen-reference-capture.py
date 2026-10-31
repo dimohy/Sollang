@@ -77,19 +77,29 @@ def verify_synthetic(lines, records, builtin, pair):
         rows = [r for r in records['Enums'] if [v['PayloadType'] for v in r['Variants']] == payloads]
         assert len(rows) == 1
         definitions += rows
-    expected = {r['Name']: r for r in definitions}
+    verify_resolved_definitions(lines, definitions, builtin, {'Pair': pair})
+
+
+def verify_resolved_definitions(lines, definitions, builtin, declared=None, expected_layouts=None):
+    expected = {r.get('Name', r.get('TraitName')): r for r in definitions}
     identities = {-1: -1}
     observed = {}
+    layouts = {}
     current = None
     for line in lines:
-        if line.startswith('builtin:'):
+        if line.startswith('layout:'):
+            _, name, size, alignment = line.split(':')
+            assert name not in layouts
+            layouts[name] = (int(size), int(alignment))
+        elif line.startswith('builtin:'):
             _, name, identity = line.split(':')
             identities[int(identity)] = builtin[name]
-        elif line.startswith('declared:Pair:'):
-            identities[int(line.split(':')[-1])] = pair
-        elif line.startswith('struct:') or line.startswith('enum:'):
+        elif line.startswith('declared:'):
+            _, name, identity = line.split(':')
+            identities[int(identity)] = declared[name]
+        elif line.startswith(('struct:', 'enum:', 'dyn:')):
             kind, identity, rest = line.split(':', 2)
-            parts = rest.rsplit(':', 1 if kind == 'struct' else 2)
+            parts = [rest] if kind == 'dyn' else rest.rsplit(':', 1 if kind == 'struct' else 2)
             name = parts[0]
             assert name in expected and name not in observed
             identities[int(identity)] = expected[name]['Id']
@@ -102,18 +112,21 @@ def verify_synthetic(lines, records, builtin, pair):
             assert current is not None
             current.append(line.split(':'))
     assert current is None and set(observed) == set(expected)
+    assert layouts == (expected_layouts or {}), (layouts, expected_layouts)
     for name, rows in observed.items():
         reference = expected[name]
         for row in rows:
-            coordinate = 1 if row[0] in ('struct', 'enum') else 3
+            coordinate = 1 if row[0] in ('struct', 'enum', 'dyn') else 3
             row[coordinate] = str(identities[int(row[coordinate])])
         if rows[0][0] == 'struct':
             target = [['struct', reference['Id'], name, reference['ModuleName']]]
             target += [['field', f['Index'], f['Name'], f['Type']] for f in reference['Fields']]
-        else:
+        elif rows[0][0] == 'enum':
             target = [['enum', reference['Id'], name, reference['ModuleName'], reference['PayloadWords']]]
             target += [['variant', v['Tag'], v['Name'], v['PayloadType'] if v['PayloadType'] is not None else -1]
                        for v in reference['Variants']]
+        else:
+            target = [['dyn', reference['Id'], reference['TraitName']]]
         assert rows == [[str(p) for p in row] for row in target], (name, rows, target)
 
 
@@ -123,7 +136,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -131,7 +144,8 @@ def main():
     probe = ROOT / {'reference': 'scripts/probes/codegen-registered-types',
                     'storage': 'scripts/probes/codegen-storage-capture',
                     'nominal': 'scripts/probes/codegen-nominal-capture',
-                    'synthetic': 'scripts/probes/codegen-synthetic-capture'}[args.probe]
+                    'synthetic': 'scripts/probes/codegen-synthetic-capture',
+                    'finaltypes': 'scripts/probes/codegen-final-type-capture'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -143,7 +157,7 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic'}[args.probe] + '.Pair'
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes'}[args.probe] + ('.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
@@ -194,6 +208,22 @@ def main():
                     assert lines[0] == lines[1], lines
                 elif args.probe == 'nominal':
                     verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
+                elif args.probe == 'finaltypes':
+                    builtin = reference['cases'][0]['observation']['builtinTypeIds']
+                    declared = [r for group in ('Structs', 'Enums') for r in records[group]
+                                if r['ModuleName'] == 'cache.finaltypes']
+                    assert len(declared) == 4
+                    outer = next(r for r in declared if r['Name'] == 'cache.finaltypes.Outer')
+                    optional = [r for r in records['Enums']
+                                if [v['PayloadType'] for v in r['Variants']] == [None, outer['Id']]]
+                    dynamic = [r for r in records['DynTraits'] if r['TraitName'].endswith('cache.finaltypes.Value')]
+                    assert len(optional) == len(dynamic) == 1
+                    layouts = {}
+                    for definition in declared:
+                        boxes = [r for r in records['Boxes'] if r['ElementType'] == definition['Id']]
+                        assert len(boxes) == 1
+                        layouts[definition['Name']] = (boxes[0]['Size'], boxes[0]['Alignment'])
+                    verify_resolved_definitions(lines, [*declared, *optional, *dynamic], builtin, expected_layouts=layouts)
                 elif args.probe == 'synthetic':
                     verify_synthetic(lines, records, reference['cases'][0]['observation']['builtinTypeIds'], pair[0])
                 else:

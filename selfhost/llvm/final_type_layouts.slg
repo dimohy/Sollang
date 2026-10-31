@@ -1,0 +1,330 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.ast as ast
+
+# The production preparation stage refines one recursive graph of enum payloads,
+# aggregate fields, fixed arrays and ownership facts before publishing its ABI.
+public refineDeclaredTypeLayouts types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], references: ref [typeIds.TypeReference; ~], ranges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~], nodes: ref [ast.AstNode; ~], referenceByAst: ref [Int; ~], sizes: mut [Int; ~], aligns: mut [Int; ~], statuses: mut [Int; ~], traits: mut [Int; ~] -> Unit {
+    [Bool; ~] => nominalEnumFlags!
+    0 => nominalEnumFlagIndex!
+    nominalEnumFlagIndex! < (types -> len)
+        -> while {
+            nominalEnumFlags! -> push(false)
+            nominalEnumFlagIndex! + 1 => nominalEnumFlagIndex!
+        }
+    # Enum payloads and the aggregates that contain them form one recursive
+    # layout graph. Recompute both sides until neither changes: a struct can
+    # grow after a nested enum is recovered, and that struct can itself be the
+    # payload of Result/Option or another nominal enum.
+    types -> typeIds.valueLayoutCycles(fields, references, ranges, declarations, referenceByAst) => valueCycles
+    valueCycles.cyclic => cyclicLayouts
+    false => hasCyclicLayout!
+    0 => cyclicLayoutIndex!
+    cyclicLayoutIndex! < (cyclicLayouts -> len) -> while {
+        cyclicLayouts[cyclicLayoutIndex!] -> if {
+            3 => statuses[cyclicLayoutIndex!]
+            true => hasCyclicLayout!
+        }
+        cyclicLayoutIndex! + 1 => cyclicLayoutIndex!
+    }
+    not hasCyclicLayout! => aggregateLayoutChanged!
+    aggregateLayoutChanged! -> while {
+        false => aggregateLayoutChanged!
+        0 => intrinsicEnumLayoutIndex!
+        intrinsicEnumLayoutIndex! < (types -> len)
+            -> while {
+                types[intrinsicEnumLayoutIndex!] => intrinsicEnumType
+                intrinsicEnumType.kind == 7
+                    and intrinsicEnumType.origin == 4
+                    and (intrinsicEnumType.symbol == 0 or intrinsicEnumType.symbol == 1)
+                    -> if {
+                        0 => intrinsicEnumPayloadSize!
+                        [intrinsicEnumType.first, intrinsicEnumType.second] => intrinsicEnumPayloads
+                        0 => intrinsicEnumPayloadIndex!
+                        intrinsicEnumPayloadIndex! < (intrinsicEnumPayloads -> len)
+                            -> while {
+                                intrinsicEnumPayloads[intrinsicEnumPayloadIndex!] => intrinsicEnumPayload
+                                intrinsicEnumPayload >= 0 -> if {
+                                    types[intrinsicEnumPayload] -> aggregateFieldLayout(sizes[intrinsicEnumPayload], aligns[intrinsicEnumPayload]) => intrinsicPayloadLayout
+                                    intrinsicPayloadLayout.size => intrinsicEnumResolvedPayloadSize!
+                                    types[intrinsicEnumPayload] => intrinsicEnumPayloadType
+                                    intrinsicEnumPayloadType.kind == 1 -> if {
+                                        0 => intrinsicNominalPayloadSize!
+                                        1 => intrinsicNominalPayloadAlign!
+                                        false => intrinsicNominalPayloadHasField!
+                                        0 => intrinsicNominalFieldIndex!
+                                        intrinsicNominalFieldIndex! < (fields -> len)
+                                            -> while {
+                                                fields[intrinsicNominalFieldIndex!] => intrinsicNominalField
+                                                intrinsicNominalField.ownerType >= 0 -> if {
+                                                    types[intrinsicNominalField.ownerType] => intrinsicNominalOwner
+                                                    intrinsicNominalField.status == 0
+                                                        and intrinsicNominalOwner.module == intrinsicEnumPayloadType.module
+                                                        and intrinsicNominalOwner.symbol == intrinsicEnumPayloadType.symbol
+                                                        and intrinsicNominalField.fieldType >= 0
+                                                        and statuses[intrinsicNominalField.fieldType] == 0
+                                                        -> if {
+                                                            true => intrinsicNominalPayloadHasField!
+                                                            types[intrinsicNominalField.fieldType] -> aggregateFieldLayout(sizes[intrinsicNominalField.fieldType], aligns[intrinsicNominalField.fieldType]) => intrinsicFieldLayout
+                                                            intrinsicFieldLayout.align > intrinsicNominalPayloadAlign!
+                                                                -> if { intrinsicFieldLayout.align => intrinsicNominalPayloadAlign! }
+                                                            ((intrinsicNominalPayloadSize! + intrinsicFieldLayout.align - 1) / intrinsicFieldLayout.align) * intrinsicFieldLayout.align => intrinsicNominalPayloadSize!
+                                                            intrinsicNominalPayloadSize! + intrinsicFieldLayout.size => intrinsicNominalPayloadSize!
+                                                        }
+                                                }
+                                                intrinsicNominalFieldIndex! + 1 => intrinsicNominalFieldIndex!
+                                            }
+                                        intrinsicNominalPayloadHasField! -> if {
+                                            ((intrinsicNominalPayloadSize! + intrinsicNominalPayloadAlign! - 1) / intrinsicNominalPayloadAlign!) * intrinsicNominalPayloadAlign! => intrinsicNominalPayloadSize!
+                                            intrinsicNominalPayloadSize! > intrinsicEnumResolvedPayloadSize!
+                                                -> if { intrinsicNominalPayloadSize! => intrinsicEnumResolvedPayloadSize! }
+                                        }
+                                        0 => intrinsicEnumPayloadCandidateIndex!
+                                        intrinsicEnumPayloadCandidateIndex! < (types -> len)
+                                            -> while {
+                                                types[intrinsicEnumPayloadCandidateIndex!] => intrinsicEnumPayloadCandidate
+                                                intrinsicEnumPayloadCandidate.status == 0
+                                                    and intrinsicEnumPayloadCandidate.kind == 1
+                                                    and intrinsicEnumPayloadCandidate.module == intrinsicEnumPayloadType.module
+                                                    and intrinsicEnumPayloadCandidate.symbol == intrinsicEnumPayloadType.symbol
+                                                    and sizes[intrinsicEnumPayloadCandidateIndex!] > intrinsicEnumResolvedPayloadSize!
+                                                    -> if {
+                                                        sizes[intrinsicEnumPayloadCandidateIndex!] => intrinsicEnumResolvedPayloadSize!
+                                                    }
+                                                intrinsicEnumPayloadCandidateIndex! + 1 => intrinsicEnumPayloadCandidateIndex!
+                                            }
+                                    }
+                                    intrinsicEnumResolvedPayloadSize! > intrinsicEnumPayloadSize!
+                                        -> if { intrinsicEnumResolvedPayloadSize! => intrinsicEnumPayloadSize! }
+                                }
+                                intrinsicEnumPayloadIndex! + 1 => intrinsicEnumPayloadIndex!
+                            }
+                        (intrinsicEnumPayloadSize! + 7) / 8 => intrinsicEnumPayloadWords
+                        8 + intrinsicEnumPayloadWords * 8 => intrinsicEnumSize
+                        sizes[intrinsicEnumLayoutIndex!] != intrinsicEnumSize
+                            or aligns[intrinsicEnumLayoutIndex!] != 8
+                            or statuses[intrinsicEnumLayoutIndex!] != 0
+                            -> if { true => aggregateLayoutChanged! }
+                        intrinsicEnumSize => sizes[intrinsicEnumLayoutIndex!]
+                        8 => aligns[intrinsicEnumLayoutIndex!]
+                        0 => statuses[intrinsicEnumLayoutIndex!]
+                    }
+                intrinsicEnumLayoutIndex! + 1 => intrinsicEnumLayoutIndex!
+            }
+        0 => nominalEnumLayoutIndex!
+        nominalEnumLayoutIndex! < (types -> len)
+            -> while {
+                types[nominalEnumLayoutIndex!] => nominalEnumType
+                -1 => nominalEnumAst!
+                nominalEnumType.kind == 1 and (nominalEnumType.origin == 0 or nominalEnumType.origin == 2) and nominalEnumType.module >= 0 and nominalEnumType.module < (ranges -> len)
+                    -> if {
+                        ranges[nominalEnumType.module] => nominalEnumRange
+                        nominalEnumType.symbol >= 0 and nominalEnumType.symbol < nominalEnumRange.symbolCount
+                            -> if {
+                                declarations[nominalEnumRange.symbolStart + nominalEnumType.symbol] => nominalEnumSymbol
+                                nominalEnumSymbol.astNode >= 0 -> if {
+                                    nodes[nominalEnumRange.astStart + nominalEnumSymbol.astNode].kind == 4
+                                        -> if { nominalEnumSymbol.astNode => nominalEnumAst! }
+                                }
+                            }
+                    }
+                nominalEnumAst! >= 0 -> if {
+                    true => nominalEnumFlags![nominalEnumLayoutIndex!]
+                    0 => nominalEnumPayloadSize!
+                    false => nominalEnumOwns!
+                    false => nominalEnumReachesHeap!
+                    # Only a variant's complete payload annotation denotes its
+                    # stored value. Canonical references carry semantic arena IDs;
+                    # legacy nominal/composite canonical IDs are syntax registries.
+                    references -> each payloadReference {
+                        payloadReference.status == 0
+                            and payloadReference.sourceModule == nominalEnumType.module
+                            and payloadReference.typeId >= 0
+                            and payloadReference.typeId < (sizes -> len)
+                            -> if {
+                                ranges[nominalEnumType.module] => payloadRange
+                                nodes[payloadRange.astStart + payloadReference.typeAst] => payloadTypeNode
+                                payloadTypeNode.parent >= 0 -> if {
+                                    nodes[payloadRange.astStart + payloadTypeNode.parent] => payloadVariant
+                                    payloadVariant.kind == 27 and payloadVariant.parent == nominalEnumAst!
+                                        -> if {
+                                            types[payloadReference.typeId] -> aggregateFieldLayout(sizes[payloadReference.typeId], aligns[payloadReference.typeId]) => nominalPayloadLayout
+                                            nominalPayloadLayout.size > nominalEnumPayloadSize!
+                                                -> if { nominalPayloadLayout.size => nominalEnumPayloadSize! }
+                                            traits[payloadReference.typeId] % 2 == 1
+                                                -> if { true => nominalEnumOwns! }
+                                            (traits[payloadReference.typeId] / 2) % 2 == 1
+                                                -> if { true => nominalEnumReachesHeap! }
+                                        }
+                                }
+                            }
+                    }
+                    (nominalEnumPayloadSize! + 7) / 8 => nominalEnumPayloadWords
+                    8 + nominalEnumPayloadWords * 8 => nominalEnumSize
+                    sizes[nominalEnumLayoutIndex!] != nominalEnumSize
+                        or aligns[nominalEnumLayoutIndex!] != 8
+                        or statuses[nominalEnumLayoutIndex!] != 0
+                        -> if { true => aggregateLayoutChanged! }
+                    nominalEnumSize => sizes[nominalEnumLayoutIndex!]
+                    8 => aligns[nominalEnumLayoutIndex!]
+                    0 => statuses[nominalEnumLayoutIndex!]
+                    # Preserve canonical resource reachability during layout refinement.
+                    ((traits[nominalEnumLayoutIndex!] / 4) % 2) * 4 => nominalEnumTraits!
+                    nominalEnumOwns! -> if { nominalEnumTraits! + 1 => nominalEnumTraits! }
+                    nominalEnumReachesHeap! -> if { nominalEnumTraits! + 2 => nominalEnumTraits! }
+                    traits[nominalEnumLayoutIndex!] != nominalEnumTraits!
+                        -> if { true => aggregateLayoutChanged! }
+                    nominalEnumTraits! => traits[nominalEnumLayoutIndex!]
+                }
+                nominalEnumLayoutIndex! + 1 => nominalEnumLayoutIndex!
+            }
+        # Enum declarations are recovered after the first recursive layout pass.
+        # Reflow nominal structs and fixed arrays that contain those enums so their
+        # stored size matches LLVM's padded aggregate stride (for example Path is
+        # 32 bytes, not the unpadded 24-byte field sum).
+        true => nominalDependentLayoutChanged!
+        nominalDependentLayoutChanged! -> while {
+            false => nominalDependentLayoutChanged!
+            0 => nominalDependentLayoutIndex!
+            nominalDependentLayoutIndex! < (types -> len)
+                -> while {
+                    types[nominalDependentLayoutIndex!] => nominalDependentType
+                    (nominalDependentType.kind == 1
+                        and (nominalDependentType.origin == 0 or nominalDependentType.origin == 2))
+                        or nominalDependentType.kind == 10 -> if {
+                            0 => nominalDependentSize!
+                            1 => nominalDependentAlign!
+                            true => nominalDependentReady!
+                            false => nominalDependentHasField!
+                            0 => nominalDependentFieldIndex!
+                            nominalDependentFieldIndex! < (fields -> len)
+                                -> while {
+                                    fields[nominalDependentFieldIndex!] => nominalDependentField
+                                    nominalDependentField.status == 0 and nominalDependentField.ownerType == nominalDependentLayoutIndex!
+                                        -> if {
+                                            true => nominalDependentHasField!
+                                            nominalDependentField.fieldType < 0 or statuses[nominalDependentField.fieldType] != 0
+                                                -> if {
+                                                    false => nominalDependentReady!
+                                                } else {
+                                                    types[nominalDependentField.fieldType] -> aggregateFieldLayout(sizes[nominalDependentField.fieldType], aligns[nominalDependentField.fieldType]) => dependentFieldLayout
+                                                    dependentFieldLayout.align > nominalDependentAlign!
+                                                        -> if {
+                                                            dependentFieldLayout.align => nominalDependentAlign!
+                                                        }
+                                                    ((nominalDependentSize! + dependentFieldLayout.align - 1) / dependentFieldLayout.align) * dependentFieldLayout.align => nominalDependentSize!
+                                                    nominalDependentSize! + dependentFieldLayout.size => nominalDependentSize!
+                                                }
+                                        }
+                                    nominalDependentFieldIndex! + 1 => nominalDependentFieldIndex!
+                                }
+                            nominalDependentReady!
+                                and (nominalDependentHasField! or nominalDependentType.kind == 10)
+                                -> if {
+                                    ((nominalDependentSize! + nominalDependentAlign! - 1) / nominalDependentAlign!) * nominalDependentAlign! => nominalDependentSize!
+                                    sizes[nominalDependentLayoutIndex!] != nominalDependentSize! or aligns[nominalDependentLayoutIndex!] != nominalDependentAlign!
+                                        -> if {
+                                            nominalDependentSize! => sizes[nominalDependentLayoutIndex!]
+                                            nominalDependentAlign! => aligns[nominalDependentLayoutIndex!]
+                                            0 => statuses[nominalDependentLayoutIndex!]
+                                            true => nominalDependentLayoutChanged!
+                                            true => aggregateLayoutChanged!
+                                        }
+                                }
+                        }
+                    nominalDependentType.kind == 4
+                        and nominalDependentType.first >= 0
+                        and nominalDependentType.length >= 0
+                        and statuses[nominalDependentType.first] == 0
+                        -> if {
+                            types[nominalDependentType.first] -> aggregateFieldLayout(sizes[nominalDependentType.first], aligns[nominalDependentType.first]) => dependentElementLayout
+                            dependentElementLayout.size * nominalDependentType.length => nominalDependentArraySize
+                            dependentElementLayout.align => nominalDependentArrayAlign
+                            sizes[nominalDependentLayoutIndex!] != nominalDependentArraySize or aligns[nominalDependentLayoutIndex!] != nominalDependentArrayAlign
+                                -> if {
+                                    nominalDependentArraySize => sizes[nominalDependentLayoutIndex!]
+                                    nominalDependentArrayAlign => aligns[nominalDependentLayoutIndex!]
+                                    0 => statuses[nominalDependentLayoutIndex!]
+                                    true => nominalDependentLayoutChanged!
+                                    true => aggregateLayoutChanged!
+                                }
+                        }
+                    nominalDependentLayoutIndex! + 1 => nominalDependentLayoutIndex!
+                }
+        }
+        # Imported and local references can have distinct canonical type IDs
+        # for the same nominal declaration. Only one representative owns the
+        # recovered field table, so publish its converged layout to every
+        # equivalent (module, symbol) identity before sizing outer enums.
+        0 => nominalLayoutPublishIndex!
+        nominalLayoutPublishIndex! < (types -> len)
+            -> while {
+                types[nominalLayoutPublishIndex!] => nominalLayoutPublishType
+                nominalLayoutPublishType.kind == 1
+                    -> if {
+                        sizes[nominalLayoutPublishIndex!] => publishedNominalSize!
+                        aligns[nominalLayoutPublishIndex!] => publishedNominalAlign!
+                        0 => publishedNominalFieldSize!
+                        1 => publishedNominalFieldAlign!
+                        false => publishedNominalHasField!
+                        0 => publishedNominalFieldIndex!
+                        publishedNominalFieldIndex! < (fields -> len)
+                            -> while {
+                                fields[publishedNominalFieldIndex!] => publishedNominalField
+                                publishedNominalField.ownerType >= 0 -> if {
+                                    types[publishedNominalField.ownerType] => publishedNominalOwner
+                                    publishedNominalField.status == 0
+                                        and publishedNominalOwner.module == nominalLayoutPublishType.module
+                                        and publishedNominalOwner.symbol == nominalLayoutPublishType.symbol
+                                        and publishedNominalField.fieldType >= 0
+                                        and statuses[publishedNominalField.fieldType] == 0
+                                        -> if {
+                                            true => publishedNominalHasField!
+                                            types[publishedNominalField.fieldType] -> aggregateFieldLayout(sizes[publishedNominalField.fieldType], aligns[publishedNominalField.fieldType]) => publishedFieldLayout
+                                            publishedFieldLayout.align > publishedNominalFieldAlign!
+                                                -> if { publishedFieldLayout.align => publishedNominalFieldAlign! }
+                                            ((publishedNominalFieldSize! + publishedFieldLayout.align - 1) / publishedFieldLayout.align) * publishedFieldLayout.align => publishedNominalFieldSize!
+                                            publishedNominalFieldSize! + publishedFieldLayout.size => publishedNominalFieldSize!
+                                        }
+                                }
+                                publishedNominalFieldIndex! + 1 => publishedNominalFieldIndex!
+                            }
+                        publishedNominalHasField! -> if {
+                            ((publishedNominalFieldSize! + publishedNominalFieldAlign! - 1) / publishedNominalFieldAlign!) * publishedNominalFieldAlign! => publishedNominalFieldSize!
+                            publishedNominalFieldSize! > publishedNominalSize!
+                                -> if { publishedNominalFieldSize! => publishedNominalSize! }
+                            publishedNominalFieldAlign! > publishedNominalAlign!
+                                -> if { publishedNominalFieldAlign! => publishedNominalAlign! }
+                        }
+                        0 => nominalLayoutCandidateIndex!
+                        nominalLayoutCandidateIndex! < (types -> len)
+                            -> while {
+                                types[nominalLayoutCandidateIndex!] => nominalLayoutCandidate
+                                nominalLayoutCandidate.status == 0
+                                    and nominalLayoutCandidate.kind == 1
+                                    and nominalLayoutCandidate.module == nominalLayoutPublishType.module
+                                    and nominalLayoutCandidate.symbol == nominalLayoutPublishType.symbol
+                                    -> if {
+                                        sizes[nominalLayoutCandidateIndex!] > publishedNominalSize!
+                                            -> if { sizes[nominalLayoutCandidateIndex!] => publishedNominalSize! }
+                                        aligns[nominalLayoutCandidateIndex!] > publishedNominalAlign!
+                                            -> if { aligns[nominalLayoutCandidateIndex!] => publishedNominalAlign! }
+                                    }
+                                nominalLayoutCandidateIndex! + 1 => nominalLayoutCandidateIndex!
+                            }
+                        sizes[nominalLayoutPublishIndex!] != publishedNominalSize!
+                            or aligns[nominalLayoutPublishIndex!] != publishedNominalAlign!
+                            -> if {
+                                publishedNominalSize! => sizes[nominalLayoutPublishIndex!]
+                                publishedNominalAlign! => aligns[nominalLayoutPublishIndex!]
+                                0 => statuses[nominalLayoutPublishIndex!]
+                                true => aggregateLayoutChanged!
+                            }
+                    }
+                nominalLayoutPublishIndex! + 1 => nominalLayoutPublishIndex!
+            }
+    }
+}
