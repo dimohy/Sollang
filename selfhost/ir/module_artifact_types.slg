@@ -1198,6 +1198,16 @@ recipeDependencies type: typeIds.SemanticType, index: Int, details: ref TypeDeta
 # remain outside it; a selected unresolved root/dependency is never repaired or
 # dropped. The map translates final owner facts into compact recipe positions.
 public encodeSelectedRecipes types: ref [typeIds.SemanticType; ~], details: ref TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, roots: ref [Int; ~] -> SelectedTypeRecipes {
+    types -> selectedTypeRecipes(details, declarations, roots, false)
+}
+
+# Codegen identities follow ordered concrete arguments, not intern-table slots.
+# Keep the existing semantic generation ordering for its existing consumers.
+public encodeRootOrderedRecipes types: ref [typeIds.SemanticType; ~], details: ref TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, roots: ref [Int; ~] -> SelectedTypeRecipes {
+    types -> selectedTypeRecipes(details, declarations, roots, true)
+}
+
+selectedTypeRecipes types: ref [typeIds.SemanticType; ~], details: ref TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, roots: ref [Int; ~], rootOrdered: Bool -> SelectedTypeRecipes {
     details.status != 0 -> if { 1 -> failedSelectedTypeRecipes -> return }
     types -> len => count
     [Bool; ~] => needed!
@@ -1245,8 +1255,12 @@ public encodeSelectedRecipes types: ref [typeIds.SemanticType; ~], details: ref 
     (selected! -> len) < (work! -> len) and changed!
         -> while {
             false => changed!
-            0 => index!
-            index! < count -> while {
+            count => traversalCount!
+            rootOrdered -> if { work! -> len => traversalCount! }
+            0 => position!
+            position! < traversalCount! -> while {
+                position! => index!
+                rootOrdered -> if { work![(work! -> len) - 1 - position!] => index! }
                 needed![index!] and mapped![index!] < 0 -> if {
                     true => ready!
                     0 => edge!
@@ -1269,7 +1283,7 @@ public encodeSelectedRecipes types: ref [typeIds.SemanticType; ~], details: ref 
                         true => changed!
                     }
                 }
-                index! + 1 => index!
+                position! + 1 => position!
             }
         }
     (selected! -> len) != (work! -> len) -> if { 3 -> failedSelectedTypeRecipes -> return }

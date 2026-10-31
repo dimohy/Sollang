@@ -5969,6 +5969,13 @@ hexadecimal preserves word boundaries and avoids hash-only identity. Function
 definitions, calls, runtime wrappers and specialization base names must use the
 same prepared key. This does not replace the independent naming rules for SSA
 values, type layouts, private globals or specialization arguments.
+Self-host specialization arguments use a complete ordered concrete type recipe
+and the exact numeric generic value, with an explicit marker for absence.
+Recipe dependencies follow ordered roots rather than source type-table slots;
+ordered root references retain repeated arguments and the result-type boundary.
+The template's complete declaration name remains the base. Definitions, async
+definitions, direct calls and function values share one prepared suffix table.
+Its owned storage backs borrowed name views for the emitter's lifetime.
 SSA value and label ordinals are local to the emitted function partition.
 Program-wide auxiliary symbols use a separate naming domain; resetting local
 counters must not merge string literals, static storage or callback symbols.

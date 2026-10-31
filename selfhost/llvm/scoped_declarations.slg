@@ -4,11 +4,81 @@ import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.module_interfaces as interfaces
 import sollang.compiler.llvm.scoped_names as names
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.module_artifact_types as artifactTypes
 
 public prepare package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~] -> names.Names {
     package -> interfaces.declarationIdentitiesAnalyzed(identities) => keys
     names.Keys {
         keyIndexBySymbol: keys.keyIndexBySymbol -> names.borrowValues, starts: keys.starts -> names.borrowValues,
         lengths: keys.lengths -> names.borrowValues, words: keys.words -> names.borrowValues, status: keys.status
+    } -> names.fromKeys
+}
+
+emptyGenericNames status: Int -> names.Names {
+    names.Names { starts: [Int; ~], lengths: [Int; ~], bytes: [UInt8; ~], status: status }
+}
+
+# The declaration name already identifies the template. Its suffix contains the
+# complete ordered concrete environment used by materializeGenericClosure.
+# IR positions and intern IDs are lookup coordinates, never persisted words.
+public prepareGenericSpecializations prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], fields: ref [typeIds.NominalField; ~], ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], bindings: ref typedIr.GenericBodyBindings -> names.Names {
+    false => hasInstances!
+    bindings.templatesByFunction -> each template { template >= 0 -> if { true => hasInstances! } }
+    not hasInstances! -> if { 0 -> emptyGenericNames -> return }
+    prepared.package -> artifactTypes.captureTypeDetailsAnalyzed(types, references, fields) => details
+    details.status != 0 -> if { details.status -> emptyGenericNames -> return }
+    prepared.package -> interfaces.declarationIdentitiesAnalyzed(prepared.modules) => declarations
+    [Int; ~] => keyByFunction!
+    0..<(ir -> len) -> each index { keyByFunction! -> push(-1) }
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => words!
+    plans -> each plan {
+        -1 => function!
+        plan.callNode >= 0 and plan.callNode < (bindings.functionsByCall -> len)
+            -> if { bindings.functionsByCall[plan.callNode] => function! }
+        plan.callNode < 0 and plan.interpolationNode >= 0
+            -> if {
+                bindings -> typedIr.genericInterpolationFunction(plan.ownerFunction, plan.interpolationNode) => function!
+            }
+        plan.status == 0 and function! >= 0 and function! < (ir -> len) and keyByFunction![function!] < 0
+            -> if {
+                [Int; ~] => roots!
+                plan.actualInputs -> each actual { roots! -> push(actual) }
+                plan.resultType >= 0 -> if { roots! -> push(plan.resultType) }
+                plan.resultType < -1 -> if { 1 -> emptyGenericNames -> return }
+                types -> artifactTypes.encodeRootOrderedRecipes(details, declarations, roots!) => recipes
+                recipes.status != 0 -> if { recipes.status -> emptyGenericNames -> return }
+                -1 => value!
+                plan.callNode >= 0 -> if {
+                    ir[plan.callNode] -> typedIr.explicitGenericValueIdentity(prepared) => value!
+                }
+                value! < -1 -> if { 2 -> emptyGenericNames -> return }
+                starts! -> len => keyByFunction![function!]
+                words! -> len => start
+                starts! -> push(start)
+                words! -> push(1)
+                words! -> push(UInt64(plan.actualInputs -> len))
+                plan.resultType >= 0 -> if { words! -> push(1) } else { words! -> push(0) }
+                value! >= 0 -> if { words! -> push(UInt64(value!) + 1) } else { words! -> push(0) }
+                roots! -> each root { words! -> push(UInt64(recipes.recipeBySourceType[root])) }
+                words! -> push(UInt64(recipes.words -> len))
+                recipes.words -> each word { words! -> push(word) }
+                lengths! -> push((words! -> len) - start)
+            }
+    }
+    0 => functionIndex!
+    functionIndex! < (bindings.templatesByFunction -> len)
+        -> while {
+            bindings.templatesByFunction[functionIndex!] >= 0 and keyByFunction![functionIndex!] < 0
+                -> if { 3 -> emptyGenericNames -> return }
+            functionIndex! + 1 => functionIndex!
+        }
+    names.Keys {
+        keyIndexBySymbol: keyByFunction! -> names.borrowValues, starts: starts! -> names.borrowValues,
+        lengths: lengths! -> names.borrowValues, words: words! -> names.borrowValues, status: 0
     } -> names.fromKeys
 }
