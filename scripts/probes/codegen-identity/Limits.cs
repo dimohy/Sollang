@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,28 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "registered-type-universe-vectors")
+{
+    var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
+    var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
+    var paths = Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal).ToArray();
+    var loaded = app.GetMethod("LoadProgram", BindingFlags.NonPublic | BindingFlags.Static)!
+        .Invoke(null, [paths, null, target])!;
+    var program = loaded.GetType().GetProperty("Program")!.GetValue(loaded)!;
+    var semanticType = assembly.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
+    var semantic = Activator.CreateInstance(semanticType, BindingFlags.Instance | BindingFlags.Public
+        | BindingFlags.NonPublic, null, [program, 64], null)!;
+    var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
+    var types = bound.GetType().GetProperty("Types")!.GetValue(bound)!;
+    var records = new Dictionary<string, object>();
+    foreach (var name in new[] { "Structs", "Enums", "Boxes", "References", "DynTraits", "StaticArrays", "DynamicArrays", "Dictionaries" })
+        records[name] = types.GetType().GetProperty(name)!.GetValue(types)!;
+    var hash = cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!
+        .Invoke(null, [types]);
+    Console.WriteLine(JsonSerializer.Serialize(new { hash, records }));
+    return;
+}
 
 if (args.Length == 3 && args[2] == "type-universe-vectors")
 {

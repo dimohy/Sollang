@@ -1,0 +1,47 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.type_ids as typeIds
+
+public enum TypeUniverseCaptureError { InvalidType, InvalidPart, Record(TypeUniverseError) }
+
+integerLayoutField value: Int -> Field {
+    Arena(0) => storage!
+    "$value" -> materialize(storage!) => text
+    text -> textField
+}
+
+# Read the committed semantic arena. Coordinates remain the current compiler's
+# ABI identities; source-local ordinals and compatibility diagnostic IDs cannot
+# replace either the reference identity or its registered element identity.
+public appendReferenceTypeUniverse records: mut TypeUniverseRecords, types: ref [typeIds.SemanticType; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!] => type
+        type.kind == 8 and type.status == 0 and not type.containsParameter
+            -> if {
+                type.first < 0 or type.first >= (types -> len) or types[type.first].status != 0
+                    -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                plans.referenceLayoutFields() => rule
+                [Binding; ~] => bindings!
+                rule.parts -> each part {
+                    (part -> plans.partIndex) == (plans.KeyPart.TypeId -> plans.partIndex)
+                        -> if {
+                            index!
+                        } else {
+                            (part -> plans.partIndex) != (plans.KeyPart.TypeElement -> plans.partIndex)
+                                -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart) -> return }
+                            type.first
+                        } => valueId
+                    valueId -> integerLayoutField => value
+                    bindings! -> push(Binding { part: part, fields: [value,; ~] })
+                }
+                records -> appendTypeUniverseRecord(plans.KeyPart.TypeReferences, index!, -1, bindings!) -> when {
+                    Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+                    Ok {}
+                }
+            }
+        index! + 1 => index!
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}

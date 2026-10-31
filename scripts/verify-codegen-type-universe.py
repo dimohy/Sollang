@@ -24,6 +24,7 @@ def main():
     parser.add_argument('--baseline-result', type=Path)
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--verify-source', action='store_true')
+    parser.add_argument('--registered-sources', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     compiler = args.compiler.resolve()
@@ -40,6 +41,9 @@ def main():
         # The new compiler is expected to change; frozen input vectors must not.
         assert baseline['inputHashes'][str(vectors.resolve())] == sha(vectors)
         inputs.append(args.baseline_result)
+    if args.registered_sources:
+        assert not args.emitter and not args.verify_source and not args.baseline_result
+        inputs += sorted(args.registered_sources.glob('*.slg'))
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -56,7 +60,7 @@ def main():
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
     with VerificationContractLease(list(map(Path, fingerprints))):
-        result = dict(schemaVersion=1, status='running', completed=0, total=18 if args.emitter else 9, cases=[],
+        result = dict(schemaVersion=1, status='running', completed=0, total=1 if args.registered_sources else 18 if args.emitter else 9, cases=[],
                       inputHashes=fingerprints, claimsGoalComplete=False,
                       scope='Actual BuildTypeUniverseHash and table records: eight registered layout categories, '
                             'field/variant/type order, null fixed length, Unicode and category mutations. '
@@ -99,15 +103,24 @@ def main():
                                       output / 'build', timeout=180)
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
-                                      str(compiler.with_suffix('.dll')), str(output), 'type-universe-vectors'],
+                                      str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
+                                      'registered-type-universe-vectors' if args.registered_sources else 'type-universe-vectors'],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
-                rows = [json.loads(line) for line in done.stdout.splitlines()]
-                assert len(rows) == 9
-                if baseline:
-                    assert rows == [case['observation'] for case in baseline['cases']]
-                result.update(status='passed', completed=9,
-                              cases=[dict(id=row['id'], passed=True, observation=row) for row in rows])
+                if args.registered_sources:
+                    row = json.loads(done.stdout)
+                    assert set(row['records']) == {'Structs', 'Enums', 'Boxes', 'References', 'DynTraits',
+                                                   'StaticArrays', 'DynamicArrays', 'Dictionaries'}
+                    assert all(row['records'][name] for name in row['records']), 'missing registered category'
+                    result.update(status='passed', completed=1,
+                                  cases=[dict(id='actual-registered-types', passed=True, observation=row)])
+                else:
+                    rows = [json.loads(line) for line in done.stdout.splitlines()]
+                    assert len(rows) == 9
+                    if baseline:
+                        assert rows == [case['observation'] for case in baseline['cases']]
+                    result.update(status='passed', completed=9,
+                                  cases=[dict(id=row['id'], passed=True, observation=row) for row in rows])
         except BaseException as exc:
             error = exc
         finally:
