@@ -1,0 +1,74 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+showTupleRule context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, rule: ref plans.KeyRule, name: Text, label: Text, blockTuple: Bool, unavailable: Bool -> Unit uses Console, Process {
+    "$(name)|$(label)" -> println
+    blockTuple -> if { context -> functionBlockFields(package, rule) } else { context -> functionGenericFields(package, rule) } -> when {
+        Ok(fields) {
+            unavailable -> if { process.exit(1) }
+            fields -> each field {
+                field.bytes -> file.borrowBytes => bytes
+                bytes -> slice(0, bytes -> len) -> println
+            }
+        }
+        Err(_) { unavailable -> if { "unavailable" -> println } else { process.exit(1) } }
+    }
+}
+
+inspectTuples package: ref analysis.PackageAnalysis, context: mut TypeFieldContext -> Unit uses Console, Process {
+    0 => sourceModule!
+    sourceModule! < (package.ranges -> len) -> while {
+        sourceModule! => context.sourceModule
+        package.ranges[sourceModule!] => range
+        0 => index!
+        index! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + index!] => symbol
+            symbol.kind == 7 and symbol.flags / 4 % 2 == 1
+                -> if {
+                    index! => context.ownerSymbol
+                    context -> declarationNameField(package, index!) => nameField
+                    nameField.bytes -> file.borrowBytes => bytes
+                    bytes -> slice(0, bytes -> len) => name
+                    name == "cache.interfaces.chooseFourth" or name == "cache.remaining.constrained"
+                        -> if {
+                            [plans.genericOriginal(), plans.genericReordered(), plans.genericRelabeled(), plans.genericUnavailable()] => rules
+                            ["GenericOriginal", "GenericReordered", "GenericRelabeled", "GenericUnavailable"] => labels
+                            0..<4 -> each ruleIndex {
+                                context -> showTupleRule(package, rules[ruleIndex], name, labels[ruleIndex], false, ruleIndex == 3)
+                            }
+                        }
+                    name == "cache.tuples.project" or name == "cache.tuples.visit"
+                        -> if {
+                            [plans.blockOriginal(), plans.blockReordered(), plans.blockRelabeled(), plans.blockUnavailable()] => rules
+                            ["BlockOriginal", "BlockReordered", "BlockRelabeled", "BlockUnavailable"] => labels
+                            0..<4 -> each ruleIndex {
+                                context -> showTupleRule(package, rules[ruleIndex], name, labels[ruleIndex], true, ruleIndex == 3)
+                            }
+                        }
+                }
+            index! + 1 => index!
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+}
+
+main {
+    process.arguments() => arguments
+    [file.SourceText; ~] => sources!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    package -> inspectTuples(context!)
+}

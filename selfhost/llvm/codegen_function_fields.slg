@@ -200,14 +200,11 @@ functionBindingsWithContext context: ref TypeFieldContext, package: ref analysis
         }
     }
     bindings! -> push(Binding { part: plans.KeyPart.FunctionReturn, fields: result! })
-    [Field; ~] => block!
-    [declaration.blockTypeNode, declaration.blockResultTypeNode] -> each node {
-        context -> optionalFunctionType(package, node) -> when {
-            Ok(field) { block! -> push(field) }
-            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
-        }
+    plans.functionBlockFields() => blockRule
+    context -> functionBlockFields(package, blockRule) -> when {
+        Ok(tuple) { bindings! -> push(Binding { part: plans.KeyPart.FunctionBlock, fields: tuple }) }
+        Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
     }
-    bindings! -> push(Binding { part: plans.KeyPart.FunctionBlock, fields: block! })
     [Field; ~] => stream!
     declaration.flags / 64 % 2 == 1 -> if { resultNode } else { -1 } => streamNode
     context -> optionalFunctionType(package, streamNode) -> when {
@@ -219,21 +216,12 @@ functionBindingsWithContext context: ref TypeFieldContext, package: ref analysis
     declaration.flags / 8 % 2 == 1 -> if { "async" } else { "sync" } -> textField => asyncField
     asyncFields! -> push(asyncField)
     bindings! -> push(Binding { part: plans.KeyPart.FunctionAsync, fields: asyncFields! })
-    [Field; ~] => generics!
     [Field; ~] => parameters!
     plans.namedOwnedTypeFields() => parameterRule
-    -1 => firstGeneric!
-    0 => genericCount!
     0 => index!
     index! < range.symbolCount -> while {
         package.symbols[range.symbolStart + index!] => member
         member.parent == context.ownerSymbol -> if {
-            member.kind == 32 and genericCount! < 3 -> if {
-                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => name
-                generics! -> push(name)
-                genericCount! == 0 -> if { member.nameToken => firstGeneric! }
-                genericCount! + 1 => genericCount!
-            }
             member.kind == 35 and member.astNode != declaration.astNode
                 -> if {
                     parameterRule.parts -> each part {
@@ -246,17 +234,11 @@ functionBindingsWithContext context: ref TypeFieldContext, package: ref analysis
         }
         index! + 1 => index!
     }
-    genericCount! < 3 -> while { generics! -> push(textField(""))
-        genericCount! + 1 => genericCount! }
-    context -> functionConstraintFields(package, firstGeneric!) -> when {
-        Ok(fields) {
-            generics! -> push(fields.traitBound)
-            generics! -> push(fields.associatedName)
-            generics! -> push(fields.associatedType)
-        }
+    plans.functionGenericFields() => genericRule
+    context -> functionGenericFields(package, genericRule) -> when {
+        Ok(tuple) { bindings! -> push(Binding { part: plans.KeyPart.FunctionGenerics, fields: tuple }) }
         Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
     }
-    bindings! -> push(Binding { part: plans.KeyPart.FunctionGenerics, fields: generics! })
     bindings! -> push(Binding { part: plans.KeyPart.FunctionParameters, fields: parameters! })
     [Field; ~] => effects!
     effectTokens! -> each token {

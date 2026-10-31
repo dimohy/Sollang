@@ -241,6 +241,9 @@ inputs: `partitionPoint<T>: self, values: [T] -> Int block item: ref T -> Bool`
 borrows each yielded `T` as `ref T`; it must not specialize `T` to the type of
 `self`. Do not introduce a global helper or strip a wrong qualified owner to
 make such a call compile.
+Namespace qualification of an ordinary block function selects that function;
+it does not declare a `self` receiver. Infer its generic input from the ordinary
+source value and declared callback roles.
 
 ### What makes code beautiful
 

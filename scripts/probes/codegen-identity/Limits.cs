@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,64 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "function-tuple-rule-vectors")
+{
+    var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
+    var paths = Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal).ToArray();
+    var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
+    var loaded = app.GetMethod("LoadProgram", BindingFlags.NonPublic | BindingFlags.Static)!
+        .Invoke(null, [paths, null, target])!;
+    var sources = ((System.Collections.IEnumerable)loaded.GetType().GetProperty("Sources")!.GetValue(loaded)!).Cast<object>()
+        .Where(source => paths.Contains((string)source.GetType().GetProperty("Path")!.GetValue(source)!, StringComparer.Ordinal));
+    var functions = sources.SelectMany(source =>
+    {
+        var program = source.GetType().GetProperty("Program")!.GetValue(source)!;
+        return ((System.Collections.IEnumerable)program.GetType().GetProperty("Functions")!.GetValue(program)!).Cast<object>();
+    }).ToDictionary(function => (string)function.GetType().GetProperty("Name")!.GetValue(function)!, StringComparer.Ordinal);
+    var partType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyPart", true)!;
+    var ruleType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
+    var render = assembly.GetType("Sollang.Compiler.Cli.SelfHostPolicyCompiler", true)!
+        .GetMethod("RenderKeyRule", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var generated = "namespace sollang.compiler.llvm.codegen_cache_key_policy\n";
+    var rules = new Dictionary<string, object>(StringComparer.Ordinal);
+    foreach (var (group, original) in new[]
+    {
+        ("Block", new[] { "BlockInput", "BlockResult" }),
+        ("Generic", new[] { "GenericPrimary", "GenericSecondary", "GenericTertiary",
+            "GenericTraitBound", "GenericAssociatedName", "GenericAssociatedType" })
+    })
+        foreach (var variant in new[] { "Original", "Reordered", "Relabeled", "Unavailable" })
+        {
+            var names = variant == "Unavailable" ? ["Identity"]
+                : variant == "Reordered" ? original.Reverse().ToArray() : original;
+            var parts = Array.CreateInstance(partType, names.Length);
+            for (var index = 0; index < names.Length; index++) parts.SetValue(Enum.Parse(partType, names[index]), index);
+            var rule = Activator.CreateInstance(ruleType, [variant == "Relabeled" ? "changed-label" : "original", parts])!;
+            rules.Add(group + variant, rule);
+            generated += "\n" + (string)render.Invoke(null, [group + variant, rule])!;
+        }
+    foreach (var functionName in new[] { "cache.interfaces.chooseFourth", "cache.remaining.constrained", "cache.tuples.project", "cache.tuples.visit" })
+    {
+        var group = functionName.StartsWith("cache.tuples.", StringComparison.Ordinal) ? "Block" : "Generic";
+        var method = cacheType.GetMethod("Function" + group + "Fields", BindingFlags.NonPublic | BindingFlags.Static)!;
+        foreach (var variant in new[] { "Original", "Reordered", "Relabeled", "Unavailable" })
+        {
+            var name = functionName + "|" + group + variant;
+            try
+            {
+                var fields = ((IEnumerable<string>)method.Invoke(null, [rules[group + variant], functions[functionName]])!).ToArray();
+                Console.WriteLine(JsonSerializer.Serialize(new { name, fields, unavailable = false }));
+            }
+            catch (InvalidOperationException) when (variant == "Unavailable")
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new { name, fields = Array.Empty<string>(), unavailable = true }));
+            }
+        }
+    }
+    File.WriteAllText(Path.Combine(directory, "function-tuple-rules.slg"), generated);
+    return;
+}
 
 if (args.Length == 3 && args[2] == "module-interface-vectors")
 {

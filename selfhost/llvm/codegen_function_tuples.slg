@@ -1,0 +1,77 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+# Nested tuples expose facts; only the generated part list decides their order.
+# The rule's diagnostic domain is not part of these nested field streams.
+public functionBlockFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, rule: ref plans.KeyRule -> Result<[Field; ~], DeclarationFieldError> {
+    package.symbols[package.ranges[context.sourceModule].symbolStart + context.ownerSymbol] => declaration
+    [Field; ~] => fields!
+    rule.parts -> each part {
+        part -> plans.partIndex => selected
+        -1 => node!
+        selected == (plans.KeyPart.BlockInput -> plans.partIndex)
+            -> if {
+                declaration.blockTypeNode => node!
+            } else {
+                selected == (plans.KeyPart.BlockResult -> plans.partIndex)
+                    -> if {
+                        declaration.blockResultTypeNode => node!
+                    } else { Result<[Field; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart) -> return }
+            }
+        context -> optionalFunctionType(package, node!) -> when {
+            Ok(field) { fields! -> push(field) }
+            Err(error) { Result<[Field; ~], DeclarationFieldError>.Err(error) -> return }
+        }
+    }
+    Result<[Field; ~], DeclarationFieldError>.Ok(fields!)
+}
+
+functionGenericPart context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, tokens: ref [Int; ~], constraints: ref FunctionConstraintFields, part: plans.KeyPart -> Result<Field, DeclarationFieldError> {
+    part -> plans.partIndex => selected
+    -1 => ordinal!
+    selected == (plans.KeyPart.GenericPrimary -> plans.partIndex)
+        -> if { 0 => ordinal! }
+    selected == (plans.KeyPart.GenericSecondary -> plans.partIndex)
+        -> if { 1 => ordinal! }
+    selected == (plans.KeyPart.GenericTertiary -> plans.partIndex)
+        -> if { 2 => ordinal! }
+    ordinal! >= 0 -> if {
+        tokens[ordinal!] < 0 -> if { Result<Field, DeclarationFieldError>.Ok(textField("")) -> return }
+        Result<Field, DeclarationFieldError>.Ok(context -> typeTokenText(package, context.sourceModule, tokens[ordinal!]) -> textField) -> return
+    }
+    selected == (plans.KeyPart.GenericTraitBound -> plans.partIndex)
+        -> if { Result<Field, DeclarationFieldError>.Ok(copyFunctionField(constraints.traitBound)) -> return }
+    selected == (plans.KeyPart.GenericAssociatedName -> plans.partIndex)
+        -> if { Result<Field, DeclarationFieldError>.Ok(copyFunctionField(constraints.associatedName)) -> return }
+    selected == (plans.KeyPart.GenericAssociatedType -> plans.partIndex)
+        -> if { Result<Field, DeclarationFieldError>.Ok(copyFunctionField(constraints.associatedType)) -> return }
+    Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart)
+}
+
+public functionGenericFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, rule: ref plans.KeyRule -> Result<[Field; ~], DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    [Int; ~] => tokens!
+    0 => index!
+    index! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + index!] => member
+        member.parent == context.ownerSymbol and member.kind == 32 and (tokens! -> len) < 3
+            -> if { tokens! -> push(member.nameToken) }
+        index! + 1 => index!
+    }
+    (tokens! -> len) < 3 -> while { tokens! -> push(-1) }
+    context -> functionConstraintFields(package, tokens![0]) -> when {
+        Err(error) { Result<[Field; ~], DeclarationFieldError>.Err(error) }
+        Ok(constraints) {
+            [Field; ~] => fields!
+            rule.parts -> each part {
+                context -> functionGenericPart(package, tokens!, constraints, part) -> when {
+                    Ok(field) { fields! -> push(field) }
+                    Err(error) { Result<[Field; ~], DeclarationFieldError>.Err(error) -> return }
+                }
+            }
+            Result<[Field; ~], DeclarationFieldError>.Ok(fields!)
+        }
+    }
+}

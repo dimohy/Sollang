@@ -35,7 +35,15 @@ internal enum CodegenKeyPart
     InterfaceStructs,
     InterfaceEnums,
     InterfaceTraits,
-    InterfaceFunctions
+    InterfaceFunctions,
+    BlockInput,
+    BlockResult,
+    GenericPrimary,
+    GenericSecondary,
+    GenericTertiary,
+    GenericTraitBound,
+    GenericAssociatedName,
+    GenericAssociatedType
 }
 
 internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<CodegenKeyPart> Parts);
@@ -64,6 +72,14 @@ internal static class CodegenCacheKeyPolicy
     public static CodegenKeyRule TraitMethodFields() => new("trait-method-fields",
         [CodegenKeyPart.MemberName, CodegenKeyPart.MemberOwnership, CodegenKeyPart.MemberType,
             CodegenKeyPart.MethodParameterCount, CodegenKeyPart.MethodParameters]);
+
+    public static CodegenKeyRule FunctionBlockFields() => new("function-block-fields",
+        [CodegenKeyPart.BlockInput, CodegenKeyPart.BlockResult]);
+
+    public static CodegenKeyRule FunctionGenericFields() => new("function-generic-fields",
+        [CodegenKeyPart.GenericPrimary, CodegenKeyPart.GenericSecondary,
+            CodegenKeyPart.GenericTertiary, CodegenKeyPart.GenericTraitBound,
+            CodegenKeyPart.GenericAssociatedName, CodegenKeyPart.GenericAssociatedType]);
 
     public static CodegenKeyRule StructInterface() => new("struct",
         [CodegenKeyPart.Identity, CodegenKeyPart.DeclarationContainer,

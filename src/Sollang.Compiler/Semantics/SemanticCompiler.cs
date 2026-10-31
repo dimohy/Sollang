@@ -7091,7 +7091,10 @@ internal sealed partial class SemanticCompiler
             && functions.TryGetValue(target, out var qualified)
             && IsBlockFunction(qualified))
         {
-            if (qualified.InputType != receiverType)
+            // Namespace qualification does not assert a self receiver. A
+            // generic top-level block still specializes its declared input
+            // in BindUserBlockFunctionCall after this exact-name lookup.
+            if (qualified.InputName == "self" && qualified.InputType != receiverType)
             {
                 throw Error(
                     call.Line,

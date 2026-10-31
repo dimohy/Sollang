@@ -3475,6 +3475,9 @@ match that receiver and never falls back by stripping the qualifier. `self`
 selects the method only; it does not infer a method type parameter or replace
 the declared callback role. For `block item: ref T`, infer `T` from the matching
 explicit method arguments and borrow the yielded element as `ref T`.
+Namespace qualification of an ordinary block function selects its exact name
+without asserting a `self` receiver. Its generic input remains subject to the
+ordinary declared-input and callback-role specialization rules.
 
 Flow-call method lookup uses the exact nominal type of the immediate receiver,
 including the result of a preceding call in the same chain. An imported
@@ -6237,6 +6240,11 @@ Current backend:
   Effects are read from the signature clause and sorted ordinal UTF-16 without
   examining body text. Synthetic input aliases do not become additional
   parameters. Legacy generic slots retain the first three source generic names.
+  FunctionBlockFields and FunctionGenericFields are generated nested part-order
+  rules. They contribute their selected fields without a nested domain label;
+  changing part order changes the projection in both compilers, while changing
+  only a diagnostic rule label leaves the field stream unchanged. A rule that
+  requests an unavailable fact is rejected rather than silently shortened.
   Inferred signatures retain the shared managed inference marker before semantic
   result inference. Qualified ordinary function paths remain absolute. Constraint
   metadata retains the primary generic's first trait bound and last associated

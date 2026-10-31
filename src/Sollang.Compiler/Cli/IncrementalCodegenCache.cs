@@ -597,12 +597,10 @@ internal sealed class IncrementalCodegenCache
                         Shared.CodegenKeyPart.Identity => [function.Name],
                         Shared.CodegenKeyPart.FunctionInput => MemberFields(Shared.CodegenCacheKeyPolicy.OwnedTypeFields(), null, function.InputType ?? "", function.InputOwnership),
                         Shared.CodegenKeyPart.FunctionReturn => [function.ReturnType],
-                        Shared.CodegenKeyPart.FunctionBlock => [function.BlockInputType ?? "", function.BlockResultType ?? ""],
+                        Shared.CodegenKeyPart.FunctionBlock => FunctionBlockFields(Shared.CodegenCacheKeyPolicy.FunctionBlockFields(), function),
                         Shared.CodegenKeyPart.FunctionStream => [function.StreamElementType ?? ""],
                         Shared.CodegenKeyPart.FunctionAsync => [function.IsAsync ? "async" : "sync"],
-                        Shared.CodegenKeyPart.FunctionGenerics => [function.GenericParameterName ?? "", function.SecondaryGenericParameterName ?? "",
-                            function.TertiaryGenericParameterName ?? "", function.GenericTraitBound ?? "",
-                            function.GenericAssociatedTypeName ?? "", function.GenericAssociatedTypeConstraint ?? ""],
+                        Shared.CodegenKeyPart.FunctionGenerics => FunctionGenericFields(Shared.CodegenCacheKeyPolicy.FunctionGenericFields(), function),
                         Shared.CodegenKeyPart.FunctionEffects => (function.Effects ?? []).Order(StringComparer.Ordinal),
                         Shared.CodegenKeyPart.FunctionParameters => (function.AdditionalParameters ?? []).SelectMany(static parameter =>
                             MemberFields(Shared.CodegenCacheKeyPolicy.NamedOwnedTypeFields(), parameter.Name, parameter.TypeName, parameter.Ownership)),
@@ -616,6 +614,26 @@ internal sealed class IncrementalCodegenCache
                 throw UnexpectedKeyPart(part);
         }
     }
+
+    private static IEnumerable<string> FunctionBlockFields(Shared.CodegenKeyRule rule, FunctionDeclaration function) =>
+        PartFields(rule, part => part switch
+        {
+            Shared.CodegenKeyPart.BlockInput => [function.BlockInputType ?? ""],
+            Shared.CodegenKeyPart.BlockResult => [function.BlockResultType ?? ""],
+            _ => throw UnexpectedKeyPart(part)
+        });
+
+    private static IEnumerable<string> FunctionGenericFields(Shared.CodegenKeyRule rule, FunctionDeclaration function) =>
+        PartFields(rule, part => part switch
+        {
+            Shared.CodegenKeyPart.GenericPrimary => [function.GenericParameterName ?? ""],
+            Shared.CodegenKeyPart.GenericSecondary => [function.SecondaryGenericParameterName ?? ""],
+            Shared.CodegenKeyPart.GenericTertiary => [function.TertiaryGenericParameterName ?? ""],
+            Shared.CodegenKeyPart.GenericTraitBound => [function.GenericTraitBound ?? ""],
+            Shared.CodegenKeyPart.GenericAssociatedName => [function.GenericAssociatedTypeName ?? ""],
+            Shared.CodegenKeyPart.GenericAssociatedType => [function.GenericAssociatedTypeConstraint ?? ""],
+            _ => throw UnexpectedKeyPart(part)
+        });
 
     private static IEnumerable<string> MemberFieldValues(Shared.CodegenKeyPart part, string? name,
         string type, FunctionInputOwnership? ownership) => part switch
