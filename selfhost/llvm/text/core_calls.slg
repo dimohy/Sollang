@@ -2380,7 +2380,7 @@ emitFormattingCallAllocas callIndex: Int, ownerIndex: Int, context: ref emitterC
                 -> if {
                     textIndex -> emitTransientIntegerTextAllocas(callIndex, ownerIndex, 0, context, state)
                 } else {
-                    textIndex -> emitIntegerTextRootAllocas("materialize$(callIndex)",
+                    textIndex -> emitIntegerTextRootAllocas("materialize$(callIndex -> valueNameId(state))",
                     ownerIndex, callIndex, context, state)
                 }
             return
@@ -2501,7 +2501,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                                 and (referenceProjectionDepth == 0
                                 or (referenceNeedsTemporaryRoot and referenceRootBinding >= 0))
                                 -> if {
-                                    "  %callref$(callIndex!)_arg$(ordinal!) = alloca " -> print
+                                    "  %callref$(callIndex! -> valueNameId(state))_arg$(ordinal!) = alloca " -> print
                                     referenceStorageType! -> writeValueAbiTypeId(context, state)
                                     ", align " -> print
                                     referenceStorageType! -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
@@ -2622,7 +2622,7 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                                 referenceStorageType -> writeAggregateFieldTypeId(context, state)
                                 " " -> print
                                 referenceRootBinding -> writeReferenceRootValue(ownerIndex, context, state)
-                                ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
+                                ", ptr %callref$(callIndex -> valueNameId(state))_arg$(ordinal), align " -> print
                                 referenceStorageType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
                             }
                         referenceRootAddressable or referenceProjectionDepth > 0
@@ -2631,12 +2631,12 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                             } else {
                                 context.types[referenceOwnerType].kind == 12 => boundedReferenceValue
                                 boundedReferenceValue -> if {
-                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(referenceArgumentIndex, ownerIndex, referenceOwnerType, context, state)
+                                    "callref$(callIndex -> valueNameId(state))_arg$(ordinal)_bounded" -> emitBoundedArrayValue(referenceArgumentIndex, ownerIndex, referenceOwnerType, context, state)
                                 }
                                 "  store " -> print
                                 referenceOwnerType -> writeValueAbiTypeId(context, state)
                                 " " -> print
-                                boundedReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
+                                boundedReferenceValue -> if { "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_bounded" -> print } else {
                                     referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
                                     liveReferenceParameterOrdinal >= 0 -> if {
                                         "%v$(referenceArgumentIndex -> valueNameId(state))" -> print
@@ -2644,21 +2644,20 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                                         referenceArgumentIndex -> writeValue(ownerIndex, context, state)
                                     }
                                 }
-                                ", ptr %callref" -> print
-                                callIndex -> writeDecimal
+                                ", ptr %callref$(callIndex -> valueNameId(state))" -> print
                                 "_arg" -> print
                                 ordinal -> writeDecimal
                                 ", align " -> print
                                 referenceOwnerType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
                             }
-                        "  %callref$(callIndex)_arg$(ordinal)_address = getelementptr i8, ptr " -> print
+                        "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_address = getelementptr i8, ptr " -> print
                         emittedReferenceProjectionDepth! > 0 -> if {
-                            "%callref$(callIndex)_arg$(ordinal)_place$(emittedReferenceProjectionDepth! - 1)" -> print
+                            "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_place$(emittedReferenceProjectionDepth! - 1)" -> print
                         } else {
                             referenceRootAddressable -> if {
                                 referenceRootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
                             } else {
-                                "%callref$(callIndex)_arg$(ordinal)" -> print
+                                "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)" -> print
                             }
                         }
                         ", i64 0" -> println
@@ -2699,7 +2698,7 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                                 referenceStorageType -> writeAggregateFieldTypeId(context, state)
                                 " " -> print
                                 referenceRootBinding -> writeReferenceRootValue(ownerIndex, context, state)
-                                ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
+                                ", ptr %callref$(callIndex -> valueNameId(state))_arg$(ordinal), align " -> print
                                 referenceStorageType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
                             }
                         referenceRootAddressable or referenceProjectionDepth > 0
@@ -2708,55 +2707,55 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                             } else {
                                 referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveWhileReferenceOrdinal
                                 liveWhileReferenceOrdinal >= 0 -> if {
-                                    "  %callref$(callIndex)_arg$(ordinal)_live_ptr = load ptr, ptr " -> print
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live_ptr = load ptr, ptr " -> print
                                     liveWhileReferenceOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(liveWhileReferenceOrdinal)_mut_ptr_addr" -> print }
                                     ", align 8" -> println
-                                    "  %callref$(callIndex)_arg$(ordinal)_live_len = load i64, ptr " -> print
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live_len = load i64, ptr " -> print
                                     liveWhileReferenceOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(liveWhileReferenceOrdinal)_mut_len_addr" -> print }
                                     ", align 8" -> println
-                                    "  %callref$(callIndex)_arg$(ordinal)_live_capacity = load i64, ptr " -> print
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live_capacity = load i64, ptr " -> print
                                     liveWhileReferenceOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(liveWhileReferenceOrdinal)_mut_capacity_addr" -> print }
                                     ", align 8" -> println
-                                    "  %callref$(callIndex)_arg$(ordinal)_live0 = insertvalue " -> print
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live0 = insertvalue " -> print
                                     referenceOwnerType -> writeAggregateFieldTypeId(context, state)
-                                    " poison, ptr %callref$(callIndex)_arg$(ordinal)_live_ptr, 0" -> println
-                                    "  %callref$(callIndex)_arg$(ordinal)_live1 = insertvalue " -> print
+                                    " poison, ptr %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live_ptr, 0" -> println
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live1 = insertvalue " -> print
                                     referenceOwnerType -> writeAggregateFieldTypeId(context, state)
-                                    " %callref$(callIndex)_arg$(ordinal)_live0, i64 %callref$(callIndex)_arg$(ordinal)_live_len, 1" -> println
-                                    "  %callref$(callIndex)_arg$(ordinal)_live = insertvalue " -> print
+                                    " %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live0, i64 %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live_len, 1" -> println
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live = insertvalue " -> print
                                     referenceOwnerType -> writeAggregateFieldTypeId(context, state)
-                                    " %callref$(callIndex)_arg$(ordinal)_live1, i64 %callref$(callIndex)_arg$(ordinal)_live_capacity, 2" -> println
+                                    " %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live1, i64 %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live_capacity, 2" -> println
                                 }
                                 context.types[referenceOwnerType].kind == 12 => boundedWhileReferenceValue
                                 boundedWhileReferenceValue -> if {
-                                    "  %callref$(callIndex)_arg$(ordinal)_handle = freeze %sollang.array.i32 " -> print
-                                    liveWhileReferenceOrdinal >= 0 -> if { "%callref$(callIndex)_arg$(ordinal)_live" -> print } else {
+                                    "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_handle = freeze %sollang.array.i32 " -> print
+                                    liveWhileReferenceOrdinal >= 0 -> if { "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live" -> print } else {
                                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
                                     }
                                     "" -> println
-                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValueFromHandle("%callref$(callIndex)_arg$(ordinal)_handle", referenceOwnerType, context, state)
+                                    "callref$(callIndex -> valueNameId(state))_arg$(ordinal)_bounded" -> emitBoundedArrayValueFromHandle("%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_handle", referenceOwnerType, context, state)
                                 }
                                 "  store " -> print
                                 referenceOwnerType -> writeValueAbiTypeId(context, state)
                                 " " -> print
-                                boundedWhileReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
+                                boundedWhileReferenceValue -> if { "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_bounded" -> print } else {
                                     liveWhileReferenceOrdinal >= 0 -> if {
-                                        "%callref$(callIndex)_arg$(ordinal)_live" -> print
+                                        "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_live" -> print
                                     } else {
                                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
                                     }
                                 }
-                                ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
+                                ", ptr %callref$(callIndex -> valueNameId(state))_arg$(ordinal), align " -> print
                                 referenceOwnerType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
                             }
-                        "  %callref$(callIndex)_arg$(ordinal)_address = getelementptr i8, ptr " -> print
+                        "  %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_address = getelementptr i8, ptr " -> print
                         emittedReferenceProjectionDepth! > 0 -> if {
-                            "%callref$(callIndex)_arg$(ordinal)_place$(emittedReferenceProjectionDepth! - 1)" -> print
+                            "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)_place$(emittedReferenceProjectionDepth! - 1)" -> print
                         } else {
                             referenceRootAddressable -> if {
                                 referenceRootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
                             } else {
-                                "%callref$(callIndex)_arg$(ordinal)" -> print
+                                "%callref$(callIndex -> valueNameId(state))_arg$(ordinal)" -> print
                             }
                         }
                         ", i64 0" -> println

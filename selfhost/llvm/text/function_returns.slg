@@ -336,16 +336,16 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropCandidate.kind == 14 and dropCandidateHasInlineArrayAbi!
                         -> if {
                             true => dropCandidateNeedsInlineArrayReload!
-                            "  %dropfixedreturn$(dropIndex!)_data = extractvalue %sollang.int_slice %v$(dropIndex! -> valueNameId(state)), 0" -> println
-                            "  %dropfixedreturn$(dropIndex!) = load " -> print
+                            "  %dropfixedreturn$(dropIndex! -> valueNameId(state))_data = extractvalue %sollang.int_slice %v$(dropIndex! -> valueNameId(state)), 0" -> println
+                            "  %dropfixedreturn$(dropIndex! -> valueNameId(state)) = load " -> print
                             dropCandidate.typeId -> writeSemanticTypeId(context, state)
-                            ", ptr %dropfixedreturn$(dropIndex!)_data, align " -> print
+                            ", ptr %dropfixedreturn$(dropIndex! -> valueNameId(state))_data, align " -> print
                             context.typeAligns[dropCandidate.typeId] -> writeDecimalLine
                         }
                     context.types[dropCandidate.typeId].kind == 12 => dropCandidateNeedsBoundedValue
                     dropCandidateNeedsBoundedValue -> if {
                         Arena(0) => prefixStorage!
-                        "dropboundedreturn$(dropIndex!)" -> materialize(prefixStorage!) => prefix
+                        "dropboundedreturn$(dropIndex! -> valueNameId(state))" -> materialize(prefixStorage!) => prefix
                         Arena(0) => valueStorage!
                         "%v$(dropIndex! -> valueNameId(state))" -> materialize(valueStorage!) => valueName
                         prefix -> emitBoundedArrayValueFromHandle(valueName, dropCandidate.typeId, context, state)
@@ -354,9 +354,9 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropCandidate.typeId -> writeSemanticTypeId(context, state)
                     " " -> print
                     dropCandidateNeedsBoundedValue -> if {
-                        "%dropboundedreturn$(dropIndex!)" -> print
+                        "%dropboundedreturn$(dropIndex! -> valueNameId(state))" -> print
                     } else { dropCandidateNeedsInlineArrayReload! -> if {
-                            "%dropfixedreturn$(dropIndex!)" -> print
+                            "%dropfixedreturn$(dropIndex! -> valueNameId(state))" -> print
                         } else {
                             "%v$(dropIndex! -> valueNameId(state))" -> print
                     } }
@@ -364,13 +364,13 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
-                    "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %v$(dropIndex! -> valueNameId(state)), 0" -> println
-                    "  call void @sollang_free(ptr %drop$(dropIndex!))" -> println
+                    "  %drop$(dropIndex! -> valueNameId(state)) = extractvalue %sollang.array.i32 %v$(dropIndex! -> valueNameId(state)), 0" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex! -> valueNameId(state)))" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 16 and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
-                    "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary %v$(dropIndex! -> valueNameId(state)), 0" -> println
-                    "  call void @sollang_free(ptr %drop$(dropIndex!)_keys)" -> println
+                    "  %drop$(dropIndex! -> valueNameId(state))_keys = extractvalue %sollang.int_dictionary %v$(dropIndex! -> valueNameId(state)), 0" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex! -> valueNameId(state))_keys)" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
@@ -413,9 +413,9 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 and not dropCandidateMoved! and not dropCandidateReturned!
                 => dropNamedPathFlagGuard
             dropNamedPathFlagGuard -> if {
-                "  %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_owned = load i1, ptr %v$(dropIndex! -> valueNameId(state))_owned, align 1" -> println
-                "  br i1 %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_owned, label %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_drop, label %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_done" -> println
-                "localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_drop:" -> println
+                "  %localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_owned = load i1, ptr %v$(dropIndex! -> valueNameId(state))_owned, align 1" -> println
+                "  br i1 %localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_owned, label %localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_drop, label %localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_done" -> println
+                "localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_drop:" -> println
             }
             dropCandidate.operand0 => dropCandidateDropValueIndex
             dropCandidateInitialized! and dropCandidateIsRoot!
@@ -426,17 +426,17 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 -> if {
                     dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => fixedBackingAsyncRoot
                     fixedBackingAsyncRoot >= 0 -> if {
-                        "  %dropfixedliteral$(dropIndex!)_restored = load %sollang.int_slice, ptr " -> print
+                        "  %dropfixedliteral$(dropIndex! -> valueNameId(state))_restored = load %sollang.int_slice, ptr " -> print
                         fixedBackingAsyncRoot -> writeAsyncLocalAddress(context, state)
                         ", align " -> print
                         dropCandidate -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                     }
-                    "  %dropfixedliteral$(dropIndex!) = extractvalue %sollang.int_slice " -> print
+                    "  %dropfixedliteral$(dropIndex! -> valueNameId(state)) = extractvalue %sollang.int_slice " -> print
                     fixedBackingAsyncRoot >= 0 -> if {
-                        "%dropfixedliteral$(dropIndex!)_restored" -> print
+                        "%dropfixedliteral$(dropIndex! -> valueNameId(state))_restored" -> print
                     } else { "%v$(dropCandidateDropValueIndex -> valueNameId(state))" -> print }
                     ", 0" -> println
-                    "  call void @sollang_free(ptr %dropfixedliteral$(dropIndex!))" -> println
+                    "  call void @sollang_free(ptr %dropfixedliteral$(dropIndex! -> valueNameId(state)))" -> println
                 }
             -1 => dropCandidateParameterIndex!
             dropCandidate.kind == 17 and dropCandidate.flags != 1
@@ -452,7 +452,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 -> if {
                     dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => dropAsyncRoot
                     dropAsyncRoot >= 0 -> if {
-                        "  %drop$(dropIndex!)_restored = load " -> print
+                        "  %drop$(dropIndex! -> valueNameId(state))_restored = load " -> print
                         dropCandidate -> writeIrType(context, state)
                         ", ptr " -> print
                         dropAsyncRoot -> writeAsyncLocalAddress(context, state)
@@ -470,19 +470,19 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         and (context.ir[dropCandidateDropValueIndex].kind == 14 or (dropCandidateDropValueIndex -> promotedFixedArrayCall(context, state)) >= 0)
                         -> if {
                             true => dropBindingNeedsInlineArrayReload!
-                            "  %dropfixedbinding$(dropIndex!)_data = extractvalue %sollang.int_slice " -> print
-                            dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
+                            "  %dropfixedbinding$(dropIndex! -> valueNameId(state))_data = extractvalue %sollang.int_slice " -> print
+                            dropAsyncRoot >= 0 -> if { "%drop$(dropIndex! -> valueNameId(state))_restored" -> print } else {
                                 "%v$(dropCandidateDropValueIndex -> valueNameId(state))" -> print
                             }
                             ", 0" -> println
-                            "  %dropfixedbinding$(dropIndex!) = load " -> print
+                            "  %dropfixedbinding$(dropIndex! -> valueNameId(state)) = load " -> print
                             dropCandidate.typeId -> writeSemanticTypeId(context, state)
-                            ", ptr %dropfixedbinding$(dropIndex!)_data, align " -> print
+                            ", ptr %dropfixedbinding$(dropIndex! -> valueNameId(state))_data, align " -> print
                             context.typeAligns[dropCandidate.typeId] -> writeDecimalLine
                         }
                     dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
                         -> if {
-                            "  %drop$(dropIndex!)_current = load " -> print
+                            "  %drop$(dropIndex! -> valueNameId(state))_current = load " -> print
                             context.types[dropCandidate.typeId].kind == 12
                                 -> if {
                                     dropCandidate -> writeIrType(context, state)
@@ -492,15 +492,15 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         }
                     context.types[dropCandidate.typeId].kind == 12 => dropBindingNeedsBoundedValue
                     dropBindingNeedsBoundedValue -> if {
-                        "  %dropboundedbinding$(dropIndex!)_handle = freeze %sollang.array.i32 " -> print
-                        dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
-                            dropCandidate.flags == 1 -> if { "%drop$(dropIndex!)_current" -> print } else {
+                        "  %dropboundedbinding$(dropIndex! -> valueNameId(state))_handle = freeze %sollang.array.i32 " -> print
+                        dropAsyncRoot >= 0 -> if { "%drop$(dropIndex! -> valueNameId(state))_restored" -> print } else {
+                            dropCandidate.flags == 1 -> if { "%drop$(dropIndex! -> valueNameId(state))_current" -> print } else {
                                 dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                             }
                         }
                         "" -> println
                         Arena(0) => prefixStorage!
-                        "dropboundedbinding$(dropIndex!)" -> materialize(prefixStorage!) => prefix
+                        "dropboundedbinding$(dropIndex! -> valueNameId(state))" -> materialize(prefixStorage!) => prefix
                         Arena(0) => valueStorage!
                         "%$(prefix)_handle" -> materialize(valueStorage!) => handle
                         prefix -> emitBoundedArrayValueFromHandle(handle, dropCandidate.typeId, context, state)
@@ -509,11 +509,11 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropCandidate.typeId -> writeSemanticTypeId(context, state)
                     " " -> print
                     dropBindingNeedsBoundedValue -> if {
-                        "%dropboundedbinding$(dropIndex!)" -> print
+                        "%dropboundedbinding$(dropIndex! -> valueNameId(state))" -> print
                     } else { dropBindingNeedsInlineArrayReload! -> if {
-                            "%dropfixedbinding$(dropIndex!)" -> print
-                        } else { dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
-                                dropCandidate.flags == 1 -> if { "%drop$(dropIndex!)_current" -> print } else {
+                            "%dropfixedbinding$(dropIndex! -> valueNameId(state))" -> print
+                        } else { dropAsyncRoot >= 0 -> if { "%drop$(dropIndex! -> valueNameId(state))_restored" -> print } else {
+                                dropCandidate.flags == 1 -> if { "%drop$(dropIndex! -> valueNameId(state))_current" -> print } else {
                                     dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                                 }
                             }
@@ -526,34 +526,34 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         and context.ir[dropCandidateDropValueIndex].kind == 14
                         and (dropCandidateDropValueIndex -> fixedArrayLiteralNeedsHeap(context, state))
                         -> if {
-                            "  call void @sollang_free(ptr %dropfixedbinding$(dropIndex!)_data)" -> println
+                            "  call void @sollang_free(ptr %dropfixedbinding$(dropIndex! -> valueNameId(state))_data)" -> println
                         }
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
                     dropCandidate.flags == 1 -> if {
-                        "  %drop$(dropIndex!)_current = load %sollang.array.i32, ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
+                        "  %drop$(dropIndex! -> valueNameId(state))_current = load %sollang.array.i32, ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
                         dropCandidate -> storageAlign(context, state) -> writeDecimalLine
-                        "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %drop$(dropIndex!)_current, 0" -> println
+                        "  %drop$(dropIndex! -> valueNameId(state)) = extractvalue %sollang.array.i32 %drop$(dropIndex! -> valueNameId(state))_current, 0" -> println
                     } else {
-                        "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 " -> print
+                        "  %drop$(dropIndex! -> valueNameId(state)) = extractvalue %sollang.array.i32 " -> print
                         dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                         ", 0" -> println
                     }
-                    "  call void @sollang_free(ptr %drop$(dropIndex!))" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex! -> valueNameId(state)))" -> println
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     dropCandidate.flags == 1 -> if {
-                        "  %drop$(dropIndex!)_current = load %sollang.int_dictionary, ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
+                        "  %drop$(dropIndex! -> valueNameId(state))_current = load %sollang.int_dictionary, ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
                         dropCandidate -> storageAlign(context, state) -> writeDecimalLine
-                        "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary %drop$(dropIndex!)_current, 0" -> println
+                        "  %drop$(dropIndex! -> valueNameId(state))_keys = extractvalue %sollang.int_dictionary %drop$(dropIndex! -> valueNameId(state))_current, 0" -> println
                     } else {
-                        "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary " -> print
+                        "  %drop$(dropIndex! -> valueNameId(state))_keys = extractvalue %sollang.int_dictionary " -> print
                         dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                         ", 0" -> println
                     }
-                    "  call void @sollang_free(ptr %drop$(dropIndex!)_keys)" -> println
+                    "  call void @sollang_free(ptr %drop$(dropIndex! -> valueNameId(state))_keys)" -> println
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
@@ -610,8 +610,8 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 and (returnedOwnedBindingRoot < 0 or returnedOwnedBindingRoot != dropCandidateRoot!)
                 -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex, context, state) }
             dropNamedPathFlagGuard -> if {
-                "  br label %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_done" -> println
-                "localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_done:" -> println
+                "  br label %localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_done" -> println
+                "localreturn$(functionIndex -> valueNameId(state))_b$(dropIndex! -> valueNameId(state))_done:" -> println
             }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot!
                 and dropCandidate.parent == function.operand0
