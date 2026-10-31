@@ -1,0 +1,42 @@
+import sys.file as file
+import sys.process as process
+
+struct Field { bytes: [UInt8; ~] }
+struct Facts { owner: Field, name: Field }
+enum Failure { Invalid }
+
+makeField value: UInt8 -> Field {
+    [UInt8; ~] => bytes!
+    bytes! -> push(value)
+    Field { bytes: bytes! }
+}
+make: -> Result<Facts, Failure> {
+    Result<Facts, Failure>.Ok(Facts { owner: makeField('o'), name: makeField('n') })
+}
+early: -> Result<Field, Failure> {
+    make() -> when {
+        Ok(facts) { Result<Field, Failure>.Ok(facts.name) -> return }
+        Err(error) { Result<Field, Failure>.Err(error) -> return }
+    }
+}
+tail: -> Result<Field, Failure> {
+    make() -> when {
+        Ok(facts) { Result<Field, Failure>.Ok(facts.name) }
+        Err(error) { Result<Field, Failure>.Err(error) }
+    }
+}
+show field: ref Field -> Unit uses Console {
+    field.bytes -> file.borrowBytes => text
+    text -> slice(0, text -> len) -> println
+}
+main {
+    process.arguments() => arguments
+    arguments[1] == "borrow" -> if {
+        make() -> when { Ok(facts) { facts.name -> show } Err(_) {} }
+    } else {
+        arguments[1] == "tail" -> if { tail() } else { early() } -> when {
+            Ok(field) { field -> show }
+            Err(_) { "error" -> println }
+        }
+    }
+}

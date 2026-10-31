@@ -31,7 +31,11 @@ internal enum CodegenKeyPart
     MemberType,
     MemberOwnership,
     MethodParameterCount,
-    MethodParameters
+    MethodParameters,
+    InterfaceStructs,
+    InterfaceEnums,
+    InterfaceTraits,
+    InterfaceFunctions
 }
 
 internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<CodegenKeyPart> Parts);
@@ -41,6 +45,12 @@ internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<Code
     "src/Sollang.Compiler/Shared/Policies/CodegenCacheKeyPolicy.cs")]
 internal static class CodegenCacheKeyPolicy
 {
+    // Declaration categories are ordered within each source, never across files.
+    // This plan contributes no domain field to the module's interface stream.
+    public static CodegenKeyRule InterfaceDeclarations() => new("interface-declarations",
+        [CodegenKeyPart.InterfaceStructs, CodegenKeyPart.InterfaceEnums,
+            CodegenKeyPart.InterfaceTraits, CodegenKeyPart.InterfaceFunctions]);
+
     // Nested record layouts contribute only their parts, without a domain field.
     public static CodegenKeyRule NamedTypeFields() => new("named-type-fields",
         [CodegenKeyPart.MemberName, CodegenKeyPart.MemberType]);

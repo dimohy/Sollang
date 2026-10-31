@@ -648,6 +648,10 @@ internal sealed partial class LlvmEmitter
     {
         foreach (var (name, storedValue) in _locals.Reverse())
         {
+            // Match payload locals are views. Their obligations below own
+            // cleanup, including the siblings of a projected return value.
+            if (_borrowedOwnedLocals.Contains(name))
+                continue;
             if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
             {
                 if (TryDropTransferredOwnerSiblings(name, storedValue, transferredExpression))
@@ -751,6 +755,22 @@ internal sealed partial class LlvmEmitter
             && obligation.Value is RuntimeStruct projectedOwner)
         {
             DropOwnedStructFieldsExcept(projectedOwner, excludedField);
+            return;
+        }
+        // Early return/break/continue must honor the same projected transfers
+        // as an arm's ordinary exit. The payload's retained flag alone only
+        // distinguishes a whole move; sibling fields still need cleanup.
+        if (obligation.BindingName is { } bindingName
+            && obligation.Value is RuntimeStruct payload
+            && _movedOwnedStructFields.TryGetValue(bindingName, out var movedFields)
+            && movedFields.Count > 0)
+        {
+            var transferredPaths = movedFields.Select(static path =>
+                (IReadOnlyList<string>)path.Split('.')).ToArray();
+            if (obligation.RetainedFlag is { } payloadRetainedFlag)
+                DropOwnedStructFieldsExceptTransferredIfRetained(payloadRetainedFlag, payload, transferredPaths);
+            else
+                DropOwnedStructFieldsExceptTransferred(payload, transferredPaths);
             return;
         }
         if (obligation.RetainedFlag is { } retainedFlag)

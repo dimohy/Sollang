@@ -58,7 +58,13 @@ hashBytes hash: UInt64, bytes: ref [UInt8; ~] -> UInt64 {
 }
 
 public hashRule rule: ref plans.KeyRule, bindings: ref [Binding; ~] -> Result<UInt64, KeyError> {
-    arithmetic.envelopeChecksumSeed() -> hashText(rule.domain) => hash!
+    arithmetic.envelopeChecksumSeed() -> hashRuleFrom(rule, bindings)
+}
+
+# A module hashes one continuous field stream, including each declaration's
+# rule domain. It never hashes or formats the intermediate declaration hash.
+public hashRuleFrom seed: UInt64, rule: ref plans.KeyRule, bindings: ref [Binding; ~] -> Result<UInt64, KeyError> {
+    seed -> hashText(rule.domain) => hash!
     rule.parts -> each part {
         -1 => selected!
         0 => bindingIndex!

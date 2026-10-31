@@ -1,0 +1,153 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+import sollang.compiler.llvm.codegen_units as units
+import sys.file as file
+
+public struct ModuleDeclaration {
+    public sourceModule: Int
+    public ownerSymbol: Int
+}
+
+compareFieldText left: ref Field, right: ref Field -> Int {
+    left.bytes -> file.borrowBytes => leftBytes
+    right.bytes -> file.borrowBytes => rightBytes
+    units.compareIdentityText(leftBytes -> slice(0, leftBytes -> len), rightBytes -> slice(0, rightBytes -> len))
+}
+
+public declarationRule kind: Int -> Result<plans.KeyRule, DeclarationFieldError> {
+    kind == 3 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.structInterface()) -> return }
+    kind == 4 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.enumInterface()) -> return }
+    kind == 5 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.traitInterface()) -> return }
+    kind == 7 or kind == 31 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.functionInterface()) -> return }
+    Result<plans.KeyRule, DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration)
+}
+
+declarationCategory part: plans.KeyPart -> Result<Int, DeclarationFieldError> {
+    part -> plans.partIndex => selected
+    selected == (plans.KeyPart.InterfaceStructs -> plans.partIndex)
+        -> if { Result<Int, DeclarationFieldError>.Ok(3) -> return }
+    selected == (plans.KeyPart.InterfaceEnums -> plans.partIndex)
+        -> if { Result<Int, DeclarationFieldError>.Ok(4) -> return }
+    selected == (plans.KeyPart.InterfaceTraits -> plans.partIndex)
+        -> if { Result<Int, DeclarationFieldError>.Ok(5) -> return }
+    selected == (plans.KeyPart.InterfaceFunctions -> plans.partIndex)
+        -> if { Result<Int, DeclarationFieldError>.Ok(7) -> return }
+    Result<Int, DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart)
+}
+
+declarationIdentityField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<Field, DeclarationFieldError> {
+    package.symbols[package.ranges[context.sourceModule].symbolStart + context.ownerSymbol] => symbol
+    symbol.kind == 7 or symbol.kind == 31 -> if {
+        context -> functionContextFields(package) -> when {
+            Ok(fields) { Result<Field, DeclarationFieldError>.Ok(fields.name) -> return }
+            Err(error) { Result<Field, DeclarationFieldError>.Err(error) -> return }
+        }
+    }
+    Result<Field, DeclarationFieldError>.Ok(context -> declarationNameField(package, context.ownerSymbol))
+}
+
+# Match CreateModuleIdentity: path order first, then per-source category and
+# stable declaration-name order. Source paths are owned metadata, not namespaces.
+public orderedModuleDeclarations context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, sourcePaths: ref [Field; ~] -> Result<[ModuleDeclaration; ~], DeclarationFieldError> {
+    context.sourceModule < 0 or context.sourceModule >= (package.ranges -> len)
+        or (sourcePaths -> len) != (package.ranges -> len)
+        or (context.identities -> len) != (package.ranges -> len)
+        -> if { Result<[ModuleDeclaration; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    context.sourceModule => selectedModule
+    [Int; ~] => sources!
+    0 => source!
+    source! < (package.ranges -> len) -> while {
+        modules.sameLogicalAnalyzedSource(package.sources, context.identities, selectedModule, source!, package.tokens, package.ranges)
+            -> if {
+                sources! -> len => position!
+                sources! -> push(source!)
+                position! > 0 -> while {
+                    compareFieldText(sourcePaths[sources![position! - 1]], sourcePaths[source!]) <= 0
+                        -> if { break }
+                    sources![position! - 1] => sources![position!]
+                    position! - 1 => position!
+                }
+                source! => sources![position!]
+            }
+        source! + 1 => source!
+    }
+    [ModuleDeclaration; ~] => declarations!
+    plans.interfaceDeclarations() => categoryRule
+    sources! -> each sourceModule {
+        sourceModule => context.sourceModule
+        package.ranges[sourceModule] => range
+        categoryRule.parts -> each part {
+            part -> declarationCategory -> when {
+                Err(error) { Result<[ModuleDeclaration; ~], DeclarationFieldError>.Err(error) -> return }
+                Ok(kind) {
+                    [Int; ~] => symbols!
+                    [Field; ~] => names!
+                    [Int; ~] => order!
+                    0 => symbolIndex!
+                    symbolIndex! < range.symbolCount -> while {
+                        package.symbols[range.symbolStart + symbolIndex!] => symbol
+                        (symbol.kind == kind or (kind == 7 and symbol.kind == 31)) and symbol.flags / 4 % 2 == 1
+                            -> if {
+                                symbolIndex! => context.ownerSymbol
+                                context -> declarationIdentityField(package) -> when {
+                                    Err(error) { Result<[ModuleDeclaration; ~], DeclarationFieldError>.Err(error) -> return }
+                                    Ok(name) {
+                                        names! -> push(name)
+                                        symbols! -> push(symbolIndex!)
+                                    }
+                                }
+                                order! -> len => ordinal
+                                ordinal => position!
+                                order! -> push(ordinal)
+                                position! > 0 -> while {
+                                    compareFieldText(names![order![position! - 1]], names![ordinal]) <= 0
+                                        -> if { break }
+                                    order![position! - 1] => order![position!]
+                                    position! - 1 => position!
+                                }
+                                ordinal => order![position!]
+                            }
+                        symbolIndex! + 1 => symbolIndex!
+                    }
+                    order! -> each ordinal {
+                        declarations! -> push(ModuleDeclaration { sourceModule: sourceModule, ownerSymbol: symbols![ordinal] })
+                    }
+                }
+            }
+        }
+    }
+    Result<[ModuleDeclaration; ~], DeclarationFieldError>.Ok(declarations!)
+}
+
+public moduleInterfaceHash context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, sourcePaths: ref [Field; ~] -> Result<UInt64, DeclarationFieldError> {
+    context -> orderedModuleDeclarations(package, sourcePaths) -> when {
+        Err(error) { Result<UInt64, DeclarationFieldError>.Err(error) }
+        Ok(declarations) {
+            arithmetic.envelopeChecksumSeed() => hash!
+            declarations -> each declaration {
+                declaration.sourceModule => context.sourceModule
+                declaration.ownerSymbol => context.ownerSymbol
+                package.symbols[package.ranges[declaration.sourceModule].symbolStart + declaration.ownerSymbol].kind => kind
+                kind -> declarationRule -> when {
+                    Err(error) { Result<UInt64, DeclarationFieldError>.Err(error) -> return }
+                    Ok(rule) {
+                        context -> declarationBindings(package) -> when {
+                            Err(error) { Result<UInt64, DeclarationFieldError>.Err(error) -> return }
+                            Ok(bindings) {
+                                hash! -> hashRuleFrom(rule, bindings) -> when {
+                                    Ok(value) { value => hash! }
+                                    Err(_) { Result<UInt64, DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart) -> return }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Result<UInt64, DeclarationFieldError>.Ok(hash!)
+        }
+    }
+}

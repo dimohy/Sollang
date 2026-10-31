@@ -546,55 +546,75 @@ internal sealed class IncrementalCodegenCache
 
     private static IEnumerable<string> PublicInterfaceFields(SollangProgram program)
     {
-        foreach (var structure in program.Structs.Where(static value => value.IsPublic)
-                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
-            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.StructInterface(), part => part switch
-            {
-                Shared.CodegenKeyPart.Identity => [structure.Name],
-                Shared.CodegenKeyPart.DeclarationContainer => [structure.DeclaringTypeName ?? ""],
-                Shared.CodegenKeyPart.Visibility => [structure.IsPublic ? "public" : "private"],
-                Shared.CodegenKeyPart.StructFields => structure.Fields.SelectMany(static field => MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), field.Name, field.TypeName, null)),
-                _ => throw UnexpectedKeyPart(part)
-            })) yield return field;
-        foreach (var enumeration in program.Enums.Where(static value => value.IsPublic)
-                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
-            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.EnumInterface(), part => part switch
-            {
-                Shared.CodegenKeyPart.Identity => [enumeration.Name],
-                Shared.CodegenKeyPart.Visibility => [enumeration.IsPublic ? "public" : "private"],
-                Shared.CodegenKeyPart.EnumVariants => enumeration.Variants.SelectMany(static variant => MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), variant.Name, variant.PayloadType ?? "", null)),
-                _ => throw UnexpectedKeyPart(part)
-            })) yield return field;
-        foreach (var trait in program.Traits.Where(static value => value.IsPublic)
-                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
-            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.TraitInterface(), part => part switch
-            {
-                Shared.CodegenKeyPart.Identity => [trait.Name],
-                Shared.CodegenKeyPart.TraitAssociatedTypes => trait.AssociatedTypes.Select(static associated => associated.Name),
-                Shared.CodegenKeyPart.TraitMethods => TraitMethodFields(trait),
-                _ => throw UnexpectedKeyPart(part)
-            })) yield return field;
-        foreach (var function in program.Functions.Where(static value => value.IsPublic)
-                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
-            foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.FunctionInterface(), part => part switch
-            {
-                Shared.CodegenKeyPart.Identity => [function.Name],
-                Shared.CodegenKeyPart.FunctionInput => MemberFields(Shared.CodegenCacheKeyPolicy.OwnedTypeFields(), null, function.InputType ?? "", function.InputOwnership),
-                Shared.CodegenKeyPart.FunctionReturn => [function.ReturnType],
-                Shared.CodegenKeyPart.FunctionBlock => [function.BlockInputType ?? "", function.BlockResultType ?? ""],
-                Shared.CodegenKeyPart.FunctionStream => [function.StreamElementType ?? ""],
-                Shared.CodegenKeyPart.FunctionAsync => [function.IsAsync ? "async" : "sync"],
-                Shared.CodegenKeyPart.FunctionGenerics => [function.GenericParameterName ?? "", function.SecondaryGenericParameterName ?? "",
-                    function.TertiaryGenericParameterName ?? "", function.GenericTraitBound ?? "",
-                    function.GenericAssociatedTypeName ?? "", function.GenericAssociatedTypeConstraint ?? ""],
-                Shared.CodegenKeyPart.FunctionEffects => (function.Effects ?? []).Order(StringComparer.Ordinal),
-                Shared.CodegenKeyPart.FunctionParameters => (function.AdditionalParameters ?? []).SelectMany(static parameter =>
-                    MemberFields(Shared.CodegenCacheKeyPolicy.NamedOwnedTypeFields(), parameter.Name, parameter.TypeName, parameter.Ownership)),
-                Shared.CodegenKeyPart.FunctionAssociatedTypes => (function.ImplAssociatedTypes ?? new Dictionary<string, string>())
-                    .OrderBy(static pair => pair.Key, StringComparer.Ordinal).SelectMany(static pair =>
-                    MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), pair.Key, pair.Value, null)),
-                _ => throw UnexpectedKeyPart(part)
-            })) yield return field;
+        foreach (var part in Shared.CodegenCacheKeyPolicy.InterfaceDeclarations().Parts)
+            foreach (var field in PublicDeclarationFields(program, part))
+                yield return field;
+    }
+
+    private static IEnumerable<string> PublicDeclarationFields(SollangProgram program, Shared.CodegenKeyPart part)
+    {
+        switch (part)
+        {
+            case Shared.CodegenKeyPart.InterfaceStructs:
+                foreach (var structure in program.Structs.Where(static value => value.IsPublic)
+                             .OrderBy(static value => value.Name, StringComparer.Ordinal))
+                    foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.StructInterface(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.Identity => [structure.Name],
+                        Shared.CodegenKeyPart.DeclarationContainer => [structure.DeclaringTypeName ?? ""],
+                        Shared.CodegenKeyPart.Visibility => [structure.IsPublic ? "public" : "private"],
+                        Shared.CodegenKeyPart.StructFields => structure.Fields.SelectMany(static field => MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), field.Name, field.TypeName, null)),
+                        _ => throw UnexpectedKeyPart(part)
+                    })) yield return field;
+                yield break;
+            case Shared.CodegenKeyPart.InterfaceEnums:
+                foreach (var enumeration in program.Enums.Where(static value => value.IsPublic)
+                             .OrderBy(static value => value.Name, StringComparer.Ordinal))
+                    foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.EnumInterface(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.Identity => [enumeration.Name],
+                        Shared.CodegenKeyPart.Visibility => [enumeration.IsPublic ? "public" : "private"],
+                        Shared.CodegenKeyPart.EnumVariants => enumeration.Variants.SelectMany(static variant => MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), variant.Name, variant.PayloadType ?? "", null)),
+                        _ => throw UnexpectedKeyPart(part)
+                    })) yield return field;
+                yield break;
+            case Shared.CodegenKeyPart.InterfaceTraits:
+                foreach (var trait in program.Traits.Where(static value => value.IsPublic)
+                             .OrderBy(static value => value.Name, StringComparer.Ordinal))
+                    foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.TraitInterface(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.Identity => [trait.Name],
+                        Shared.CodegenKeyPart.TraitAssociatedTypes => trait.AssociatedTypes.Select(static associated => associated.Name),
+                        Shared.CodegenKeyPart.TraitMethods => TraitMethodFields(trait),
+                        _ => throw UnexpectedKeyPart(part)
+                    })) yield return field;
+                yield break;
+            case Shared.CodegenKeyPart.InterfaceFunctions:
+                foreach (var function in program.Functions.Where(static value => value.IsPublic)
+                             .OrderBy(static value => value.Name, StringComparer.Ordinal))
+                    foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.FunctionInterface(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.Identity => [function.Name],
+                        Shared.CodegenKeyPart.FunctionInput => MemberFields(Shared.CodegenCacheKeyPolicy.OwnedTypeFields(), null, function.InputType ?? "", function.InputOwnership),
+                        Shared.CodegenKeyPart.FunctionReturn => [function.ReturnType],
+                        Shared.CodegenKeyPart.FunctionBlock => [function.BlockInputType ?? "", function.BlockResultType ?? ""],
+                        Shared.CodegenKeyPart.FunctionStream => [function.StreamElementType ?? ""],
+                        Shared.CodegenKeyPart.FunctionAsync => [function.IsAsync ? "async" : "sync"],
+                        Shared.CodegenKeyPart.FunctionGenerics => [function.GenericParameterName ?? "", function.SecondaryGenericParameterName ?? "",
+                            function.TertiaryGenericParameterName ?? "", function.GenericTraitBound ?? "",
+                            function.GenericAssociatedTypeName ?? "", function.GenericAssociatedTypeConstraint ?? ""],
+                        Shared.CodegenKeyPart.FunctionEffects => (function.Effects ?? []).Order(StringComparer.Ordinal),
+                        Shared.CodegenKeyPart.FunctionParameters => (function.AdditionalParameters ?? []).SelectMany(static parameter =>
+                            MemberFields(Shared.CodegenCacheKeyPolicy.NamedOwnedTypeFields(), parameter.Name, parameter.TypeName, parameter.Ownership)),
+                        Shared.CodegenKeyPart.FunctionAssociatedTypes => (function.ImplAssociatedTypes ?? new Dictionary<string, string>())
+                            .OrderBy(static pair => pair.Key, StringComparer.Ordinal).SelectMany(static pair =>
+                            MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), pair.Key, pair.Value, null)),
+                        _ => throw UnexpectedKeyPart(part)
+                    })) yield return field;
+                yield break;
+            default:
+                throw UnexpectedKeyPart(part);
+        }
     }
 
     private static IEnumerable<string> MemberFieldValues(Shared.CodegenKeyPart part, string? name,

@@ -1,0 +1,92 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+show field: ref keys.Field -> Unit uses Console {
+    field.bytes -> file.borrowBytes => bytes
+    bytes -> slice(0, bytes -> len) -> println
+}
+
+inspect package: ref analysis.PackageAnalysis, paths: ref [keys.Field; ~], context: mut keys.TypeFieldContext -> Unit uses Console, Process {
+    0 => sourceModule!
+    sourceModule! < (package.ranges -> len) -> while {
+        false => seen!
+        0 => previous!
+        previous! < sourceModule! -> while {
+            modules.sameLogicalAnalyzedSource(package.sources, context.identities, previous!, sourceModule!, package.tokens, package.ranges)
+                -> if { true => seen! }
+            previous! + 1 => previous!
+        }
+        not seen! -> if {
+            sourceModule! => context.sourceModule
+            [UInt64; ~] => nameWords!
+            package.sources[sourceModule!] -> slice(0, package.sources[sourceModule!] -> len) => source
+            modules.appendLogicalNameWords(source, context.identities[sourceModule!], package.ranges[sourceModule!], package.tokens, nameWords!)
+            [UInt8; ~] => nameBytes!
+            nameWords! -> each word { nameBytes! -> push(UInt8(word)) }
+            keys.Field { bytes: nameBytes! } => name
+            name -> show
+            context -> keys.orderedModuleDeclarations(package, paths) -> when {
+                Err(_) { "invalid-order" -> println
+                    process.exit(1) }
+                Ok(declarations) {
+                    declarations -> each declaration {
+                        declaration.sourceModule => context.sourceModule
+                        declaration.ownerSymbol => context.ownerSymbol
+                        package.symbols[package.ranges[declaration.sourceModule].symbolStart + declaration.ownerSymbol].kind -> keys.declarationRule -> when {
+                            Err(_) { "invalid-kind" -> println
+                                process.exit(1) }
+                            Ok(rule) {
+                                rule.domain -> println
+                                context -> keys.declarationBindings(package) -> when {
+                                    Err(_) { "invalid-declaration" -> println
+                                        process.exit(1) }
+                                    Ok(bindings) {
+                                        rule.parts -> each part {
+                                            bindings -> each binding {
+                                                (binding.part -> plans.partIndex) == (part -> plans.partIndex)
+                                                    -> if {
+                                                        binding.fields -> each field { field -> show }
+                                                    }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            sourceModule! => context.sourceModule
+            context -> keys.moduleInterfaceHash(package, paths) -> when {
+                Ok(hash) { keys.hexField(hash) => field
+                    field -> show }
+                Err(_) { "invalid-hash" -> println
+                    process.exit(1) }
+            }
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+}
+
+main {
+    process.arguments() => arguments
+    [file.SourceText; ~] => sources!
+    [keys.Field; ~] => paths!
+    UIntSize(1) => argument!
+    argument! < (arguments -> len) -> while {
+        arguments[argument!] -> keys.textField => path
+        paths! -> push(path)
+        arguments[argument!] -> file.mapText => owner
+        sources! -> push(owner)
+        argument! + 1 => argument!
+    }
+    sources! -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
+    package -> inspect(paths!, context!)
+}

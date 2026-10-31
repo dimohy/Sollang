@@ -4149,6 +4149,10 @@ Container rules:
   reinitializes that same path. No call, branch, fallible expression, or access
   to another path may intervene, because the mutable owner must never be
   observable or returned in a partially initialized state.
+  An owned match payload may transfer an exact field path into a returned
+  aggregate. Ordinary arm completion and explicit early return both destroy
+  only its remaining live siblings, exactly once; the payload view does not
+  create a second owner or cleanup obligation.
   In the current slice, field assignment accepts only a direct field target.
   Therefore an owned nested field cannot be extracted through a mutable
   binding or mutable borrow: there is no supported nested assignment with
@@ -6243,6 +6247,12 @@ Current backend:
   alias.member, and status/out interface results wrap the declared success type
   as Result<success, Int32>. Native headers accept optional try, then optional
   public, then the actual name; neither modifier creates an input binding.
+  A logical module orders its sources by ordinal UTF-16 path. Within each
+  source, the generated InterfaceDeclarations plan selects declaration
+  categories, and each category is stably sorted by its full declaration name.
+  The module hashes one continuous field stream containing each declaration's
+  rule domain and fields. It adds no module domain or intermediate declaration
+  hash. An empty public interface retains the shared checksum seed.
   An unfinished source projection must reject cache admission until its actual
   managed facts are available; that rejection does not remove supported language
   forms from the compiler parity and final verification requirements.

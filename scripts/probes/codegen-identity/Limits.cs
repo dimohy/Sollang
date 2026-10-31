@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,44 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "module-interface-vectors")
+{
+    var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
+    var paths = Directory.GetFiles(directory, "*.slg").Order(StringComparer.Ordinal).ToArray();
+    var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
+    var loaded = app.GetMethod("LoadProgram", BindingFlags.NonPublic | BindingFlags.Static)!
+        .Invoke(null, [paths, null, target])!;
+    var sources = ((System.Collections.IEnumerable)loaded.GetType().GetProperty("Sources")!.GetValue(loaded)!)
+        .Cast<object>().Where(source => paths.Contains(
+            (string)source.GetType().GetProperty("Path")!.GetValue(source)!, StringComparer.Ordinal)).ToArray();
+    var sourceType = assembly.GetType("Sollang.Compiler.Cli.CompilationSource", true)!;
+    var create = cacheType.GetMethod("CreateModuleIdentity", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var fieldsMethod = cacheType.GetMethod("PublicInterfaceFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var hashMethod = cacheType.GetMethod("HashFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    foreach (var group in sources.GroupBy(source =>
+                 (string)sourceType.GetProperty("ModuleName")!.GetValue(source)!, StringComparer.Ordinal)
+                 .OrderBy(group => group.Key, StringComparer.Ordinal))
+    {
+        var ordered = group.OrderBy(source => (string)sourceType.GetProperty("Path")!.GetValue(source)!, StringComparer.Ordinal).ToArray();
+        ulong InterfaceHash(IEnumerable<object> values)
+        {
+            var input = values.ToArray();
+            var array = Array.CreateInstance(sourceType, input.Length);
+            for (var index = 0; index < input.Length; index++) array.SetValue(input[index], index);
+            var identity = create.Invoke(null, [group.Key, array])!;
+            return (ulong)identity.GetType().GetProperty("InterfaceHash")!.GetValue(identity)!;
+        }
+        var fields = ordered.SelectMany(source => (IEnumerable<string>)fieldsMethod.Invoke(null,
+            [sourceType.GetProperty("Program")!.GetValue(source)!])!).ToArray();
+        var hash = InterfaceHash(ordered);
+        if (hash != (ulong)hashMethod.Invoke(null, [fields])! || hash != InterfaceHash(ordered.Reverse()))
+            throw new InvalidOperationException("module interface field stream or source ordering differs");
+        Console.WriteLine(JsonSerializer.Serialize(new { name = group.Key, fields, hash,
+            sources = ordered.Select(source => Path.GetFileName((string)sourceType.GetProperty("Path")!.GetValue(source)!)) }));
+    }
+    return;
+}
 
 if (args.Length == 3 && args[2] == "member-rule-vectors")
 {
