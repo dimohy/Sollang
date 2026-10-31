@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,41 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "member-rule-vectors")
+{
+    var partType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyPart", true)!;
+    var ruleType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
+    var member = cacheType.GetMethod("MemberFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var render = assembly.GetType("Sollang.Compiler.Cli.SelfHostPolicyCompiler", true)!
+        .GetMethod("RenderKeyRule", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var generated = "namespace sollang.compiler.llvm.codegen_cache_key_policy\n";
+    foreach (var (name, domain, names) in new[]
+    {
+        ("MemberOriginal", "original", new[] { "MemberName", "MemberType" }),
+        ("MemberReordered", "original", new[] { "MemberType", "MemberName" }),
+        ("MemberRelabeled", "changed-diagnostic-label", new[] { "MemberName", "MemberType" }),
+        ("MemberUnavailable", "unavailable", new[] { "Identity" })
+    })
+    {
+        var parts = Array.CreateInstance(partType, names.Length);
+        for (var index = 0; index < names.Length; index++) parts.SetValue(Enum.Parse(partType, names[index]), index);
+        var rule = Activator.CreateInstance(ruleType, [domain, parts])!;
+        generated += "\n" + (string)render.Invoke(null, [name, rule])!;
+        try
+        {
+            var fields = ((IEnumerable<string>)member.Invoke(null, [rule, "value", "Text", null])!).ToArray();
+            Console.WriteLine(JsonSerializer.Serialize(new { name, fields, unavailable = false }));
+        }
+        catch (InvalidOperationException)
+        {
+            if (name != "MemberUnavailable") throw;
+            Console.WriteLine(JsonSerializer.Serialize(new { name, fields = Array.Empty<string>(), unavailable = true }));
+        }
+    }
+    File.WriteAllText(Path.Combine(directory, "member-rule-smoke.slg"), generated);
+    return;
+}
 
 if (args.Length == 3 && args[2] == "type-name-vectors")
 {

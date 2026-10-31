@@ -6222,6 +6222,11 @@ Current backend:
   that count. Empty traits still bind the required empty groups; parameter names
   do not enter the trait method interface. Numeric metadata uses invariant decimal
   spelling, with Default, Move and MutableBorrow represented by 0, 1 and 2.
+  Inner named-type pairs, owned-type pairs, named owned parameters and trait
+  method records also consume compiled shared field-order plans. Their rule
+  labels are diagnostic metadata: only outer interface records serialize a
+  domain field. Changes to inner plan order flow through policy generation and
+  both fact providers; unavailable requested facts fail explicitly.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash

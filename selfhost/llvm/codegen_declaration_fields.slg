@@ -3,7 +3,7 @@ namespace sollang.compiler.llvm.codegen_cache_keys
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.llvm.codegen_cache_key_policy as plans
 
-public enum DeclarationFieldError { InvalidInput, UnsupportedDeclaration, InvalidType }
+public enum DeclarationFieldError { InvalidInput, UnsupportedDeclaration, InvalidType, UnavailablePart }
 
 # Names retain every parsed namespace and containing type segment. Parent and
 # symbol indexes remain local to their source, exactly like the type adapter.
@@ -45,6 +45,34 @@ unsignedDeclarationField value: UInt64 -> Field {
     Field { bytes: bytes! }
 }
 
+# This dispatch supplies facts. The compiled shared rule owns their order.
+sourceMemberField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, symbolIndex: Int, part: plans.KeyPart -> Result<Field, DeclarationFieldError> {
+    package.symbols[package.ranges[context.sourceModule].symbolStart + symbolIndex] => member
+    part -> plans.partIndex => selected
+    selected == (plans.KeyPart.MemberName -> plans.partIndex)
+        -> if {
+            member.nameToken < 0 -> if { Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+            context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => field
+            Result<Field, DeclarationFieldError>.Ok(field) -> return
+        }
+    selected == (plans.KeyPart.MemberType -> plans.partIndex)
+        -> if {
+            member.typeNode < 0 -> if {
+                member.kind == 27 -> if { Result<Field, DeclarationFieldError>.Ok(textField("")) -> return }
+                Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return
+            }
+            context -> typeAnnotationField(package, member.typeNode) -> when {
+                Ok(field) { Result<Field, DeclarationFieldError>.Ok(field) -> return }
+                Err(_) { Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+            }
+        }
+    selected == (plans.KeyPart.MemberOwnership -> plans.partIndex)
+        -> if {
+            Result<Field, DeclarationFieldError>.Ok(unsignedDeclarationField(UInt64(member.flags % 4))) -> return
+        }
+    Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart)
+}
+
 struct TraitFields {
     associated: [Field; ~]
     methods: [Field; ~]
@@ -63,13 +91,6 @@ traitDeclarationFields context: ref TypeFieldContext, package: ref analysis.Pack
                 associated! -> push(name)
             }
             member.kind == 29 -> if {
-                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => name
-                methods! -> push(name)
-                methods! -> push(unsignedDeclarationField(UInt64(member.flags % 4)))
-                context -> typeAnnotationField(package, member.typeNode) -> when {
-                    Ok(field) { methods! -> push(field) }
-                    Err(_) { Result<TraitFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
-                }
                 [Int; ~] => parameters!
                 0 => parameterIndex!
                 parameterIndex! < range.symbolCount -> while {
@@ -78,14 +99,31 @@ traitDeclarationFields context: ref TypeFieldContext, package: ref analysis.Pack
                         -> if { parameters! -> push(parameterIndex!) }
                     parameterIndex! + 1 => parameterIndex!
                 }
-                methods! -> push(unsignedDeclarationField(UInt64(parameters! -> len)))
-                parameters! -> each parameterIndex {
-                    package.symbols[range.symbolStart + parameterIndex] => parameter
-                    context -> typeAnnotationField(package, parameter.typeNode) -> when {
-                        Ok(field) { methods! -> push(field) }
-                        Err(_) { Result<TraitFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
-                    }
-                    methods! -> push(unsignedDeclarationField(UInt64(parameter.flags % 4)))
+                plans.traitMethodFields() => methodRule
+                methodRule.parts -> each part {
+                    part -> plans.partIndex => selected
+                    selected == (plans.KeyPart.MethodParameterCount -> plans.partIndex)
+                        -> if {
+                            methods! -> push(unsignedDeclarationField(UInt64(parameters! -> len)))
+                        } else {
+                            selected == (plans.KeyPart.MethodParameters -> plans.partIndex)
+                                -> if {
+                                    plans.ownedTypeFields() => parameterRule
+                                    parameters! -> each parameterIndex {
+                                        parameterRule.parts -> each parameterPart {
+                                            context -> sourceMemberField(package, parameterIndex, parameterPart) -> when {
+                                                Ok(field) { methods! -> push(field) }
+                                                Err(error) { Result<TraitFields, DeclarationFieldError>.Err(error) -> return }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    context -> sourceMemberField(package, index!, part) -> when {
+                                        Ok(field) { methods! -> push(field) }
+                                        Err(error) { Result<TraitFields, DeclarationFieldError>.Err(error) -> return }
+                                    }
+                                }
+                        }
                 }
             }
         }
@@ -145,17 +183,11 @@ public declarationBindings context: ref TypeFieldContext, package: ref analysis.
         member.parent == context.ownerSymbol
             and ((declaration.kind == 3 and member.kind == 26) or (declaration.kind == 4 and member.kind == 27))
             -> if {
-                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => memberName
-                members! -> push(memberName)
-                member.typeNode < 0 -> if {
-                    declaration.kind == 3 -> if {
-                        Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return
-                    }
-                    members! -> push(textField(""))
-                } else {
-                    context -> typeAnnotationField(package, member.typeNode) -> when {
+                plans.namedTypeFields() => memberRule
+                memberRule.parts -> each part {
+                    context -> sourceMemberField(package, index!, part) -> when {
                         Ok(field) { members! -> push(field) }
-                        Err(_) { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+                        Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
                     }
                 }
             }

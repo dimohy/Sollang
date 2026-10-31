@@ -26,7 +26,12 @@ internal enum CodegenKeyPart
     FunctionGenerics,
     FunctionEffects,
     FunctionParameters,
-    FunctionAssociatedTypes
+    FunctionAssociatedTypes,
+    MemberName,
+    MemberType,
+    MemberOwnership,
+    MethodParameterCount,
+    MethodParameters
 }
 
 internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<CodegenKeyPart> Parts);
@@ -36,6 +41,20 @@ internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<Code
     "src/Sollang.Compiler/Shared/Policies/CodegenCacheKeyPolicy.cs")]
 internal static class CodegenCacheKeyPolicy
 {
+    // Nested record layouts contribute only their parts, without a domain field.
+    public static CodegenKeyRule NamedTypeFields() => new("named-type-fields",
+        [CodegenKeyPart.MemberName, CodegenKeyPart.MemberType]);
+
+    public static CodegenKeyRule OwnedTypeFields() => new("owned-type-fields",
+        [CodegenKeyPart.MemberType, CodegenKeyPart.MemberOwnership]);
+
+    public static CodegenKeyRule NamedOwnedTypeFields() => new("named-owned-type-fields",
+        [CodegenKeyPart.MemberName, CodegenKeyPart.MemberType, CodegenKeyPart.MemberOwnership]);
+
+    public static CodegenKeyRule TraitMethodFields() => new("trait-method-fields",
+        [CodegenKeyPart.MemberName, CodegenKeyPart.MemberOwnership, CodegenKeyPart.MemberType,
+            CodegenKeyPart.MethodParameterCount, CodegenKeyPart.MethodParameters]);
+
     public static CodegenKeyRule StructInterface() => new("struct",
         [CodegenKeyPart.Identity, CodegenKeyPart.DeclarationContainer,
             CodegenKeyPart.Visibility, CodegenKeyPart.StructFields]);

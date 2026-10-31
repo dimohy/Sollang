@@ -1,8 +1,8 @@
 # Generated from src/Sollang.Compiler/Shared/Policies/CodegenCacheKeyPolicy.cs
-# source-sha256: C6077942595507D00B48D3722FDAE113409C8C2254E39A6B3A56806697423EFB
+# source-sha256: 249B36016159C09E861D29681EECCCA3DE3B2DC985B6875AD43DF47D0AE40760
 namespace sollang.compiler.llvm.codegen_cache_key_policy
 
-public enum KeyPart { Identity, SourceImplementation, AmbientStandardLibrary, TypeUniverse, Emissions, DependencyInterfaces, ModuleInterfaces, ModuleImplementations, WholeInterface, WholeImplementation, DeclarationContainer, Visibility, StructFields, EnumVariants, TraitAssociatedTypes, TraitMethods, FunctionInput, FunctionReturn, FunctionBlock, FunctionStream, FunctionAsync, FunctionGenerics, FunctionEffects, FunctionParameters, FunctionAssociatedTypes }
+public enum KeyPart { Identity, SourceImplementation, AmbientStandardLibrary, TypeUniverse, Emissions, DependencyInterfaces, ModuleInterfaces, ModuleImplementations, WholeInterface, WholeImplementation, DeclarationContainer, Visibility, StructFields, EnumVariants, TraitAssociatedTypes, TraitMethods, FunctionInput, FunctionReturn, FunctionBlock, FunctionStream, FunctionAsync, FunctionGenerics, FunctionEffects, FunctionParameters, FunctionAssociatedTypes, MemberName, MemberType, MemberOwnership, MethodParameterCount, MethodParameters }
 
 public struct KeyRule {
     public domain: Text
@@ -36,6 +36,11 @@ public partIndex part: KeyPart -> Int {
         FunctionEffects { 22 }
         FunctionParameters { 23 }
         FunctionAssociatedTypes { 24 }
+        MemberName { 25 }
+        MemberType { 26 }
+        MemberOwnership { 27 }
+        MethodParameterCount { 28 }
+        MethodParameters { 29 }
     }
 }
 
@@ -78,6 +83,37 @@ public moduleImplementation: -> KeyRule {
     parts! -> push(KeyPart.DependencyInterfaces)
     KeyRule {
         domain: "module-implementation"
+        parts: parts!
+    }
+}
+
+public namedOwnedTypeFields: -> KeyRule {
+    [KeyPart; ~] => parts!
+    parts! -> push(KeyPart.MemberName)
+    parts! -> push(KeyPart.MemberType)
+    parts! -> push(KeyPart.MemberOwnership)
+    KeyRule {
+        domain: "named-owned-type-fields"
+        parts: parts!
+    }
+}
+
+public namedTypeFields: -> KeyRule {
+    [KeyPart; ~] => parts!
+    parts! -> push(KeyPart.MemberName)
+    parts! -> push(KeyPart.MemberType)
+    KeyRule {
+        domain: "named-type-fields"
+        parts: parts!
+    }
+}
+
+public ownedTypeFields: -> KeyRule {
+    [KeyPart; ~] => parts!
+    parts! -> push(KeyPart.MemberType)
+    parts! -> push(KeyPart.MemberOwnership)
+    KeyRule {
+        domain: "owned-type-fields"
         parts: parts!
     }
 }
@@ -158,6 +194,19 @@ public traitInterface: -> KeyRule {
     parts! -> push(KeyPart.TraitMethods)
     KeyRule {
         domain: "trait"
+        parts: parts!
+    }
+}
+
+public traitMethodFields: -> KeyRule {
+    [KeyPart; ~] => parts!
+    parts! -> push(KeyPart.MemberName)
+    parts! -> push(KeyPart.MemberOwnership)
+    parts! -> push(KeyPart.MemberType)
+    parts! -> push(KeyPart.MethodParameterCount)
+    parts! -> push(KeyPart.MethodParameters)
+    KeyRule {
+        domain: "trait-method-fields"
         parts: parts!
     }
 }
