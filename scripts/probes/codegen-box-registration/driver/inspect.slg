@@ -8,6 +8,22 @@ import sollang.compiler.semantic.modules as modules
 import sys.file as file
 import sys.process as process
 
+canonicalizeExcludedSourceText types: mut [typeIds.SemanticType; ~], package: ref analysis.PackageAnalysis -> Unit {
+    types[typeIds.builtinTypeId(types, 24)] => canonical
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!] => type
+        type.kind == 1 and type.module == 1 and type.symbol >= 0
+            -> if {
+                package.symbols[package.ranges[1].symbolStart + type.symbol].nameToken => token
+                package.tokens[package.ranges[1].tokenStart + token].span => span
+                (package.sources[1] -> slice(span.start, span.length)) == "SourceText"
+                    -> if { canonical => types[index!] }
+            }
+        index! + 1 => index!
+    }
+}
+
 inspectBoxes: -> Unit uses Console, File, Process {
     [
     """
@@ -18,9 +34,11 @@ inspectBoxes: -> Unit uses Console, File, Process {
     """
     namespace sys.file
     struct File { value: Int }
+    struct SourceText { }
     """; ~
     ] -> analysis.analyze => excludedPackage
     excludedPackage -> typeIds.resolveAnalyzed => excluded!
+    excluded!.types -> canonicalizeExcludedSourceText(excludedPackage)
     registration.registerNamedBoxes(excludedPackage, excluded!.types) -> when {
         Err(_) { process.exit(7) }
         Ok(boxes) { (boxes.ids -> len) != 4 -> if { process.exit(8) } }
@@ -29,10 +47,13 @@ inspectBoxes: -> Unit uses Console, File, Process {
     arguments[1] -> file.mapText => owner
     [owner,; ~] -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
     package -> typeIds.resolveAnalyzed => semantic!
+    (semantic!.types -> len) => scratch
+    semantic!.types -> push(typeIds.SemanticType { kind: 6, origin: -1, module: -1, symbol: -1, first: typeIds.builtinTypeId(semantic!.types, 8), second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
     registration.registerNamedBoxes(package, semantic!.types) -> when {
         Err(_) { process.exit(1) -> return }
         Ok(boxes) { boxes }
     } => boxes
+    boxes.ids -> each identity { identity == scratch -> if { process.exit(9) } }
     (semantic!.types -> len) => count
     registration.registerNamedBoxes(package, semantic!.types) -> when {
         Err(_) { process.exit(2) }

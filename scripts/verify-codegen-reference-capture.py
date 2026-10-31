@@ -240,7 +240,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog', 'storage-registration'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog', 'storage-registration', 'prepared-registry'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -253,7 +253,8 @@ def main():
                     'registration': 'scripts/probes/codegen-registration-capture',
                     'boxes': 'scripts/probes/codegen-box-registration',
                     'catalog': 'scripts/probes/codegen-registered-universe',
-                    'storage-registration': 'scripts/probes/codegen-storage-registration'}[args.probe]
+                    'storage-registration': 'scripts/probes/codegen-storage-registration',
+                    'prepared-registry': 'scripts/probes/codegen-prepared-registry'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -265,12 +266,15 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog', 'storage-registration': 'cache.storage_registration'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog', 'storage-registration': 'cache.storage_registration', 'prepared-registry': 'cache.prepared_registry'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes', 'prepared-registry') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.reference_result,
              *fixtures, manifest, *sources, *sorted((ROOT / 'stdlib').rglob('*.slg'))]
+    if args.probe == 'prepared-registry':
+        assert args.emitter, 'prepared registry requires the current-source emitter'
+        paths += sorted((probe / 'minimal-stdlib').glob('*.slg'))
     if args.emitter:
         producer_path = args.emitter.parent / 'result.json'
         producer = json.loads(producer_path.read_text(encoding='utf-8'))
@@ -281,7 +285,7 @@ def main():
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
     with VerificationContractLease(list(map(Path, inputs))):
-        result = dict(schemaVersion=1, status='running', completed=0, total=2 if args.emitter else 1,
+        result = dict(schemaVersion=1, status='running', completed=0, total=3 if args.probe == 'prepared-registry' else 2 if args.emitter else 1,
                       cases=[], inputHashes=inputs, claimsGoalComplete=False,
                       scope=f'Actual semantic {args.probe} records bound to Pair declaration; '
                             'compare CSharp registered contract and both executions. Canonical registration selection pending.')
@@ -296,7 +300,43 @@ def main():
 
         try:
             expected = None
-            for backend in (['managed', 'slg'] if args.emitter else ['managed']):
+            for backend in (['prepared'] if args.probe == 'prepared-registry' else ['managed', 'slg'] if args.emitter else ['managed']):
+                if backend == 'prepared':
+                    stdlib = ROOT / 'stdlib'
+                    done = run([args.emitter, 'registry-windows', stdlib, output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures], 'prepared-full')
+                    lines = done.stdout.splitlines()
+                    header, standard_count, storage_count, box_count = lines[0].split(':')
+                    assert header == 'registry' and int(standard_count) > 0 and int(storage_count) == 5
+                    builtin = reference['cases'][0]['observation']['builtinTypeIds']
+                    named = {r['Id'] for group in ('Structs', 'Enums') for r in records[group]
+                             if r['ModuleName'] and not r.get('IsProduct')}
+                    named.update((builtin['Text'], builtin['Int'], builtin['Bool']))
+                    expected_boxes = [r for r in records['Boxes'] if r['ElementType'] in named]
+                    assert int(box_count) == len(expected_boxes), (box_count, len(expected_boxes))
+                    assert len(lines) == 6
+                    storage_ids = set()
+                    roles = ['FixedUInt8Array12', 'FixedUInt8Array16', 'FixedUInt8Array32', 'DynamicUInt8Array', 'DynamicDirectoryEntryArray']
+                    for line, role in zip(lines[1:], roles):
+                        prefix, identity, kind, element, length, size, align = line.split(':')
+                        assert prefix == 'storage' and int(identity) not in storage_ids
+                        storage_ids.add(int(identity))
+                        group = 'StaticArrays' if role.startswith('Fixed') else 'DynamicArrays'
+                        rows = [r for r in records[group] if r['Id'] == builtin[role]]
+                        assert len(rows) == 1
+                        row = rows[0]
+                        assert (int(kind), int(length), int(size), int(align)) == (4 if group == 'StaticArrays' else 3, row.get('FixedLength', -1), row['ElementSize'], row['ElementAlignment'])
+                    result['cases'].append(dict(id='production-full-stdlib-registry', passed=True, stdout=done.stdout))
+                    result['completed'] += 1
+                    lite = run([args.emitter, 'registry-lite-windows', stdlib, output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures], 'prepared-standalone')
+                    assert lite.stdout == 'registry:0:0:0\n', lite.stdout
+                    result['cases'].append(dict(id='standalone-boundary', passed=True, stdout=lite.stdout))
+                    result['completed'] += 1
+                    rejected = execution.run(list(map(str, [args.emitter, 'registry-windows', probe / 'minimal-stdlib', output / 'unused.semantic', output / 'unused-stage.semantic', *fixtures])), output / 'prepared-rejected', timeout=180)
+                    assert rejected.returncode == 1 and not rejected.stderr
+                    assert rejected.stdout == '; sollang compiler error S080: TYPE_REGISTRY_MISSING_STORAGE_ELEMENT\n', rejected.stdout
+                    result['cases'].append(dict(id='missing-required-registry-blocked-before-llvm', passed=True, stdout=rejected.stdout))
+                    result['completed'] += 1
+                    continue
                 executable = output / (backend + '.exe')
                 if backend == 'managed':
                     run([compiler, 'build', *sources, '-o', executable, '--target', 'windows-x64',

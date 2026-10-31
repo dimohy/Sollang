@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.type_registration
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.storage_registration as storage
 import sollang.compiler.semantic.type_name_policy as policy
 import sys.file as file
 
@@ -24,11 +25,10 @@ containsPolicyName table: Text, name: Text -> Bool {
     false
 }
 
-appendRegisteredBox types: mut [typeIds.SemanticType; ~], ids: mut [Int; ~], available: mut [Int; ~], next: ref [Int; ~], claimed: mut [Bool; ~], element: Int -> Unit {
+appendRegisteredBox types: mut [typeIds.SemanticType; ~], ids: mut [Int; ~], available: mut [Int; ~], next: ref [Int; ~], element: Int -> Unit {
     available[element] => identity!
     identity! >= 0 -> if {
         next[identity!] => available[element]
-        true => claimed[identity!]
     } else {
         (types -> len) => identity!
         types -> push(typeIds.SemanticType {
@@ -42,15 +42,15 @@ appendRegisteredBox types: mut [typeIds.SemanticType; ~], ids: mut [Int; ~], ava
 
 # The catalog consumes committed declaration identities, not all scratch kinds.
 # Existing box identities are reused, including alias multiplicity, before new
-# canonical boxes are appended. Other already registered boxes are retained.
+# canonical boxes are appended. Unrelated arena boxes remain outside this
+# named seed list and are selected later by their committed body roots.
 public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typeIds.SemanticType; ~] -> Result<RegisteredBoxes, BoxRegistrationError> {
     (types -> len) => originalCount
     [Int; ~] => available!
     [Int; ~] => next!
-    [Bool; ~] => claimed!
     types -> each _ { available! -> push(-1)
         next! -> push(-1)
-        claimed! -> push(false) }
+    }
     originalCount - 1 => index!
     index! >= 0 -> while {
         types[index!] => type
@@ -75,7 +75,7 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
                 element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.InvalidType) -> return }
                 policy.canRegisterBoxName(true, false, false, false, false)
                     -> if {
-                        types -> appendRegisteredBox(ids!, available!, next!, claimed!, element)
+                        types -> appendRegisteredBox(ids!, available!, next!, element)
                     }
                 cursor! + 1 => start!
             }
@@ -104,8 +104,6 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
             symbol! < range.symbolCount -> while {
                 package.symbols[range.symbolStart + symbol!].kind == kind
                     -> if {
-                        declared![range.symbolStart + symbol!] => element
-                        element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.MissingDeclaration) -> return }
                         [UInt8; ~] => name!
                         modules.appendDeclarationNameBytes(text, identities[source!], range, package.tokens, package.symbols, symbol!, name!)
                         name! -> file.borrowBytes => bytes
@@ -114,7 +112,9 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
                         policy.boxExcludedNominalNames() -> containsPolicyName(qualified) => excludedNominal
                         policy.canRegisterBoxName(false, kind == 3, kind == 4, excludedStructure, excludedNominal)
                             -> if {
-                                types -> appendRegisteredBox(ids!, available!, next!, claimed!, element)
+                                declared![range.symbolStart + symbol!] => element
+                                element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.MissingDeclaration) -> return }
+                                types -> appendRegisteredBox(ids!, available!, next!, element)
                             }
                     }
                 symbol! + 1 => symbol!
@@ -122,12 +122,26 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
             source! + 1 => source!
         }
     }
-    0 => remaining!
-    remaining! < originalCount -> while {
-        types[remaining!].kind == 6 and types[remaining!].status == 0 and not claimed![remaining!]
-            -> if { ids! -> push(remaining!) }
-        remaining! + 1 => remaining!
-    }
     RegisteredBoxes { ids: ids! } => result
     Result<RegisteredBoxes, BoxRegistrationError>.Ok(result)
+}
+
+public enum TypeRegistryError { Storage(storage.StorageRegistrationError), Boxes(BoxRegistrationError) }
+public struct RegisteredTypeSeeds { public storage: [Int; ~], public boxes: [Int; ~] }
+
+public emptyRegisteredTypeSeeds: -> RegisteredTypeSeeds {
+    RegisteredTypeSeeds { storage: [Int; ~], boxes: [Int; ~] }
+}
+
+public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, types: mut [typeIds.SemanticType; ~] -> Result<RegisteredTypeSeeds, TypeRegistryError> {
+    storage.registerPredeclaredStorageTypes(package, types) -> when {
+        Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.Storage(error)) -> return }
+        Ok(value) { value }
+    } => storageTypes
+    registerNamedBoxes(package, types) -> when {
+        Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.Boxes(error)) -> return }
+        Ok(value) { value }
+    } => boxes
+    RegisteredTypeSeeds { storage: storageTypes.ids, boxes: boxes.ids } => seeds
+    Result<RegisteredTypeSeeds, TypeRegistryError>.Ok(seeds)
 }

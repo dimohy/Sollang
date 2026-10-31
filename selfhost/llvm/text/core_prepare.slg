@@ -1716,7 +1716,7 @@ emitBodyScheduleDiagnostics state: ref CoreEmitterState -> Unit uses Console {
 preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
     context -> unboundArrayRepeatDiagnosticCount(state) => repeatCount
     repeatCount > 0 -> if { repeatCount -> return }
-    context -> placementPreparationDiagnosticCount => placementCount
+    context -> preparationIntegrityDiagnosticCount => placementCount
     placementCount > 0 -> if { placementCount -> return }
     context -> asyncArenaFrameDiagnosticCount(state) => arenaCount
     arenaCount > 0 -> if { arenaCount -> return }
@@ -1778,7 +1778,29 @@ unboundArrayRepeatDiagnosticCount context: ref emitterContext.EmitContext, state
 
 # Checked source diagnostics have already won before this prepared-emitter
 # gate is called. A failed plan blocks LLVM output as a compiler integrity error.
-placementPreparationDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
+preparationIntegrityDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
+    context.typeRegistration -> when {
+        Ok(_) { }
+        Err(error) {
+            error -> when {
+                Storage(failure) {
+                    failure -> when {
+                        InvalidDefinition { "; sollang compiler error S080: TYPE_REGISTRY_INVALID_STORAGE_DEFINITION" -> println }
+                        MissingElement { "; sollang compiler error S080: TYPE_REGISTRY_MISSING_STORAGE_ELEMENT" -> println }
+                        InvalidType { "; sollang compiler error S080: TYPE_REGISTRY_INVALID_STORAGE_TYPE" -> println }
+                    }
+                }
+                Boxes(failure) {
+                    failure -> when {
+                        PrimitiveName { "; sollang compiler error S080: TYPE_REGISTRY_INVALID_PRIMITIVE_BOX" -> println }
+                        MissingDeclaration { "; sollang compiler error S080: TYPE_REGISTRY_MISSING_BOX_DECLARATION" -> println }
+                        InvalidType { "; sollang compiler error S080: TYPE_REGISTRY_INVALID_BOX_TYPE" -> println }
+                    }
+                }
+            }
+            1 -> return
+        }
+    }
     context.storagePlacement -> when {
         Ok(_) { 0 }
         Err(failure) {

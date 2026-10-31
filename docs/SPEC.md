@@ -1084,6 +1084,17 @@ self-host entry and ordinary-function paths consume the same centralized base,
 contextual, and control-shape policies and seal types and operands in later
 passes. They must not use provisional type-table membership to decide whether
 to create a value or independently maintain AST-to-Typed-IR kind tables.
+S080 is a blocking compiler-integrity diagnostic when a standard-library
+compilation cannot prepare its required type-registration seeds. The same
+compiled definitions supply the managed and self-hosted compilers' predefined
+storage shapes and named box eligibility. Preparation preserves committed
+identities, retains the complete registration result in the emitter context,
+and rejects a failed result before target headers or LLVM output. Unrelated
+scratch boxes are not named registration seeds. Standalone prepared APIs with
+no standard-library source range have no complete-registry or cache-universe
+claim; their explicit lightweight boundary does not authorize suppressing a
+registration failure in a standard-library compilation.
+
 S059 is a blocking compiler-integrity diagnostic when a binding has a binary
 initializer AST but no corresponding binary Typed IR producer. Consecutive
 binary AST nodes are transparent wrappers only when their source spans are

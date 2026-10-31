@@ -41,10 +41,11 @@ def main():
     for source in [manifest, *sources]:
         assert semantic['inputHashes'][str(source.resolve())] == sha(source)
     wrapper = ROOT / 'scripts/probes/codegen-unit-stream/emitter.slg'
+    support = [wrapper.with_name('registry_context.slg'), wrapper.with_name('registry_root.slg')]
     llvm = ROOT / '.tools/llvm-22.1.8'
     assert (llvm / 'bin/clang.exe').is_file() and (llvm / 'bin/llvm-as.exe').is_file()
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.semantic_result,
-             args.source_comparison, reference_path, manifest, wrapper, *sources,
+             args.source_comparison, reference_path, manifest, wrapper, *support, *sources,
              *sorted((ROOT / 'stdlib').rglob('*.slg'))]
     inputs = {str(path.resolve()): sha(path) for path in paths}
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
@@ -57,7 +58,7 @@ def main():
                                          lambda: all(sha(p) == h for p, h in inputs.items()), sha)
         error = None
         try:
-            done = execution.run([str(compiler), 'build', str(wrapper), *map(str, sources),
+            done = execution.run([str(compiler), 'build', str(wrapper), *map(str, support), *map(str, sources),
                                   '-o', str(output / 'emitter.exe'), '--target', 'windows-x64',
                                   '--llvm', str(llvm), '--jobs', '24', '-O2'],
                                  output / 'build', timeout=budget['timeoutSeconds'])

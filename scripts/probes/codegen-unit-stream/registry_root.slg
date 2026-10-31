@@ -1,0 +1,27 @@
+namespace sollang.compiler.llvm.source_root
+
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.llvm.text as llvm
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+public inspectRegistryRoot root: move path.Path, explicitStart: UIntSize, standalone: Bool -> Int uses Console, File, Process {
+    explicitStart -> collectExplicitPaths => explicitPaths
+    standalone -> if {
+        explicitPaths[0] -> file.mapText => owner
+        owner -> slice(0, owner -> len) => source
+        [source,; ~] -> llvm.inspectPreparedRegistry(0) -> return
+    }
+    root -> sourceRoot.discoverDirect => paths
+    (paths -> len) == 0 -> if { 6 -> return }
+    [Text; ~] => mappedPaths!
+    paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
+        Err(_) { 7 -> return }
+        Ok(value) { value }
+    } => batch
+    [Text; ~] => sources!
+    batch.owners -> each owner { owner -> slice(0, owner -> len) => source
+        sources! -> push(source) }
+    sources! -> llvm.inspectPreparedRegistry(batch.standardLibrarySourceCount)
+}

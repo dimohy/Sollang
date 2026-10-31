@@ -3,6 +3,7 @@ namespace sollang.compiler.llvm.text
 import sollang.compiler.llvm.scoped_declarations as scopedDeclarations
 
 import sollang.compiler.semantic.storage_placement_package as storagePackage
+import sollang.compiler.semantic.type_registration as typeRegistration
 
 import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
 import sollang.compiler.semantic.mutable_binding_warnings as mutableBindingWarnings
@@ -174,6 +175,15 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     request.expectedPathStyle => expectedPathStyle
     resolvedCallContext.prepared => prepared
     resolvedCallContext.types => recursiveTypes!
+    # Full CLI compilations require the same predeclared storage and named
+    # boxes as the managed definition table. Standalone prepared API inputs
+    # have no standard-library registry contract or cache-universe claim.
+    prepared.standardLibrarySourceCount > 0 -> if {
+        typeRegistration.registerCompilationTypeSeeds(prepared.package, recursiveTypes!.types)
+    } else {
+        typeRegistration.emptyRegisteredTypeSeeds() => empty
+        Result<typeRegistration.RegisteredTypeSeeds, typeRegistration.TypeRegistryError>.Ok(empty)
+    } => typeRegistry
     prepared -> semanticDiagnostics.activeInterpolationBodies(recursiveTypes!) => activeInterpolationBodyByNode
     prepared -> semanticDiagnostics.firstInferredInputConflict(recursiveTypes!) => inferredInputConflict
     signatureTypeDiagnostic => resolvedSignatureDiagnostic!
@@ -623,6 +633,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
         symbolNames: symbolNames
         genericNames: genericNames
         storagePlacement: storagePlacement
+        typeRegistration: typeRegistry
         globalFunctionAliasDiagnostic: calls.noGlobalFunctionAliasDiagnostic()
         initializerDiagnostics: [emitterContext.InitializerDiagnostic; ~]
         missingEnumVariants: missingEnumVariants

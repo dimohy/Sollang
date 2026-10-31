@@ -1,0 +1,36 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+inspectPreparedRegistryContext context: ref emitterContext.EmitContext, standardCount: Int -> Int uses Console {
+    context -> preparationIntegrityDiagnosticCount => failures
+    failures > 0 -> if { 1 -> return }
+    (context.types -> len) => count
+    (context.typeSizes -> len) != count or (context.typeAligns -> len) != count or (context.typeLayoutStatuses -> len) != count
+        -> if { 2 -> return }
+    context.typeRegistration -> when {
+        Err(_) { 3 -> return }
+        Ok(seeds) {
+            "registry:$standardCount:$(seeds.storage -> len):$(seeds.boxes -> len)" -> println
+            seeds.storage -> each identity {
+                identity < 0 or identity >= count or context.typeLayoutStatuses[identity] != 0
+                    -> if { 4 -> return }
+                context.types[identity] => type
+                "storage:$identity:$(type.kind):$(type.first):$(type.length):$(context.typeSizes[type.first]):$(context.typeAligns[type.first])" -> println
+            }
+            seeds.boxes -> each identity {
+                identity < 0 or identity >= count or context.types[identity].kind != 6
+                    -> if { 5 -> return }
+            }
+        }
+    }
+    0
+}
+
+public inspectPreparedRegistry sources: move [Text; ~], standardCount: Int -> Int uses Console {
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepare => context
+    context -> inspectPreparedRegistryContext(standardCount)
+}
