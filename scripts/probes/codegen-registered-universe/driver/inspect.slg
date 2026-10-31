@@ -4,6 +4,7 @@ import sollang.compiler.llvm.text as llvm
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_registration as registration
+import sollang.compiler.semantic.storage_registration as storageRegistration
 import sollang.compiler.semantic.modules as modules
 import sys.file as file
 import sys.process as process
@@ -27,10 +28,15 @@ inspectCatalog: -> Unit uses Console, File, Process {
                     or type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6 or type.kind == 8 or type.kind == 9 or type.kind == 10
                     or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1))
                     -> if {
-                        # CSharp's legacy DynamicIntArray is an implicit builtin,
-                        # not an entry in TypeDefinitionTable.DynamicArrays.
-                        not (type.kind == 3 and type.first == typeIds.builtinTypeId(semantic!.types, 2))
-                            -> if { registered! -> push(identity!) }
+                        true => include!
+                        type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6
+                            -> if {
+                                semantic!.types -> storageRegistration.sourceStorageRequiresMetadata(identity!) -> when {
+                                    Err(_) { process.exit(18) }
+                                    Ok(required) { required => include! }
+                                }
+                            }
+                        include! -> if { registered! -> push(identity!) }
                     }
             }
         identity! + 1 => identity!

@@ -1,0 +1,125 @@
+namespace sollang.compiler.semantic.storage_registration
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_name_policy as policy
+import sys.file as file
+
+public enum StorageRegistrationError { InvalidDefinition, MissingElement, InvalidType }
+public struct RegisteredStorageTypes { public ids: [Int; ~] }
+struct StorageDefinition { kind: Int, element: Int, length: Int }
+
+storageElement package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], types: ref [typeIds.SemanticType; ~], name: Text -> Int {
+    name -> typeIds.builtinSymbolByName => builtin
+    builtin >= 0 -> if { types -> typeIds.builtinTypeId(builtin) -> return }
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!] => type
+        (type.kind == 1 or type.kind == 9) and type.status == 0 and not type.containsParameter and type.module >= 0 and type.module < (package.ranges -> len) and type.symbol >= 0
+            -> if {
+                package.ranges[type.module] => range
+                type.symbol < range.symbolCount -> if {
+                    [UInt8; ~] => bytes!
+                    package.sources[type.module] -> slice(0, package.sources[type.module] -> len) => source
+                    modules.appendDeclarationNameBytes(source, identities[type.module], range, package.tokens, package.symbols, type.symbol, bytes!)
+                    bytes! -> file.borrowBytes => buffer
+                    (buffer -> slice(0, buffer -> len)) == name -> if { index! -> return }
+                }
+            }
+        index! + 1 => index!
+    }
+    -1
+}
+
+registerStorageShape types: mut [typeIds.SemanticType; ~], kind: Int, element: Int, length: Int -> Int {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!] => type
+        type.kind == kind and type.first == element and type.length == length and type.status == 0 and not type.containsParameter
+            -> if { index! -> return }
+        index! + 1 => index!
+    }
+    (types -> len) => identity
+    types -> push(typeIds.SemanticType { kind: kind, origin: -1, module: -1, symbol: -1, first: element, second: -1, length: length, lengthHash: 0, containsParameter: false, status: 0 })
+    identity
+}
+
+collectStorageDefinitions package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], types: ref [typeIds.SemanticType; ~], schema: Text, kind: Int, definitions: mut [StorageDefinition; ~] -> Result<Unit, StorageRegistrationError> {
+    (schema -> len) == 0 -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
+    (schema -> byte((schema -> len) - 1)) == '|' -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
+    UIntSize(0) => start!
+    start! < (schema -> len) -> while {
+        start! => end!
+        end! < (schema -> len) and (schema -> byte(end!)) != '|'
+            -> while { end! + 1 => end! }
+        start! => colon!
+        colon! < end! and (schema -> byte(colon!)) != ':'
+            -> while { colon! + 1 => colon! }
+        colon! == start! or colon! + 1 >= end!
+            -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
+        colon! + 1 => elementStart
+        end! => elementEnd!
+        -1 => length!
+        kind == 4 -> if {
+            elementStart => elementEnd!
+            elementEnd! < end! and (schema -> byte(elementEnd!)) != ':'
+                -> while { elementEnd! + 1 => elementEnd! }
+            elementEnd! == elementStart or elementEnd! + 1 >= end!
+                -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
+            0 => length!
+            elementEnd! + 1 => digitIndex!
+            digitIndex! < end! -> while {
+                Int(schema -> byte(digitIndex!)) - 48 => digit
+                digit < 0 or digit > 9 or length! > (2147483647 - digit) / 10
+                    -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
+                length! * 10 + digit => length!
+                digitIndex! + 1 => digitIndex!
+            }
+        }
+        schema -> slice(elementStart, elementEnd! - elementStart) => name
+        package -> storageElement(identities, types, name) => element
+        element < 0 -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.MissingElement) -> return }
+        definitions -> push(StorageDefinition { kind: kind, element: element, length: length! })
+        end! + 1 => start!
+    }
+    Result<Unit, StorageRegistrationError>.Ok
+}
+
+public registerPredeclaredStorageTypes package: ref analysis.PackageAnalysis, types: mut [typeIds.SemanticType; ~] -> Result<RegisteredStorageTypes, StorageRegistrationError> {
+    package -> modules.identitiesAnalyzed => identities
+    [StorageDefinition; ~] => definitions!
+    package -> collectStorageDefinitions(identities, types, policy.predeclaredFixedArrays(), 4, definitions!) -> when {
+        Err(error) { Result<RegisteredStorageTypes, StorageRegistrationError>.Err(error) -> return }
+        Ok {}
+    }
+    package -> collectStorageDefinitions(identities, types, policy.predeclaredDynamicArrays(), 3, definitions!) -> when {
+        Err(error) { Result<RegisteredStorageTypes, StorageRegistrationError>.Err(error) -> return }
+        Ok {}
+    }
+    [Int; ~] => ids!
+    definitions! -> each definition {
+        types -> registerStorageShape(definition.kind, definition.element, definition.length) => identity
+        ids! -> push(identity)
+    }
+    RegisteredStorageTypes { ids: ids! } => result
+    Result<RegisteredStorageTypes, StorageRegistrationError>.Ok(result)
+}
+
+# Source annotations reuse the implicit legacy Int containers. An explicit
+# type-table insertion remains distinct from this source-resolution decision.
+public sourceStorageRequiresMetadata types: ref [typeIds.SemanticType; ~], typeId: Int -> Result<Bool, StorageRegistrationError> {
+    typeId < 0 or typeId >= (types -> len) -> if { Result<Bool, StorageRegistrationError>.Err(StorageRegistrationError.InvalidType) -> return }
+    types[typeId] => type
+    type.status != 0 or type.containsParameter or type.first < 0 or type.first >= (types -> len)
+        -> if { Result<Bool, StorageRegistrationError>.Err(StorageRegistrationError.InvalidType) -> return }
+    types -> typeIds.builtinTypeId(2) => integer
+    type.kind == 3 -> if { Result<Bool, StorageRegistrationError>.Ok(not policy.sourceDynamicArrayIsImplicit(type.first == integer)) -> return }
+    type.kind == 5 -> if {
+        type.second < 0 or type.second >= (types -> len)
+            -> if { Result<Bool, StorageRegistrationError>.Err(StorageRegistrationError.InvalidType) -> return }
+        Result<Bool, StorageRegistrationError>.Ok(not policy.sourceDictionaryIsImplicit(type.first == integer, type.second == integer)) -> return
+    }
+    type.kind == 4 or type.kind == 6 -> if { Result<Bool, StorageRegistrationError>.Ok(true) -> return }
+    Result<Bool, StorageRegistrationError>.Err(StorageRegistrationError.InvalidType)
+}

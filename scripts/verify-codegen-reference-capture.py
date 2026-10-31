@@ -190,13 +190,57 @@ def verify_catalog(lines, records, builtin):
     assert Counter(observed) == Counter(expected), (observed, expected)
 
 
+def verify_storage_registration(lines, records, builtin, pair):
+    identities = {-1: -1}
+    roles = {}
+    eligibility = []
+    pending = None
+    for line in lines:
+        if line.startswith('builtin:'):
+            _, name, identity = line.split(':')
+            identities[int(identity)] = builtin[name]
+        elif line.startswith('declared:'):
+            _, name, identity = line.split(':')
+            identities[int(identity)] = pair if name == 'Pair' else builtin[name]
+        elif line.startswith('registration:'):
+            assert pending is None
+            _, pending, identity = line.split(':')
+            assert pending not in roles
+            identities[int(identity)] = builtin[pending]
+        elif line.startswith('eligibility:'):
+            _, kind, first, second, required = line.split(':')
+            eligibility.append((int(kind), identities[int(first)], identities[int(second)], required == 'true'))
+        else:
+            assert pending is not None
+            prefix, identity, element, *numbers = line.split(':')
+            group = 'StaticArrays' if prefix == 'static-array' else 'DynamicArrays'
+            attributes = ['ElementSize', 'ElementAlignment'] + (['FixedLength'] if group == 'StaticArrays' else [])
+            rows = [r for r in records[group] if r['Id'] == builtin[pending]]
+            assert len(rows) == 1
+            target = rows[0]
+            observed = [identities[int(identity)], identities[int(element)], *map(int, numbers)]
+            expected = [target['Id'], target['ElementType'], *(target[a] for a in attributes)]
+            assert observed == expected, (pending, observed, expected)
+            roles[pending] = observed
+            pending = None
+    assert pending is None and set(roles) == {'FixedUInt8Array12', 'FixedUInt8Array16', 'FixedUInt8Array32', 'DynamicUInt8Array', 'DynamicDirectoryEntryArray'}
+    wanted = []
+    for element in (builtin['UInt8'], builtin['Int'], pair):
+        present = any(r['ElementType'] == element for r in records['DynamicArrays'])
+        wanted.append((3, element, -1, present))
+    for value in (builtin['Int'], builtin['Bool']):
+        present = any(r['KeyType'] == builtin['Int'] and r['ValueType'] == value for r in records['Dictionaries'])
+        wanted.append((5, builtin['Int'], value, present))
+    assert Counter(eligibility) == Counter(wanted), (eligibility, wanted)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic', 'finaltypes', 'registration', 'boxes', 'catalog', 'storage-registration'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -208,7 +252,8 @@ def main():
                     'finaltypes': 'scripts/probes/codegen-final-type-capture',
                     'registration': 'scripts/probes/codegen-registration-capture',
                     'boxes': 'scripts/probes/codegen-box-registration',
-                    'catalog': 'scripts/probes/codegen-registered-universe'}[args.probe]
+                    'catalog': 'scripts/probes/codegen-registered-universe',
+                    'storage-registration': 'scripts/probes/codegen-storage-registration'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -220,7 +265,7 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic', 'finaltypes': 'cache.finaltypes', 'registration': 'cache.registration', 'boxes': 'cache.boxregistration', 'catalog': 'cache.catalog', 'storage-registration': 'cache.storage_registration'}[args.probe] + ('.Used' if args.probe in ('registration', 'boxes') else '.Wide' if args.probe == 'finaltypes' else '.Pair')
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
@@ -271,6 +316,8 @@ def main():
                     assert lines[0] == lines[1], lines
                 elif args.probe == 'nominal':
                     verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
+                elif args.probe == 'storage-registration':
+                    verify_storage_registration(lines, records, reference['cases'][0]['observation']['builtinTypeIds'], pair[0])
                 elif args.probe == 'catalog':
                     verify_catalog(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
                 elif args.probe == 'boxes':

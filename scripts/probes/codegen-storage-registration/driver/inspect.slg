@@ -1,0 +1,141 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.storage_registration as registration
+import sollang.compiler.semantic.type_name_policy as policy
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+inspectStorage: -> Unit uses Console, File, Process {
+    ["main { }",; ~] -> analysis.analyze => missingPackage
+    missingPackage -> typeIds.resolveAnalyzed => missing!
+    (missing!.types -> len) => originalCount
+    registration.registerPredeclaredStorageTypes(missingPackage, missing!.types) -> when {
+        Err(_) { }
+        Ok(_) { process.exit(1) }
+    }
+    (missing!.types -> len) != originalCount -> if { process.exit(2) }
+    process.arguments() => arguments
+    arguments[1] -> file.mapText => owner
+    "stdlib/sys/path.slg" -> file.mapText => pathSource
+    "stdlib/sys/directory/kind.slg" -> file.mapText => kindSource
+    "stdlib/sys/directory.slg" -> file.mapText => directorySource
+    [owner, pathSource, kindSource, directorySource; ~] -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> typeIds.resolveAnalyzed => semantic!
+    [-1, -1] => existing!
+    semantic!.references -> each reference {
+        reference.sourceModule == 0 and reference.status == 0
+            -> if {
+                semantic!.types[reference.typeId] => type
+                type.first == typeIds.builtinTypeId(semantic!.types, 8)
+                    -> if {
+                        type.kind == 4 and type.length == 12 -> if { reference.typeId => existing![0] }
+                        type.kind == 3 -> if { reference.typeId => existing![1] }
+                    }
+            }
+    }
+    existing![0] < 0 or existing![1] < 0 -> if { process.exit(10) }
+    registration.registerPredeclaredStorageTypes(package, semantic!.types) -> when {
+        Err(_) { process.exit(3) -> return }
+        Ok(value) { value }
+    } => registered
+    existing! -> each identity {
+        0 => matches!
+        registered.ids -> each selected { selected == identity -> if { matches! + 1 => matches! } }
+        matches! != 1 -> if { process.exit(11) }
+    }
+    (semantic!.types -> len) => registeredCount
+    registration.registerPredeclaredStorageTypes(package, semantic!.types) -> when {
+        Err(_) { process.exit(4) }
+        Ok(repeated) {
+            (semantic!.types -> len) != registeredCount or (repeated.ids -> len) != (registered.ids -> len)
+                -> if { process.exit(5) }
+            0 => index!
+            index! < (registered.ids -> len) -> while {
+                registered.ids[index!] != repeated.ids[index!]
+                    -> if { process.exit(6) }
+                index! + 1 => index!
+            }
+        }
+    }
+    [typeIds.SemanticType; ~] => layoutTypes!
+    semantic!.types -> each type { layoutTypes! -> push(type) }
+    [typeIds.NominalField; ~] => layoutFields!
+    semantic!.fields -> each field { layoutFields! -> push(field) }
+    llvm.TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: 64 } -> llvm.layoutsFor => layouts!
+    [Int; ~] => referenceIndex!
+    package.nodes -> each _ { referenceIndex! -> push(-1) }
+    0 => reference!
+    semantic!.references -> each current {
+        current.typeAst >= 0 -> if { reference! => referenceIndex![package.ranges[current.sourceModule].astStart + current.typeAst] }
+        reference! + 1 => reference!
+    }
+    typeIds.enumPayloadEdges(semantic!.types, semantic!.references, package.ranges, package.symbols, referenceIndex!) => edges
+    typeIds.classifyWithPayloads(semantic!.types, semantic!.fields, edges) => traits!
+    semantic!.types -> llvm.refineDeclaredTypeLayouts(semantic!.fields, semantic!.references, package.ranges, package.symbols, package.nodes, referenceIndex!, layouts!.sizes, layouts!.aligns, layouts!.statuses, traits!)
+    "builtin:UInt8:$(typeIds.builtinTypeId(semantic!.types, 8))" -> println
+    "builtin:Int:$(typeIds.builtinTypeId(semantic!.types, 2))" -> println
+    "builtin:Bool:$(typeIds.builtinTypeId(semantic!.types, 23))" -> println
+    0 => pair!
+    semantic!.types -> each type {
+        type.kind == 1 and type.module == 0 and type.symbol >= 0 and type.origin == 0
+            -> if {
+                "declared:Pair:$(pair!)" -> println
+            }
+        type.kind == 1 and type.module == 3 and type.symbol >= 0
+            -> if {
+                package.symbols[package.ranges[3].symbolStart + type.symbol].nameToken => token
+                package.tokens[package.ranges[3].tokenStart + token].span => span
+                (package.sources[3] -> slice(span.start, span.length)) == "Entry"
+                    -> if {
+                        "declared:DirectoryEntry:$(pair!)" -> println
+                    }
+            }
+        pair! + 1 => pair!
+    }
+    0 => ordinal!
+    [policy.predeclaredFixedArrays(), policy.predeclaredDynamicArrays()] -> each schema {
+        UIntSize(0) => start!
+        start! < (schema -> len) -> while {
+            start! => end!
+            end! < (schema -> len) and (schema -> byte(end!)) != '|'
+                -> while { end! + 1 => end! }
+            start! => colon!
+            colon! < end! and (schema -> byte(colon!)) != ':'
+                -> while { colon! + 1 => colon! }
+            schema -> slice(start!, colon! - start!) => role
+            registered.ids[ordinal!] => identity
+            keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+            records! -> llvm.appendStorageTypeUniverseRecord(semantic!.types, layouts!, identity) -> when {
+                Err(_) { process.exit(7) }
+                Ok {}
+            }
+            "registration:$role:$identity" -> println
+            records!.fields -> each field {
+                field.bytes -> file.borrowBytes => buffer
+                buffer -> slice(0, buffer -> len) -> println
+            }
+            ordinal! + 1 => ordinal!
+            end! + 1 => start!
+        }
+    }
+    ordinal! != (registered.ids -> len) -> if { process.exit(8) }
+    semantic!.references -> each reference {
+        reference.sourceModule == 0 and reference.status == 0
+            -> if {
+                semantic!.types[reference.typeId] => type
+                type.kind == 3 or type.kind == 5 -> if {
+                    semantic!.types -> registration.sourceStorageRequiresMetadata(reference.typeId) -> when {
+                        Err(_) { process.exit(9) }
+                        Ok(required) {
+                            "eligibility:$(type.kind):$(type.first):$(type.second):$required" -> println
+                        }
+                    }
+                }
+            }
+    }
+}
+main { inspectStorage() }

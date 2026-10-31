@@ -22,6 +22,14 @@ internal static class TypeNamePolicy
     public static string OptionVariantNames() => "None|Some";
     public static string ResultVariantNames() => "Ok|Err";
 
+    public static string PredeclaredFixedArrays() =>
+        "FixedUInt8Array12:UInt8:12|FixedUInt8Array16:UInt8:16|FixedUInt8Array32:UInt8:32";
+    public static string PredeclaredDynamicArrays() =>
+        "DynamicUInt8Array:UInt8|DynamicDirectoryEntryArray:sys.directory.Entry";
+    public static bool SourceDynamicArrayIsImplicit(bool builtinInt) => builtinInt;
+    public static bool SourceDictionaryIsImplicit(bool builtinIntKey, bool builtinIntValue) =>
+        builtinIntKey && builtinIntValue;
+
     public static string RangeDefinition() => "Range|start:Int|endInclusive:Int";
 
     public static string AffineStorageFieldName() => "handle";

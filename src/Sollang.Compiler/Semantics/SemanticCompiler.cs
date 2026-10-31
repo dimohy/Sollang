@@ -9009,7 +9009,7 @@ internal sealed partial class SemanticCompiler
         {
             return _types.GetOrAddBoundedDictionary(keyType, valueType, boundedCapacity);
         }
-        return keyType == BoundType.Int && valueType == BoundType.Int
+        return Shared.TypeNamePolicy.SourceDictionaryIsImplicit(keyType == BoundType.Int, valueType == BoundType.Int)
             ? BoundType.IntDictionary
             : _types.GetOrAddDictionary(keyType, valueType);
     }
@@ -15438,28 +15438,12 @@ internal sealed partial class SemanticCompiler
         }
 
         var boxes = new Dictionary<TypeId, BoundBoxDefinition>();
-        var predeclaredFixedStaticArrays = new Dictionary<TypeId, (TypeId ElementType, int Length)>
-        {
-            [TypeId.FixedUInt8Array12] = (TypeId.UInt8, 12),
-            [TypeId.FixedUInt8Array16] = (TypeId.UInt8, 16),
-            [TypeId.FixedUInt8Array32] = (TypeId.UInt8, 32)
-        };
-        var predeclaredFixedStaticArraysByShape = new Dictionary<(TypeId ElementType, int Length), TypeId>
-        {
-            [(TypeId.UInt8, 12)] = TypeId.FixedUInt8Array12,
-            [(TypeId.UInt8, 16)] = TypeId.FixedUInt8Array16,
-            [(TypeId.UInt8, 32)] = TypeId.FixedUInt8Array32
-        };
-        var predeclaredDynamicArrays = new Dictionary<TypeId, TypeId>
-        {
-            [TypeId.DynamicUInt8Array] = TypeId.UInt8,
-            [TypeId.DynamicDirectoryEntryArray] = TypeId.DirectoryEntry
-        };
-        var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>
-        {
-            [TypeId.UInt8] = TypeId.DynamicUInt8Array,
-            [TypeId.DirectoryEntry] = TypeId.DynamicDirectoryEntryArray
-        };
+        var predeclaredFixedStaticArrays = StorageTypeDefinitions.FixedArrays(names);
+        var predeclaredFixedStaticArraysByShape = predeclaredFixedStaticArrays
+            .ToDictionary(item => item.Value, item => item.Key);
+        var predeclaredDynamicArrays = StorageTypeDefinitions.DynamicArrays(names);
+        var predeclaredDynamicArraysByElement = predeclaredDynamicArrays
+            .ToDictionary(item => item.Value, item => item.Key);
         var predeclaredBitSets = new Dictionary<TypeId, int>();
         var predeclaredBitSetsByCount = new Dictionary<int, TypeId>();
         var predeclaredBoundedArrays = new Dictionary<TypeId, (TypeId ElementType, int Capacity)>();
@@ -15829,7 +15813,7 @@ internal sealed partial class SemanticCompiler
             {
                 return false;
             }
-            if (elementType == BoundType.Int)
+            if (Shared.TypeNamePolicy.SourceDynamicArrayIsImplicit(elementType == BoundType.Int))
             {
                 type = BoundType.DynamicIntArray;
                 return true;
@@ -15925,7 +15909,7 @@ internal sealed partial class SemanticCompiler
             var key = ResolveDefinitionType(typeName[1..separator].Trim(), line, column);
             var value = ResolveDefinitionType(typeName[(separator + 1)..^1].Trim(), line, column);
             _declaredDictionaryKeyChecks.Add((key, line, column, _currentModuleName));
-            if (key == TypeId.Int && value == TypeId.Int)
+            if (Shared.TypeNamePolicy.SourceDictionaryIsImplicit(key == TypeId.Int, value == TypeId.Int))
                 type = TypeId.IntDictionary;
             else if (!predeclaredDictionariesByShape.TryGetValue((key, value), out type))
             {
@@ -16191,7 +16175,7 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(line, column, "growable array elements must have a supported inline value layout");
             }
-            return elementType == BoundType.Int
+            return Shared.TypeNamePolicy.SourceDynamicArrayIsImplicit(elementType == BoundType.Int)
                 ? BoundType.DynamicIntArray
                 : _types.GetOrAddDynamicArray(elementType);
         }
@@ -16269,7 +16253,7 @@ internal sealed partial class SemanticCompiler
                     }
                     return _types.GetOrAddBoundedDictionary(keyType, valueType, capacity);
                 }
-                return keyType == BoundType.Int && valueType == BoundType.Int
+                return Shared.TypeNamePolicy.SourceDictionaryIsImplicit(keyType == BoundType.Int, valueType == BoundType.Int)
                     ? BoundType.IntDictionary
                     : _types.GetOrAddDictionary(keyType, valueType);
             }
