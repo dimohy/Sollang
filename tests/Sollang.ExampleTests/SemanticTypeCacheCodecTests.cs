@@ -69,6 +69,28 @@ internal static class SemanticTypeCacheCodecTests
             if (rejected) passed++;
             rows.Add(new { id = "invalid/" + identity, identity, passed = rejected });
         }
+        var firstTable = CreateTable();
+        var secondTable = CreateTable();
+        var bitSet = tableType.GetMethod("GetOrAddBitSet")!;
+        var array = tableType.GetMethod("GetOrAddDynamicArray")!;
+        var firstType = bitSet.Invoke(firstTable, [257])!;
+        var unrelatedType = bitSet.Invoke(secondTable, [263])!;
+        var secondType = bitSet.Invoke(secondTable, [257])!;
+        foreach (var nested in new[] { false, true })
+        {
+            var left = nested ? array.Invoke(firstTable, [firstType])! : firstType;
+            var right = nested ? array.Invoke(secondTable, [secondType])! : secondType;
+            var leftIdentity = (string)identityType.GetMethod("Type")!.Invoke(null, [firstTable, left])!;
+            var rightIdentity = (string)identityType.GetMethod("Type")!.Invoke(null, [secondTable, right])!;
+            var stable = !left.Equals(right) && leftIdentity == rightIdentity;
+            if (stable) passed++;
+            rows.Add(new { id = "intern-order/" + (nested ? "nested-array" : "direct"), passed = stable, leftIdentity, rightIdentity });
+        }
+        var unrelatedIdentity = (string)identityType.GetMethod("Type")!.Invoke(null, [secondTable, unrelatedType])!;
+        var targetIdentity = (string)identityType.GetMethod("Type")!.Invoke(null, [secondTable, secondType])!;
+        var distinctCapacity = unrelatedIdentity != targetIdentity;
+        if (distinctCapacity) passed++;
+        rows.Add(new { id = "complete-capacity-identity", passed = distinctCapacity, unrelatedIdentity, targetIdentity });
         var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalSemanticCache", true)!;
         var checkedCount = cacheType.GetMethod("CheckedCount", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Semantic cache count validator contract changed.");
