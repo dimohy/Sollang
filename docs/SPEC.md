@@ -6245,6 +6245,11 @@ Current backend:
   sequence. Private bodies and comments do not enter these public interface
   fields. Live declaration discovery and complete module-interface hashing
   remain required independently of layout generation.
+  Eager function-signature type binding uses one compiled C# policy for return
+  annotations, explicit ownership annotations, callback results and parallel-role
+  names. Generated SLG consumes those decisions. Abstract metadata signature
+  identities retain generic parameter roles separately from concrete runtime
+  types; selecting such identities does not supply metadata names or layouts.
   Parser builtin type-name classification uses one compiled C# catalog shared
   with parser source generation and the generated SLG policy. This classification
   preserves parser spelling and qualification decisions; it is distinct from

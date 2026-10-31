@@ -6,6 +6,7 @@ import sollang.compiler.semantic.diagnostics as diagnostics
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.reference_type_ids as nominal
 import sollang.compiler.semantic.reference_synthetic_type_ids as synthetic
+import sollang.compiler.semantic.function_type_binding_policy as bindingPolicy
 import sys.file as file
 import syntax.generated.slg as grammar
 
@@ -185,6 +186,31 @@ intrinsicDeclaration prepared: ref semanticContext.SemanticSnapshot, module: Int
     false
 }
 
+parallelRole moduleName: Text, name: Text -> Bool {
+    bindingPolicy.parallelRoleNames() => table
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    cursor! <= (table -> len) -> while {
+        cursor! == (table -> len) or (table -> byte(cursor!)) == '|'
+            -> if {
+                cursor! - start! == (moduleName -> len) + 1 + (name -> len)
+                    and (table -> slice(start!, moduleName -> len)) == moduleName
+                    and (table -> byte(start! + (moduleName -> len))) == '.'
+                    and (table -> slice(start! + (moduleName -> len) + 1, name -> len)) == name
+                    -> if { true -> return }
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    false
+}
+
+compositeTemplate prepared: ref semanticContext.SemanticSnapshot, typeId: Int -> Bool {
+    typeId < 0 -> if { false -> return }
+    prepared.semantic.types[typeId] => type
+    type.containsParameter and type.kind != 1
+}
+
 appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: ref [Int; ~], roots: mut [Int; ~] -> Unit {
     prepared.package.ranges -> each range {
         0 => functionIndex!
@@ -232,14 +258,15 @@ appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: 
                         prepared.package.sources[range.sourceModule] -> slice(module.pathStart, module.pathLength) => moduleName
                         prepared.package.tokens[range.tokenStart + function.nameToken] => nameToken
                         prepared.package.sources[range.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
-                        moduleName == "sys.runtime" and (name == "parallel" or name == "tryParallel") => parallelRole
-                        not parallelRole and (prepared -> intrinsicDeclaration(range.sourceModule, function.astNode))
+                        references[range.astStart + resultAst!] => resultType
+                        bindingPolicy.bindReturnTypeEagerly(prepared -> compositeTemplate(resultType), prepared -> intrinsicDeclaration(range.sourceModule, function.astNode), parallelRole(moduleName, name))
                             -> if { 1 } else { 0 } => mode
-                        prepared -> appendSignatureRoot(references[range.astStart + resultAst!], mode, roots)
+                        prepared -> appendSignatureRoot(resultType, mode, roots)
                     }
                     function.blockTypeNode >= 0 -> if { prepared -> appendSignatureRoot(references[range.astStart + function.blockTypeNode], 2, roots) }
-                    function.blockResultTypeNode >= 0 -> if { prepared -> appendSignatureRoot(references[range.astStart + function.blockResultTypeNode], 1, roots) }
-                    not valueGeneric! and function.flags % 4 != 0
+                    function.blockResultTypeNode >= 0 and bindingPolicy.bindCallbackResultEagerly(function.blockTypeNode >= 0)
+                        -> if { prepared -> appendSignatureRoot(references[range.astStart + function.blockResultTypeNode], 1, roots) }
+                    bindingPolicy.bindOwnershipTypeEagerly(prepared -> compositeTemplate(primary!), valueGeneric!, function.flags % 4 != 0)
                         -> if { prepared -> appendSignatureRoot(primary!, 1, roots) }
                     0 => index!
                     index! < range.symbolCount -> while {
@@ -248,7 +275,7 @@ appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: 
                             -> if {
                                 references[range.astStart + parameter.typeNode] => typeId
                                 prepared -> appendSignatureRoot(typeId, 0, roots)
-                                not valueGeneric! and parameter.flags % 4 != 0
+                                bindingPolicy.bindOwnershipTypeEagerly(prepared -> compositeTemplate(typeId), valueGeneric!, parameter.flags % 4 != 0)
                                     -> if { prepared -> appendSignatureRoot(typeId, 1, roots) }
                             }
                         index! + 1 => index!
@@ -260,11 +287,47 @@ appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: 
     }
 }
 
-public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(false)
+public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(false, false)
 
-public registerDeclarations prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(true)
+public registerDeclarations prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(true, false)
 
-registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarations: Bool -> Result<synthetic.Identities, Error> {
+public registerMetadataSignatures prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(true, true)
+
+metadataSignatureRoots prepared: ref semanticContext.SemanticSnapshot, sourceRoots: ref [Int; ~] -> Result<[Int; ~], Error> {
+    [Int; ~] => pending!
+    sourceRoots -> each root { pending! -> push(root) }
+    [Bool; ~] => seen!
+    prepared.semantic.types -> each _ { seen! -> push(false) }
+    [Int; ~] => roots!
+    0 => cursor!
+    cursor! < (pending! -> len) -> while {
+        pending![cursor!] => identity
+        identity < 0 or identity >= (prepared.semantic.types -> len)
+            -> if { Result<[Int; ~], Error>.Err(Error.InvalidSource) -> return }
+        not seen![identity] -> if {
+            true => seen![identity]
+            prepared.semantic.types[identity] => type
+            type.containsParameter -> if {
+                type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6 or type.kind == 8 or type.kind == 10
+                    or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1))
+                    -> if { roots! -> push(identity) }
+                type.first >= 0 -> if { pending! -> push(type.first) }
+                type.second >= 0 -> if { pending! -> push(type.second) }
+            }
+        }
+        cursor! + 1 => cursor!
+    }
+    Result<[Int; ~], Error>.Ok(roots!)
+}
+
+registerRecipes recipes: ref [synthetic.Recipe; ~], seeds: ref [Int; ~], aliases: ref [synthetic.Shape; ~], roots: ref [Int; ~], nextTypeId: Int -> Result<synthetic.Identities, Error> {
+    recipes -> synthetic.register(seeds, aliases, roots, nextTypeId) -> when {
+        Err(error) { Result<synthetic.Identities, Error>.Err(Error.Synthetic(error)) }
+        Ok(registered) { Result<synthetic.Identities, Error>.Ok(registered) }
+    }
+}
+
+registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarations: Bool, metadataOnly: Bool -> Result<synthetic.Identities, Error> {
     [nominal.NominalDeclaration; ~] => declarations!
     [UInt8; ~] => strings!
     [Int; ~] => declarationBySymbol!
@@ -388,8 +451,11 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarati
     }
     prepared -> appendTraitRoots(roots!)
     includeDeclarations -> if { prepared -> appendFunctionRoots(references!, roots!) }
-    recipes! -> synthetic.register(seeds!, aliases, roots!, boxed.nextTypeId) -> when {
-        Err(error) { Result<synthetic.Identities, Error>.Err(Error.Synthetic(error)) }
-        Ok(registered) { Result<synthetic.Identities, Error>.Ok(registered) }
+    metadataOnly -> if {
+        prepared -> metadataSignatureRoots(roots!) -> when {
+            Err(error) { Result<synthetic.Identities, Error>.Err(error) -> return }
+            Ok(selected) { registerRecipes(recipes!, seeds!, aliases, selected, boxed.nextTypeId) -> return }
+        }
     }
+    registerRecipes(recipes!, seeds!, aliases, roots!, boxed.nextTypeId)
 }

@@ -8,6 +8,8 @@ namespace Sollang.Compiler.Semantics;
 
 internal sealed partial class SemanticCompiler
 {
+    private static readonly HashSet<string> ParallelRoleFunctionNames =
+        FunctionTypeBindingPolicy.ParallelRoleNames().Split('|').ToHashSet(StringComparer.Ordinal);
     private SollangProgram _program;
     private readonly TypeDefinitionTable _types;
     private readonly List<(TypeId KeyType, int Line, int Column, string ModuleName)> _declaredDictionaryKeyChecks = [];
@@ -1038,7 +1040,7 @@ internal sealed partial class SemanticCompiler
             }
         }
 
-        var isParallelRole = function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
+        var isParallelRole = ParallelRoleFunctionNames.Contains(function.Name);
         var hasCompositeGenericInput = function.GenericParameterName is not null
             && function.InputType is not null
             && !genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
@@ -1074,7 +1076,8 @@ internal sealed partial class SemanticCompiler
         // Runtime intrinsic admission checks the abstract signature before any
         // concrete call exists. Keep that shape while retaining its syntax for
         // canonical specialization; user templates may defer their layout.
-        var returnType = returnTypeTemplate is null || (function.IsIntrinsic && !isParallelRole)
+        var returnType = FunctionTypeBindingPolicy.BindReturnTypeEagerly(
+            returnTypeTemplate is not null, function.IsIntrinsic, isParallelRole)
             ? ParseFunctionType(
                 function.ReturnType,
                 function.GenericParameterName,
@@ -1104,7 +1107,7 @@ internal sealed partial class SemanticCompiler
             && TypeSyntaxReferencesAnyParameter(function.BlockResultType, genericParameterNames)
                 ? function.BlockResultType
                 : null;
-        var blockResultType = function.BlockInputType is null
+        var blockResultType = !FunctionTypeBindingPolicy.BindCallbackResultEagerly(function.BlockInputType is not null)
             ? (BoundType?)null
             : function.BlockResultType is null
                 ? BoundType.Unit
@@ -1150,10 +1153,10 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
         }
-        var inputOwnershipType = inputTypeTemplate is not null
-            && !function.HasValueGenericFixedArrayInput
-            && function.InputOwnership != FunctionInputOwnership.Default
-                ? ParseOwnershipTemplateType(inputTypeTemplate, genericParameterNames, function.Line, function.Column)
+        var inputOwnershipType = FunctionTypeBindingPolicy.BindOwnershipTypeEagerly(
+            inputTypeTemplate is not null, function.HasValueGenericFixedArrayInput,
+            function.InputOwnership != FunctionInputOwnership.Default)
+                ? ParseOwnershipTemplateType(inputTypeTemplate!, genericParameterNames, function.Line, function.Column)
                 : inputType;
         var inputOwnership = BindFunctionInputOwnership(function, inputOwnershipType);
         var additionalParameters = (function.AdditionalParameters ?? [])
@@ -1191,8 +1194,10 @@ internal sealed partial class SemanticCompiler
                         }
                         : BindFunctionInputOwnership(
                             parameter.Ownership,
-                            parameterTypeTemplate is not null && parameter.Ownership != FunctionInputOwnership.Default
-                                ? ParseOwnershipTemplateType(parameterTypeTemplate, genericParameterNames, parameter.Line, parameter.Column)
+                            FunctionTypeBindingPolicy.BindOwnershipTypeEagerly(
+                                parameterTypeTemplate is not null, function.IsValueGeneric,
+                                parameter.Ownership != FunctionInputOwnership.Default)
+                                ? ParseOwnershipTemplateType(parameterTypeTemplate!, genericParameterNames, parameter.Line, parameter.Column)
                                 : parameterType,
                             parameter.Line,
                             parameter.Column),
