@@ -2645,6 +2645,9 @@ public struct ExpressionOperandDiagnostic {
     public operatorKind: Int
     public locationOffset: UIntSize
     # Code 32 carries the missing closed-capability bit in this payload.
+    # Codes 74/75 carry expected/actual canonical IDs in operandTypeId/firstTypeId.
+    # Code 74 uses operatorKind for the target module and operandTypeSymbol for
+    # the function. Code 75 locates the producer's actual yielded value.
     public operandTypeSymbol: Int
     public operandTypeId: Int
     public firstTypeId: Int
@@ -5555,6 +5558,29 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
             operandTypeId: -1
             firstTypeId: -1
         } -> return
+    }
+    # A producer's declared yield input is checked before its caller callback.
+    # Instantiated source facts are captured before callback role remapping.
+    resolved.userBlockYieldInputs -> each input {
+        input.expectedTypeId >= 0 and input.expectedTypeId < (resolved.types -> len)
+            and input.actualTypeId >= 0 and input.actualTypeId < (resolved.types -> len)
+            and input.sourceModule >= 0 and input.sourceModule < (package.ranges -> len)
+            and input.valueAst >= 0
+            and (prepared -> declarationBodyIsActive(resolved, input.callerSourceModule, input.callerCallAst))
+            -> if {
+                resolved.types[input.expectedTypeId] => expected
+                resolved.types[input.actualTypeId] => actual
+                not expected.containsParameter and not actual.containsParameter
+                    -> if {
+                        expected.kind == 8 => referenceInput
+                        referenceInput and input.actualTypeId == expected.first => elementType
+                        not blockValueContract.acceptsValue(input.actualTypeId == input.expectedTypeId, referenceInput, elementType)
+                            -> if {
+                                package.ranges[input.sourceModule] => range
+                                ExpressionOperandDiagnostic { code: 75, sourceModule: input.sourceModule, astNode: input.valueAst, operandAst: input.valueAst, operatorKind: -1, locationOffset: package.nodes[range.astStart + input.valueAst].start, operandTypeSymbol: -1, operandTypeId: input.expectedTypeId, firstTypeId: input.actualTypeId } -> return
+                            }
+                    }
+            }
     }
     package -> modules.identitiesAnalyzed => identities
     package -> expressionTypeIds.continuationFlags => continuationByAst
