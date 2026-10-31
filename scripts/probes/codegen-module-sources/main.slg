@@ -1,0 +1,38 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+
+show name: Text, sources: [Text; ~], paths: [Text; ~], sourceModule: Int, standardCount: Int -> Unit uses Console {
+    sources -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities
+    sources -> keys.captureModuleSources(paths, identities, package.tokens, package.ranges, sourceModule, standardCount)
+        -> when {
+            Ok(value) {
+                value.implementationHash => hash
+                value.members -> len => count
+                value.isStandardLibrary => standard
+                "$name=$hash,$count,$standard" -> println
+            }
+            Err(error) {
+                error -> when {
+                    InvalidInput { "$name=invalid" -> println }
+                    EmptyPath { "$name=empty" -> println }
+                    DuplicatePath { "$name=duplicate" -> println }
+                }
+            }
+        }
+}
+
+main {
+    "mixed-case" -> show(["namespace same\n# last\n", "namespace same\n# first\n"; ~], ["Z.slg", "a.slg"; ~], 0, 0)
+    "mixed-case-reversed" -> show(["namespace same\n# first\n", "namespace same\n# last\n"; ~], ["a.slg", "Z.slg"; ~], 0, 0)
+    "case-distinct" -> show(["namespace same\n# upper\n", "namespace same\n# lower\n"; ~], ["A.slg", "a.slg"; ~], 0, 2)
+    "case-distinct-reversed" -> show(["namespace same\n# lower\n", "namespace same\n# upper\n"; ~], ["a.slg", "A.slg"; ~], 0, 1)
+    "utf16-order" -> show(["namespace same\n# bmp\n", "namespace same\n# supplementary\n"; ~], [".slg", "𐀀.slg"; ~], 0, 0)
+    "comments" -> show(["namespace same\n# body\n"; ~], ["a.slg"; ~], 0, 0)
+    "comments-changed" -> show(["namespace same\n# body # comment\n"; ~], ["a.slg"; ~], 0, 0)
+    "module-group" -> show(["namespace other\n# ignored\n", "namespace same\n# body\n"; ~], ["a.slg", "b.slg"; ~], 1, 1)
+    "duplicate-path" -> show(["namespace same\n", "namespace same\n"; ~], ["a.slg", "a.slg"; ~], 0, 0)
+    "empty-path" -> show(["namespace same\n"; ~], [""; ~], 0, 0)
+    "invalid-input" -> show(["namespace same\n"; ~], ["a.slg"; ~], 0, 2)
+}

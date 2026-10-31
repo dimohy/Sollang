@@ -475,7 +475,9 @@ internal sealed class IncrementalCodegenCache
         string identity,
         IReadOnlyList<CompilationSource> sources)
     {
-        var ordered = sources.OrderBy(static source => source.Path, StringComparer.OrdinalIgnoreCase).ToArray();
+        // Match exact-source semantic generations; case-distinct paths must not
+        // retain an input-order tie on case-sensitive source namespaces.
+        var ordered = sources.OrderBy(static source => source.Path, StringComparer.Ordinal).ToArray();
         var implementationHash = HashBinaryFields(ordered.Select(static source => source.SourceBytes));
         var interfaceHash = HashFields(ordered.SelectMany(static source => PublicInterfaceFields(source.Program)));
         var imports = ordered

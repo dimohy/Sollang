@@ -203,6 +203,25 @@ identityOrder words: ref [UInt64; ~], leftStart: Int, leftLength: Int, rightStar
     0
 }
 
+# Reuse the cache identity's UTF-16 ordering for current metadata text too.
+# Text's ordinary byte ordering is different for supplementary scalars.
+# Return2 retains the same invalid UTF-8 distinction as identityOrder.
+public compareIdentityText left: Text, right: Text -> Int {
+    [UInt64; ~] => words!
+    UIntSize(0) => index!
+    index! < (left -> len) -> while {
+        words! -> push(UInt64(left -> byte(index!)))
+        index! + 1 => index!
+    }
+    words! -> len => rightStart
+    UIntSize(0) => rightIndex!
+    rightIndex! < (right -> len) -> while {
+        words! -> push(UInt64(right -> byte(rightIndex!)))
+        rightIndex! + 1 => rightIndex!
+    }
+    words! -> identityOrder(0, rightStart, rightStart, Int(right -> len))
+}
+
 checksum words: [UInt64; ~], start: Int, count: Int, seed: UInt64 -> UInt64 {
     seed => hash!
     0 => index!

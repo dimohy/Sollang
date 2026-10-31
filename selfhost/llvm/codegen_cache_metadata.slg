@@ -1,0 +1,59 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+import sollang.compiler.llvm.codegen_units as units
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.syntax as syntax
+
+public struct ModuleSources {
+    public members: [Int; ~]
+    public implementationHash: UInt64
+    public isStandardLibrary: Bool
+}
+
+public enum SourceError { InvalidInput, EmptyPath, DuplicatePath }
+
+# The checked compilation supplies original source views, resolved paths and
+# parsed identities. Match CreateModuleIdentity, including comments and field
+# boundaries; paths order fields but are not themselves hashed here.
+public captureModuleSources sources: ref [Text; ~], paths: ref [Text; ~], identities: ref [modules.ModuleIdentity; ~], tokens: ref [syntax.SyntaxToken; ~], ranges: ref [analysis.SourceAnalysisRange; ~], sourceModule: Int, standardLibrarySourceCount: Int -> Result<ModuleSources, SourceError> {
+    (sources -> len) != (paths -> len) or (sources -> len) != (identities -> len)
+        or (sources -> len) != (ranges -> len) or sourceModule < 0 or sourceModule >= (sources -> len)
+        or standardLibrarySourceCount < 0 or standardLibrarySourceCount > (sources -> len)
+        -> if { Result<ModuleSources, SourceError>.Err(SourceError.InvalidInput) -> return }
+    [Int; ~] => members!
+    0 => candidate!
+    candidate! < (sources -> len) -> while {
+        modules.sameLogicalSource(sources, identities, sourceModule, candidate!, tokens, ranges)
+            -> if {
+                (paths[candidate!] -> len) == 0
+                    -> if { Result<ModuleSources, SourceError>.Err(SourceError.EmptyPath) -> return }
+                (paths[candidate!] -> units.compareIdentityText(paths[candidate!])) == 2
+                    -> if { Result<ModuleSources, SourceError>.Err(SourceError.InvalidInput) -> return }
+                members! -> each prior {
+                    (paths[prior] -> units.compareIdentityText(paths[candidate!])) == 0
+                        -> if { Result<ModuleSources, SourceError>.Err(SourceError.DuplicatePath) -> return }
+                }
+                members! -> push(candidate!)
+                (members! -> len) - 1 => insertion!
+                insertion! > 0 -> while {
+                    (paths[members![insertion! - 1]] -> units.compareIdentityText(paths[candidate!])) <= 0
+                        -> if { break }
+                    members![insertion! - 1] => members![insertion!]
+                    insertion! - 1 => insertion!
+                }
+                candidate! => members![insertion!]
+            }
+        candidate! + 1 => candidate!
+    }
+    arithmetic.envelopeChecksumSeed() => hash!
+    true => standard!
+    members! -> each member {
+        hash! -> hashText(sources[member]) => hash!
+        member >= standardLibrarySourceCount -> if { false => standard! }
+    }
+    Result<ModuleSources, SourceError>.Ok(ModuleSources {
+        members: members!, implementationHash: hash!, isStandardLibrary: standard!
+    })
+}

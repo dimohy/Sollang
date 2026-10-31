@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,44 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "module-source-vectors")
+{
+    var programType = assembly.GetType("Sollang.Compiler.Syntax.SollangProgram", true)!;
+    var sourceType = assembly.GetType("Sollang.Compiler.Cli.CompilationSource", true)!;
+    var programConstructor = programType.GetConstructors().Single();
+    var programArguments = programConstructor.GetParameters().Select(parameter =>
+        (object)Array.CreateInstance(parameter.ParameterType.GetGenericArguments()[0], 0)).ToArray();
+    programArguments[0] = new[] { "same" };
+    var program = programConstructor.Invoke(programArguments);
+    var identity = cacheType.GetMethod("CreateModuleIdentity", BindingFlags.NonPublic | BindingFlags.Static)!;
+    ulong Hash((string Path, string Text)[] files)
+    {
+        var sources = Array.CreateInstance(sourceType, files.Length);
+        for (var index = 0; index < files.Length; index++)
+            sources.SetValue(Activator.CreateInstance(sourceType,
+                [files[index].Path, program, null, false,
+                    System.Text.Encoding.UTF8.GetBytes("namespace same\n# " + files[index].Text + "\n"), null]), index);
+        var result = identity.Invoke(null, ["same", sources])!;
+        return (ulong)result.GetType().GetProperty("ImplementationHash")!.GetValue(result)!;
+    }
+    foreach (var (name, files) in new (string, (string, string)[])[]
+    {
+        ("mixed-case", [("Z.slg", "last"), ("a.slg", "first")]),
+        ("case-distinct", [("A.slg", "upper"), ("a.slg", "lower")]),
+        ("utf16-order", [("\uE000.slg", "bmp"), ("𐀀.slg", "supplementary")])
+    })
+        Console.WriteLine(JsonSerializer.Serialize(new { name, hash = Hash(files),
+            reversed = Hash(files.Reverse().ToArray()), scope = "virtual CompilationSource metadata; not platform file loading" }));
+    Console.WriteLine(JsonSerializer.Serialize(new { name = "comments", hash = Hash([("a.slg", "body")]),
+        changed = Hash([("a.slg", "body # comment")]) }));
+    var binaryFields = cacheType.GetMethod("HashBinaryFields", BindingFlags.NonPublic | BindingFlags.Static)!;
+    ulong Binary(params string[] values) => (ulong)binaryFields.Invoke(null,
+        [values.Select(System.Text.Encoding.UTF8.GetBytes).ToArray()])!;
+    Console.WriteLine(JsonSerializer.Serialize(new { name = "field-boundaries", hash = Binary("ab", "c"),
+        changed = Binary("a", "bc") }));
+    return;
+}
 
 if (args.Length == 3 && args[2] == "key-rule-vectors")
 {

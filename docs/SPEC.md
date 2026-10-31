@@ -6190,6 +6190,13 @@ Current backend:
   sequence is distinct from a missing input. Layout generation does not replace
   discovery of current source, interface, dependency, type-universe and emission
   facts or prove production cache consumption.
+- module source key inputs group every file by its complete parsed namespace.
+  Files use ordinal UTF-16 path order, matching exact-source semantic generations;
+  case-distinct paths do not retain an input-order tie. The implementation hash
+  includes each original UTF-8 source byte sequence, including comments, with its
+  own length and delimiter. Paths determine field order but are not hashed as
+  source content. Standard-library classification requires every member to be a
+  standard-library source.
 - process-backed self-host LLVM output preserves these same unit boundaries in
   comments. A checked native emission with a cache request starts with
   `; sollang.codegen.unit 0:`, writes each module after
