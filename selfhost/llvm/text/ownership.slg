@@ -2086,7 +2086,7 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                                                             or (dropFieldTypeId! -> semanticTypeOwns(context, state))))
                                                             -> if {
                                                                 dropTasks! -> len => dropFieldPath
-                                                                "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sollang.struct.m$(dropTask.typeModule)_s$(dropTask.typeSymbol) " -> print
+                                                                "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropTask.typeModule, dropTask.typeSymbol)) " -> print
                                                                 dropTask -> emitDropValueName(context, state)
                                                                 ", $(dropFieldOrdinal!)" -> println
                                                                 dropTasks! -> push(DropGlueRequest {
@@ -2868,7 +2868,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     -> if {
                         dropType.kind == 1 and (dropTypeIndex! -> isOwnedSocketType(context, state))
                             -> if {
-                                "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
+                                "  %handle = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropType.module, dropType.symbol)) %value, 0" -> println
                                 context.ranges[dropType.module] => socketOwnerRange
                                 context.symbols[socketOwnerRange.symbolStart + dropType.symbol] => socketOwnerSymbol
                                 dropType.module -> sourceTokenIs(socketOwnerSymbol.nameToken, "CompletionReactor", context, state)
@@ -2880,12 +2880,12 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                             } else {
                                 dropType.kind == 1 and (dropTypeIndex! -> isOwnedProcessChildType(context, state))
                                     -> if {
-                                        "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
+                                        "  %handle = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropType.module, dropType.symbol)) %value, 0" -> println
                                         "  call void @sollang_drop_process_child(i64 %handle)" -> println
                                     } else {
                                         dropType.kind == 1 and (dropTypeIndex! -> isOwnedFileType(context, state))
                                             -> if {
-                                                "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
+                                                "  %handle = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropType.module, dropType.symbol)) %value, 0" -> println
                                                 "  call void @sollang_platform_close_owned_file(i64 %handle)" -> println
                                             } else {
                                                 0 => dropFieldIndex!
@@ -3074,7 +3074,7 @@ emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext
         }
     payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2)
         -> if {
-            "  %dropg$(request.nameRoot)_p0 = load %sollang.struct.m$(payloadType.module)_s$(payloadType.symbol), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            "  %dropg$(request.nameRoot)_p0 = load %sollang.struct.$(context -> emitterContext.declarationName(payloadType.module, payloadType.symbol)), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
             context.typeAligns[request.payloadTypeId] -> writeDecimalLine
             DropGlueRequest {
                 typeId: request.payloadTypeId
@@ -3375,7 +3375,7 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
                 current.origin == 16 -> if { "%sollang.dyn" -> print } else {
                     current.origin == 0 or current.origin == 2 -> if {
                         typeTask -> isNominalEnumType(context, state)
-                            -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print }
+                            -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.$(context -> emitterContext.declarationName(current.module, current.symbol))" -> print }
                     } else {
                         current.symbol == 0 -> if { "void" -> print }
                         current.symbol == 1 -> if { "%sollang.text" -> print }
@@ -3481,7 +3481,7 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
                                 # and is still written by writeSemanticTypeId for owner layouts.
                                 "%sollang.int_slice" -> print
                             } else {
-                                typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
+                                typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeContextualType(context) }
                             }
                     }
                 }

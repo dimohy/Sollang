@@ -5976,6 +5976,10 @@ ordered root references retain repeated arguments and the result-type boundary.
 The template's complete declaration name remains the base. Definitions, async
 definitions, direct calls and function values share one prepared suffix table.
 Its owned storage backs borrowed name views for the emitter's lifetime.
+Production nominal LLVM struct definitions and references use their complete
+declaration key as well. A source module/symbol pair only indexes that table.
+The context-free type-metadata inspection API retains its coordinate display;
+production fallback emission uses the context-aware writer instead.
 SSA value and label ordinals are local to the emitted function partition.
 Program-wide auxiliary symbols use a separate naming domain; resetting local
 counters must not merge string literals, static storage or callback symbols.
