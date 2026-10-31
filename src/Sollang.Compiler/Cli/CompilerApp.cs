@@ -45,6 +45,10 @@ internal static class CompilerApp
             {
                 return SourceFormatter.Run(args[1..]);
             }
+            if (args is ["selfhost-sync", ..])
+            {
+                return SelfHostPolicyCompiler.Run(args[1..]);
+            }
             if (args is ["language-server", ..])
             {
                 return LanguageServer.Run(args[1..]);
@@ -175,6 +179,7 @@ internal static class CompilerApp
 
     private static void Build(CliOptions options)
     {
+        SelfHostPolicyCompiler.CheckGeneratedInputs(options.SourcePaths);
         var toolchain = LlvmToolchain.From(options.LlvmHome);
         Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
             ?? Directory.GetCurrentDirectory());
@@ -443,6 +448,7 @@ internal static class CompilerApp
         ProjectBuild? project,
         CompilationTarget target)
     {
+        SelfHostPolicyCompiler.CheckGeneratedInputs(sourcePaths);
         var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
         var sourcePrograms = LoadUserPrograms(sourcePaths, project, target, standardLibrary);
         var modules = standardLibrary

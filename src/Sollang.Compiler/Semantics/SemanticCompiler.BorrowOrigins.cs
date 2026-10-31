@@ -2344,9 +2344,12 @@ internal sealed partial class SemanticCompiler
         foreach (var origin in origins)
         {
             var root = SplitBorrowPlace(origin)[0];
-            if (returnOuterBindings.TryGetValue(root, out var outerType)
-                && (!(_currentMoveInputNames.Contains(root) && _types.ContainsOwnedStorage(outerType))
-                    || TextPayloadSurvivesMovedOwner(origin, outerType)))
+            var outerParameter = returnOuterBindings.TryGetValue(root, out var outerType);
+            var movesOwner = outerParameter && _currentMoveInputNames.Contains(root);
+            var ownsStorage = movesOwner && _types.ContainsOwnedStorage(outerType);
+            var externalTextPayload = ownsStorage && TextPayloadSurvivesMovedOwner(origin, outerType);
+            if (!Shared.BorrowedTextReturnPolicy.RequiresOriginCheck(
+                outerParameter, movesOwner, ownsStorage) || externalTextPayload)
             {
                 continue;
             }

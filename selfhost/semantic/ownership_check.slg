@@ -6,6 +6,7 @@ import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.ir.stream as streamIr
 import sollang.compiler.lexer as lexer
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.borrowed_text_return_policy as borrowedTextReturnPolicy
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
@@ -7515,11 +7516,13 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         escapeOwner! >= 0 and not escapeReported!
                             -> while {
                                 typed[escapeOwner!] => localOwner
+                                localOwner.kind == 10 => outerParameter
+                                outerParameter and localOwner.flags % 2 == 1 => movesOwner
+                                movesOwner and (prepared -> semanticTypeContainsOwnedStorageCached(types, fields, ownedStorageByType!, localOwner.typeId)) => ownsStorage
                                 (localOwner.kind == 17 or localOwner.kind == 29 or localOwner.kind == 10)
                                     and ((typed -> borrowedTextFunctionIr(escapeOwner!)) == escapeFunction)
-                                    and (localOwner.kind != 10 or (localOwner.flags % 2 == 1
-                                    and (prepared -> semanticTypeContainsOwnedStorageCached(types, fields, ownedStorageByType!, localOwner.typeId))
-                                    and not (escapedReturn.operand0 -> retainedAggregateReturn(escapeOwner!))
+                                    and borrowedTextReturnPolicy.requiresOriginCheck(outerParameter, movesOwner, ownsStorage)
+                                    and (localOwner.kind != 10 or (not (escapedReturn.operand0 -> retainedAggregateReturn(escapeOwner!))
                                     and not (borrowedReturns! -> returnsRetainedWholeOwner(escapeFunction, escapeOwner!, borrowedEscapeReturn!))))
                                     -> if {
                                         typed -> borrowedTextReturnQueryIr(borrowedEscapeReturn!) => escapeQueryIr

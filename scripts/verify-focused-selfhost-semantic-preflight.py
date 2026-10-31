@@ -74,7 +74,10 @@ def main():
     controls = [("positive", 0, None), ("deferred-text", 1, "deferred interpolation"),
                 ("rebound-owner", 1, "owned container binding")]
     producer_paths = [ROOT / "src/Sollang.Compiler/Cli/CompilerApp.cs",
-                      ROOT / "src/Sollang.Compiler/Semantics/SemanticCompiler.cs"]
+                      ROOT / "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
+                      ROOT / "src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs",
+                      ROOT / "src/Sollang.Compiler/Shared/SelfHostPolicyAttribute.cs",
+                      *sorted((ROOT / "src/Sollang.Compiler/Shared/Policies").glob("*.cs"))]
     forbidden = ("LlvmIrGenerator", "WriteAndLink", 'GetMethod("Build"', "CompileStandalone")
     harness_text = harness.read_text(encoding="utf-8-sig")
     if any(token in harness_text for token in forbidden):
@@ -145,6 +148,9 @@ def main():
                 raise ValueError("SEMANTIC_PREFLIGHT_TOOL_PROBE_FAILED")
             record["toolVersion"] = (output / "tool-probe.stdout.txt").read_text().strip()
             if not args.controls_only:
+                code, _ = run([dotnet, str(dll), "selfhost-sync", "--root", str(ROOT), "--check"], "shared-policy-check")
+                if code != 0:
+                    raise ValueError("SEMANTIC_PREFLIGHT_SHARED_POLICY_DRIFT")
                 code, _ = run([dotnet, str(dll), "format", "--check", *map(str, sources)], "compiler-source-format")
                 record["formatPreflight"] = {"status": "passed" if code == 0 else "failed",
                                             "sourceCount": len(sources), "exit": code,

@@ -1802,6 +1802,20 @@ the selected producer. Recheck compiler, runtime, grammar, and source hashes
 after execution. A changed producer starts a new verification epoch; never
 combine cases from different compiler hashes into one current proof.
 
+Finite Boolean decisions shared by the C# and SLG compilers belong in
+`src/Sollang.Compiler/Shared/Policies`, with `SelfHostPolicyAttribute` declaring
+their generated module and source path. C# callers use the compiled method;
+SLG callers import its generated module. The C# build exports the complete
+Boolean input table, so a method-body change updates SLG without a second rule
+implementation. Keep representation-specific origin discovery in each compiler
+and pass explicit facts into the shared decision. Only static deterministic
+Boolean methods with at most six Boolean inputs are supported; unsupported
+signatures fail instead of retaining an old rule. Do not edit generated SLG.
+Before compiling self-host sources, run `selfhost-sync --root <repository>
+--check` with the selected managed compiler. A source change requires rebuilding
+that compiler; a generated-source change requires regeneration. Both checks
+precede semantic or native compilation, including cached builds.
+
 Persistent codegen units retain complete UTF-8 module identities. Validate the
 encoding and the C# byte-length limit before comparing identities; retain the
 global module's valid empty identity. A stable hash orders buckets; ties use

@@ -722,9 +722,21 @@ class ArtifactLifecycleTests(unittest.TestCase):
         record['scope'] = 'controls-only'
         record['completed'] = record['total'] = 3
         record['cases'] = [row for row in record['cases'] if row['id'] != 'focused-selfhost']
-        record['steps'] = [row for row in record['steps'] if row['id'] not in ('focused-selfhost', 'compiler-source-format')]
+        full_only = policy.load_policy()['semanticPreflight']['fullScopeOnlySteps']
+        record['steps'] = [row for row in record['steps'] if row['id'] not in full_only]
         record.pop('formatPreflight')
         self.assertTrue(policy.completed(record))
+
+    def test_preflight_shared_policy_guard_is_required_and_must_pass(self):
+        original = self.actual_preflight_record()
+        self.assertTrue(policy.completed(original))
+        missing = copy.deepcopy(original)
+        missing['steps'] = [row for row in missing['steps'] if row['id'] != 'shared-policy-check']
+        self.assertFalse(policy.completed(missing))
+        for update in ({'exit': 1}, {'status': 'running'}, {'exit': None}):
+            altered = copy.deepcopy(original)
+            next(row for row in altered['steps'] if row['id'] == 'shared-policy-check').update(update)
+            self.assertFalse(policy.completed(altered))
 
     def test_step_collection_type_and_nested_fail_closed(self):
         base = {'status': 'passed', 'inputsStable': True}

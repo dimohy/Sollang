@@ -26,6 +26,12 @@ if (args.Length > 0 && args[0] == "--llvm-assertion-tests")
         args.Length == 4 ? args[3] : "51-fixed-array-value-generics");
 }
 
+if (args.Length > 0 && args[0] == "--selfhost-policy-tests")
+{
+    if (args.Length != 3) throw new ArgumentException("Expected compiler DLL and new result path.");
+    return SelfHostPolicyTests.Run(args[1], args[2]);
+}
+
 if (args.Length > 0 && args[0] == "--verify-common-llvm")
 {
     if (args.Length != 5)
