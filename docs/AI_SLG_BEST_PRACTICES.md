@@ -779,6 +779,12 @@ An ownership diagnostic should lead to one of four explicit designs: transfer,
 borrow, mutate in place, or copy by deliberate policy. Hidden copies are not a
 compatibility solution.
 
+A `Text` slice of owned `SourceText` borrows its byte owner, including through
+a readonly `ref SourceText` helper, an owned field, or an array element. Keep
+that owner alive while using the slice or a parsed record containing it.
+An external `Text` sibling does not extend an owned `SourceText` field's
+lifetime. Preserve external byte origins when returning the `Text` sibling.
+
 An enum constructor inside interpolation follows the same payload ownership
 rules. After transferring a named payload, do not reuse it in a later argument,
 operand, hole, or statement. A borrowed fixed payload remains available when
@@ -1834,6 +1840,13 @@ Physical declaration, source, IR and type-registration positions are lookup
 coordinates, not ordering keys. Keep semantic evaluation and diagnostic order
 unchanged. Prepare this order before the module grouping helper, whose public
 contract continues to preserve the order supplied by its caller.
+
+Keep process-backed codegen output divided into the same prefix, complete
+logical module and suffix units as the C# memory sink. Cache-enabled checked
+native output carries these boundaries as LLVM comments; validate their complete
+sequence before linking. Retain the input owner while using returned fragment
+views. Unit framing does not replace the
+current metadata keys or successful-link requirement for persistent cache reuse.
 
 Library interface producers and integrity validation share the canonical ABI
 and signature material helpers. Preserve qualified-name ordering, NUL field

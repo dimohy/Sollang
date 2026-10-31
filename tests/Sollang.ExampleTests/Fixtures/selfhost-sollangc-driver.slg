@@ -4,6 +4,7 @@ import sollang.compiler.llvm.codegen_units as codegenUnits
 import sollang.compiler.ir.module_artifacts as moduleArtifacts
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.semantic.semantic_cache as semanticCache
+import sollang.compiler.semantic.library_interfaces as libraryInterfaces
 import sollang.compiler.semantic.semantic_generations as semanticGenerations
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
@@ -1342,6 +1343,24 @@ nativeOutputPathSafe output: Text, hostTarget: Int -> Bool uses Console, File {
     true
 }
 
+validateNativeCodegenStage stage: Text -> Bool uses Console, File {
+    stage -> libraryInterfaces.readSourcePath -> when {
+        Err(code) {
+            "sollang: cannot read staged codegen units: $stage (E$code)" -> runtime.eprintln
+            false
+        }
+        Ok(owner) {
+            owner -> slice(0, owner -> len) -> codegenUnits.readStreamedUnits -> when {
+                Ok(units) { true }
+                Err(error) {
+                    "sollang: invalid codegen unit stream in staged LLVM: $stage" -> runtime.eprintln
+                    false
+                }
+            }
+        }
+    }
+}
+
 executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
     target == 2 -> if {
         "sollang: native CLI wasm linking is not implemented yet" -> println
@@ -1439,6 +1458,12 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     emitCommand -> runToFile(llvmStage) -> processFileCode => emitCode
     emitCode != 0 -> if {
         emitCode -> finishNativeEmitterFailure(llvmStage, executableStage) -> return
+    }
+    includeStdlibRoot -> if {
+        llvmStage -> validateNativeCodegenStage -> unless {
+            llvmStage -> reportNativeBuildFailureStages(executableStage)
+            -1 -> return
+        }
     }
     includeStdlibRoot -> if {
         cacheDirectory -> path.fromText(path.nativeStyle()) => cacheDirectoryPath

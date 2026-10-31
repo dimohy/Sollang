@@ -1,0 +1,103 @@
+define internal %sollang.text @sollang_fn_dangling(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state) #0 {
+entry:
+  %trap_written4 = alloca i32, align 4
+  %trap_written10 = alloca i32, align 4
+  %trap_written14 = alloca i32, align 4
+  %trap_written23 = alloca i32, align 4
+  %trap_written31 = alloca i32, align 4
+  %source_text_mapped0 = call %sollang.mapped_bytes @sollang_map_file(ptr @.slg.str.module.x.0, i64 44, i64 0, i64 0, i64 0, i1 false)
+  %source_text_data1 = extractvalue %sollang.mapped_bytes %source_text_mapped0, 0
+  %source_text_valid2 = icmp ne ptr %source_text_data1, null
+  br i1 %source_text_valid2, label %bb_source_text_open_ok0, label %bb_source_text_open_fail1
+
+bb_source_text_open_fail1:
+  %trap_stderr3 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr3, ptr @.slg.str.module.x.1, i32 35, ptr %trap_written4, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_source_text_open_ok0:
+  %source_text_length5 = extractvalue %sollang.mapped_bytes %source_text_mapped0, 1
+  %source_text_base6 = extractvalue %sollang.mapped_bytes %source_text_mapped0, 2
+  %source_text_mapped_length7 = extractvalue %sollang.mapped_bytes %source_text_mapped0, 3
+  %text_slice_start_in_bounds8 = icmp ule i64 0, %source_text_length5
+  br i1 %text_slice_start_in_bounds8, label %bb_text_slice_start_bounds_ok2, label %bb_text_slice_start_bounds_fail3
+
+bb_text_slice_start_bounds_fail3:
+  %trap_stderr9 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr9, ptr @.slg.str.module.x.2, i32 33, ptr %trap_written10, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_text_slice_start_bounds_ok2:
+  %text_slice_remaining11 = sub i64 %source_text_length5, 0
+  %text_slice_length_in_bounds12 = icmp ule i64 6, %text_slice_remaining11
+  br i1 %text_slice_length_in_bounds12, label %bb_text_slice_length_bounds_ok4, label %bb_text_slice_length_bounds_fail5
+
+bb_text_slice_length_bounds_fail5:
+  %trap_stderr13 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr13, ptr @.slg.str.module.x.3, i32 34, ptr %trap_written14, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_text_slice_length_bounds_ok4:
+  %text_slice_end15 = add i64 0, 6
+  %text_slice_start_at_end16 = icmp eq i64 0, %source_text_length5
+  br i1 %text_slice_start_at_end16, label %bb_text_slice_start_valid7, label %bb_text_slice_start_check6
+bb_text_slice_start_check6:
+  %text_slice_start_ptr17 = getelementptr i8, ptr %source_text_data1, i64 0
+  %text_slice_start_byte18 = load i8, ptr %text_slice_start_ptr17, align 1
+  %text_slice_start_prefix19 = and i8 %text_slice_start_byte18, -64
+  %text_slice_start_continuation20 = icmp eq i8 %text_slice_start_prefix19, -128
+  %text_slice_start_boundary21 = xor i1 %text_slice_start_continuation20, true
+  br i1 %text_slice_start_boundary21, label %bb_text_slice_start_utf8_boundary_ok8, label %bb_text_slice_start_utf8_boundary_fail9
+
+bb_text_slice_start_utf8_boundary_fail9:
+  %trap_stderr22 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr22, ptr @.slg.str.module.x.4, i32 40, ptr %trap_written23, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_text_slice_start_utf8_boundary_ok8:
+  br label %bb_text_slice_start_valid7
+bb_text_slice_start_valid7:
+  %text_slice_end_at_end24 = icmp eq i64 %text_slice_end15, %source_text_length5
+  br i1 %text_slice_end_at_end24, label %bb_text_slice_end_valid11, label %bb_text_slice_end_check10
+bb_text_slice_end_check10:
+  %text_slice_end_ptr25 = getelementptr i8, ptr %source_text_data1, i64 %text_slice_end15
+  %text_slice_end_byte26 = load i8, ptr %text_slice_end_ptr25, align 1
+  %text_slice_end_prefix27 = and i8 %text_slice_end_byte26, -64
+  %text_slice_end_continuation28 = icmp eq i8 %text_slice_end_prefix27, -128
+  %text_slice_end_boundary29 = xor i1 %text_slice_end_continuation28, true
+  br i1 %text_slice_end_boundary29, label %bb_text_slice_end_utf8_boundary_ok12, label %bb_text_slice_end_utf8_boundary_fail13
+
+bb_text_slice_end_utf8_boundary_fail13:
+  %trap_stderr30 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr30, ptr @.slg.str.module.x.5, i32 38, ptr %trap_written31, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_text_slice_end_utf8_boundary_ok12:
+  br label %bb_text_slice_end_valid11
+bb_text_slice_end_valid11:
+  %text_slice_ptr32 = getelementptr i8, ptr %source_text_data1, i64 0
+  %source_text_owned33 = icmp ne ptr %source_text_base6, null
+  br i1 %source_text_owned33, label %bb_source_text_release14, label %bb_source_text_drop_done17
+
+bb_source_text_release14:
+  %source_text_heap_owned34 = icmp eq i64 %source_text_mapped_length7, -1
+  br i1 %source_text_heap_owned34, label %bb_source_text_free15, label %bb_source_text_unmap16
+
+bb_source_text_free15:
+  call void @sollang_free(ptr %source_text_base6)
+  br label %bb_source_text_drop_done17
+
+bb_source_text_unmap16:
+  call void @sollang_mapped_unmap(ptr %source_text_base6, i64 %source_text_mapped_length7)
+  br label %bb_source_text_drop_done17
+
+bb_source_text_drop_done17:
+  %text_ret35 = insertvalue %sollang.text poison, ptr %text_slice_ptr32, 0
+  %text_ret36 = insertvalue %sollang.text %text_ret35, i64 6, 1
+  ret %sollang.text %text_ret36
+}

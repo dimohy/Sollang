@@ -1,0 +1,28 @@
+import sollang.compiler.llvm.source_root as llvmRoot
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sys.path as path
+import sys.process as process
+import sys.text as text
+
+runEmitter: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    arguments[1] -> text.endsWith("linux") -> if { 1 } else { 0 } => target
+    arguments[2] -> path.fromText(path.nativeStyle()) => root
+    arguments[1] -> text.startsWith("plain") -> if {
+        root -> llvmRoot.emitCheckedRoot(5, target)
+    } else {
+        arguments[0] -> cache.compilerIdentity -> when {
+            Ok(value) { value }
+            Err(code) { process.exit(code)
+                return }
+        } => compiler
+        "-O0" -> cache.configurationIdentity => configuration
+        generations.CompilationIdentity { compiler: compiler, target: UInt64(target), configuration: configuration } => identity
+        cache.Request { enabled: true, destination: arguments[3], staged: arguments[4], identity: identity } => request
+        root -> llvmRoot.emitCachedCheckedRoot(5, target, request)
+    } => status
+    process.exit(status)
+}
+
+main { runEmitter() }

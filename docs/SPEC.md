@@ -4216,6 +4216,12 @@ and reaching-version rules continue to govern loans carried from prior iteration
 An owned `SourceText` has no upstream borrowed origin, but a `Text` slice
 returned from a call that reads it borrows the `SourceText` owner place. An
 empty carrier entry for that owner cannot erase the origin of the new slice.
+This rule also applies through a readonly `ref SourceText` input, an owned
+`SourceText` field, or an array element. Classify a reference input by its
+materialized value type before mapping the returned view to the caller's
+owner. An owned `SourceText` field has its own storage lifetime; an unrelated
+borrowed `Text` sibling does not supply that lifetime. A `Text` field that
+already borrows external bytes retains those external origins.
 
 - A user struct field may have type `ref T`. The reference remains a plain
   pointer in the runtime layout, while the compiler attaches its inferred
@@ -6175,6 +6181,19 @@ Current backend:
   padding validation, including scalars split across packed-word boundaries.
   Empty fragments remain valid; malformed text is rejected before decoding or
   merging a generation.
+- process-backed self-host LLVM output preserves these same unit boundaries in
+  comments. A checked native emission with a cache request starts with
+  `; sollang.codegen.unit 0:`, writes each module after
+  `; sollang.codegen.unit 1:<complete namespace>`, starts the suffix with
+  `; sollang.codegen.unit 2:`, and ends with `; sollang.codegen.end`.
+  Header lines end in LF or CRLF; fragment bytes retain their original spelling.
+  The prefix and suffix have empty identities. Module identities obey the
+  canonical UTF-8, size, hash and ordinal ordering rules above, including the
+  valid empty global identity. The reader rejects missing or repeated boundaries,
+  duplicate or unordered modules, truncation, and bytes after the final boundary
+  before the native driver invokes the linker. The complete stream owner remains
+  alive while fragment views are used. Reuse admission still requires the current
+  implementation and dependency keys, and persistence requires a successful link.
 - canonical self-host module interfaces retain the full parsed namespace as
   length-prefixed UTF-8 bytes in the schema-2 interface payload. Whitespace and
   comments do not participate in namespace identity. The namespace hash is a

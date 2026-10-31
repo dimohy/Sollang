@@ -1355,8 +1355,16 @@ internal sealed partial class SemanticCompiler
                 && target.Arguments.Count == 1)
                 return TryGetConcreteBorrowOrigins(target.Arguments[0], bindings, out origins);
             if (target.Path.Count == 1 && target.Path[0] == "slice")
+            {
+                // SourceText owns its backing bytes even when its borrowed Text
+                // payload loan is known empty. Text itself remains a span, whose
+                // existing upstream loan must stay authoritative.
+                if (TryGetBorrowedViewReceiverType(current, bindings, out var receiverType)
+                    && receiverType == BoundType.SourceText)
+                    return TryGetBorrowedSourceCallSiteOrigins(current, functions, bindings, out origins);
                 return TryGetBorrowedTextCallOrigins(current, functions, bindings, out origins)
                     || TryGetConcreteBorrowOrigins(current, bindings, out origins);
+            }
             if (TryGetBorrowedCallSiteFunction(target, target.Path, functions, out var targetFunction))
             {
                 if (IsBorrowedStorageViewIntrinsic(targetFunction.Kind))
@@ -2020,7 +2028,10 @@ internal sealed partial class SemanticCompiler
             var ownership = called.InputType is not null && ordinal == 0
                 ? called.InputOwnership
                 : (called.AdditionalParameters ?? [])[ordinal - (called.InputType is null ? 0 : 1)].Ownership;
-            if (parameterTypes[ordinal] is BoundType.SourceText or BoundType.Arena
+            var parameterType = parameterTypes[ordinal];
+            var parameterValueType = _types.IsReference(parameterType)
+                ? _types.GetReference(parameterType).ElementType : parameterType;
+            if (parameterValueType is BoundType.SourceText or BoundType.Arena
                 || (IsBorrowedTextByteStorage(parameterTypes[ordinal])
                     && (parameterTypes[ordinal] == TypeId.DynamicUInt8Array
                         || ownership != BoundFunctionInputOwnership.Move)
@@ -2442,6 +2453,49 @@ internal sealed partial class SemanticCompiler
         return parameters;
     }
 
+    private bool TryGetBorrowedViewReceiverType(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out BoundType type)
+    {
+        switch (expression)
+        {
+            case NameExpression name when bindings.TryGetValue(name.Name, out type):
+                break;
+            case FieldAccessExpression field
+                when TryGetBorrowedViewReceiverType(field.Source, bindings, out var owner)
+                    && _types.IsStruct(owner):
+                var selected = _types.GetStruct(owner).Fields.FirstOrDefault(candidate =>
+                    StringComparer.Ordinal.Equals(candidate.Name, field.FieldName));
+                if (selected is null)
+                {
+                    type = default;
+                    return false;
+                }
+                type = selected.Type;
+                break;
+            case IndexExpression index
+                when TryGetBorrowedViewReceiverType(index.Source, bindings, out var container):
+                if (TryGetContextualArrayElementType(container, out type))
+                    break;
+                if (_types.IsDictionary(container))
+                {
+                    type = _types.IsBoundedDictionary(container)
+                        ? _types.GetBoundedDictionary(container).ValueType
+                        : _types.GetDictionary(container).ValueType;
+                    break;
+                }
+                type = default;
+                return false;
+            default:
+                type = default;
+                return false;
+        }
+        if (_types.IsReference(type))
+            type = _types.GetReference(type).ElementType;
+        return true;
+    }
+
     private bool TryGetConcreteBorrowOrigins(
         Expression expression,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -2526,7 +2580,7 @@ internal sealed partial class SemanticCompiler
     {
         if (TryGetOwnedPlaceType(field, out var fieldType)
             && _types.ContainsOwnedStorage(fieldType)
-            && !TypeCanCarryBorrowedTextOrigin(fieldType)
+            && (fieldType == BoundType.SourceText || !TypeCanCarryBorrowedTextOrigin(fieldType))
             && !TypeContainsReadonlyReference(fieldType)
             && TryGetBorrowPlace(field, out place))
         {

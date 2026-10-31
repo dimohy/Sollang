@@ -854,11 +854,16 @@ borrowedTextFunctionIr typed: ref [typedIr.TypedIrNode; ~], nodeIr: Int -> Int {
 
 borrowedTextParameterCarriesOrigin parameter: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], viewTypes: ref [Bool; ~] -> Bool {
     parameter.kind != 10 -> if { false -> return }
-    parameter.typeOrigin == 1 and parameter.typeSymbol == 24
+    types -> typeIds.materializedReadTypeId(parameter.typeId) => valueTypeId
+    valueTypeId < 0 or valueTypeId >= (types -> len) => unavailableType
+    # Partial IR retains its declared builtin metadata; a committed type wins.
+    (prepared -> semanticTypeIsSourceText(types, valueTypeId))
+        or (unavailableType and parameter.typeOrigin == 1 and parameter.typeSymbol == 24)
         -> if {
             (parameter.flags -> ast.readonlyInputFlags) -> return
         }
-    parameter.typeOrigin == 1 and parameter.typeSymbol == 15
+    (not unavailableType and types[valueTypeId].kind == 1 and types[valueTypeId].origin == 1 and types[valueTypeId].symbol == 15)
+        or (unavailableType and parameter.typeOrigin == 1 and parameter.typeSymbol == 15)
         -> if { true -> return }
     parameter.typeId < 0 or parameter.typeId >= (types -> len)
         -> if { false -> return }
@@ -1872,11 +1877,13 @@ borrowedTextIndependentFieldType prepared: ref semanticContext.SemanticSnapshot,
     types[typeId] => valueType
     valueType.status != 0 or valueType.containsParameter
         -> if { false -> return }
+    prepared -> semanticTypeIsSourceText(types, typeId)
+        -> if { true -> return }
     valueType.kind == 1 and valueType.origin == 1
         -> if {
             (((valueType.symbol -> typeIds.builtinNameIsReserved)
                 or valueType.symbol == typeIds.builtinSymbolByName("Range"))
-                and valueType.symbol != 1 and valueType.symbol != 24) -> return
+                and valueType.symbol != 1) -> return
         }
     valueType.kind == 3 or valueType.kind == 4 -> if {
         valueType.first < 0 or valueType.first >= (types -> len)
@@ -2076,8 +2083,10 @@ borrowedTextConcreteOrigin typed: ref [typedIr.TypedIrNode; ~], prepared: ref se
                     or (prepared -> semanticTypeContainsOwnedStorage(types, definition.typeId))
                     -> if {
                         # Empty upstream loans do not erase owned aggregate storage.
-                        # Query actual loans without synthesizing initializer owners.
-                        typed -> borrowedTextValueOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, false, valueIr, originIr, active, depth) => upstream
+                        # Query all upstream loans, including formal Text payloads,
+                        # without synthesizing initializer owners. The queried
+                        # origin still decides whether that loan uses this owner.
+                        typed -> borrowedTextValueOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, true, false, valueIr, originIr, active, depth) => upstream
                         upstream.status == 2 or upstream.status == 3 -> if { upstream -> return }
                         BorrowedTextOriginFact { status: 2, usesOrigin: typed -> borrowedTextPlaceUsesOrigin(valueIr, originIr), placeIr: valueIr } -> return
                     }
@@ -2423,7 +2432,16 @@ borrowedTextValueOriginCore typed: ref [typedIr.TypedIrNode; ~], prepared: ref s
             value.opcode == -206 or value.opcode == -232 -> if {
                 typed -> borrowedTextConcreteOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, value.operand0, originIr, active, depth) -> return
             }
-            # Actual slice uses known loans before a concrete fallback.
+            # A SourceText slice borrows owned bytes, even when the payload loan
+            # is known empty. Ordinary Text slices preserve their upstream loan.
+            value.operand0 >= 0 and value.operand0 < (typed -> len)
+                -> if {
+                    types -> typeIds.materializedReadTypeId(typed[value.operand0].typeId) => receiverTypeId
+                    prepared -> semanticTypeIsSourceText(types, receiverTypeId)
+                        -> if {
+                            typed -> borrowedTextConcreteOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, value.operand0, originIr, active, depth) -> return
+                        }
+                }
             typed -> borrowedTextValueOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, concrete, value.operand0, originIr, active, depth) => prefix
             not parameterLoans and prefix.status == 0 -> if {
                 typed -> borrowedTextConcreteOrigin(prepared, types, querySiteIr, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, value.operand0, originIr, active, depth) -> return
@@ -7378,13 +7396,19 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                         recordedOriginIndex! + 1 => recordedOriginIndex!
                                     }
                                 not recordedOrigin! -> if {
+                                    types -> typeIds.materializedReadTypeId(borrowedParameter.typeId) => parameterValueTypeId
+                                    parameterValueTypeId < 0 or parameterValueTypeId >= (types -> len) => unavailableParameterType
                                     borrowedReturns! -> push(BorrowedTextReturn {
                                         functionIr: borrowedFunctionIndex!
                                         sourceModule: borrowedFunction.sourceModule
                                         functionSymbol: borrowedFunction.symbol
                                         parameterOrdinal: borrowedParameterOrdinal!
                                         transfersOwner: transfersBorrowedOwner!
-                                        concreteParameter: borrowedParameter.typeOrigin == 1 and (borrowedParameter.typeSymbol == 15 or borrowedParameter.typeSymbol == 24)
+                                        concreteParameter: (prepared -> semanticTypeIsSourceText(types, parameterValueTypeId))
+                                            or (not unavailableParameterType and types[parameterValueTypeId].kind == 1
+                                            and types[parameterValueTypeId].origin == 1 and types[parameterValueTypeId].symbol == 15)
+                                            or (unavailableParameterType and borrowedParameter.typeOrigin == 1
+                                            and (borrowedParameter.typeSymbol == 15 or borrowedParameter.typeSymbol == 24))
                                             or (types -> borrowedTextCanonicalByteArrayType(borrowedParameter.typeId))
                                             or (borrowedParameter.flags % 2 != 1 and (prepared -> semanticTypeContainsByteStorage(types, borrowedParameter.typeId)))
                                     })

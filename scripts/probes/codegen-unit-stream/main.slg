@@ -1,0 +1,88 @@
+import sollang.compiler.llvm.codegen_units as units
+import sys.process as process
+import sys.file as file
+
+check source: Text, expected: Bool, label: Text -> Unit uses Console, Process {
+    source -> units.readStreamedUnits -> when {
+        Ok(parts) { true }
+        Err(error) { false }
+    } => accepted
+    (expected and not accepted) or (accepted and not expected)
+        -> if { process.exit(1) }
+    "$label=ok" -> println
+}
+
+checkViews source: Text, label: Text -> Unit uses Console, Process {
+    source -> units.readStreamedUnits -> when {
+        Ok(parts) {
+            (parts -> len) != 3 -> if { process.exit(1) }
+            parts[0].kind != 0 or parts[1].kind != 1 or parts[2].kind != 2
+                -> if { process.exit(1) }
+            not (parts[0].identity == "") or not (parts[1].identity == "cache.beta") or not (parts[2].identity == "")
+                -> if { process.exit(1) }
+            not (parts[0].fragment == "prefix\n") or not (parts[1].fragment == "body\n") or not (parts[2].fragment == "suffix\n")
+                -> if { process.exit(1) }
+        }
+        Err(error) { process.exit(1) }
+    }
+    "$label=ok" -> println
+}
+
+main {
+    "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" -> check(true, "valid")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "empty-modules")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "global-module")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:한글.모듈\n@value = global i32 1\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "unicode")
+    "; sollang.codegen.unit 0:\r\nprefix\r\n; sollang.codegen.unit 1:cache.beta\r\nbody\r\n; sollang.codegen.unit 2:\r\nsuffix\r\n; sollang.codegen.end\r\n" -> check(true, "crlf")
+    "" -> check(false, "empty")
+    "extra\n; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" -> check(false, "leading-text")
+    "; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "missing-prefix")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" -> check(false, "duplicate-prefix")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "duplicate-module")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 2:\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.end\n" -> check(false, "module-after-suffix")
+    "; sollang.codegen.unit 0:wrong\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "named-prefix")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 2:wrong\n; sollang.codegen.end\n" -> check(false, "named-suffix")
+    "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n" -> check(false, "missing-end")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.end\n" -> check(false, "missing-suffix")
+    "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\nextra\n" -> check(false, "trailing-text")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 3:\n; sollang.codegen.end\n" -> check(false, "bad-kind")
+    "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end" -> check(false, "truncated-end")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "short-header")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.unit 1:cache.alpha\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "ordered")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:cache.alpha\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "reversed")
+    "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" => input
+    input -> checkViews("static-views")
+    [UInt8; ~] => bytes!
+    UIntSize(0) => offset!
+    offset! < (input -> len) -> while {
+        bytes! -> push(input -> byte(offset!))
+        offset! + 1 => offset!
+    }
+    bytes! -> file.borrowBytes => owner
+    owner -> slice(0, owner -> len) -> checkViews("owned-source-views")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:abageakabaiaaaac\n; sollang.codegen.unit 1:cacaalahabacbcaa\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "collision-ordered")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:cacaalahabacbcaa\n; sollang.codegen.unit 1:abageakabaiaaaac\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "collision-reversed")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:" => invalidPrefix
+    "\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" => invalidSuffix
+    [UInt8; ~] => invalidBytes!
+    UIntSize(0) => invalidOffset!
+    invalidOffset! < (invalidPrefix -> len) -> while {
+        invalidBytes! -> push(invalidPrefix -> byte(invalidOffset!))
+        invalidOffset! + 1 => invalidOffset!
+    }
+    invalidBytes! -> push(255)
+    0 => invalidOffset!
+    invalidOffset! < (invalidSuffix -> len) -> while {
+        invalidBytes! -> push(invalidSuffix -> byte(invalidOffset!))
+        invalidOffset! + 1 => invalidOffset!
+    }
+    invalidBytes! -> file.borrowBytes => invalidOwner
+    invalidOwner -> slice(0, invalidOwner -> len) -> check(false, "invalid-utf8")
+    0 -> units.beginStreamedUnit("")
+    "prefix" -> println
+    1 -> units.beginStreamedUnit("cache.beta")
+    "body" -> println
+    2 -> units.beginStreamedUnit("")
+    "suffix" -> println
+    units.endStreamedUnits()
+}

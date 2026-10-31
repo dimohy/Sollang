@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.text
 
+import sollang.compiler.llvm.codegen_units as codegenUnits
+
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
 import sollang.compiler.semantic.reference_prepared_type_ids as referencePrepared
 import sollang.compiler.semantic.reference_synthetic_type_ids as referenceSynthetic
@@ -474,27 +476,31 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
                 -> unless { 1 -> return }
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
+            cache.enabled -> if { 0 -> codegenUnits.beginStreamedUnit("") }
             target.dataLayoutLine -> println
             target.tripleLine -> println
             product.windows -> if {
-                context -> emitPreparedWindowsContextWithEntry(scheduledState, false)
+                context -> emitPreparedWindowsContextWithUnitStream(scheduledState, false, cache.enabled)
             } else {
-                context -> emitPreparedLinuxContextWithEntry(scheduledState, false)
+                context -> emitPreparedLinuxContextWithUnitStream(scheduledState, false, cache.enabled)
             }
             plan -> emitLibraryExports(context, scheduledState, product.windows)
+            cache.enabled -> if { codegenUnits.endStreamedUnits() }
         } else {
             context -> prepareScheduledCoreEmitterState => scheduledState
             context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
             preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
+            cache.enabled -> if { 0 -> codegenUnits.beginStreamedUnit("") }
             target.dataLayoutLine -> println
             target.tripleLine -> println
             product.windows -> if {
-                context -> emitPreparedWindowsContextWithEntry(scheduledState, true)
+                context -> emitPreparedWindowsContextWithUnitStream(scheduledState, true, cache.enabled)
             } else {
-                context -> emitPreparedLinuxContextWithEntry(scheduledState, true)
+                context -> emitPreparedLinuxContextWithUnitStream(scheduledState, true, cache.enabled)
             }
+            cache.enabled -> if { codegenUnits.endStreamedUnits() }
         }
     } else {
         context -> diagnostics.emitBlockingDiagnostics

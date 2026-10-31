@@ -71,13 +71,38 @@ emitCodegenFunction functionIndex: Int, context: ref emitterContext.EmitContext,
     functionIndex -> emitFunction(context, state)
 }
 
+emitCodegenModule groupIndex: Int, groups: ref codegenUnits.FunctionGroups, context: ref emitterContext.EmitContext, state: ref CoreEmitterState, usesAes: Bool, streamed: Bool -> Int uses Console, Process {
+    streamed -> if {
+        groups.sources[groupIndex] => source
+        [UInt64; ~] => words!
+        context.sources[source] -> modules.appendLogicalNameWords(context.modules[source], context.ranges[source], context.tokens, words!)
+        [UInt8; ~] => bytes!
+        words! -> each word { bytes! -> push(UInt8(word)) }
+        bytes! -> file.borrowBytes => owner
+        owner -> slice(0, owner -> len) => identity
+        1 -> codegenUnits.beginStreamedUnit(identity)
+    }
+    groups.starts[groupIndex] => first
+    first + groups.lengths[groupIndex] => end
+    first => index!
+    index! < end -> while {
+        groups.functions[index!] -> emitCodegenFunction(context, state, usesAes) => functionEnd
+        index! + 1 => index!
+    }
+    end
+}
+
 emitCoreWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool -> Unit uses Console, Process {
+    context -> emitCoreWithUnitStream(state, emitEntry, false)
+}
+
+emitCoreWithUnitStream context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, streamed: Bool -> Unit uses Console, Process {
     context.symbolNames.status != 0 -> if {
         "; sollang compiler invariant: invalid declaration symbol names" -> println
         process.exit(1)
     }
     context -> prepareCodegenFunctionGroups(state) -> when {
-        Ok(groups) { context -> emitCoreFunctionGroupsWithEntry(state, emitEntry, groups) }
+        Ok(groups) { context -> emitCoreFunctionGroupsWithEntry(state, emitEntry, groups, streamed) }
         Err(_) {
             "; sollang compiler invariant: invalid codegen function grouping" -> println
             process.exit(1)
@@ -85,7 +110,7 @@ emitCoreWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitte
     }
 }
 
-emitCoreFunctionGroupsWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, groups: ref codegenUnits.FunctionGroups -> Unit uses Console, Process {
+emitCoreFunctionGroupsWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, groups: ref codegenUnits.FunctionGroups, streamed: Bool -> Unit uses Console, Process {
     context -> emitCorePreambleFeatures(false, state) => coreFeatures
     context -> emitRuntimeTaskResultCompletionFunctions(state)
     coreFeatures.usesArguments => usesArguments
@@ -93,9 +118,12 @@ emitCoreFunctionGroupsWithEntry context: ref emitterContext.EmitContext, state: 
     coreFeatures.usesComInterop => usesComInterop
     context -> usesAes128CpuSpecialization(state) => usesAes128Specialization
     context.pointerBitWidth / 8 => entryPointerAlignment
-    groups.functions -> parallel functionEmitIndex {
-        functionEmitIndex -> emitCodegenFunction(context, state, usesAes128Specialization)
-    } => functionEmissionStatuses
+    [Int; ~] => moduleIndices!
+    0..<(groups.sources -> len) -> each index { moduleIndices! -> push(index) }
+    moduleIndices! -> parallel groupIndex {
+        groupIndex -> emitCodegenModule(groups, context, state, usesAes128Specialization, streamed)
+    } => moduleEmissionEnds
+    streamed -> if { 2 -> codegenUnits.beginStreamedUnit("") }
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function

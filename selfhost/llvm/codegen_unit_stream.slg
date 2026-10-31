@@ -1,0 +1,99 @@
+namespace sollang.compiler.llvm.codegen_units
+
+import sys.text as text
+
+# Process-backed emitters preserve the same prefix/module/suffix boundaries as
+# the CSharp memory sink. These are framing comments, never LLVM parsing rules.
+# Views borrow the complete input; its owner must outlive the returned units.
+public struct StreamedUnit {
+    public kind: Int
+    public identity: Text
+    public fragment: Text
+}
+
+public enum UnitStreamError { Framing, Incomplete, Identity, Order, Limit }
+
+public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamError> {
+    [StreamedUnit; ~] => units!
+    [UInt64; ~] => identityWords!
+    -1 => kind!
+    "" => identity!
+    UIntSize(0) => fragmentStart!
+    UIntSize(0) => lineStart!
+    UInt64(0) => previousHash!
+    0 => previousStart!
+    0 => previousLength!
+    source -> len => length
+    streamPrefix() => prefix
+    prefix -> len => prefixLength
+    lineStart! < length -> while {
+        lineStart! => lineEnd!
+        lineEnd! < length and (source -> byte(lineEnd!)) != '\n'
+            -> while { lineEnd! + 1 => lineEnd! }
+        lineEnd! == length
+            -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Incomplete) -> return }
+        lineEnd! => contentEnd!
+        contentEnd! > lineStart! and (source -> byte(contentEnd! - 1)) == '\r'
+            -> if { contentEnd! - 1 => contentEnd! }
+        source -> slice(lineStart!, contentEnd! - lineStart!) => line
+        line == streamEnd() -> if {
+            kind! != 2 or lineEnd! + 1 != length
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return }
+            source -> slice(fragmentStart!, lineStart! - fragmentStart!) => fragment
+            (units! -> len) >= 1000000 or (fragment -> len) > 1073741824
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Limit) -> return }
+            units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment })
+            units! -> Result<[StreamedUnit; ~], UnitStreamError>.Ok -> return
+        }
+        line -> text.startsWith(prefix) -> if {
+            (line -> len) < prefixLength + 2 or (line -> byte(prefixLength + 1)) != ':'
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return }
+            Int(line -> byte(prefixLength)) - '0' => nextKind
+            line -> slice(prefixLength + 2, (line -> len) - prefixLength - 2) => nextIdentity
+            nextKind < 0 or nextKind > 2 or (kind! < 0 and nextKind != 0)
+                or (kind! >= 0 and nextKind == 0) or kind! == 2
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Order) -> return }
+            nextKind != 1 and (nextIdentity -> len) != 0
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Identity) -> return }
+            (nextIdentity -> len) > 1048576
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Limit) -> return }
+            kind! >= 0 -> if {
+                source -> slice(fragmentStart!, lineStart! - fragmentStart!) => fragment
+                (units! -> len) >= 1000000 or (fragment -> len) > 1073741824
+                    -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Limit) -> return }
+                units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment })
+            }
+            nextKind == 1 -> if {
+                identityWords! -> len => start
+                UIntSize(0) => offset!
+                offset! < (nextIdentity -> len) -> while {
+                    identityWords! -> push(UInt64(nextIdentity -> byte(offset!)))
+                    offset! + 1 => offset!
+                }
+                Int(nextIdentity -> len) => identityLength
+                identityWords! -> identityUtf8Valid(start, identityLength)
+                    -> unless { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Identity) -> return }
+                identityWords! -> identityHash(start, identityLength) => hash
+                kind! == 1 -> if {
+                    hash == previousHash! -> if {
+                        (identityWords! -> identityOrder(previousStart!, previousLength!, start, identityLength)) != -1
+                            -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Order) -> return }
+                    } else {
+                        previousHash! -> lessUnsigned(hash)
+                            -> unless { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Order) -> return }
+                    }
+                }
+                hash => previousHash!
+                start => previousStart!
+                identityLength => previousLength!
+            }
+            nextKind => kind!
+            nextIdentity => identity!
+            lineEnd! + 1 => fragmentStart!
+        } else {
+            kind! < 0 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return }
+        }
+        lineEnd! + 1 => lineStart!
+    }
+    Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Incomplete)
+}
