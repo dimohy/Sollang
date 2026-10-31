@@ -1166,7 +1166,7 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             (arm.kind == 19 and armSource.kind == 58) => conditionalArm
             conditionalArm -> if {
                 WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(emissionOrder, context, state)
-                "while$(armIndex!)_body:" -> println
+                "while$(armIndex! -> valueNameId(state))_body:" -> println
                 arm.operand1 -> regionReturns(context, state) => armReturns
                 arm.operand1 -> emitRegion(emissionOrder, context, state)
                 not armReturns -> if {
@@ -1177,9 +1177,9 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             booleanWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
                     OwnedDropRequest { regionIndex: arm.operand1, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
-                    "  br label %when$(whenIndex)_end" -> println
+                    "  br label %when$(whenIndex -> valueNameId(state))_end" -> println
                 }
-                "while$(armIndex!)_exit:" -> println
+                "while$(armIndex! -> valueNameId(state))_exit:" -> println
                 arm.nextOperand => armIndex!
                 armOrdinal! + 1 => armOrdinal!
             } else {
@@ -1193,19 +1193,19 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             booleanWhen -> emitIfResultStore(elseValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
                     OwnedDropRequest { regionIndex: armIndex!, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
-                    "  br label %when$(whenIndex)_end" -> println
+                    "  br label %when$(whenIndex -> valueNameId(state))_end" -> println
                 }
                 false => armOpen!
             }
         }
     }
     not whenAllArmsReturn! -> if {
-        "when$(whenIndex)_end:" -> println
+        "when$(whenIndex -> valueNameId(state))_end:" -> println
         whenValueUsed! and not (booleanWhen.typeOrigin == 1 and booleanWhen.typeSymbol == 0)
             -> if {
                 "  %v$(whenIndex -> valueNameId(state)) = load " -> print
                 booleanWhen -> writeIrType(context, state)
-                ", ptr %if$(whenIndex)_result, align " -> print
+                ", ptr %if$(whenIndex -> valueNameId(state))_result, align " -> print
                 booleanWhen -> storageAlign(context, state) -> writeDecimalLine
             }
     }
@@ -1227,13 +1227,13 @@ emitSubjectWhenRangeCondition rangeIndex: Int, armIndex: Int, ownerIndex: Int, c
     context.ir[armIndex].parent => whenIndex
     context.ir[rangeIndex] => range
     context.ir[context.ir[whenIndex].operand0] -> integerNodeSigned(context, state) => signed
-    "  %while$(armIndex)_v$(rangeIndex)_lower = " -> print
+    "  %while$(armIndex -> valueNameId(state))_v$(rangeIndex -> valueNameId(state))_lower = " -> print
     signed -> if { "icmp sge " -> print } else { "icmp uge " -> print }
     whenIndex -> writeSubjectWhenOperand(ownerIndex, context, state)
     ", " -> print
     range.operand0 -> writeComparisonOperandValue(ownerIndex, armIndex, context, state)
     "" -> println
-    "  %while$(armIndex)_v$(rangeIndex)_upper = " -> print
+    "  %while$(armIndex -> valueNameId(state))_v$(rangeIndex -> valueNameId(state))_upper = " -> print
     range.opcode == grammar.tokenIdRangeUntil() -> if {
         signed -> if { "icmp slt " -> print } else { "icmp ult " -> print }
     } else { signed -> if { "icmp sle " -> print } else { "icmp ule " -> print } }
@@ -1241,7 +1241,7 @@ emitSubjectWhenRangeCondition rangeIndex: Int, armIndex: Int, ownerIndex: Int, c
     ", " -> print
     range.operand1 -> writeComparisonOperandValue(ownerIndex, armIndex, context, state)
     "" -> println
-    "  %while$(armIndex)_v$(rangeIndex) = and i1 %while$(armIndex)_v$(rangeIndex)_lower, %while$(armIndex)_v$(rangeIndex)_upper" -> println
+    "  %while$(armIndex -> valueNameId(state))_v$(rangeIndex -> valueNameId(state)) = and i1 %while$(armIndex -> valueNameId(state))_v$(rangeIndex -> valueNameId(state))_lower, %while$(armIndex -> valueNameId(state))_v$(rangeIndex -> valueNameId(state))_upper" -> println
 }
 
 emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -1255,7 +1255,7 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
     whenIndex -> controlValueUsed(whenOwner!, context, state) => whenValueUsed
     subject -> referenceValueTypeId(context, state) => subjectReadTypeId
     subjectReadTypeId >= 0 -> if {
-        "  %when$(whenIndex)_subject_read = " -> print
+        "  %when$(whenIndex -> valueNameId(state))_subject_read = " -> print
         subjectWhen.operand0 -> referenceParameterValueIsMaterialized(whenOwner!, context, state)
             -> if {
                 "freeze " -> print
@@ -1305,7 +1305,7 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             (arm.kind == 19 and armSource.kind == 58) => conditionalArm
             conditionalArm -> if {
                 WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(emissionOrder, context, state)
-                "while$(armIndex!)_body:" -> println
+                "while$(armIndex! -> valueNameId(state))_body:" -> println
                 armIndex! => emittedArmRegion!
                 arm.operand1 >= 0 and context.ir[arm.operand1].kind == 19
                     -> if { arm.operand1 => emittedArmRegion! }
@@ -1318,9 +1318,9 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             subjectWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
                     OwnedDropRequest { regionIndex: emittedArmRegion!, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
-                    "  br label %when$(whenIndex)_end" -> println
+                    "  br label %when$(whenIndex -> valueNameId(state))_end" -> println
                 }
-                "while$(armIndex!)_exit:" -> println
+                "while$(armIndex! -> valueNameId(state))_exit:" -> println
                 arm.nextOperand => armIndex!
                 armOrdinal! + 1 => armOrdinal!
             } else {
@@ -1334,19 +1334,19 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             subjectWhen -> emitIfResultStore(elseValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
                     OwnedDropRequest { regionIndex: emittedElseRegion, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
-                    "  br label %when$(whenIndex)_end" -> println
+                    "  br label %when$(whenIndex -> valueNameId(state))_end" -> println
                 }
                 false => armOpen!
             }
         }
     }
     not whenAllArmsReturn! -> if {
-        "when$(whenIndex)_end:" -> println
+        "when$(whenIndex -> valueNameId(state))_end:" -> println
         whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0)
             -> if {
                 "  %v$(whenIndex -> valueNameId(state)) = load " -> print
                 subjectWhen -> writeIrType(context, state)
-                ", ptr %if$(whenIndex)_result, align " -> print
+                ", ptr %if$(whenIndex -> valueNameId(state))_result, align " -> print
                 subjectWhen -> storageAlign(context, state) -> writeDecimalLine
             }
     }
@@ -1533,7 +1533,7 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                 "  store " -> print
                 armBinding -> writeIrType(context, state)
                 " %v$(armBindingIndex -> valueNameId(state)), ptr " -> print
-                patternFrameRoot -> writeAsyncLocalAddress(context)
+                patternFrameRoot -> writeAsyncLocalAddress(context, state)
                 ", align " -> print
                 armBinding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
             }
@@ -1727,10 +1727,10 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
     (conditionalCondition.kind == 8 and (conditionalCondition.opcode == -25 or conditionalCondition.opcode == -24) or (conditionalCondition.kind == 7 and conditionalCondition.opcode == -26)) => conditionalShortCircuit
     conditionalShortCircuit -> if {
         WhileBranchRequest { whileIndex: controlIndex, ownerIndex: ownerIndex, conditionIndex: conditionalConditionIndex } -> emitWhileBranch(emissionOrder, context, state)
-        "while$(controlIndex)_body:" -> println
-        control -> writeIfShortCircuitBodyTarget(controlIndex)
-        "while$(controlIndex)_exit:" -> println
-        control -> writeIfShortCircuitExitTarget(controlIndex)
+        "while$(controlIndex -> valueNameId(state))_body:" -> println
+        control -> writeIfShortCircuitBodyTarget(controlIndex, state)
+        "while$(controlIndex -> valueNameId(state))_exit:" -> println
+        control -> writeIfShortCircuitExitTarget(controlIndex, state)
     } else {
         "  br i1 " -> print
         conditionalCondition.kind == 4 -> if {
@@ -1738,9 +1738,9 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
             (context.sources[conditionalCondition.sourceModule] -> byte(conditionalConditionToken.span.start)) == 116
                 -> if { "1" -> print } else { "0" -> print }
         } else { "%v$(conditionalConditionIndex -> valueNameId(state))" -> print }
-        control -> writeIfDirectBranchTargets(controlIndex)
+        control -> writeIfDirectBranchTargets(controlIndex, state)
     }
-    "if$(controlIndex)_then:" -> println
+    "if$(controlIndex -> valueNameId(state))_then:" -> println
     control.operand1 -> emitRegion(emissionOrder, context, state)
     conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
         -> if {
@@ -1748,9 +1748,9 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
             control -> emitIfResultStore(entryThenStoreIndex, ownerIndex, controlIndex, 0, context, state)
         }
     OwnedDropRequest { regionIndex: control.operand1, beforeAst: -1, edgeIndex: controlIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-    "  br label %if$(controlIndex)_merge" -> println
+    "  br label %if$(controlIndex -> valueNameId(state))_merge" -> println
     control.nextOperand >= 0 -> if {
-        "if$(controlIndex)_else:" -> println
+        "if$(controlIndex -> valueNameId(state))_else:" -> println
         control.nextOperand -> emitRegion(emissionOrder, context, state)
         conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0)
             -> if {
@@ -1758,14 +1758,14 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
                 control -> emitIfResultStore(entryElseStoreIndex, ownerIndex, controlIndex, 1, context, state)
             }
         OwnedDropRequest { regionIndex: control.nextOperand, beforeAst: -1, edgeIndex: controlIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-        "  br label %if$(controlIndex)_merge" -> println
+        "  br label %if$(controlIndex -> valueNameId(state))_merge" -> println
     }
-    "if$(controlIndex)_merge:" -> println
+    "if$(controlIndex -> valueNameId(state))_merge:" -> println
     conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
         -> if {
             "  %v$(controlIndex -> valueNameId(state)) = load " -> print
             control -> writeIrType(context, state)
-            ", ptr %if$(controlIndex)_result, align " -> print
+            ", ptr %if$(controlIndex -> valueNameId(state))_result, align " -> print
             control -> storageAlign(context, state) -> writeDecimalLine
         }
 }

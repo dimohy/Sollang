@@ -211,7 +211,7 @@ writeMutableStoragePointer bindingIndex: Int, ownerIndex: Int, context: ref emit
         -> if {
             parameterOrdinal -> writeMutableStructParameterPointer
         } else {
-            "%slot$(bindingIndex)" -> print
+            "%slot$(bindingIndex -> valueNameId(state))" -> print
         }
 }
 emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -384,7 +384,7 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
     borrowOrdinal < 0 and storageRoot >= 0 -> if {
         0 => field!
         field! < 3 -> while {
-            "  %v$(callIndex -> valueNameId(state))_arena_addr$(field!) = getelementptr %sollang.array.i32, ptr %slot$(storageRoot), i32 0, i32 $(field!)" -> println
+            "  %v$(callIndex -> valueNameId(state))_arena_addr$(field!) = getelementptr %sollang.array.i32, ptr %slot$(storageRoot -> valueNameId(state)), i32 0, i32 $(field!)" -> println
             field! + 1 => field!
         }
     }
@@ -593,7 +593,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
     call.opcode == -244 -> if {
         call.operand0 -> mutableStorageRoot(context, state) => countRoot
         countRoot >= 0 -> if {
-            "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(countRoot), align 8" -> println
+            "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(countRoot -> valueNameId(state)), align 8" -> println
         }
         0 => countWord!
         countWord! < wordCount -> while {
@@ -659,7 +659,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
                 call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutationParameter
                 "  %v$(callIndex -> valueNameId(state))_word_ptr = getelementptr inbounds %sollang.bitset.t$(bitSetTypeId!), ptr " -> print
                 mutationRoot >= 0 -> if {
-                    "%slot$(mutationRoot)" -> print
+                    "%slot$(mutationRoot -> valueNameId(state))" -> print
                 } else {
                     mutationParameter -> writeMutableStructParameterPointer
                 }
@@ -675,7 +675,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
             } else {
                 call.operand0 -> mutableStorageRoot(context, state) => containsRoot
                 containsRoot >= 0 -> if {
-                    "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(containsRoot), align 8" -> println
+                    "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(containsRoot -> valueNameId(state)), align 8" -> println
                 }
                 0 => containsWord!
                 containsWord! < wordCount -> while {
@@ -727,7 +727,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
         dequeBorrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(dequeBorrow)_mut_capacity_addr" -> print }
         ", align 8" -> println
     } else {
-        dequeRoot >= 0 -> if { "  %deque$(callIndex)_source = load %sollang.array.i32, ptr %slot$(dequeRoot), align 8" -> println }
+        dequeRoot >= 0 -> if { "  %deque$(callIndex)_source = load %sollang.array.i32, ptr %slot$(dequeRoot -> valueNameId(state)), align 8" -> println }
         "  %deque$(callIndex)_data = extractvalue %sollang.array.i32 " -> print
         dequeRoot >= 0 -> if { "%deque$(callIndex)_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
         ", 0" -> println
@@ -818,7 +818,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
             "  %deque$(callIndex)_result0 = insertvalue %sollang.array.i32 poison, ptr %deque$(callIndex)_active_data, 0" -> println
             "  %deque$(callIndex)_result1 = insertvalue %sollang.array.i32 %deque$(callIndex)_result0, i64 %deque$(callIndex)_next_length, 1" -> println
             "  %deque$(callIndex)_result = insertvalue %sollang.array.i32 %deque$(callIndex)_result1, i64 %deque$(callIndex)_active_capacity, 2" -> println
-            "  store %sollang.array.i32 %deque$(callIndex)_result, ptr %slot$(dequeRoot), align 8" -> println
+            "  store %sollang.array.i32 %deque$(callIndex)_result, ptr %slot$(dequeRoot -> valueNameId(state)), align 8" -> println
         }
     }
 
@@ -856,7 +856,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
                     ", align 8" -> println
                 } else {
                     "  %deque$(callIndex)_result = insertvalue %sollang.array.i32 %deque$(callIndex)_source, i64 %deque$(callIndex)_next_length, 1" -> println
-                    "  store %sollang.array.i32 %deque$(callIndex)_result, ptr %slot$(dequeRoot), align 8" -> println
+                    "  store %sollang.array.i32 %deque$(callIndex)_result, ptr %slot$(dequeRoot -> valueNameId(state)), align 8" -> println
                 }
             }
         }
@@ -889,19 +889,19 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
         or (context.ir[heapPlaceRoot].kind == 17 and context.ir[heapPlaceRoot].flags == 1))) => heapStructMember
 
     heapBorrow >= 0 and not heapStructMember -> if {
-        "  %heap$(callIndex)_data = load ptr, ptr " -> print
+        "  %heap$(callIndex -> valueNameId(state))_data = load ptr, ptr " -> print
         heapBorrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(heapBorrow)_mut_ptr_addr" -> print }
         ", align 8" -> println
-        "  %heap$(callIndex)_length = load i64, ptr " -> print
+        "  %heap$(callIndex -> valueNameId(state))_length = load i64, ptr " -> print
         heapBorrow == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(heapBorrow)_mut_len_addr" -> print }
         ", align 8" -> println
-        "  %heap$(callIndex)_capacity = load i64, ptr " -> print
+        "  %heap$(callIndex -> valueNameId(state))_capacity = load i64, ptr " -> print
         heapBorrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(heapBorrow)_mut_capacity_addr" -> print }
         ", align 8" -> println
     } else {
-        "  %heap$(callIndex)_source = " -> print
+        "  %heap$(callIndex -> valueNameId(state))_source = " -> print
         heapRoot >= 0 and not heapStructMember -> if {
-            "load %sollang.array.i32, ptr %slot$(heapRoot), align 8" -> println
+            "load %sollang.array.i32, ptr %slot$(heapRoot -> valueNameId(state)), align 8" -> println
         } else {
             base.typeId != heapTypeId! -> if {
                 "load %sollang.array.i32, ptr " -> print
@@ -911,91 +911,91 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
             call.operand0 -> writeValue(ownerIndex, context, state)
             base.typeId != heapTypeId! -> if { ", align 8" -> println } else { "" -> println }
         }
-        "  %heap$(callIndex)_data = extractvalue %sollang.array.i32 %heap$(callIndex)_source, 0" -> println
-        "  %heap$(callIndex)_length = extractvalue %sollang.array.i32 %heap$(callIndex)_source, 1" -> println
-        "  %heap$(callIndex)_capacity = extractvalue %sollang.array.i32 %heap$(callIndex)_source, 2" -> println
+        "  %heap$(callIndex -> valueNameId(state))_data = extractvalue %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_source, 0" -> println
+        "  %heap$(callIndex -> valueNameId(state))_length = extractvalue %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_source, 1" -> println
+        "  %heap$(callIndex -> valueNameId(state))_capacity = extractvalue %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_source, 2" -> println
     }
 
     call.opcode == -252 -> if {
         call.operand1 -> aggregateValueIndex(context, state) => heapValueIndex
-        "  %heap$(callIndex)_has_room = icmp ult i64 %heap$(callIndex)_length, %heap$(callIndex)_capacity" -> println
-        "  br i1 %heap$(callIndex)_has_room, label %heap$(callIndex)_keep, label %heap$(callIndex)_grow" -> println
-        "heap$(callIndex)_keep:" -> println
-        "  br label %heap$(callIndex)_ready" -> println
-        "heap$(callIndex)_grow:" -> println
-        "  %heap$(callIndex)_capacity_zero = icmp eq i64 %heap$(callIndex)_capacity, 0" -> println
-        "  %heap$(callIndex)_doubled = mul i64 %heap$(callIndex)_capacity, 2" -> println
-        "  %heap$(callIndex)_grown_capacity = select i1 %heap$(callIndex)_capacity_zero, i64 1, i64 %heap$(callIndex)_doubled" -> println
-        "  %heap$(callIndex)_grown_bytes = mul i64 %heap$(callIndex)_grown_capacity, $elementSize" -> println
-        "  %heap$(callIndex)_grown_data = call ptr @sollang_alloc(i64 %heap$(callIndex)_grown_bytes)" -> println
-        "  %heap$(callIndex)_copy_bytes = mul i64 %heap$(callIndex)_length, $elementSize" -> println
-        "  call void @llvm.memcpy.p0.p0.i64(ptr %heap$(callIndex)_grown_data, ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_copy_bytes, i1 false)" -> println
-        "  call void @sollang_free(ptr %heap$(callIndex)_data)" -> println
-        "  br label %heap$(callIndex)_ready" -> println
-        "heap$(callIndex)_ready:" -> println
-        "  %heap$(callIndex)_active_data = phi ptr [ %heap$(callIndex)_data, %heap$(callIndex)_keep ], [ %heap$(callIndex)_grown_data, %heap$(callIndex)_grow ]" -> println
-        "  %heap$(callIndex)_active_capacity = phi i64 [ %heap$(callIndex)_capacity, %heap$(callIndex)_keep ], [ %heap$(callIndex)_grown_capacity, %heap$(callIndex)_grow ]" -> println
-        "  %heap$(callIndex)_append = getelementptr " -> print
+        "  %heap$(callIndex -> valueNameId(state))_has_room = icmp ult i64 %heap$(callIndex -> valueNameId(state))_length, %heap$(callIndex -> valueNameId(state))_capacity" -> println
+        "  br i1 %heap$(callIndex -> valueNameId(state))_has_room, label %heap$(callIndex -> valueNameId(state))_keep, label %heap$(callIndex -> valueNameId(state))_grow" -> println
+        "heap$(callIndex -> valueNameId(state))_keep:" -> println
+        "  br label %heap$(callIndex -> valueNameId(state))_ready" -> println
+        "heap$(callIndex -> valueNameId(state))_grow:" -> println
+        "  %heap$(callIndex -> valueNameId(state))_capacity_zero = icmp eq i64 %heap$(callIndex -> valueNameId(state))_capacity, 0" -> println
+        "  %heap$(callIndex -> valueNameId(state))_doubled = mul i64 %heap$(callIndex -> valueNameId(state))_capacity, 2" -> println
+        "  %heap$(callIndex -> valueNameId(state))_grown_capacity = select i1 %heap$(callIndex -> valueNameId(state))_capacity_zero, i64 1, i64 %heap$(callIndex -> valueNameId(state))_doubled" -> println
+        "  %heap$(callIndex -> valueNameId(state))_grown_bytes = mul i64 %heap$(callIndex -> valueNameId(state))_grown_capacity, $elementSize" -> println
+        "  %heap$(callIndex -> valueNameId(state))_grown_data = call ptr @sollang_alloc(i64 %heap$(callIndex -> valueNameId(state))_grown_bytes)" -> println
+        "  %heap$(callIndex -> valueNameId(state))_copy_bytes = mul i64 %heap$(callIndex -> valueNameId(state))_length, $elementSize" -> println
+        "  call void @llvm.memcpy.p0.p0.i64(ptr %heap$(callIndex -> valueNameId(state))_grown_data, ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_copy_bytes, i1 false)" -> println
+        "  call void @sollang_free(ptr %heap$(callIndex -> valueNameId(state))_data)" -> println
+        "  br label %heap$(callIndex -> valueNameId(state))_ready" -> println
+        "heap$(callIndex -> valueNameId(state))_ready:" -> println
+        "  %heap$(callIndex -> valueNameId(state))_active_data = phi ptr [ %heap$(callIndex -> valueNameId(state))_data, %heap$(callIndex -> valueNameId(state))_keep ], [ %heap$(callIndex -> valueNameId(state))_grown_data, %heap$(callIndex -> valueNameId(state))_grow ]" -> println
+        "  %heap$(callIndex -> valueNameId(state))_active_capacity = phi i64 [ %heap$(callIndex -> valueNameId(state))_capacity, %heap$(callIndex -> valueNameId(state))_keep ], [ %heap$(callIndex -> valueNameId(state))_grown_capacity, %heap$(callIndex -> valueNameId(state))_grow ]" -> println
+        "  %heap$(callIndex -> valueNameId(state))_append = getelementptr " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        ", ptr %heap$(callIndex)_active_data, i64 %heap$(callIndex)_length" -> println
+        ", ptr %heap$(callIndex -> valueNameId(state))_active_data, i64 %heap$(callIndex -> valueNameId(state))_length" -> println
         "  store " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
         " " -> print
         heapValueIndex -> writeValue(ownerIndex, context, state)
-        ", ptr %heap$(callIndex)_append, align $elementAlign" -> println
-        "  %heap$(callIndex)_index_addr = alloca i64, align 8" -> println
-        "  store i64 %heap$(callIndex)_length, ptr %heap$(callIndex)_index_addr, align 8" -> println
-        "  br label %heap$(callIndex)_up" -> println
-        "heap$(callIndex)_up:" -> println
-        "  %heap$(callIndex)_index = load i64, ptr %heap$(callIndex)_index_addr, align 8" -> println
-        "  %heap$(callIndex)_has_parent = icmp ugt i64 %heap$(callIndex)_index, 0" -> println
-        "  br i1 %heap$(callIndex)_has_parent, label %heap$(callIndex)_up_compare, label %heap$(callIndex)_up_done" -> println
-        "heap$(callIndex)_up_compare:" -> println
-        "  %heap$(callIndex)_index_minus_one = sub i64 %heap$(callIndex)_index, 1" -> println
-        "  %heap$(callIndex)_parent = udiv i64 %heap$(callIndex)_index_minus_one, 2" -> println
-        "  %heap$(callIndex)_child_ptr = getelementptr " -> print
+        ", ptr %heap$(callIndex -> valueNameId(state))_append, align $elementAlign" -> println
+        "  %heap$(callIndex -> valueNameId(state))_index_addr = alloca i64, align 8" -> println
+        "  store i64 %heap$(callIndex -> valueNameId(state))_length, ptr %heap$(callIndex -> valueNameId(state))_index_addr, align 8" -> println
+        "  br label %heap$(callIndex -> valueNameId(state))_up" -> println
+        "heap$(callIndex -> valueNameId(state))_up:" -> println
+        "  %heap$(callIndex -> valueNameId(state))_index = load i64, ptr %heap$(callIndex -> valueNameId(state))_index_addr, align 8" -> println
+        "  %heap$(callIndex -> valueNameId(state))_has_parent = icmp ugt i64 %heap$(callIndex -> valueNameId(state))_index, 0" -> println
+        "  br i1 %heap$(callIndex -> valueNameId(state))_has_parent, label %heap$(callIndex -> valueNameId(state))_up_compare, label %heap$(callIndex -> valueNameId(state))_up_done" -> println
+        "heap$(callIndex -> valueNameId(state))_up_compare:" -> println
+        "  %heap$(callIndex -> valueNameId(state))_index_minus_one = sub i64 %heap$(callIndex -> valueNameId(state))_index, 1" -> println
+        "  %heap$(callIndex -> valueNameId(state))_parent = udiv i64 %heap$(callIndex -> valueNameId(state))_index_minus_one, 2" -> println
+        "  %heap$(callIndex -> valueNameId(state))_child_ptr = getelementptr " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        ", ptr %heap$(callIndex)_active_data, i64 %heap$(callIndex)_index" -> println
-        "  %heap$(callIndex)_parent_ptr = getelementptr " -> print
+        ", ptr %heap$(callIndex -> valueNameId(state))_active_data, i64 %heap$(callIndex -> valueNameId(state))_index" -> println
+        "  %heap$(callIndex -> valueNameId(state))_parent_ptr = getelementptr " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        ", ptr %heap$(callIndex)_active_data, i64 %heap$(callIndex)_parent" -> println
-        "  %heap$(callIndex)_child = load " -> print
+        ", ptr %heap$(callIndex -> valueNameId(state))_active_data, i64 %heap$(callIndex -> valueNameId(state))_parent" -> println
+        "  %heap$(callIndex -> valueNameId(state))_child = load " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        ", ptr %heap$(callIndex)_child_ptr, align $elementAlign" -> println
-        "  %heap$(callIndex)_parent_value = load " -> print
+        ", ptr %heap$(callIndex -> valueNameId(state))_child_ptr, align $elementAlign" -> println
+        "  %heap$(callIndex -> valueNameId(state))_parent_value = load " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        ", ptr %heap$(callIndex)_parent_ptr, align $elementAlign" -> println
-        "  %heap$(callIndex)_rises = " -> print
+        ", ptr %heap$(callIndex -> valueNameId(state))_parent_ptr, align $elementAlign" -> println
+        "  %heap$(callIndex -> valueNameId(state))_rises = " -> print
         elementFloat -> if { "fcmp ogt " -> print } else { elementSigned
                 -> if { "icmp sgt " -> print } else { "icmp ugt " -> print } }
         elementTypeId -> writeSemanticTypeId(context, state)
-        " %heap$(callIndex)_child, %heap$(callIndex)_parent_value" -> println
-        "  br i1 %heap$(callIndex)_rises, label %heap$(callIndex)_up_swap, label %heap$(callIndex)_up_done" -> println
-        "heap$(callIndex)_up_swap:" -> println
+        " %heap$(callIndex -> valueNameId(state))_child, %heap$(callIndex -> valueNameId(state))_parent_value" -> println
+        "  br i1 %heap$(callIndex -> valueNameId(state))_rises, label %heap$(callIndex -> valueNameId(state))_up_swap, label %heap$(callIndex -> valueNameId(state))_up_done" -> println
+        "heap$(callIndex -> valueNameId(state))_up_swap:" -> println
         "  store " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        " %heap$(callIndex)_parent_value, ptr %heap$(callIndex)_child_ptr, align $elementAlign" -> println
+        " %heap$(callIndex -> valueNameId(state))_parent_value, ptr %heap$(callIndex -> valueNameId(state))_child_ptr, align $elementAlign" -> println
         "  store " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        " %heap$(callIndex)_child, ptr %heap$(callIndex)_parent_ptr, align $elementAlign" -> println
-        "  store i64 %heap$(callIndex)_parent, ptr %heap$(callIndex)_index_addr, align 8" -> println
-        "  br label %heap$(callIndex)_up" -> println
-        "heap$(callIndex)_up_done:" -> println
-        "  %heap$(callIndex)_next_length = add i64 %heap$(callIndex)_length, 1" -> println
+        " %heap$(callIndex -> valueNameId(state))_child, ptr %heap$(callIndex -> valueNameId(state))_parent_ptr, align $elementAlign" -> println
+        "  store i64 %heap$(callIndex -> valueNameId(state))_parent, ptr %heap$(callIndex -> valueNameId(state))_index_addr, align 8" -> println
+        "  br label %heap$(callIndex -> valueNameId(state))_up" -> println
+        "heap$(callIndex -> valueNameId(state))_up_done:" -> println
+        "  %heap$(callIndex -> valueNameId(state))_next_length = add i64 %heap$(callIndex -> valueNameId(state))_length, 1" -> println
         heapBorrow >= 0 -> if {
-            "  store ptr %heap$(callIndex)_active_data, ptr " -> print
+            "  store ptr %heap$(callIndex -> valueNameId(state))_active_data, ptr " -> print
             heapBorrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(heapBorrow)_mut_ptr_addr" -> print }
             ", align 8" -> println
-            "  store i64 %heap$(callIndex)_next_length, ptr " -> print
+            "  store i64 %heap$(callIndex -> valueNameId(state))_next_length, ptr " -> print
             heapBorrow == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(heapBorrow)_mut_len_addr" -> print }
             ", align 8" -> println
-            "  store i64 %heap$(callIndex)_active_capacity, ptr " -> print
+            "  store i64 %heap$(callIndex -> valueNameId(state))_active_capacity, ptr " -> print
             heapBorrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(heapBorrow)_mut_capacity_addr" -> print }
             ", align 8" -> println
         } else {
-            "  %heap$(callIndex)_result0 = insertvalue %sollang.array.i32 poison, ptr %heap$(callIndex)_active_data, 0" -> println
-            "  %heap$(callIndex)_result1 = insertvalue %sollang.array.i32 %heap$(callIndex)_result0, i64 %heap$(callIndex)_next_length, 1" -> println
-            "  %heap$(callIndex)_result = insertvalue %sollang.array.i32 %heap$(callIndex)_result1, i64 %heap$(callIndex)_active_capacity, 2" -> println
+            "  %heap$(callIndex -> valueNameId(state))_result0 = insertvalue %sollang.array.i32 poison, ptr %heap$(callIndex -> valueNameId(state))_active_data, 0" -> println
+            "  %heap$(callIndex -> valueNameId(state))_result1 = insertvalue %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_result0, i64 %heap$(callIndex -> valueNameId(state))_next_length, 1" -> println
+            "  %heap$(callIndex -> valueNameId(state))_result = insertvalue %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_result1, i64 %heap$(callIndex -> valueNameId(state))_active_capacity, 2" -> println
             heapStructMember -> if {
                 call.operand0 -> emitMutableReferenceMemberPlace(
                 heapPlaceRoot,
@@ -1005,113 +1005,113 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
                 false,
                 context,
                 state) => heapMemberDepth
-                "  store %sollang.array.i32 %heap$(callIndex)_result, ptr %callref$(callIndex)_arg0_place" -> print
+                "  store %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_result, ptr %callref$(callIndex)_arg0_place" -> print
                 heapMemberDepth - 1 -> writeDecimal
                 ", align 8" -> println
             } else {
-                "  store %sollang.array.i32 %heap$(callIndex)_result, ptr %slot$(heapRoot), align 8" -> println
+                "  store %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_result, ptr %slot$(heapRoot -> valueNameId(state)), align 8" -> println
             }
         }
     }
 
     call.opcode == -253 or call.opcode == -254 -> if {
-        "  %heap$(callIndex)_nonempty = icmp ugt i64 %heap$(callIndex)_length, 0" -> println
-        "  br i1 %heap$(callIndex)_nonempty, label %heap$(callIndex)_read, label %heap$(callIndex)_empty" -> println
-        "heap$(callIndex)_empty:" -> println
+        "  %heap$(callIndex -> valueNameId(state))_nonempty = icmp ugt i64 %heap$(callIndex -> valueNameId(state))_length, 0" -> println
+        "  br i1 %heap$(callIndex -> valueNameId(state))_nonempty, label %heap$(callIndex -> valueNameId(state))_read, label %heap$(callIndex -> valueNameId(state))_empty" -> println
+        "heap$(callIndex -> valueNameId(state))_empty:" -> println
         Arena(0) => diagnosticNames!
-        "heap$(callIndex)" -> materialize(diagnosticNames!) => diagnosticPrefix
+        "heap$(callIndex -> valueNameId(state))" -> materialize(diagnosticNames!) => diagnosticPrefix
         ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "empty", "binary_heap_empty", context, state)
-        "heap$(callIndex)_read:" -> println
+        "heap$(callIndex -> valueNameId(state))_read:" -> println
         "  %v$(callIndex -> valueNameId(state)) = load " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
-        ", ptr %heap$(callIndex)_data, align $elementAlign" -> println
+        ", ptr %heap$(callIndex -> valueNameId(state))_data, align $elementAlign" -> println
         call.opcode == -254 -> if {
-            "  %heap$(callIndex)_next_length = sub i64 %heap$(callIndex)_length, 1" -> println
-            "  %heap$(callIndex)_has_tail = icmp ugt i64 %heap$(callIndex)_next_length, 0" -> println
-            "  br i1 %heap$(callIndex)_has_tail, label %heap$(callIndex)_down_init, label %heap$(callIndex)_down_done" -> println
-            "heap$(callIndex)_down_init:" -> println
-            "  %heap$(callIndex)_last_ptr = getelementptr " -> print
+            "  %heap$(callIndex -> valueNameId(state))_next_length = sub i64 %heap$(callIndex -> valueNameId(state))_length, 1" -> println
+            "  %heap$(callIndex -> valueNameId(state))_has_tail = icmp ugt i64 %heap$(callIndex -> valueNameId(state))_next_length, 0" -> println
+            "  br i1 %heap$(callIndex -> valueNameId(state))_has_tail, label %heap$(callIndex -> valueNameId(state))_down_init, label %heap$(callIndex -> valueNameId(state))_down_done" -> println
+            "heap$(callIndex -> valueNameId(state))_down_init:" -> println
+            "  %heap$(callIndex -> valueNameId(state))_last_ptr = getelementptr " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_next_length" -> println
-            "  %heap$(callIndex)_last = load " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_next_length" -> println
+            "  %heap$(callIndex -> valueNameId(state))_last = load " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_last_ptr, align $elementAlign" -> println
+            ", ptr %heap$(callIndex -> valueNameId(state))_last_ptr, align $elementAlign" -> println
             "  store " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            " %heap$(callIndex)_last, ptr %heap$(callIndex)_data, align $elementAlign" -> println
-            "  %heap$(callIndex)_down_index_addr = alloca i64, align 8" -> println
-            "  %heap$(callIndex)_best_addr = alloca i64, align 8" -> println
-            "  store i64 0, ptr %heap$(callIndex)_down_index_addr, align 8" -> println
-            "  br label %heap$(callIndex)_down" -> println
-            "heap$(callIndex)_down:" -> println
-            "  %heap$(callIndex)_down_index = load i64, ptr %heap$(callIndex)_down_index_addr, align 8" -> println
-            "  %heap$(callIndex)_twice = mul i64 %heap$(callIndex)_down_index, 2" -> println
-            "  %heap$(callIndex)_left = add i64 %heap$(callIndex)_twice, 1" -> println
-            "  %heap$(callIndex)_has_left = icmp ult i64 %heap$(callIndex)_left, %heap$(callIndex)_next_length" -> println
-            "  br i1 %heap$(callIndex)_has_left, label %heap$(callIndex)_choose, label %heap$(callIndex)_down_done" -> println
-            "heap$(callIndex)_choose:" -> println
-            "  store i64 %heap$(callIndex)_left, ptr %heap$(callIndex)_best_addr, align 8" -> println
-            "  %heap$(callIndex)_right = add i64 %heap$(callIndex)_left, 1" -> println
-            "  %heap$(callIndex)_has_right = icmp ult i64 %heap$(callIndex)_right, %heap$(callIndex)_next_length" -> println
-            "  br i1 %heap$(callIndex)_has_right, label %heap$(callIndex)_right_compare, label %heap$(callIndex)_down_compare" -> println
-            "heap$(callIndex)_right_compare:" -> println
-            "  %heap$(callIndex)_left_ptr = getelementptr " -> print
+            " %heap$(callIndex -> valueNameId(state))_last, ptr %heap$(callIndex -> valueNameId(state))_data, align $elementAlign" -> println
+            "  %heap$(callIndex -> valueNameId(state))_down_index_addr = alloca i64, align 8" -> println
+            "  %heap$(callIndex -> valueNameId(state))_best_addr = alloca i64, align 8" -> println
+            "  store i64 0, ptr %heap$(callIndex -> valueNameId(state))_down_index_addr, align 8" -> println
+            "  br label %heap$(callIndex -> valueNameId(state))_down" -> println
+            "heap$(callIndex -> valueNameId(state))_down:" -> println
+            "  %heap$(callIndex -> valueNameId(state))_down_index = load i64, ptr %heap$(callIndex -> valueNameId(state))_down_index_addr, align 8" -> println
+            "  %heap$(callIndex -> valueNameId(state))_twice = mul i64 %heap$(callIndex -> valueNameId(state))_down_index, 2" -> println
+            "  %heap$(callIndex -> valueNameId(state))_left = add i64 %heap$(callIndex -> valueNameId(state))_twice, 1" -> println
+            "  %heap$(callIndex -> valueNameId(state))_has_left = icmp ult i64 %heap$(callIndex -> valueNameId(state))_left, %heap$(callIndex -> valueNameId(state))_next_length" -> println
+            "  br i1 %heap$(callIndex -> valueNameId(state))_has_left, label %heap$(callIndex -> valueNameId(state))_choose, label %heap$(callIndex -> valueNameId(state))_down_done" -> println
+            "heap$(callIndex -> valueNameId(state))_choose:" -> println
+            "  store i64 %heap$(callIndex -> valueNameId(state))_left, ptr %heap$(callIndex -> valueNameId(state))_best_addr, align 8" -> println
+            "  %heap$(callIndex -> valueNameId(state))_right = add i64 %heap$(callIndex -> valueNameId(state))_left, 1" -> println
+            "  %heap$(callIndex -> valueNameId(state))_has_right = icmp ult i64 %heap$(callIndex -> valueNameId(state))_right, %heap$(callIndex -> valueNameId(state))_next_length" -> println
+            "  br i1 %heap$(callIndex -> valueNameId(state))_has_right, label %heap$(callIndex -> valueNameId(state))_right_compare, label %heap$(callIndex -> valueNameId(state))_down_compare" -> println
+            "heap$(callIndex -> valueNameId(state))_right_compare:" -> println
+            "  %heap$(callIndex -> valueNameId(state))_left_ptr = getelementptr " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_left" -> println
-            "  %heap$(callIndex)_right_ptr = getelementptr " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_left" -> println
+            "  %heap$(callIndex -> valueNameId(state))_right_ptr = getelementptr " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_right" -> println
-            "  %heap$(callIndex)_left_value = load " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_right" -> println
+            "  %heap$(callIndex -> valueNameId(state))_left_value = load " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_left_ptr, align $elementAlign" -> println
-            "  %heap$(callIndex)_right_value = load " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_left_ptr, align $elementAlign" -> println
+            "  %heap$(callIndex -> valueNameId(state))_right_value = load " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_right_ptr, align $elementAlign" -> println
-            "  %heap$(callIndex)_right_greater = " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_right_ptr, align $elementAlign" -> println
+            "  %heap$(callIndex -> valueNameId(state))_right_greater = " -> print
             elementFloat -> if { "fcmp ogt " -> print } else { elementSigned
                     -> if { "icmp sgt " -> print } else { "icmp ugt " -> print } }
             elementTypeId -> writeSemanticTypeId(context, state)
-            " %heap$(callIndex)_right_value, %heap$(callIndex)_left_value" -> println
-            "  %heap$(callIndex)_best_selected = select i1 %heap$(callIndex)_right_greater, i64 %heap$(callIndex)_right, i64 %heap$(callIndex)_left" -> println
-            "  store i64 %heap$(callIndex)_best_selected, ptr %heap$(callIndex)_best_addr, align 8" -> println
-            "  br label %heap$(callIndex)_down_compare" -> println
-            "heap$(callIndex)_down_compare:" -> println
-            "  %heap$(callIndex)_best = load i64, ptr %heap$(callIndex)_best_addr, align 8" -> println
-            "  %heap$(callIndex)_best_ptr = getelementptr " -> print
+            " %heap$(callIndex -> valueNameId(state))_right_value, %heap$(callIndex -> valueNameId(state))_left_value" -> println
+            "  %heap$(callIndex -> valueNameId(state))_best_selected = select i1 %heap$(callIndex -> valueNameId(state))_right_greater, i64 %heap$(callIndex -> valueNameId(state))_right, i64 %heap$(callIndex -> valueNameId(state))_left" -> println
+            "  store i64 %heap$(callIndex -> valueNameId(state))_best_selected, ptr %heap$(callIndex -> valueNameId(state))_best_addr, align 8" -> println
+            "  br label %heap$(callIndex -> valueNameId(state))_down_compare" -> println
+            "heap$(callIndex -> valueNameId(state))_down_compare:" -> println
+            "  %heap$(callIndex -> valueNameId(state))_best = load i64, ptr %heap$(callIndex -> valueNameId(state))_best_addr, align 8" -> println
+            "  %heap$(callIndex -> valueNameId(state))_best_ptr = getelementptr " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_best" -> println
-            "  %heap$(callIndex)_parent_ptr = getelementptr " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_best" -> println
+            "  %heap$(callIndex -> valueNameId(state))_parent_ptr = getelementptr " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_data, i64 %heap$(callIndex)_down_index" -> println
-            "  %heap$(callIndex)_child = load " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_down_index" -> println
+            "  %heap$(callIndex -> valueNameId(state))_child = load " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_best_ptr, align $elementAlign" -> println
-            "  %heap$(callIndex)_parent = load " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_best_ptr, align $elementAlign" -> println
+            "  %heap$(callIndex -> valueNameId(state))_parent = load " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            ", ptr %heap$(callIndex)_parent_ptr, align $elementAlign" -> println
-            "  %heap$(callIndex)_descends = " -> print
+            ", ptr %heap$(callIndex -> valueNameId(state))_parent_ptr, align $elementAlign" -> println
+            "  %heap$(callIndex -> valueNameId(state))_descends = " -> print
             elementFloat -> if { "fcmp ogt " -> print } else { elementSigned
                     -> if { "icmp sgt " -> print } else { "icmp ugt " -> print } }
             elementTypeId -> writeSemanticTypeId(context, state)
-            " %heap$(callIndex)_child, %heap$(callIndex)_parent" -> println
-            "  br i1 %heap$(callIndex)_descends, label %heap$(callIndex)_down_swap, label %heap$(callIndex)_down_done" -> println
-            "heap$(callIndex)_down_swap:" -> println
+            " %heap$(callIndex -> valueNameId(state))_child, %heap$(callIndex -> valueNameId(state))_parent" -> println
+            "  br i1 %heap$(callIndex -> valueNameId(state))_descends, label %heap$(callIndex -> valueNameId(state))_down_swap, label %heap$(callIndex -> valueNameId(state))_down_done" -> println
+            "heap$(callIndex -> valueNameId(state))_down_swap:" -> println
             "  store " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            " %heap$(callIndex)_parent, ptr %heap$(callIndex)_best_ptr, align $elementAlign" -> println
+            " %heap$(callIndex -> valueNameId(state))_parent, ptr %heap$(callIndex -> valueNameId(state))_best_ptr, align $elementAlign" -> println
             "  store " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
-            " %heap$(callIndex)_child, ptr %heap$(callIndex)_parent_ptr, align $elementAlign" -> println
-            "  store i64 %heap$(callIndex)_best, ptr %heap$(callIndex)_down_index_addr, align 8" -> println
-            "  br label %heap$(callIndex)_down" -> println
-            "heap$(callIndex)_down_done:" -> println
+            " %heap$(callIndex -> valueNameId(state))_child, ptr %heap$(callIndex -> valueNameId(state))_parent_ptr, align $elementAlign" -> println
+            "  store i64 %heap$(callIndex -> valueNameId(state))_best, ptr %heap$(callIndex -> valueNameId(state))_down_index_addr, align 8" -> println
+            "  br label %heap$(callIndex -> valueNameId(state))_down" -> println
+            "heap$(callIndex -> valueNameId(state))_down_done:" -> println
             heapBorrow >= 0 -> if {
-                "  store i64 %heap$(callIndex)_next_length, ptr " -> print
+                "  store i64 %heap$(callIndex -> valueNameId(state))_next_length, ptr " -> print
                 heapBorrow == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(heapBorrow)_mut_len_addr" -> print }
                 ", align 8" -> println
             } else {
-                "  %heap$(callIndex)_result = insertvalue %sollang.array.i32 %heap$(callIndex)_source, i64 %heap$(callIndex)_next_length, 1" -> println
-                "  store %sollang.array.i32 %heap$(callIndex)_result, ptr %slot$(heapRoot), align 8" -> println
+                "  %heap$(callIndex -> valueNameId(state))_result = insertvalue %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_source, i64 %heap$(callIndex -> valueNameId(state))_next_length, 1" -> println
+                "  store %sollang.array.i32 %heap$(callIndex -> valueNameId(state))_result, ptr %slot$(heapRoot -> valueNameId(state)), align 8" -> println
             }
         }
     }
@@ -1314,7 +1314,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
     call.operand0 -> mutableStorageRoot(context, state) => setRoot
     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => setBorrow
     "  %set$(callIndex)_source = load %sollang.int_dictionary, ptr " -> print
-    setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+    setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
     ", align 8" -> println
     "  %set$(callIndex)_storage = extractvalue %sollang.int_dictionary %set$(callIndex)_source, 0" -> println
     "  %set$(callIndex)_length = extractvalue %sollang.int_dictionary %set$(callIndex)_source, 1" -> println
@@ -1355,7 +1355,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
         "set$(callIndex)_insert_control" -> emitDictionaryControlStore("%set$(callIndex)_controls", "%set$(callIndex)_insert_slot", "%set$(callIndex)_h2", "%set$(callIndex)_capacity")
         "  %set$(callIndex)_current_result = insertvalue %sollang.int_dictionary %set$(callIndex)_source, i64 %set$(callIndex)_next_length, 1" -> println
         "  store %sollang.int_dictionary %set$(callIndex)_current_result, ptr " -> print
-        setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+        setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
         ", align 8" -> println
         "  br label %set$(callIndex)_inserted" -> println
         "set$(callIndex)_grow:" -> println
@@ -1404,7 +1404,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
         "set$(callIndex)_grown_store_control" -> emitDictionaryControlStore("%set$(callIndex)_grow_rehash_controls", "%set$(callIndex)_grown_slot", "%set$(callIndex)_h2", "%set$(callIndex)_grown_capacity")
         "  %set$(callIndex)_grown_result = insertvalue %sollang.int_dictionary %set$(callIndex)_grow_rehash_result, i64 %set$(callIndex)_next_length, 1" -> println
         "  store %sollang.int_dictionary %set$(callIndex)_grown_result, ptr " -> print
-        setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+        setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
         ", align 8" -> println
         "  br label %set$(callIndex)_inserted" -> println
         "set$(callIndex)_found:" -> println
@@ -1446,7 +1446,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
             "set$(callIndex)_keep:" -> println
             "  %set$(callIndex)_keep_result = insertvalue %sollang.int_dictionary %set$(callIndex)_source, i64 %set$(callIndex)_next_length, 1" -> println
             "  store %sollang.int_dictionary %set$(callIndex)_keep_result, ptr " -> print
-            setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+            setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
             ", align 8" -> println
             "  br label %set$(callIndex)_removed" -> println
             "set$(callIndex)_compact:" -> println
@@ -1454,7 +1454,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
             "set$(callIndex)_compact_rehash_entry:" -> println
             "set$(callIndex)_compact_rehash" -> emitSetRehash("%set$(callIndex)_keys", "%set$(callIndex)_controls", "%set$(callIndex)_capacity", "%set$(callIndex)_capacity", "%set$(callIndex)_next_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
             "  store %sollang.int_dictionary %set$(callIndex)_compact_rehash_result, ptr " -> print
-            setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot)" -> print }
+            setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
             ", align 8" -> println
             "  br label %set$(callIndex)_removed" -> println
             "set$(callIndex)_removed:" -> println
@@ -1639,9 +1639,9 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
         ", 1" -> println
     }
     materializeBorrowOrdinal < 0 -> if {
-        "  %materialize$(materializeIndex)_ptr_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot), i32 0, i32 0" -> println
-        "  %materialize$(materializeIndex)_length_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot), i32 0, i32 1" -> println
-        "  %materialize$(materializeIndex)_capacity_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot), i32 0, i32 2" -> println
+        "  %materialize$(materializeIndex)_ptr_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot -> valueNameId(state)), i32 0, i32 0" -> println
+        "  %materialize$(materializeIndex)_length_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot -> valueNameId(state)), i32 0, i32 1" -> println
+        "  %materialize$(materializeIndex)_capacity_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot -> valueNameId(state)), i32 0, i32 2" -> println
     }
     "  %materialize$(materializeIndex)_data = load ptr, ptr " -> print
     materializeBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else {
@@ -1687,7 +1687,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
                 materializeInterpolations[materializeCopyIndex] => materializeCopyRoot
                 "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
                 materializeCopyOrdinal! * 2 -> writeDecimalLine
-                "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex), i64 $(materializeCopyRoot.literalStart)" -> println
+                "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> valueNameId(state)), i64 $(materializeCopyRoot.literalStart)" -> println
                 "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_target, ptr %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source, i64 $(materializeCopyRoot.literalLength), i1 false)" -> println
                 "  %materialize$(materializeIndex)_copy_offset" -> print
                 materializeCopyOrdinal! * 2 + 1 -> writeDecimal
@@ -1709,7 +1709,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
         materializeSuffixRawLength - materializeSuffixStart! => materializeSuffixLength
         "  %materialize$(materializeIndex)_suffix_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
         materializeRootCount * 2 -> writeDecimalLine
-        "  %materialize$(materializeIndex)_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex), i64 $(materializeSuffixStart!)" -> println
+        "  %materialize$(materializeIndex)_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> valueNameId(state)), i64 $(materializeSuffixStart!)" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_suffix_target, ptr %materialize$(materializeIndex)_suffix_source, i64 $(materializeSuffixLength), i1 false)" -> println
     } else {
         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_target, ptr %materialize$(materializeIndex)_source_ptr, i64 %materialize$(materializeIndex)_source_length, i1 false)" -> println
@@ -1773,7 +1773,7 @@ emitDequeReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
         borrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(borrow)_mut_capacity_addr" -> print }
         ", align 8" -> println
     } else {
-        "  %$(prefix)_owner = load %sollang.array.i32, ptr %slot$(root), align 8" -> println
+        "  %$(prefix)_owner = load %sollang.array.i32, ptr %slot$(root -> valueNameId(state)), align 8" -> println
         "  %$(prefix)_data = extractvalue %sollang.array.i32 %$(prefix)_owner, 0" -> println
         "  %$(prefix)_length = extractvalue %sollang.array.i32 %$(prefix)_owner, 1" -> println
         "  %$(prefix)_capacity = extractvalue %sollang.array.i32 %$(prefix)_owner, 2" -> println
@@ -1831,7 +1831,7 @@ emitDequeReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
         "  %$(prefix)_result0 = insertvalue %sollang.array.i32 poison, ptr %$(prefix)_final_data, 0" -> println
         "  %$(prefix)_result1 = insertvalue %sollang.array.i32 %$(prefix)_result0, i64 %$(prefix)_length, 1" -> println
         "  %$(prefix)_result2 = insertvalue %sollang.array.i32 %$(prefix)_result1, i64 %$(prefix)_final_capacity, 2" -> println
-        "  store %sollang.array.i32 %$(prefix)_result2, ptr %slot$(root), align 8" -> println
+        "  store %sollang.array.i32 %$(prefix)_result2, ptr %slot$(root -> valueNameId(state)), align 8" -> println
     }
 }
 
@@ -1866,7 +1866,7 @@ emitDictionaryReserve request: WhileValueRequest, context: ref emitterContext.Em
     "  %$(prefix)_below_minimum = icmp ult i64 %$(prefix)_buckets_power, 16" -> println
     "  %$(prefix)_capacity = select i1 %$(prefix)_below_minimum, i64 16, i64 %$(prefix)_buckets_power" -> println
     "  %$(prefix)_owner = load %sollang.int_dictionary, ptr " -> print
-    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root)" -> print }
+    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root -> valueNameId(state))" -> print }
     ", align 8" -> println
     "  %$(prefix)_old_storage = extractvalue %sollang.int_dictionary %$(prefix)_owner, 0" -> println
     "  %$(prefix)_old_length = extractvalue %sollang.int_dictionary %$(prefix)_owner, 1" -> println
@@ -1894,7 +1894,7 @@ emitDictionaryReserve request: WhileValueRequest, context: ref emitterContext.Em
     "  %$(prefix)_final_capacity = phi i64 [ %$(prefix)_capacity, %$(prefix)_grow_complete ], [ %$(prefix)_old_capacity, %$(prefix)_keep ]" -> println
     "$(prefix)_result" -> emitGrowableDictionaryOwner("%$(prefix)_final_storage", "%$(prefix)_old_length", "%$(prefix)_final_capacity")
     "  store %sollang.int_dictionary %$(prefix)_result, ptr " -> print
-    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root)" -> print }
+    borrow >= 0 -> if { borrow -> writeMutableStructParameterPointer } else { "%slot$(root -> valueNameId(state))" -> print }
     ", align 8" -> println
 }
 
@@ -1960,7 +1960,7 @@ emitCollectionReserve request: WhileValueRequest, context: ref emitterContext.Em
         reserveBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(reserveBorrowOrdinal)_mut_capacity_addr" -> print }
         ", align 8" -> println
     } else {
-        "  %reserve$(reserveIndex)_array = load %sollang.array.i32, ptr %slot$(reserveRoot), align 8" -> println
+        "  %reserve$(reserveIndex)_array = load %sollang.array.i32, ptr %slot$(reserveRoot -> valueNameId(state)), align 8" -> println
         "  %reserve$(reserveIndex)_data = extractvalue %sollang.array.i32 %reserve$(reserveIndex)_array, 0" -> println
         "  %reserve$(reserveIndex)_length = extractvalue %sollang.array.i32 %reserve$(reserveIndex)_array, 1" -> println
         "  %reserve$(reserveIndex)_capacity = extractvalue %sollang.array.i32 %reserve$(reserveIndex)_array, 2" -> println
@@ -1992,7 +1992,7 @@ emitCollectionReserve request: WhileValueRequest, context: ref emitterContext.Em
         "  %reserve$(reserveIndex)_result0 = insertvalue %sollang.array.i32 poison, ptr %reserve$(reserveIndex)_final_data, 0" -> println
         "  %reserve$(reserveIndex)_result1 = insertvalue %sollang.array.i32 %reserve$(reserveIndex)_result0, i64 %reserve$(reserveIndex)_length, 1" -> println
         "  %reserve$(reserveIndex)_result2 = insertvalue %sollang.array.i32 %reserve$(reserveIndex)_result1, i64 %reserve$(reserveIndex)_final_capacity, 2" -> println
-        "  store %sollang.array.i32 %reserve$(reserveIndex)_result2, ptr %slot$(reserveRoot), align 8" -> println
+        "  store %sollang.array.i32 %reserve$(reserveIndex)_result2, ptr %slot$(reserveRoot -> valueNameId(state)), align 8" -> println
     }
 }
 
@@ -2240,7 +2240,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
                 pushMemberDepth - 1 -> writeDecimal
                 ", align 8" -> println
             } else {
-                "  store %sollang.array.i32 %push$(pushIndex)_array2, ptr %slot$(pushRoot), align 8" -> println
+                "  store %sollang.array.i32 %push$(pushIndex)_array2, ptr %slot$(pushRoot -> valueNameId(state)), align 8" -> println
             }
         }
 }
@@ -2436,7 +2436,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
             putKeyTypeId! >= 0 -> if { context.types[putKeyTypeId!].symbol -> integerSigned(context, state) => putHashSigned! }
             putReturnsOwner -> unless {
                 "  %put$(putIndex)_dictionary = load %sollang.int_dictionary, ptr " -> print
-                putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+                putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot -> valueNameId(state))" -> print }
                 ", align 8" -> println
             }
             "  %put$(putIndex)_old_storage = extractvalue %sollang.int_dictionary " -> print
@@ -2618,7 +2618,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
             ", i64 %put$(putIndex)_candidate_length, 1" -> println
             putReturnsOwner -> unless {
                 "  store %sollang.int_dictionary %put$(putIndex)_in_place_result, ptr " -> print
-                putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+                putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot -> valueNameId(state))" -> print }
                 ", align 8" -> println
             }
             "  br label %put$(putIndex)_complete" -> println
@@ -2690,7 +2690,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                 "put$(putIndex)_result3" -> emitGrowableDictionaryOwner("%put$(putIndex)_storage", "%put$(putIndex)_new_length", "%put$(putIndex)_capacity")
                 putReturnsOwner -> unless {
                     "  store %sollang.int_dictionary %put$(putIndex)_result3, ptr " -> print
-                    putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+                    putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot -> valueNameId(state))" -> print }
                     ", align 8" -> println
                 }
                 "  br label %put$(putIndex)_complete" -> println
@@ -2727,7 +2727,7 @@ emitBoundedDictionaryPut request: WhileValueRequest, context: ref emitterContext
     Arena(0) => prefixStorage!
     "bput$(putIndex)" -> materialize(prefixStorage!) => prefix
     "  %$(prefix)_owner = getelementptr i8, ptr " -> print
-    putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot)" -> print }
+    putBorrow >= 0 -> if { putBorrow -> writeMutableStructParameterPointer } else { "%slot$(putRoot -> valueNameId(state))" -> print }
     ", i64 0" -> println
     prefix -> emitBoundedDictionaryStoragePointer("%$(prefix)_owner", dictionaryTypeId)
     "  %$(prefix)_length_ptr = getelementptr inbounds %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %$(prefix)_owner, i32 0, i32 0" -> println
@@ -2980,7 +2980,7 @@ emitBoundedDictionaryTake request: WhileValueRequest, context: ref emitterContex
         "  %$(prefix)_owner = getelementptr i8, ptr %callref$(takeIndex)_arg0_place$(memberDepth - 1), i64 0" -> println
     } else {
         "  %$(prefix)_owner = getelementptr i8, ptr " -> print
-        takeBorrow >= 0 -> if { takeBorrow -> writeMutableStructParameterPointer } else { "%slot$(takeRoot)" -> print }
+        takeBorrow >= 0 -> if { takeBorrow -> writeMutableStructParameterPointer } else { "%slot$(takeRoot -> valueNameId(state))" -> print }
         ", i64 0" -> println
     }
     prefix -> emitBoundedDictionaryStoragePointer("%$(prefix)_owner", dictionaryTypeId)
@@ -3065,7 +3065,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         takeStructMember -> if {
             "%callref$(takeIndex)_arg0_place$(takeDictionaryMemberDepth! - 1)" -> print
         } else {
-            takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot)" -> print }
+            takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot -> valueNameId(state))" -> print }
         }
         ", align 8" -> println
         "  %take$(takeIndex)_storage = extractvalue %sollang.int_dictionary %take$(takeIndex)_dictionary, 0" -> println
@@ -3190,7 +3190,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         takeStructMember -> if {
             "%callref$(takeIndex)_arg0_place$(takeDictionaryMemberDepth! - 1)" -> print
         } else {
-            takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot)" -> print }
+            takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot -> valueNameId(state))" -> print }
         }
         ", align 8" -> println
     } else {
@@ -3305,7 +3305,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
                     takeMemberDepth - 1 -> writeDecimal
                     ", align 8" -> println
                 } else {
-                    "  store %sollang.array.i32 %take$(takeIndex)_array2, ptr %slot$(takeRoot), align 8" -> println
+                    "  store %sollang.array.i32 %take$(takeIndex)_array2, ptr %slot$(takeRoot -> valueNameId(state)), align 8" -> println
                 }
             }
     }

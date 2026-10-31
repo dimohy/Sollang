@@ -256,7 +256,7 @@ emitTextSlice request: WhileValueRequest, context: ref emitterContext.EmitContex
     context.ir[expression.operand1].nextOperand -> aggregateValueIndex(context, state) => lengthIndex
     Arena(0) => nameStorage!
     request.whileIndex >= 0 -> if {
-        "while$(request.whileIndex)_v$(request.nodeIndex)" -> materialize(nameStorage!)
+        "while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> materialize(nameStorage!)
     } else {
         "v$(request.nodeIndex -> valueNameId(state))" -> materialize(nameStorage!)
     } => prefix
@@ -379,7 +379,7 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
                 "  %v$(expressionIndex -> valueNameId(state)) = load " -> print
                 expression -> writeIrType(context, state)
                 ", ptr " -> print
-                carrier -> writeAsyncLocalAddress(context)
+                carrier -> writeAsyncLocalAddress(context, state)
                 ", align " -> print
                 expression -> storageAlign(context, state) -> writeDecimalLine
                 return
@@ -417,7 +417,7 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
                 "  %v$(expressionIndex -> valueNameId(state)) = load " -> print
                 expression -> writeIrType(context, state)
                 ", ptr " -> print
-                asyncRoot -> writeAsyncLocalAddress(context)
+                asyncRoot -> writeAsyncLocalAddress(context, state)
                 ", align " -> print
                 expression -> storageAlign(context, state) -> writeDecimalLine
                 return
@@ -475,7 +475,7 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
                                         bindingValueIr! -> mutableBindingRoot(context, state) => bindingRoot
                                         "  %v$(expressionIndex -> valueNameId(state)) = load " -> print
                                         expression -> writeIrType(context, state)
-                                        ", ptr %slot$(bindingRoot), align " -> print
+                                        ", ptr %slot$(bindingRoot -> valueNameId(state)), align " -> print
                                         expression -> storageAlign(context, state) -> writeDecimalLine
                                     } else {
                                         context.ir[bindingValue.operand0] => bindingOperand
@@ -903,7 +903,7 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
                         } else { emittedFieldValue.kind == 2 -> if {
                                 emittedFieldValue -> sourceToken(context, state) => fieldTextToken
                                 Int(TextLiteralRequest { sourceModule: emittedFieldValue.sourceModule, token: fieldTextToken } -> textLiteralLength(context, state)) => fieldTextLength
-                                "{ ptr @sollang_str_$(emittedFieldIndex), i64 $fieldTextLength }" -> print
+                                "{ ptr @sollang_str_$(emittedFieldIndex -> valueNameId(state)), i64 $fieldTextLength }" -> print
                             } else {
                                 emittedFieldValue.kind == 3 or emittedFieldValue.kind == 4
                                     -> if {
@@ -1330,7 +1330,7 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
                     "  %v$(expressionIndex -> valueNameId(state))_data = getelementptr [$(arrayLength) x " -> print
                     expression -> writeArrayElementType(context, state)
                     "], ptr " -> print
-                    functionIndex -> writeStaticReadonlyArraySymbol(expressionIndex, context)
+                    functionIndex -> writeStaticReadonlyArraySymbol(expressionIndex, context, state)
                     ", i64 0, i64 0" -> println
                 } else {
                     expressionIndex -> emitFixedStorageLifetimeStart(context, state)
@@ -1513,12 +1513,12 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
     context.ir[expression.operand1] => arrayIndex
     Arena(0) => nameStorage!
     whileIndex >= 0 -> if {
-        "while$(whileIndex)_v$(expressionIndex)" -> materialize(nameStorage!)
+        "while$(whileIndex -> valueNameId(state))_v$(expressionIndex -> valueNameId(state))" -> materialize(nameStorage!)
     } else {
         "v$(expressionIndex -> valueNameId(state))" -> materialize(nameStorage!)
     } => prefix
     expression.operand0 -> mutableStorageRoot(context, state) => indexedMutableRoot
-    indexedMutableRoot >= 0 -> if { "  %$(prefix)_dictionary = load %sollang.int_dictionary, ptr %slot$(indexedMutableRoot), align 8" -> println }
+    indexedMutableRoot >= 0 -> if { "  %$(prefix)_dictionary = load %sollang.int_dictionary, ptr %slot$(indexedMutableRoot -> valueNameId(state)), align 8" -> println }
     -1 => indexedDictionaryKeyTypeId!
     -1 => indexedDictionaryValueTypeId!
     dictionaryTypeId >= 0 -> if {
@@ -2204,10 +2204,10 @@ emitFunctionTerminalExpressions expressionIndex: Int, functionIndex: Int, functi
         (ifCondition.kind == 8 and (ifCondition.opcode == -25 or ifCondition.opcode == -24) or (ifCondition.kind == 7 and ifCondition.opcode == -26)) => ifShortCircuit
         ifShortCircuit -> if {
             WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: ifConditionIndex } -> emitWhileBranch(expressionOrder, context, state)
-            "while$(expressionIndex)_body:" -> println
-            expression -> writeIfShortCircuitBodyTarget(expressionIndex)
-            "while$(expressionIndex)_exit:" -> println
-            expression -> writeIfShortCircuitExitTarget(expressionIndex)
+            "while$(expressionIndex -> valueNameId(state))_body:" -> println
+            expression -> writeIfShortCircuitBodyTarget(expressionIndex, state)
+            "while$(expressionIndex -> valueNameId(state))_exit:" -> println
+            expression -> writeIfShortCircuitExitTarget(expressionIndex, state)
         } else {
             "  br i1 " -> print
             ifCondition.kind == 4 -> if {
@@ -2218,9 +2218,9 @@ emitFunctionTerminalExpressions expressionIndex: Int, functionIndex: Int, functi
                 ifCondition.kind == 5 and function.operand1 >= 0 and ifCondition.symbol == context.ir[function.operand1].symbol
                     -> if { "%arg" -> print } else { "%v$(ifConditionIndex -> valueNameId(state))" -> print }
             }
-            expression -> writeIfDirectBranchTargets(expressionIndex)
+            expression -> writeIfDirectBranchTargets(expressionIndex, state)
         }
-        "if$(expressionIndex)_then:" -> println
+        "if$(expressionIndex -> valueNameId(state))_then:" -> println
         expression.operand1 -> regionReturns(context, state) => thenReturns
         expression.operand1 -> emitRegion(expressionOrder, context, state)
         not thenReturns -> if {
@@ -2230,11 +2230,11 @@ emitFunctionTerminalExpressions expressionIndex: Int, functionIndex: Int, functi
                     expression -> emitIfResultStore(thenStoreIndex, functionIndex, expressionIndex, 0, context, state)
                 }
             OwnedDropRequest { regionIndex: expression.operand1, beforeAst: -1, edgeIndex: expressionIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-            "  br label %if$(expressionIndex)_merge" -> println
+            "  br label %if$(expressionIndex -> valueNameId(state))_merge" -> println
         }
         false => elseReturns!
         expression.nextOperand >= 0 -> if {
-            "if$(expressionIndex)_else:" -> println
+            "if$(expressionIndex -> valueNameId(state))_else:" -> println
             expression.nextOperand -> regionReturns(context, state) => elseReturns!
             expression.nextOperand -> emitRegion(expressionOrder, context, state)
             not elseReturns! -> if {
@@ -2244,31 +2244,31 @@ emitFunctionTerminalExpressions expressionIndex: Int, functionIndex: Int, functi
                         expression -> emitIfResultStore(elseStoreIndex, functionIndex, expressionIndex, 1, context, state)
                     }
                 OwnedDropRequest { regionIndex: expression.nextOperand, beforeAst: -1, edgeIndex: expressionIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-                "  br label %if$(expressionIndex)_merge" -> println
+                "  br label %if$(expressionIndex -> valueNameId(state))_merge" -> println
             }
         }
         thenReturns and elseReturns! => ifAllBranchesReturn!
         ifAllBranchesReturn!
             and not (expressionIndex -> controlIsLastRegionChild(context, state))
             -> if { false => ifAllBranchesReturn! }
-        not ifAllBranchesReturn! -> if { "if$(expressionIndex)_merge:" -> println }
+        not ifAllBranchesReturn! -> if { "if$(expressionIndex -> valueNameId(state))_merge:" -> println }
         ifValueUsed! and not (expression.typeOrigin == 1 and expression.typeSymbol == 0) and expression.nextOperand >= 0 and not ifAllBranchesReturn!
             -> if {
                 "  %v$(expressionIndex -> valueNameId(state)) = load " -> print
                 expression -> writeIrType(context, state)
-                ", ptr %if$(expressionIndex)_result, align " -> print
+                ", ptr %if$(expressionIndex -> valueNameId(state))_result, align " -> print
                 expression -> storageAlign(context, state) -> writeDecimalLine
             }
     }
     expression.kind == 33 -> if { expressionIndex -> emitBooleanWhen(expressionOrder, context, state) }
     expression.kind == 20 -> if {
-        "  br label %while$(expressionIndex)_header" -> println
-        "while$(expressionIndex)_header:" -> println
+        "  br label %while$(expressionIndex -> valueNameId(state))_header" -> println
+        "while$(expressionIndex -> valueNameId(state))_header:" -> println
         WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: expression.operand0 } -> emitWhileBranch(expressionOrder, context, state)
-        "while$(expressionIndex)_body:" -> println
+        "while$(expressionIndex -> valueNameId(state))_body:" -> println
         expression.operand1 -> emitRegion(expressionOrder, context, state)
         OwnedDropRequest { regionIndex: expression.operand1, beforeAst: -1, edgeIndex: expressionIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-        "  br label %while$(expressionIndex)_header" -> println
-        "while$(expressionIndex)_exit:" -> println
+        "  br label %while$(expressionIndex -> valueNameId(state))_header" -> println
+        "while$(expressionIndex -> valueNameId(state))_exit:" -> println
     }
 }

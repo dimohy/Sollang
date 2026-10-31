@@ -255,10 +255,10 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
             -> if {
                 not (nodeIndex! -> asyncIntIteratorIsPersistent(context, state))
                     -> if {
-                        "  %each$(nodeIndex!)_index_slot = alloca i64, align 8" -> println
+                        "  %each$(nodeIndex! -> valueNameId(state))_index_slot = alloca i64, align 8" -> println
                         (context.ir[node.operand0] -> typeQueries.isRange(context)) or node.opcode == typedIr.repeatOpcode()
                             -> if {
-                                "  %each$(nodeIndex!)_limit_slot = alloca i64, align 8" -> println
+                                "  %each$(nodeIndex! -> valueNameId(state))_limit_slot = alloca i64, align 8" -> println
                             }
                     }
             }
@@ -293,7 +293,7 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
             nodeIndex! -> controlValueUsed(ownerIndex, context, state) => valueUsed!
             valueUsed! and not (node.typeOrigin == 1 and node.typeSymbol == 0) and node.nextOperand >= 0
                 -> if {
-                    "  %if$(nodeIndex!)_result = alloca " -> print
+                    "  %if$(nodeIndex! -> valueNameId(state))_result = alloca " -> print
                     node -> writeIrType(context, state)
                     ", align " -> print
                     node -> storageAlign(context, state) -> writeDecimalLine
@@ -312,7 +312,7 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                 -> if { true => whenValueUsed! }
             whenValueUsed! and not (node.typeOrigin == 1 and node.typeSymbol == 0)
                 -> if {
-                    "  %if$(nodeIndex!)_result = alloca " -> print
+                    "  %if$(nodeIndex! -> valueNameId(state))_result = alloca " -> print
                     node -> writeIrType(context, state)
                     ", align " -> print
                     node -> storageAlign(context, state) -> writeDecimalLine
@@ -1094,7 +1094,7 @@ emitBoundedDictionaryIndex nodeIndex: Int, ownerIndex: Int, context: ref emitter
             sourceIndex -> mutableStorageRoot(context, state) => mutableRoot
             (nodeIndex -> boundedDictionaryIndexScratchTypeId(context, state)) < 0
                 -> if {
-                    "  %$(prefix)_owner = getelementptr i8, ptr %slot$(mutableRoot), i64 0" -> println
+                    "  %$(prefix)_owner = getelementptr i8, ptr %slot$(mutableRoot -> valueNameId(state)), i64 0" -> println
                 } else {
                     "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) " -> print
                     sourceIndex -> writeValue(ownerIndex, context, state)
@@ -1426,7 +1426,7 @@ emitDirectEachRoleAliases eachIndex: Int, eachSource: typedIr.TypedIrNode, conte
                 -> if {
                     "  %each_role_m$(eachNode.sourceModule)_s$(eachRoleSymbolIndex!) = freeze " -> print
                     eachSource -> writeDirectEachElementType(context, state)
-                    " %each$(eachIndex)_item" -> println
+                    " %each$(eachIndex -> valueNameId(state))_item" -> println
                 }
             eachRoleSymbolIndex! + 1 => eachRoleSymbolIndex!
         }
@@ -1547,7 +1547,7 @@ emitInterpolationLexicalLoad labelIndex: Int, nodeIndex: Int, node: interpolatio
             "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable = load " -> print
             context.ir[asyncRoot] -> writeIrType(context, state)
             ", ptr " -> print
-            asyncRoot -> writeAsyncLocalAddress(context)
+            asyncRoot -> writeAsyncLocalAddress(context, state)
             ", align " -> print
             context.ir[asyncRoot] -> storageAlign(context, state) -> writeDecimalLine
             return
@@ -1558,7 +1558,7 @@ emitInterpolationLexicalLoad labelIndex: Int, nodeIndex: Int, node: interpolatio
             storageRoot >= 0 -> if {
                 "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable = load " -> print
                 binding -> writeIrType(context, state)
-                ", ptr %slot$(storageRoot), align 8" -> println
+                ", ptr %slot$(storageRoot -> valueNameId(state)), align 8" -> println
             }
         }
         binding.kind == 10 and binding.flags / 2 % 2 == 1
@@ -3525,7 +3525,7 @@ emitInterpolationSetContains prefix: Text, labelIndex: Int, nodeIndex: Int, node
     storageRoot! >= 0 or receiverTypeId != setTypeId
         -> if {
             "load %sollang.int_dictionary, ptr " -> print
-            storageRoot! >= 0 -> if { "%slot$(storageRoot!)" -> print } else {
+            storageRoot! >= 0 -> if { "%slot$(storageRoot! -> valueNameId(state))" -> print } else {
                 labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             }
             ", align 8" -> println
@@ -4169,7 +4169,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         bitSetBinding -> mutableStorageRoot(context, state) => bitSetStorageRoot!
                     }
                     bitSetStorageRoot! >= 0 -> if {
-                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(bitSetStorageRoot!), align 8" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(bitSetStorageRoot! -> valueNameId(state)), align 8" -> println
                     } else {
                         bitSetReference! -> if {
                             "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr " -> print
@@ -4249,7 +4249,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     -1 => containsRoot!
                     containsBinding >= 0 -> if { containsBinding -> mutableStorageRoot(context, state) => containsRoot! }
                     containsRoot! >= 0 -> if {
-                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr %slot$(containsRoot!), align 8" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr %slot$(containsRoot! -> valueNameId(state)), align 8" -> println
                     } else {
                         containsReference! -> if {
                             "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr " -> print
@@ -5026,27 +5026,27 @@ isDirectTextEachSource source: typedIr.TypedIrNode, context: ref emitterContext.
     } else { false }
 }
 
-emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterContext.EmitContext -> Unit uses Console {
+emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     not bodyTerminated -> if {
-        "  br label %each$(eachIndex)_continue" -> println
+        "  br label %each$(eachIndex -> valueNameId(state))_continue" -> println
     }
-    "each$(eachIndex)_continue:" -> println
+    "each$(eachIndex -> valueNameId(state))_continue:" -> println
     (context.ir[context.ir[eachIndex].operand0] -> typeQueries.isRange(context)) or context.ir[eachIndex].opcode == typedIr.repeatOpcode()
         -> if {
-            "  %each$(eachIndex)_current = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
-            "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_current, 1" -> println
-            "  store i64 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 8" -> println
+            "  %each$(eachIndex -> valueNameId(state))_current = load i64, ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
+            "  %each$(eachIndex -> valueNameId(state))_next = add i64 %each$(eachIndex -> valueNameId(state))_current, 1" -> println
+            "  store i64 %each$(eachIndex -> valueNameId(state))_next, ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
         } else {
             context.ir[context.ir[eachIndex].operand0] -> isDirectTextEachSource(context)
                 -> if {
-                    "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_index, %each$(eachIndex)_width" -> println
+                    "  %each$(eachIndex -> valueNameId(state))_next = add i64 %each$(eachIndex -> valueNameId(state))_index, %each$(eachIndex -> valueNameId(state))_width" -> println
                 } else {
-                    "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_index, 1" -> println
+                    "  %each$(eachIndex -> valueNameId(state))_next = add i64 %each$(eachIndex -> valueNameId(state))_index, 1" -> println
                 }
-            "  store i64 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 8" -> println
+            "  store i64 %each$(eachIndex -> valueNameId(state))_next, ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
         }
-    "  br label %each$(eachIndex)_header" -> println
-    "each$(eachIndex)_exit:" -> println
+    "  br label %each$(eachIndex -> valueNameId(state))_header" -> println
+    "each$(eachIndex -> valueNameId(state))_exit:" -> println
 }
 
 # One direct-each implementation is shared by functions, main, and control arms.
@@ -5060,13 +5060,13 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
     eachSource -> typeQueries.isRange(context) => eachRange
     eachIndex -> asyncIntIteratorIsPersistent(context, state) => persistentIntIterator
     eachRepeat -> if {
-        "  %each$(eachIndex)_count = freeze i32 " -> print
+        "  %each$(eachIndex -> valueNameId(state))_count = freeze i32 " -> print
         eachNode.operand0 -> writeValue(ownerIndex, context, state)
         "" -> println
     }
     eachRange or eachRepeat -> if {
         eachRange -> if {
-            "  %each$(eachIndex)_range = " -> print
+            "  %each$(eachIndex -> valueNameId(state))_range = " -> print
             (eachSource -> referenceValueTypeId(context, state)) >= 0
                 and not (eachNode.operand0 -> referenceParameterValueIsMaterialized(ownerIndex, context, state))
                 -> if {
@@ -5078,25 +5078,25 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                     eachNode.operand0 -> writeReadOperand(ownerIndex, context, state)
                     "" -> println
                 }
-            "  %each$(eachIndex)_first = extractvalue { i32, i32 } %each$(eachIndex)_range, 0" -> println
-            "  %each$(eachIndex)_last = extractvalue { i32, i32 } %each$(eachIndex)_range, 1" -> println
-            "  %each$(eachIndex)_start = sext i32 %each$(eachIndex)_first to i64" -> println
+            "  %each$(eachIndex -> valueNameId(state))_first = extractvalue { i32, i32 } %each$(eachIndex -> valueNameId(state))_range, 0" -> println
+            "  %each$(eachIndex -> valueNameId(state))_last = extractvalue { i32, i32 } %each$(eachIndex -> valueNameId(state))_range, 1" -> println
+            "  %each$(eachIndex -> valueNameId(state))_start = sext i32 %each$(eachIndex -> valueNameId(state))_first to i64" -> println
         }
-        "  %each$(eachIndex)_limit = sext i32 " -> print
-        eachRepeat -> if { "%each$(eachIndex)_count" -> print } else { "%each$(eachIndex)_last" -> print }
+        "  %each$(eachIndex -> valueNameId(state))_limit = sext i32 " -> print
+        eachRepeat -> if { "%each$(eachIndex -> valueNameId(state))_count" -> print } else { "%each$(eachIndex -> valueNameId(state))_last" -> print }
         " to i64" -> println
         "  store i64 " -> print
-        eachRepeat -> if { "1" -> print } else { "%each$(eachIndex)_start" -> print }
-        ", ptr %each$(eachIndex)_index_slot, align 8" -> println
-        "  store i64 %each$(eachIndex)_limit, ptr %each$(eachIndex)_limit_slot, align 8" -> println
-        "  br label %each$(eachIndex)_header" -> println
-        "each$(eachIndex)_header:" -> println
-        "  %each$(eachIndex)_index = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
-        "  %each$(eachIndex)_bound = load i64, ptr %each$(eachIndex)_limit_slot, align 8" -> println
-        "  %each$(eachIndex)_done = icmp sgt i64 %each$(eachIndex)_index, %each$(eachIndex)_bound" -> println
-        "  br i1 %each$(eachIndex)_done, label %each$(eachIndex)_exit, label %each$(eachIndex)_body" -> println
-        "each$(eachIndex)_body:" -> println
-        "  %each$(eachIndex)_item = trunc i64 %each$(eachIndex)_index to i32" -> println
+        eachRepeat -> if { "1" -> print } else { "%each$(eachIndex -> valueNameId(state))_start" -> print }
+        ", ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
+        "  store i64 %each$(eachIndex -> valueNameId(state))_limit, ptr %each$(eachIndex -> valueNameId(state))_limit_slot, align 8" -> println
+        "  br label %each$(eachIndex -> valueNameId(state))_header" -> println
+        "each$(eachIndex -> valueNameId(state))_header:" -> println
+        "  %each$(eachIndex -> valueNameId(state))_index = load i64, ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
+        "  %each$(eachIndex -> valueNameId(state))_bound = load i64, ptr %each$(eachIndex -> valueNameId(state))_limit_slot, align 8" -> println
+        "  %each$(eachIndex -> valueNameId(state))_done = icmp sgt i64 %each$(eachIndex -> valueNameId(state))_index, %each$(eachIndex -> valueNameId(state))_bound" -> println
+        "  br i1 %each$(eachIndex -> valueNameId(state))_done, label %each$(eachIndex -> valueNameId(state))_exit, label %each$(eachIndex -> valueNameId(state))_body" -> println
+        "each$(eachIndex -> valueNameId(state))_body:" -> println
+        "  %each$(eachIndex -> valueNameId(state))_item = trunc i64 %each$(eachIndex -> valueNameId(state))_index to i32" -> println
     } else {
         eachSource -> isSetCollection(context) => eachSet
         false => eachReadonlyReference!
@@ -5107,7 +5107,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                 context.types[eachContainerTypeId!].kind == 3 or eachText
                     -> if {
                         true => eachReadonlyReference!
-                        "  %each$(eachIndex)_source = load " -> print
+                        "  %each$(eachIndex -> valueNameId(state))_source = load " -> print
                         eachContainerTypeId! -> writeSemanticTypeId(context, state)
                         ", ptr " -> print
                         eachNode.operand0 -> writeValue(ownerIndex, context, state)
@@ -5115,77 +5115,77 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                     }
             }
         eachArguments -> if {
-            "  %each$(eachIndex)_length = call i64 @sollang_argument_count()" -> println
+            "  %each$(eachIndex -> valueNameId(state))_length = call i64 @sollang_argument_count()" -> println
         } else {
             eachSet -> if {
-                "  %each$(eachIndex)_storage = extractvalue %sollang.int_dictionary " -> print
+                "  %each$(eachIndex -> valueNameId(state))_storage = extractvalue %sollang.int_dictionary " -> print
                 eachNode.operand0 -> writeValue(ownerIndex, context, state)
                 ", 0" -> println
-                "  %each$(eachIndex)_length = extractvalue %sollang.int_dictionary " -> print
+                "  %each$(eachIndex -> valueNameId(state))_length = extractvalue %sollang.int_dictionary " -> print
                 eachNode.operand0 -> writeValue(ownerIndex, context, state)
                 ", 2" -> println
                 context.types[eachContainerTypeId!].first => eachSetElementType
                 context.typeSizes[eachSetElementType] -> dictionaryEntryLayout(context.typeAligns[eachSetElementType], 0, 1) => eachSetEntryLayout
-                "each$(eachIndex)" -> emitGrowableDictionaryPointers("%each$(eachIndex)_storage", "%each$(eachIndex)_length", eachSetEntryLayout)
+                "each$(eachIndex -> valueNameId(state))" -> emitGrowableDictionaryPointers("%each$(eachIndex -> valueNameId(state))_storage", "%each$(eachIndex -> valueNameId(state))_length", eachSetEntryLayout)
             } else {
-                "  %each$(eachIndex)_data = extractvalue " -> print
+                "  %each$(eachIndex -> valueNameId(state))_data = extractvalue " -> print
                 eachContainerTypeId! -> writeArrayViewType(context, state)
                 " " -> print
-                eachReadonlyReference! -> if { "%each$(eachIndex)_source" -> print } else {
+                eachReadonlyReference! -> if { "%each$(eachIndex -> valueNameId(state))_source" -> print } else {
                     eachSource.kind == 5 and owner.operand1 >= 0 and eachSource.symbol == context.ir[owner.operand1].symbol
                         -> if { "%arg" -> print } else { "%v$(eachNode.operand0 -> valueNameId(state))" -> print }
                 }
                 ", 0" -> println
-                "  %each$(eachIndex)_length = extractvalue " -> print
+                "  %each$(eachIndex -> valueNameId(state))_length = extractvalue " -> print
                 eachContainerTypeId! -> writeArrayViewType(context, state)
                 " " -> print
-                eachReadonlyReference! -> if { "%each$(eachIndex)_source" -> print } else {
+                eachReadonlyReference! -> if { "%each$(eachIndex -> valueNameId(state))_source" -> print } else {
                     eachSource.kind == 5 and owner.operand1 >= 0 and eachSource.symbol == context.ir[owner.operand1].symbol
                         -> if { "%arg" -> print } else { "%v$(eachNode.operand0 -> valueNameId(state))" -> print }
                 }
                 ", 1" -> println
             }
         }
-        "  store i64 0, ptr %each$(eachIndex)_index_slot, align 8" -> println
-        "  br label %each$(eachIndex)_header" -> println
-        "each$(eachIndex)_header:" -> println
-        "  %each$(eachIndex)_index = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
-        "  %each$(eachIndex)_done = icmp " -> print
+        "  store i64 0, ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
+        "  br label %each$(eachIndex -> valueNameId(state))_header" -> println
+        "each$(eachIndex -> valueNameId(state))_header:" -> println
+        "  %each$(eachIndex -> valueNameId(state))_index = load i64, ptr %each$(eachIndex -> valueNameId(state))_index_slot, align 8" -> println
+        "  %each$(eachIndex -> valueNameId(state))_done = icmp " -> print
         eachText -> if { "uge" -> print } else { "eq" -> print }
-        " i64 %each$(eachIndex)_index, %each$(eachIndex)_length" -> println
+        " i64 %each$(eachIndex -> valueNameId(state))_index, %each$(eachIndex -> valueNameId(state))_length" -> println
         eachSet -> if {
-            "  br i1 %each$(eachIndex)_done, label %each$(eachIndex)_exit, label %each$(eachIndex)_check" -> println
-            "each$(eachIndex)_check:" -> println
-            "  %each$(eachIndex)_control_ptr = getelementptr i8, ptr %each$(eachIndex)_controls, i64 %each$(eachIndex)_index" -> println
-            "  %each$(eachIndex)_control = load i8, ptr %each$(eachIndex)_control_ptr, align 1" -> println
-            "  %each$(eachIndex)_occupied = icmp sgt i8 %each$(eachIndex)_control, 0" -> println
-            "  br i1 %each$(eachIndex)_occupied, label %each$(eachIndex)_body, label %each$(eachIndex)_continue" -> println
+            "  br i1 %each$(eachIndex -> valueNameId(state))_done, label %each$(eachIndex -> valueNameId(state))_exit, label %each$(eachIndex -> valueNameId(state))_check" -> println
+            "each$(eachIndex -> valueNameId(state))_check:" -> println
+            "  %each$(eachIndex -> valueNameId(state))_control_ptr = getelementptr i8, ptr %each$(eachIndex -> valueNameId(state))_controls, i64 %each$(eachIndex -> valueNameId(state))_index" -> println
+            "  %each$(eachIndex -> valueNameId(state))_control = load i8, ptr %each$(eachIndex -> valueNameId(state))_control_ptr, align 1" -> println
+            "  %each$(eachIndex -> valueNameId(state))_occupied = icmp sgt i8 %each$(eachIndex -> valueNameId(state))_control, 0" -> println
+            "  br i1 %each$(eachIndex -> valueNameId(state))_occupied, label %each$(eachIndex -> valueNameId(state))_body, label %each$(eachIndex -> valueNameId(state))_continue" -> println
         } else {
-            "  br i1 %each$(eachIndex)_done, label %each$(eachIndex)_exit, label %each$(eachIndex)_body" -> println
+            "  br i1 %each$(eachIndex -> valueNameId(state))_done, label %each$(eachIndex -> valueNameId(state))_exit, label %each$(eachIndex -> valueNameId(state))_body" -> println
         }
-        "each$(eachIndex)_body:" -> println
+        "each$(eachIndex -> valueNameId(state))_body:" -> println
         eachArguments -> if {
-            "  %each$(eachIndex)_item = call %sollang.text @sollang_argument(i64 %each$(eachIndex)_index)" -> println
+            "  %each$(eachIndex -> valueNameId(state))_item = call %sollang.text @sollang_argument(i64 %each$(eachIndex -> valueNameId(state))_index)" -> println
         } else {
             eachText -> if {
-                "  %each$(eachIndex)_utf8 = call i64 @sollang_utf8_decode(ptr %each$(eachIndex)_data, i64 %each$(eachIndex)_length, i64 %each$(eachIndex)_index)" -> println
-                "  %each$(eachIndex)_valid = icmp ne i64 %each$(eachIndex)_utf8, -1" -> println
-                "  br i1 %each$(eachIndex)_valid, label %each$(eachIndex)_decoded, label %each$(eachIndex)_invalid" -> println
-                "each$(eachIndex)_invalid:" -> println
+                "  %each$(eachIndex -> valueNameId(state))_utf8 = call i64 @sollang_utf8_decode(ptr %each$(eachIndex -> valueNameId(state))_data, i64 %each$(eachIndex -> valueNameId(state))_length, i64 %each$(eachIndex -> valueNameId(state))_index)" -> println
+                "  %each$(eachIndex -> valueNameId(state))_valid = icmp ne i64 %each$(eachIndex -> valueNameId(state))_utf8, -1" -> println
+                "  br i1 %each$(eachIndex -> valueNameId(state))_valid, label %each$(eachIndex -> valueNameId(state))_decoded, label %each$(eachIndex -> valueNameId(state))_invalid" -> println
+                "each$(eachIndex -> valueNameId(state))_invalid:" -> println
                 "  call void @llvm.trap()" -> println
                 "  unreachable" -> println
-                "each$(eachIndex)_decoded:" -> println
-                "  %each$(eachIndex)_item = trunc i64 %each$(eachIndex)_utf8 to i32" -> println
-                "  %each$(eachIndex)_width = lshr i64 %each$(eachIndex)_utf8, 32" -> println
+                "each$(eachIndex -> valueNameId(state))_decoded:" -> println
+                "  %each$(eachIndex -> valueNameId(state))_item = trunc i64 %each$(eachIndex -> valueNameId(state))_utf8 to i32" -> println
+                "  %each$(eachIndex -> valueNameId(state))_width = lshr i64 %each$(eachIndex -> valueNameId(state))_utf8, 32" -> println
             } else {
-                "  %each$(eachIndex)_item_ptr = getelementptr " -> print
+                "  %each$(eachIndex -> valueNameId(state))_item_ptr = getelementptr " -> print
                 eachSource -> writeArrayElementType(context, state)
                 ", ptr " -> print
-                eachSet -> if { "%each$(eachIndex)_keys" -> print } else { "%each$(eachIndex)_data" -> print }
-                ", i64 %each$(eachIndex)_index" -> println
-                "  %each$(eachIndex)_item = load " -> print
+                eachSet -> if { "%each$(eachIndex -> valueNameId(state))_keys" -> print } else { "%each$(eachIndex -> valueNameId(state))_data" -> print }
+                ", i64 %each$(eachIndex -> valueNameId(state))_index" -> println
+                "  %each$(eachIndex -> valueNameId(state))_item = load " -> print
                 eachSource -> writeArrayElementType(context, state)
-                ", ptr %each$(eachIndex)_item_ptr, align " -> print
+                ", ptr %each$(eachIndex -> valueNameId(state))_item_ptr, align " -> print
                 eachSource -> arrayElementAlign(context, state) -> writeDecimalLine
             }
         }
@@ -5210,7 +5210,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                 eachRoleIsItem! -> if {
                     "  %v$(eachRoleUseIndex! -> valueNameId(state)) = freeze " -> print
                     eachSource -> writeDirectEachElementType(context, state)
-                    " %each$(eachIndex)_item" -> println
+                    " %each$(eachIndex -> valueNameId(state))_item" -> println
                 }
             }
         eachRoleUseIndex! + 1 => eachRoleUseIndex!

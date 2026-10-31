@@ -30,14 +30,14 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
-writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Unit uses Console {
+writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[transfer.operand0] => loop
     loop.kind == 6 and (loop.opcode -> typedIr.isDirectIterationOpcode)
         -> if {
-            "  br label %each$(transfer.operand0)_" -> print
+            "  br label %each$(transfer.operand0 -> valueNameId(state))_" -> print
             transfer.opcode == 1 -> if { "continue" -> println } else { "exit" -> println }
         } else {
-            "  br label %while$(transfer.operand0)_" -> print
+            "  br label %while$(transfer.operand0 -> valueNameId(state))_" -> print
             transfer.opcode == 1 -> if { "header" -> println } else { "exit" -> println }
         }
 }
@@ -326,7 +326,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                                 }
                             context.ir[guardCleanupAncestor!].parent => guardCleanupAncestor!
                         }
-                    regionNode -> writeLoopTransferTarget(context)
+                    regionNode -> writeLoopTransferTarget(context, state)
                     "guard$(regionNodeIndex)_next:" -> println
                     false => regionTerminated!
                 }
@@ -341,7 +341,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                             }
                             context.ir[cleanupAncestor!].parent => cleanupAncestor!
                         }
-                    regionNode -> writeLoopTransferTarget(context)
+                    regionNode -> writeLoopTransferTarget(context, state)
                     true => regionTerminated!
                 }
                 regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23
@@ -392,10 +392,10 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                 (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
                 nestedShortCircuit -> if {
                     WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex } -> emitWhileBranch(emissionOrder, context, state)
-                    "while$(regionNodeIndex)_body:" -> println
-                    regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex)
-                    "while$(regionNodeIndex)_exit:" -> println
-                    regionNode -> writeIfShortCircuitExitTarget(regionNodeIndex)
+                    "while$(regionNodeIndex -> valueNameId(state))_body:" -> println
+                    regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex, state)
+                    "while$(regionNodeIndex -> valueNameId(state))_exit:" -> println
+                    regionNode -> writeIfShortCircuitExitTarget(regionNodeIndex, state)
                 } else {
                     "  br i1 " -> print
                     nestedCondition.kind == 4 -> if {
@@ -406,9 +406,9 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                         ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
                             -> if { "%arg" -> print } else { "%v$(nestedConditionIndex -> valueNameId(state))" -> print }
                     }
-                    regionNode -> writeIfDirectBranchTargets(regionNodeIndex)
+                    regionNode -> writeIfDirectBranchTargets(regionNodeIndex, state)
                 }
-                "if$(regionNodeIndex)_then:" -> println
+                "if$(regionNodeIndex -> valueNameId(state))_then:" -> println
                 false => regionTerminated!
             }
         }
@@ -424,10 +424,10 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                                 regionNode -> emitIfResultStore(nestedThenStoreIndex, ownerIndex!, regionNodeIndex, 0, context, state)
                             }
                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-                        "  br label %if$(regionNodeIndex)_merge" -> println
+                        "  br label %if$(regionNodeIndex -> valueNameId(state))_merge" -> println
                         true => ifThenReachesMerge[regionNodeIndex - regionLocalStart]
                     }
-                    "if$(regionNodeIndex)_else:" -> println
+                    "if$(regionNodeIndex -> valueNameId(state))_else:" -> println
                     false => regionTerminated!
                 }
         }
@@ -448,12 +448,12 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                         } else {
                             OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                         }
-                        "  br label %if$(regionNodeIndex)_merge" -> println
+                        "  br label %if$(regionNodeIndex -> valueNameId(state))_merge" -> println
                         true => ifThenReachesMerge[regionNodeIndex - regionLocalStart]
                     }
                     ifThenReachesMerge[regionNodeIndex - regionLocalStart]
                         -> if {
-                            "if$(regionNodeIndex)_merge:" -> println
+                            "if$(regionNodeIndex -> valueNameId(state))_merge:" -> println
                             false => regionTerminated!
                             false => nestedMergeValueUsed!
                             regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedMergeValueUsed!
@@ -461,7 +461,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                                 -> if {
                                     "  %v$(regionNodeIndex -> valueNameId(state)) = load " -> print
                                     regionNode -> writeIrType(context, state)
-                                    ", ptr %if$(regionNodeIndex)_result, align " -> print
+                                    ", ptr %if$(regionNodeIndex -> valueNameId(state))_result, align " -> print
                                     regionNode -> storageAlign(context, state) -> writeDecimalLine
                                 }
                         }
@@ -474,8 +474,8 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
         regionEventKind! == 6 -> if {
             not regionTerminated! -> if {
                 true => loopActive[regionNodeIndex - regionLocalStart]
-                "  br label %while$(regionNodeIndex)_header" -> println
-                "while$(regionNodeIndex)_header:" -> println
+                "  br label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
+                "while$(regionNodeIndex -> valueNameId(state))_header:" -> println
                 false => regionTerminated!
             }
         }
@@ -483,7 +483,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
             loopActive[regionNodeIndex - regionLocalStart]
                 -> if {
                     WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
-                    "while$(regionNodeIndex)_body:" -> println
+                    "while$(regionNodeIndex -> valueNameId(state))_body:" -> println
                     false => regionTerminated!
                 }
         }
@@ -492,9 +492,9 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                 -> if {
                     not regionTerminated! -> if {
                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-                        "  br label %while$(regionNodeIndex)_header" -> println
+                        "  br label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
                     }
-                    "while$(regionNodeIndex)_exit:" -> println
+                    "while$(regionNodeIndex -> valueNameId(state))_exit:" -> println
                     false => regionTerminated!
                 }
         }
@@ -517,7 +517,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                 }
             }
             nextInside! -> if { false => closeEach! } else {
-                eachIndex -> emitDirectEachEnd(regionTerminated!, context)
+                eachIndex -> emitDirectEachEnd(regionTerminated!, context, state)
                 eachIndex -> emitStorageLifetimeEndsAfter(false, context)
                 false => regionTerminated!
                 activeEachSize! - 1 => activeEachSize!

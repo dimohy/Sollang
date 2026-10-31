@@ -44,16 +44,16 @@ writeArrayStorageIdentity identity: ArrayStorageIdentity, suffix: Text, state: r
     identity.resultDomain == 1 -> if {
         "%v$(identity.labelIndex -> valueNameId(state))_expression$(identity.resultIndex)$suffix" -> print
     } else { identity.resultDomain == 2 -> if {
-            "%while$(identity.labelIndex)_v$(identity.resultIndex)$suffix" -> print
+            "%while$(identity.labelIndex -> valueNameId(state))_v$(identity.resultIndex -> valueNameId(state))$suffix" -> print
         } else { "%v$(identity.resultIndex -> valueNameId(state))$suffix" -> print } }
 }
 
 # Physical heap identity survives descriptor publication. A while expression
 # has the same IR allocation identity; interpolation has a separate AST domain.
-writeArrayHeapIdentity identity: ArrayStorageIdentity -> Unit uses Console {
+writeArrayHeapIdentity identity: ArrayStorageIdentity, state: ref CoreEmitterState -> Unit uses Console {
     identity.resultDomain == 1 -> if {
-        "%heap_v$(identity.labelIndex)_expression$(identity.resultIndex)" -> print
-    } else { "%heap_v$(identity.resultIndex)" -> print }
+        "%heap_v$(identity.labelIndex -> valueNameId(state))_expression$(identity.resultIndex)" -> print
+    } else { "%heap_v$(identity.resultIndex -> valueNameId(state))" -> print }
 }
 
 emitArrayStackBacking identity: ArrayStorageIdentity, byteLength: Int, alignment: Int, state: ref CoreEmitterState -> Unit uses Console {
@@ -65,21 +65,21 @@ emitArrayStackBacking identity: ArrayStorageIdentity, byteLength: Int, alignment
 emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     byteLength == 0 -> if {
         "  " -> print
-        identity -> writeArrayHeapIdentity
+        identity -> writeArrayHeapIdentity(state)
         " = inttoptr i64 0 to ptr" -> println
         "  " -> print
         identity -> writeArrayStorageIdentity("_data", state)
         " = getelementptr i8, ptr " -> print
-        identity -> writeArrayHeapIdentity
+        identity -> writeArrayHeapIdentity(state)
         ", i64 0" -> println
     } else {
         "  " -> print
-        identity -> writeArrayHeapIdentity
+        identity -> writeArrayHeapIdentity(state)
         " = call ptr @sollang_alloc(i64 $byteLength)" -> println
         "  " -> print
         identity -> writeArrayStorageIdentity("_data", state)
         " = getelementptr i8, ptr " -> print
-        identity -> writeArrayHeapIdentity
+        identity -> writeArrayHeapIdentity(state)
         ", i64 0" -> println
         identity -> emitArrayAllocationGuard(ownerIndex, context, state)
     }
@@ -92,7 +92,7 @@ emitArrayAllocationGuard identity: ArrayStorageIdentity, ownerIndex: Int, contex
     (identity.resultDomain == 1 -> if {
         "v$(identity.labelIndex -> valueNameId(state))_expression$(identity.resultIndex)" -> materialize(names!)
     } else { identity.resultDomain == 2 -> if {
-            "while$(identity.labelIndex)_v$(identity.resultIndex)" -> materialize(names!)
+            "while$(identity.labelIndex -> valueNameId(state))_v$(identity.resultIndex -> valueNameId(state))" -> materialize(names!)
         } else { "v$(identity.resultIndex -> valueNameId(state))" -> materialize(names!) } }) => prefix
     prefix -> emitAllocationGuard("_data", ownerIndex, context, state)
 }
@@ -2505,7 +2505,7 @@ isFilePathStatusCall call: typedIr.TypedIrNode -> Bool {
 
 writeFileScalarName request: WhileValueRequest, state: ref CoreEmitterState -> Unit uses Console {
     request.whileIndex >= 0 -> if {
-        "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+        "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
     } else { "%v$(request.nodeIndex -> valueNameId(state))" -> print }
 }
 
@@ -2514,7 +2514,7 @@ writeFileScalarArgument request: WhileValueRequest, pathIndex: Int, context: ref
     path.kind == 2 -> if {
         path -> sourceToken(context, state) => token
         Int(TextLiteralRequest { sourceModule: path.sourceModule, token: token } -> textLiteralLength(context, state)) => length
-        "{ ptr @sollang_str_$pathIndex, i64 $length }" -> print
+        "{ ptr @sollang_str_$(pathIndex -> valueNameId(state)), i64 $length }" -> print
     } else {
         request.whileIndex >= 0 -> if {
             WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: pathIndex } -> writeWhileValue(context, state)

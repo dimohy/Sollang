@@ -39,7 +39,7 @@ import sys.runtime as runtime
 emitWhileIntegerIndexRead request: WhileValueRequest, indexValue: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
     context.ir[indexValue] -> scalarReferenceValueTypeId(context, state) => readTypeId
     readTypeId < 0 -> if { -1 -> return }
-    "  %while$(request.whileIndex)_v$(request.nodeIndex)_index_value = load " -> print
+    "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_index_value = load " -> print
     readTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr " -> print
     WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: indexValue } -> writeWhileValue(context, state)
@@ -50,7 +50,7 @@ emitWhileIntegerIndexRead request: WhileValueRequest, indexValue: Int, context: 
 
 writeWhileIntegerIndexValue request: WhileValueRequest, indexValue: Int, readTypeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     readTypeId >= 0 -> if {
-        "%while$(request.whileIndex)_v$(request.nodeIndex)_index_value" -> print
+        "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_index_value" -> print
     } else {
         WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: indexValue } -> writeWhileValue(context, state)
     }
@@ -74,7 +74,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                 value.kind == 2 -> if {
                     value -> sourceToken(context, state) => whileTextToken
                     Int(TextLiteralRequest { sourceModule: value.sourceModule, token: whileTextToken } -> textLiteralLength(context, state)) => whileTextLength
-                    "{ ptr @sollang_str_$(request.nodeIndex), i64 $whileTextLength }" -> print
+                    "{ ptr @sollang_str_$(request.nodeIndex -> valueNameId(state)), i64 $whileTextLength }" -> print
                 } else {
                     value.kind == 3 or value.kind == 4 -> if {
                         value -> sourceToken(context, state) => valueToken
@@ -104,7 +104,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                                 whileParameterOrdinal! >= 0 -> if {
                                     request.nodeIndex -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => mutableWhileParameterOrdinal
                                     mutableWhileParameterOrdinal >= 0 -> if {
-                                        "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                                        "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
                                     } else {
                                         whileParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(whileParameterOrdinal!)" -> print }
                                     }
@@ -146,7 +146,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                                             "%v$(request.nodeIndex -> valueNameId(state))" -> print
                                         } else {
                                             capturedWhileValue! or whileEachRoleOwner >= 0 or whileParallelRoleOwner >= 0
-                                                -> if { "%v$(request.nodeIndex -> valueNameId(state))" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
+                                                -> if { "%v$(request.nodeIndex -> valueNameId(state))" -> print } else { "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print }
                                         }
                                 }
                             }
@@ -166,11 +166,11 @@ emitWhileCurrentMutableParameterValue whileIndex: Int, valueIndex: Int, paramete
                 and context.types[mutableParameterTypeId].kind == 4
                 and context.types[mutableParameterTypeId].length >= 0
                 -> if {
-                    "  %while$(whileIndex)_v$(valueIndex) = insertvalue %sollang.int_slice " -> print
+                    "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state)) = insertvalue %sollang.int_slice " -> print
                     parameterOrdinal == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal)" -> print }
                     ", i64 $(context.types[mutableParameterTypeId].length), 1" -> println
                 } else {
-                    "  %while$(whileIndex)_v$(valueIndex) = load " -> print
+                    "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state)) = load " -> print
                     value -> writeIrType(context, state)
                     ", ptr " -> print
                     parameterOrdinal -> writeMutableStructParameterPointer
@@ -178,24 +178,24 @@ emitWhileCurrentMutableParameterValue whileIndex: Int, valueIndex: Int, paramete
                     value -> storageAlign(context, state) -> writeDecimalLine
                 }
         } else {
-            "  %while$(whileIndex)_v$(valueIndex)_current_ptr = load ptr, ptr " -> print
+            "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current_ptr = load ptr, ptr " -> print
             parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
             ", align 8" -> println
-            "  %while$(whileIndex)_v$(valueIndex)_current_len = load i64, ptr " -> print
+            "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current_len = load i64, ptr " -> print
             parameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(parameterOrdinal)_mut_len_addr" -> print }
             ", align 8" -> println
-            "  %while$(whileIndex)_v$(valueIndex)_current_capacity = load i64, ptr " -> print
+            "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current_capacity = load i64, ptr " -> print
             parameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(parameterOrdinal)_mut_capacity_addr" -> print }
             ", align 8" -> println
-            "  %while$(whileIndex)_v$(valueIndex)_current0 = insertvalue " -> print
+            "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current0 = insertvalue " -> print
             value -> writeIrType(context, state)
-            " poison, ptr %while$(whileIndex)_v$(valueIndex)_current_ptr, 0" -> println
-            "  %while$(whileIndex)_v$(valueIndex)_current1 = insertvalue " -> print
+            " poison, ptr %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current_ptr, 0" -> println
+            "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current1 = insertvalue " -> print
             value -> writeIrType(context, state)
-            " %while$(whileIndex)_v$(valueIndex)_current0, i64 %while$(whileIndex)_v$(valueIndex)_current_len, 1" -> println
-            "  %while$(whileIndex)_v$(valueIndex) = insertvalue " -> print
+            " %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current0, i64 %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current_len, 1" -> println
+            "  %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state)) = insertvalue " -> print
             value -> writeIrType(context, state)
-            " %while$(whileIndex)_v$(valueIndex)_current1, i64 %while$(whileIndex)_v$(valueIndex)_current_capacity, 2" -> println
+            " %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current1, i64 %while$(whileIndex -> valueNameId(state))_v$(valueIndex -> valueNameId(state))_current_capacity, 2" -> println
         }
 }
 emitBoundedDictionaryIndexAssignment request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -262,12 +262,12 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                             assignmentDictionaryType.second => assignmentValueTypeId!
                         }
                 }
-                "  %assign$(request.nodeIndex)_dictionary = load %sollang.int_dictionary, ptr " -> print
+                "  %assign$(request.nodeIndex -> valueNameId(state))_dictionary = load %sollang.int_dictionary, ptr " -> print
                 assignmentRoot -> writeMutableStoragePointer(request.ownerIndex, context, state)
                 ", align 8" -> println
-                "  %assign$(request.nodeIndex)_storage = extractvalue %sollang.int_dictionary %assign$(request.nodeIndex)_dictionary, 0" -> println
-                "  %assign$(request.nodeIndex)_length = extractvalue %sollang.int_dictionary %assign$(request.nodeIndex)_dictionary, 1" -> println
-                "  %assign$(request.nodeIndex)_capacity = extractvalue %sollang.int_dictionary %assign$(request.nodeIndex)_dictionary, 2" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_storage = extractvalue %sollang.int_dictionary %assign$(request.nodeIndex -> valueNameId(state))_dictionary, 0" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_length = extractvalue %sollang.int_dictionary %assign$(request.nodeIndex -> valueNameId(state))_dictionary, 1" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_capacity = extractvalue %sollang.int_dictionary %assign$(request.nodeIndex -> valueNameId(state))_dictionary, 2" -> println
                 -1 => assignmentKeyStorageSize!
                 assignmentKeyTypeId! >= 0 -> if { context.typeSizes[assignmentKeyTypeId!] => assignmentKeyStorageSize! }
                 assignmentKeyStorageSize! < 0 -> if { assignmentBinding.typeModule -> storageSize(context, state) => assignmentKeyStorageSize! }
@@ -293,13 +293,13 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                 } => assignmentHashWidth
                 false => assignmentHashSigned!
                 assignmentKeyTypeId! >= 0 -> if { context.types[assignmentKeyTypeId!].symbol -> integerSigned(context, state) => assignmentHashSigned! }
-                "  %assign$(request.nodeIndex)_query = freeze " -> print
+                "  %assign$(request.nodeIndex -> valueNameId(state))_query = freeze " -> print
                 assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId(context, state) } else { assignmentBinding.typeModule -> llvmType(context, state) -> print }
                 " " -> print
                 assignment.operand1 -> writeValue(request.ownerIndex, context, state)
                 "" -> println
-                "assign$(request.nodeIndex)_lookup" -> emitSetHashValue(
-                "%assign$(request.nodeIndex)_query",
+                "assign$(request.nodeIndex -> valueNameId(state))_lookup" -> emitSetHashValue(
+                "%assign$(request.nodeIndex -> valueNameId(state))_query",
                 assignmentKeyTypeId!,
                 assignmentHashMethod!,
                 assignmentKeyIsText!,
@@ -308,70 +308,70 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                 assignmentHashSigned!,
                 context,
                 state)
-                "  %assign$(request.nodeIndex)_h2_shifted = lshr i64 %assign$(request.nodeIndex)_lookup_hash, 57" -> println
-                "  %assign$(request.nodeIndex)_h2_raw = and i64 %assign$(request.nodeIndex)_h2_shifted, 127" -> println
-                "  %assign$(request.nodeIndex)_h2_zero = icmp eq i64 %assign$(request.nodeIndex)_h2_raw, 0" -> println
-                "  %assign$(request.nodeIndex)_h2_value = select i1 %assign$(request.nodeIndex)_h2_zero, i64 1, i64 %assign$(request.nodeIndex)_h2_raw" -> println
-                "  %assign$(request.nodeIndex)_h2 = trunc i64 %assign$(request.nodeIndex)_h2_value to i8" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_h2_shifted = lshr i64 %assign$(request.nodeIndex -> valueNameId(state))_lookup_hash, 57" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_h2_raw = and i64 %assign$(request.nodeIndex -> valueNameId(state))_h2_shifted, 127" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_h2_zero = icmp eq i64 %assign$(request.nodeIndex -> valueNameId(state))_h2_raw, 0" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_h2_value = select i1 %assign$(request.nodeIndex -> valueNameId(state))_h2_zero, i64 1, i64 %assign$(request.nodeIndex -> valueNameId(state))_h2_raw" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_h2 = trunc i64 %assign$(request.nodeIndex -> valueNameId(state))_h2_value to i8" -> println
                 assignmentKeyTypeId! -> dictionaryEntryLayoutForTypeIds(assignmentValueTypeId!, assignmentBinding.typeModule, assignmentBinding.typeSymbol, context, state) => assignmentEntryLayout
-                "assign$(request.nodeIndex)" -> emitGrowableDictionaryPointers("%assign$(request.nodeIndex)_storage", "%assign$(request.nodeIndex)_capacity", assignmentEntryLayout)
-                "  %assign$(request.nodeIndex)_has_capacity = icmp ugt i64 %assign$(request.nodeIndex)_capacity, 0" -> println
-                "  br i1 %assign$(request.nodeIndex)_has_capacity, label %assign$(request.nodeIndex)_find_start, label %assign$(request.nodeIndex)_missing" -> println
-                "assign$(request.nodeIndex)_find_start:" -> println
-                "  %assign$(request.nodeIndex)_start_slot = urem i64 %assign$(request.nodeIndex)_lookup_hash, %assign$(request.nodeIndex)_capacity" -> println
-                "  br label %assign$(request.nodeIndex)_find" -> println
-                "assign$(request.nodeIndex)_find:" -> println
-                "  %assign$(request.nodeIndex)_find_slot = phi i64 [ %assign$(request.nodeIndex)_start_slot, %assign$(request.nodeIndex)_find_start ], [ %assign$(request.nodeIndex)_find_next, %assign$(request.nodeIndex)_find_advance ]" -> println
-                "  %assign$(request.nodeIndex)_find_probe = phi i64 [ 0, %assign$(request.nodeIndex)_find_start ], [ %assign$(request.nodeIndex)_find_probe_next, %assign$(request.nodeIndex)_find_advance ]" -> println
-                "  %assign$(request.nodeIndex)_find_active = icmp ult i64 %assign$(request.nodeIndex)_find_probe, %assign$(request.nodeIndex)_capacity" -> println
-                "  br i1 %assign$(request.nodeIndex)_find_active, label %assign$(request.nodeIndex)_find_check, label %assign$(request.nodeIndex)_missing" -> println
-                "assign$(request.nodeIndex)_find_check:" -> println
-                "  %assign$(request.nodeIndex)_control_ptr = getelementptr i8, ptr %assign$(request.nodeIndex)_controls, i64 %assign$(request.nodeIndex)_find_slot" -> println
-                "  %assign$(request.nodeIndex)_control = load i8, ptr %assign$(request.nodeIndex)_control_ptr, align 1" -> println
-                "  %assign$(request.nodeIndex)_empty = icmp eq i8 %assign$(request.nodeIndex)_control, 0" -> println
-                "  br i1 %assign$(request.nodeIndex)_empty, label %assign$(request.nodeIndex)_missing, label %assign$(request.nodeIndex)_h2_check" -> println
-                "assign$(request.nodeIndex)_h2_check:" -> println
-                "  %assign$(request.nodeIndex)_h2_match = icmp eq i8 %assign$(request.nodeIndex)_control, %assign$(request.nodeIndex)_h2" -> println
-                "  br i1 %assign$(request.nodeIndex)_h2_match, label %assign$(request.nodeIndex)_key_check, label %assign$(request.nodeIndex)_find_advance" -> println
-                "assign$(request.nodeIndex)_key_check:" -> println
-                "  %assign$(request.nodeIndex)_key_ptr = getelementptr " -> print
+                "assign$(request.nodeIndex -> valueNameId(state))" -> emitGrowableDictionaryPointers("%assign$(request.nodeIndex -> valueNameId(state))_storage", "%assign$(request.nodeIndex -> valueNameId(state))_capacity", assignmentEntryLayout)
+                "  %assign$(request.nodeIndex -> valueNameId(state))_has_capacity = icmp ugt i64 %assign$(request.nodeIndex -> valueNameId(state))_capacity, 0" -> println
+                "  br i1 %assign$(request.nodeIndex -> valueNameId(state))_has_capacity, label %assign$(request.nodeIndex -> valueNameId(state))_find_start, label %assign$(request.nodeIndex -> valueNameId(state))_missing" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_find_start:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_start_slot = urem i64 %assign$(request.nodeIndex -> valueNameId(state))_lookup_hash, %assign$(request.nodeIndex -> valueNameId(state))_capacity" -> println
+                "  br label %assign$(request.nodeIndex -> valueNameId(state))_find" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_find:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_find_slot = phi i64 [ %assign$(request.nodeIndex -> valueNameId(state))_start_slot, %assign$(request.nodeIndex -> valueNameId(state))_find_start ], [ %assign$(request.nodeIndex -> valueNameId(state))_find_next, %assign$(request.nodeIndex -> valueNameId(state))_find_advance ]" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_find_probe = phi i64 [ 0, %assign$(request.nodeIndex -> valueNameId(state))_find_start ], [ %assign$(request.nodeIndex -> valueNameId(state))_find_probe_next, %assign$(request.nodeIndex -> valueNameId(state))_find_advance ]" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_find_active = icmp ult i64 %assign$(request.nodeIndex -> valueNameId(state))_find_probe, %assign$(request.nodeIndex -> valueNameId(state))_capacity" -> println
+                "  br i1 %assign$(request.nodeIndex -> valueNameId(state))_find_active, label %assign$(request.nodeIndex -> valueNameId(state))_find_check, label %assign$(request.nodeIndex -> valueNameId(state))_missing" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_find_check:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_control_ptr = getelementptr i8, ptr %assign$(request.nodeIndex -> valueNameId(state))_controls, i64 %assign$(request.nodeIndex -> valueNameId(state))_find_slot" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_control = load i8, ptr %assign$(request.nodeIndex -> valueNameId(state))_control_ptr, align 1" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_empty = icmp eq i8 %assign$(request.nodeIndex -> valueNameId(state))_control, 0" -> println
+                "  br i1 %assign$(request.nodeIndex -> valueNameId(state))_empty, label %assign$(request.nodeIndex -> valueNameId(state))_missing, label %assign$(request.nodeIndex -> valueNameId(state))_h2_check" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_h2_check:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_h2_match = icmp eq i8 %assign$(request.nodeIndex -> valueNameId(state))_control, %assign$(request.nodeIndex -> valueNameId(state))_h2" -> println
+                "  br i1 %assign$(request.nodeIndex -> valueNameId(state))_h2_match, label %assign$(request.nodeIndex -> valueNameId(state))_key_check, label %assign$(request.nodeIndex -> valueNameId(state))_find_advance" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_key_check:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_key_ptr = getelementptr " -> print
                 assignmentEntryLayout -> writeDictionaryEntryStorageType
-                ", ptr %assign$(request.nodeIndex)_keys, i64 %assign$(request.nodeIndex)_find_slot" -> println
-                "  %assign$(request.nodeIndex)_key = load " -> print
+                ", ptr %assign$(request.nodeIndex -> valueNameId(state))_keys, i64 %assign$(request.nodeIndex -> valueNameId(state))_find_slot" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_key = load " -> print
                 assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId(context, state) } else { assignmentBinding.typeModule -> llvmType(context, state) -> print }
-                ", ptr %assign$(request.nodeIndex)_key_ptr, align " -> print
+                ", ptr %assign$(request.nodeIndex -> valueNameId(state))_key_ptr, align " -> print
                 assignmentKeyTypeId! >= 0 -> if { context.typeAligns[assignmentKeyTypeId!] -> writeDecimalLine } else { assignmentBinding.typeModule -> legacyStorageAlign(context, state) -> writeDecimalLine }
-                "assign$(request.nodeIndex)_lookup" -> emitSetEquality(
-                "%assign$(request.nodeIndex)_key",
-                "%assign$(request.nodeIndex)_query",
+                "assign$(request.nodeIndex -> valueNameId(state))_lookup" -> emitSetEquality(
+                "%assign$(request.nodeIndex -> valueNameId(state))_key",
+                "%assign$(request.nodeIndex -> valueNameId(state))_query",
                 assignmentKeyTypeId!,
                 assignmentEqMethod!,
                 assignmentKeyIsText!,
                 assignmentKeyIsNominal,
                 context,
                 state)
-                "  br i1 %assign$(request.nodeIndex)_lookup_equal, label %assign$(request.nodeIndex)_hit, label %assign$(request.nodeIndex)_find_advance" -> println
-                "assign$(request.nodeIndex)_find_advance:" -> println
-                "  %assign$(request.nodeIndex)_find_next_unwrapped = add i64 %assign$(request.nodeIndex)_find_slot, 1" -> println
-                "  %assign$(request.nodeIndex)_find_next = urem i64 %assign$(request.nodeIndex)_find_next_unwrapped, %assign$(request.nodeIndex)_capacity" -> println
-                "  %assign$(request.nodeIndex)_find_probe_next = add i64 %assign$(request.nodeIndex)_find_probe, 1" -> println
-                "  br label %assign$(request.nodeIndex)_find" -> println
-                "assign$(request.nodeIndex)_missing:" -> println
+                "  br i1 %assign$(request.nodeIndex -> valueNameId(state))_lookup_equal, label %assign$(request.nodeIndex -> valueNameId(state))_hit, label %assign$(request.nodeIndex -> valueNameId(state))_find_advance" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_find_advance:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_find_next_unwrapped = add i64 %assign$(request.nodeIndex -> valueNameId(state))_find_slot, 1" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_find_next = urem i64 %assign$(request.nodeIndex -> valueNameId(state))_find_next_unwrapped, %assign$(request.nodeIndex -> valueNameId(state))_capacity" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_find_probe_next = add i64 %assign$(request.nodeIndex -> valueNameId(state))_find_probe, 1" -> println
+                "  br label %assign$(request.nodeIndex -> valueNameId(state))_find" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_missing:" -> println
                 "  call void @llvm.trap()" -> println
                 "  unreachable" -> println
-                "assign$(request.nodeIndex)_hit:" -> println
-                "  %assign$(request.nodeIndex)_value_ptr = getelementptr " -> print
+                "assign$(request.nodeIndex -> valueNameId(state))_hit:" -> println
+                "  %assign$(request.nodeIndex -> valueNameId(state))_value_ptr = getelementptr " -> print
                 assignmentEntryLayout -> writeDictionaryEntryStorageType
-                ", ptr %assign$(request.nodeIndex)_values, i64 %assign$(request.nodeIndex)_find_slot" -> println
+                ", ptr %assign$(request.nodeIndex -> valueNameId(state))_values, i64 %assign$(request.nodeIndex -> valueNameId(state))_find_slot" -> println
                 assignmentValueTypeId! >= 0 and (assignmentValueTypeId! -> semanticTypeOwns(context, state))
                     -> if {
-                        "  %assign$(request.nodeIndex)_previous = load " -> print
+                        "  %assign$(request.nodeIndex -> valueNameId(state))_previous = load " -> print
                         assignmentValueTypeId! -> writeSemanticTypeId(context, state)
-                        ", ptr %assign$(request.nodeIndex)_value_ptr, align " -> print
+                        ", ptr %assign$(request.nodeIndex -> valueNameId(state))_value_ptr, align " -> print
                         context.typeAligns[assignmentValueTypeId!] -> writeDecimalLine
                         "  call void @sollang_drop_t$(assignmentValueTypeId!)(" -> print
                         assignmentValueTypeId! -> writeSemanticTypeId(context, state)
-                        " %assign$(request.nodeIndex)_previous)" -> println
+                        " %assign$(request.nodeIndex -> valueNameId(state))_previous)" -> println
                     }
                 "  store " -> print
                 assignmentValueTypeId! >= 0 -> if { assignmentValueTypeId! -> writeSemanticTypeId(context, state) } else { assignmentBinding.typeSymbol -> llvmType(context, state) -> print }
@@ -389,10 +389,10 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                         request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
                             -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                     }
-                ", ptr %assign$(request.nodeIndex)_value_ptr, align " -> print
+                ", ptr %assign$(request.nodeIndex -> valueNameId(state))_value_ptr, align " -> print
                 assignmentValueTypeId! >= 0 -> if { context.typeAligns[assignmentValueTypeId!] -> writeDecimalLine } else { assignmentBinding.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
-                "  br label %assign$(request.nodeIndex)_done" -> println
-                "assign$(request.nodeIndex)_done:" -> println
+                "  br label %assign$(request.nodeIndex -> valueNameId(state))_done" -> println
+                "assign$(request.nodeIndex -> valueNameId(state))_done:" -> println
             } else {
                 assignmentBinding -> arrayElementTypeId(context, state) => assignmentTargetElementTypeId
                 assignmentTargetElementTypeId < 0 -> if {
@@ -411,30 +411,30 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                     assignmentBinding.flags / 2 % 2 == 1 -> if {
                         assignmentBinding -> mutableBorrowUsesStructPointer(context)
                             -> if {
-                                "  %assign$(request.nodeIndex)_data = extractvalue " -> print
+                                "  %assign$(request.nodeIndex -> valueNameId(state))_data = extractvalue " -> print
                                 assignmentBinding -> writeIrType(context, state)
                                 " " -> print
                                 assignmentParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(assignmentParameterOrdinal!)" -> print }
                                 ", 0" -> println
                             } else {
-                                "  %assign$(request.nodeIndex)_data = load ptr, ptr " -> print
+                                "  %assign$(request.nodeIndex -> valueNameId(state))_data = load ptr, ptr " -> print
                                 assignmentParameterOrdinal! == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(assignmentParameterOrdinal!)_mut_ptr_addr" -> print }
                                 ", align 8" -> println
                             }
                     } else {
-                        "  %assign$(request.nodeIndex)_data = extractvalue " -> print
+                        "  %assign$(request.nodeIndex -> valueNameId(state))_data = extractvalue " -> print
                         assignmentBinding -> writeIrType(context, state)
                         " " -> print
                         assignmentParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(assignmentParameterOrdinal!)" -> print }
                         ", 0" -> println
                     }
                 } else {
-                    "  %assign$(request.nodeIndex)_array = load " -> print
+                    "  %assign$(request.nodeIndex -> valueNameId(state))_array = load " -> print
                     assignmentBinding -> writeIrType(context, state)
-                    ", ptr %slot$(assignmentRoot), align 8" -> println
-                    "  %assign$(request.nodeIndex)_data = extractvalue " -> print
+                    ", ptr %slot$(assignmentRoot -> valueNameId(state)), align 8" -> println
+                    "  %assign$(request.nodeIndex -> valueNameId(state))_data = extractvalue " -> print
                     assignmentBinding -> writeIrType(context, state)
-                    " %assign$(request.nodeIndex)_array, 0" -> println
+                    " %assign$(request.nodeIndex -> valueNameId(state))_array, 0" -> println
                 }
                 assignmentIndex -> integerNodeWidth(context, state) => assignmentIndexWidth!
                 assignmentIndex -> integerNodeSigned(context, state) => assignmentIndexSigned!
@@ -447,20 +447,20 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                     }
                 }
                 assignmentIndexWidth! == 64 -> if {
-                    "  %assign$(request.nodeIndex)_index = add i64 0, " -> print
+                    "  %assign$(request.nodeIndex -> valueNameId(state))_index = add i64 0, " -> print
                     assignment.operand1 -> writeValue(request.ownerIndex, context, state)
                     "" -> println
                 } else {
-                    "  %assign$(request.nodeIndex)_index = " -> print
+                    "  %assign$(request.nodeIndex -> valueNameId(state))_index = " -> print
                     assignmentIndexSigned!
                         -> if { "sext" -> print } else { "zext" -> print }
                     " i$(assignmentIndexWidth!) " -> print
                     assignment.operand1 -> writeValue(request.ownerIndex, context, state)
                     " to i64" -> println
                 }
-                "  %assign$(request.nodeIndex)_ptr = getelementptr " -> print
+                "  %assign$(request.nodeIndex -> valueNameId(state))_ptr = getelementptr " -> print
                 assignmentBinding -> writeArrayElementType(context, state)
-                ", ptr %assign$(request.nodeIndex)_data, i64 %assign$(request.nodeIndex)_index" -> println
+                ", ptr %assign$(request.nodeIndex -> valueNameId(state))_data, i64 %assign$(request.nodeIndex -> valueNameId(state))_index" -> println
                 false => assignmentValueIsReference!
                 false => assignmentReferenceValueIsMaterialized!
                 assignmentValue.typeId >= 0
@@ -470,7 +470,7 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                         true => assignmentValueIsReference!
                         assignmentValueIndex -> referenceParameterValueIsMaterialized(request.ownerIndex, context, state) => assignmentReferenceValueIsMaterialized!
                         assignmentReferenceValueIsMaterialized! -> unless {
-                            "  %assign$(request.nodeIndex)_referenced_value = load " -> print
+                            "  %assign$(request.nodeIndex -> valueNameId(state))_referenced_value = load " -> print
                             assignmentTargetElementTypeId -> writeSemanticTypeId(context, state)
                             ", ptr %v$(assignmentValueIndex -> valueNameId(state)), align " -> print
                             context.typeAligns[assignmentTargetElementTypeId] -> writeDecimalLine
@@ -491,7 +491,7 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                 }
                 (assignmentSourceWidth > 0 and assignmentTargetWidth! > 0 and assignmentSourceWidth != assignmentTargetWidth! and assignmentValue.kind != 3 and assignmentValue.kind != 4) => castAssignmentValue
                 castAssignmentValue -> if {
-                    "  %assign$(request.nodeIndex)_value_cast = " -> print
+                    "  %assign$(request.nodeIndex -> valueNameId(state))_value_cast = " -> print
                     assignmentTargetWidth! < assignmentSourceWidth
                         -> if { "trunc " -> print } else {
                             assignmentValue -> integerNodeSigned(context, state)
@@ -507,13 +507,13 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                 }
                 assignmentTargetElementTypeId >= 0 and (assignmentTargetElementTypeId -> semanticTypeOwns(context, state))
                     -> if {
-                        "  %assign$(request.nodeIndex)_previous = load " -> print
+                        "  %assign$(request.nodeIndex -> valueNameId(state))_previous = load " -> print
                         assignmentTargetElementTypeId -> writeSemanticTypeId(context, state)
-                        ", ptr %assign$(request.nodeIndex)_ptr, align " -> print
+                        ", ptr %assign$(request.nodeIndex -> valueNameId(state))_ptr, align " -> print
                         context.typeAligns[assignmentTargetElementTypeId] -> writeDecimalLine
                         "  call void @sollang_drop_t$(assignmentTargetElementTypeId)(" -> print
                         assignmentTargetElementTypeId -> writeSemanticTypeId(context, state)
-                        " %assign$(request.nodeIndex)_previous)" -> println
+                        " %assign$(request.nodeIndex -> valueNameId(state))_previous)" -> println
                     }
                 "  store " -> print
                 assignmentBinding -> writeArrayElementType(context, state)
@@ -528,15 +528,15 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                     } else {
                         assignmentValueIsReference! -> if {
                             assignmentReferenceValueIsMaterialized!
-                                -> if { "%v$(assignmentValueIndex -> valueNameId(state))" -> print } else { "%assign$(request.nodeIndex)_referenced_value" -> print }
+                                -> if { "%v$(assignmentValueIndex -> valueNameId(state))" -> print } else { "%assign$(request.nodeIndex -> valueNameId(state))_referenced_value" -> print }
                         } else {
-                            castAssignmentValue -> if { "%assign$(request.nodeIndex)_value_cast" -> print } else {
+                            castAssignmentValue -> if { "%assign$(request.nodeIndex -> valueNameId(state))_value_cast" -> print } else {
                                 request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
                                     -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                             }
                         }
                     }
-                ", ptr %assign$(request.nodeIndex)_ptr, align " -> print
+                ", ptr %assign$(request.nodeIndex -> valueNameId(state))_ptr, align " -> print
                 assignmentBinding -> arrayElementAlign(context, state) -> writeDecimalLine
             }
         }
@@ -768,7 +768,7 @@ emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitCont
                         }
                     context.fields[fieldIndex!] => field
                     ordinal! == memberCount! - 1 => terminal
-                    "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                    "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
                     terminal -> unless { "_m$(ordinal!)" -> print }
                     reference! -> if {
                         "_address = getelementptr inbounds " -> print
@@ -780,14 +780,14 @@ emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitCont
                                     WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: member.operand0 } -> writeWhileValue(context, state)
                                 }
                         } else {
-                            "%while$(request.whileIndex)_v$(request.nodeIndex)_m$(ordinal! - 1)" -> print
+                            "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_m$(ordinal! - 1)" -> print
                         }
                         ", i32 0, i32 $(field.ordinal)" -> println
-                        "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                        "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
                         terminal -> unless { "_m$(ordinal!)" -> print }
                         " = load " -> print
                         field.fieldType -> writeAggregateFieldTypeId(context, state)
-                        ", ptr %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                        ", ptr %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
                         terminal -> unless { "_m$(ordinal!)" -> print }
                         "_address, align $(context.typeAligns[field.fieldType])" -> println
                     } else {
@@ -797,7 +797,7 @@ emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitCont
                         ordinal! == 0 -> if {
                             WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: member.operand0 } -> writeWhileValue(context, state)
                         } else {
-                            "%while$(request.whileIndex)_v$(request.nodeIndex)_m$(ordinal! - 1)" -> print
+                            "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_m$(ordinal! - 1)" -> print
                         }
                         ", $(field.ordinal)" -> println
                     }
@@ -825,14 +825,14 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
             callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => whileBoundedArgumentTypeId
             whileBoundedArgumentTypeId >= 0 -> if {
                 whileBoundedArgumentTypeId -> writeValueAbiTypeId(context, state)
-                " %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_bounded" -> print
+                " %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_bounded" -> print
             } else {
                 callIndex -> callArgumentIsMutableBorrow(ordinal, context, state)
                     -> if {
                         argumentIndex -> writeCallArgument(callIndex, ownerIndex, ordinal, context, state)
                     } else {
                         whileArgumentNeedsSliceProjection -> if {
-                            "%sollang.int_slice %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice" -> print
+                            "%sollang.int_slice %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice" -> print
                         } else {
                             argumentNeedsReferenceSlot! -> if {
                                 "ptr %callref$(callIndex)_arg$(ordinal)_address" -> print
@@ -844,7 +844,7 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
                                 }
                                 " " -> print
                                 whileArgumentNeedsReferenceValueLoad -> if {
-                                    "%while$(whileIndex)_call$(callIndex)_arg$(ordinal)_reference_value" -> print
+                                    "%while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_reference_value" -> print
                                 } else {
                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentValueIndex } -> writeWhileValue(context, state)
                                 }
@@ -863,14 +863,14 @@ emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: 
                 argumentIndex -> aggregateValueIndex(context, state) => whileBoundedValueIndex
                 argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
                     -> if {
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_bounded = load " -> print
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_bounded = load " -> print
                         whileBoundedArgumentTypeId -> writeValueAbiTypeId(context, state)
                         ", ptr " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileBoundedValueIndex } -> writeWhileValue(context, state)
                         ", align $(context.typeAligns[whileBoundedArgumentTypeId])" -> println
                     } else {
                         Arena(0) => boundedPrefixStorage!
-                        "while$(whileIndex)_call$(callIndex)_arg$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix
+                        "while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix
                         "  %$(boundedPrefix)_handle = freeze %sollang.array.i32 " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileBoundedValueIndex } -> writeWhileValue(context, state)
                         "" -> println
@@ -882,7 +882,7 @@ emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: 
                     argumentIndex -> aggregateValueIndex(context, state) => whileReferenceValueIndex
                     callIndex -> callTargetParameter(ordinal, context, state) => whileReferenceParameterIndex
                     context.ir[whileReferenceParameterIndex] => whileReferenceParameter
-                    "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_reference_value = load " -> print
+                    "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_reference_value = load " -> print
                     whileReferenceParameter -> writeIrType(context, state)
                     ", ptr " -> print
                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileReferenceValueIndex } -> writeWhileValue(context, state)
@@ -896,27 +896,27 @@ emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: 
                     whileSliceValueIndex -> canonicalMemberValueTypeId(context, state) => whileCanonicalSliceTypeId
                     whileCanonicalSliceTypeId >= 0 -> if { whileCanonicalSliceTypeId => whileSliceTypeId! }
                     context.types[whileSliceTypeId!].kind == 4 -> if {
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_storage = alloca " -> print
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_storage = alloca " -> print
                         whileSliceTypeId! -> writeSemanticTypeId(context, state)
                         ", align $(context.typeAligns[whileSliceTypeId!])" -> println
                         "  store " -> print
                         whileSliceTypeId! -> writeSemanticTypeId(context, state)
                         " " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceValueIndex } -> writeWhileValue(context, state)
-                        ", ptr %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[whileSliceTypeId!])" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[whileSliceTypeId!].length), 1" -> println
+                        ", ptr %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[whileSliceTypeId!])" -> println
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[whileSliceTypeId!].length), 1" -> println
                     } else {
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceValueIndex } -> writeWhileValue(context, state)
                         ", 0" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceValueIndex } -> writeWhileValue(context, state)
                         ", 1" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr " -> print
-                        whileSliceValueIndex -> writeCallSliceDataPointer("%while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_data", context, state)
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr " -> print
+                        whileSliceValueIndex -> writeCallSliceDataPointer("%while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_data", context, state)
                         ", 0" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0, i64 %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+                        "  %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice0, i64 %while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
                     }
                 }
             context.ir[argumentIndex].nextOperand -> emitWhileCallArgumentPromotions(callIndex, whileIndex, ownerIndex, ordinal + 1, context, state)
@@ -946,50 +946,50 @@ emitWhilePathText request: WhileValueRequest, context: ref emitterContext.EmitCo
         fieldIndex! + 1 => fieldIndex!
     }
     pathIsReference! -> if {
-        "  %while$(whileIndex)_v$(nodeIndex)_path_value = load " -> print
+        "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_value = load " -> print
         pathType! -> writeSemanticTypeId(context, state)
         ", ptr " -> print
         WhileValueRequest { whileIndex: whileIndex, ownerIndex: request.ownerIndex, nodeIndex: pathCall.operand0 } -> writeWhileValue(context, state)
         ", align 8" -> println
     }
-    "  %while$(whileIndex)_v$(nodeIndex)_path_bytes = extractvalue " -> print
+    "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_bytes = extractvalue " -> print
     pathType! -> writeSemanticTypeId(context, state)
     " " -> print
-    pathIsReference! -> if { "%while$(whileIndex)_v$(nodeIndex)_path_value" -> print } else {
+    pathIsReference! -> if { "%while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_value" -> print } else {
         WhileValueRequest { whileIndex: whileIndex, ownerIndex: request.ownerIndex, nodeIndex: pathCall.operand0 } -> writeWhileValue(context, state)
     }
     ", 0" -> println
-    "  %while$(whileIndex)_v$(nodeIndex)_path_data = extractvalue " -> print
+    "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_data = extractvalue " -> print
     bytesType! -> writeSemanticTypeId(context, state)
-    " %while$(whileIndex)_v$(nodeIndex)_path_bytes, 0" -> println
-    "  %while$(whileIndex)_v$(nodeIndex)_path_length = extractvalue " -> print
+    " %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_bytes, 0" -> println
+    "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_length = extractvalue " -> print
     bytesType! -> writeSemanticTypeId(context, state)
-    " %while$(whileIndex)_v$(nodeIndex)_path_bytes, 1" -> println
+    " %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_bytes, 1" -> println
     pathCall.opcode == -214 -> if {
         context.expectedPathStyle => expectedStyle
-        "  %while$(whileIndex)_v$(nodeIndex)_path_style_value = extractvalue " -> print
+        "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_style_value = extractvalue " -> print
         pathType! -> writeSemanticTypeId(context, state)
         " " -> print
-        pathIsReference! -> if { "%while$(whileIndex)_v$(nodeIndex)_path_value" -> print } else {
+        pathIsReference! -> if { "%while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_value" -> print } else {
             WhileValueRequest { whileIndex: whileIndex, ownerIndex: request.ownerIndex, nodeIndex: pathCall.operand0 } -> writeWhileValue(context, state)
         }
         ", 1" -> println
-        "  %while$(whileIndex)_v$(nodeIndex)_path_style = extractvalue " -> print
+        "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_style = extractvalue " -> print
         styleType! -> writeSemanticTypeId(context, state)
-        " %while$(whileIndex)_v$(nodeIndex)_path_style_value, 0" -> println
-        "  %while$(whileIndex)_v$(nodeIndex)_path_style_valid = icmp eq i32 %while$(whileIndex)_v$(nodeIndex)_path_style, $(expectedStyle)" -> println
-        "  br i1 %while$(whileIndex)_v$(nodeIndex)_path_style_valid, label %while$(whileIndex)_map_path$(nodeIndex)_open, label %while$(whileIndex)_map_path$(nodeIndex)_style_error" -> println
-        "while$(whileIndex)_map_path$(nodeIndex)_style_error:" -> println
+        " %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_style_value, 0" -> println
+        "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_style_valid = icmp eq i32 %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_style, $(expectedStyle)" -> println
+        "  br i1 %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_style_valid, label %while$(whileIndex -> valueNameId(state))_map_path$(nodeIndex)_open, label %while$(whileIndex -> valueNameId(state))_map_path$(nodeIndex)_style_error" -> println
+        "while$(whileIndex -> valueNameId(state))_map_path$(nodeIndex)_style_error:" -> println
         "  call void @llvm.trap()" -> println
         "  unreachable" -> println
-        "while$(whileIndex)_map_path$(nodeIndex)_open:" -> println
+        "while$(whileIndex -> valueNameId(state))_map_path$(nodeIndex)_open:" -> println
     }
-    "  %while$(whileIndex)_v$(nodeIndex)_path_text0 = insertvalue %sollang.text poison, ptr %while$(whileIndex)_v$(nodeIndex)_path_data, 0" -> println
-    "  %while$(whileIndex)_v$(nodeIndex)_path_text = insertvalue %sollang.text %while$(whileIndex)_v$(nodeIndex)_path_text0, i64 %while$(whileIndex)_v$(nodeIndex)_path_length, 1" -> println
+    "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_text0 = insertvalue %sollang.text poison, ptr %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_data, 0" -> println
+    "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_text = insertvalue %sollang.text %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_text0, i64 %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_length, 1" -> println
     pathCall.opcode == -230 -> if {
-        "  %while$(whileIndex)_v$(nodeIndex) = freeze %sollang.text %while$(whileIndex)_v$(nodeIndex)_path_text" -> println
+        "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state)) = freeze %sollang.text %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_text" -> println
     } else {
-        "  %while$(whileIndex)_v$(nodeIndex) = call %sollang.source_text @sollang_runtime_map_text(%sollang.text %while$(whileIndex)_v$(nodeIndex)_path_text)" -> println
+        "  %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state)) = call %sollang.source_text @sollang_runtime_map_text(%sollang.text %while$(whileIndex -> valueNameId(state))_v$(nodeIndex -> valueNameId(state))_path_text)" -> println
     }
 }
 
@@ -1014,7 +1014,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
         boolTasks![boolTaskSize!] => boolTask
         boolTask.kind == 1 -> if {
             true => emittedLogicalLabel!
-            "while$(whileIndex)_bool$(boolTask.nodeIndex)_rhs:" -> println
+            "while$(whileIndex -> valueNameId(state))_bool$(boolTask.nodeIndex)_rhs:" -> println
         } else {
             boolTask.nodeIndex => boolNodeIndex!
             true => boolNodeUnwrap!
@@ -1210,22 +1210,22 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 context.ir[valueBindingIndex!] => valueBinding
                                                 valueBinding.flags == 1 -> if {
                                                     valueBindingIndex! -> mutableBindingRoot(context, state) => valueRoot
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = load " -> print
                                                     valueNode -> writeIrType(context, state)
-                                                    ", ptr %slot$(valueRoot), align " -> print
+                                                    ", ptr %slot$(valueRoot -> valueNameId(state)), align " -> print
                                                     valueNode -> storageAlign(context, state) -> writeDecimalLine
                                                 } else {
                                                     valueBindingIndex! -> asyncFrameBindingRoot(ownerIndex, context, state) => asyncRoot
                                                     asyncRoot >= 0 -> if {
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = load " -> print
                                                         valueNode -> writeIrType(context, state)
                                                         ", ptr " -> print
-                                                        asyncRoot -> writeAsyncLocalAddress(context)
+                                                        asyncRoot -> writeAsyncLocalAddress(context, state)
                                                         ", align " -> print
                                                         valueNode -> storageAlign(context, state) -> writeDecimalLine
                                                     } else {
                                                         context.ir[valueBinding.operand0] => bindingOperand
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = freeze " -> print
                                                         bindingOperand -> writeIrType(context, state)
                                                         " " -> print
                                                         bindingOperand.kind == 3 or bindingOperand.kind == 4
@@ -1264,7 +1264,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                             (valueNode -> isFixedArrayType)
                                                 and not (valueNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
                                                 -> if {
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_data = getelementptr i8, ptr %v$(valueNodeIndex -> valueNameId(state))_data, i64 0" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = getelementptr i8, ptr %v$(valueNodeIndex -> valueNameId(state))_data, i64 0" -> println
                                                 } else {
                                                     whileArrayCapacity! * (valueNode -> arrayElementSize(context, state)) => whileArrayByteLength
                                                     whileArrayByteLength == 0 -> if {
@@ -1276,7 +1276,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 } else { valueNode -> arrayElementSize(context, state) }) => emptyWhileCallStorageBytes
                                                                 ArrayStorageIdentity { resultDomain: 2, resultIndex: valueNodeIndex, labelIndex: whileIndex } -> emitArrayHeapBacking(emptyWhileCallStorageBytes, ownerIndex, context, state)
                                                             } else {
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_data = inttoptr i64 0 to ptr" -> println
+                                                                "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = inttoptr i64 0 to ptr" -> println
                                                             }
                                                     } else {
                                                         ArrayStorageIdentity { resultDomain: 2, resultIndex: valueNodeIndex, labelIndex: whileIndex } -> emitArrayHeapBacking(whileArrayByteLength, ownerIndex, context, state)
@@ -1287,9 +1287,9 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                             whileArrayElementIndex! >= 0 and whileArrayElementPosition! < whileArrayLength!
                                                 -> while {
                                                     context.ir[whileArrayElementIndex!] => whileArrayElement
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_ptr$(whileArrayElementPosition!) = getelementptr " -> print
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_ptr$(whileArrayElementPosition!) = getelementptr " -> print
                                                     valueNode -> writeArrayElementType(context, state)
-                                                    ", ptr %while$(whileIndex)_v$(valueNodeIndex)_data, i64 $(whileArrayElementPosition!)" -> println
+                                                    ", ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data, i64 $(whileArrayElementPosition!)" -> println
                                                     "  store " -> print
                                                     valueNode -> writeArrayElementType(context, state)
                                                     " " -> print
@@ -1298,24 +1298,24 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     } else {
                                                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileArrayElementIndex! } -> writeWhileValue(context, state)
                                                     }
-                                                    ", ptr %while$(whileIndex)_v$(valueNodeIndex)_ptr$(whileArrayElementPosition!), align " -> print
+                                                    ", ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_ptr$(whileArrayElementPosition!), align " -> print
                                                     valueNode -> arrayElementAlign(context, state) -> writeDecimalLine
                                                     whileArrayOperandCount! > 1 -> if { whileArrayElement.nextOperand => whileArrayElementIndex! }
                                                     whileArrayElementPosition! + 1 => whileArrayElementPosition!
                                                 }
                                             (valueNode -> isFixedArrayType) or (valueNode -> isSliceArrayType)
                                                 -> if {
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex)_v$(valueNodeIndex)_data, 0" -> println
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = insertvalue %sollang.int_slice %while$(whileIndex)_v$(valueNodeIndex)_0, i64 $(whileArrayLength!), 1" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data, 0" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = insertvalue %sollang.int_slice %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0, i64 $(whileArrayLength!), 1" -> println
                                                 } else {
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %while$(whileIndex)_v$(valueNodeIndex)_data, 0" -> println
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_1 = insertvalue %sollang.array.i32 %while$(whileIndex)_v$(valueNodeIndex)_0, i64 $(whileArrayLength!), 1" -> println
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = insertvalue %sollang.array.i32 %while$(whileIndex)_v$(valueNodeIndex)_1, i64 $(whileArrayCapacity!), 2" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data, 0" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0, i64 $(whileArrayLength!), 1" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_1, i64 $(whileArrayCapacity!), 2" -> println
                                                 }
                                         }
                                     (valueNode.kind == 6 or valueNode.kind == 9) and valueNode.opcode == -212
                                         -> if {
-                                            "  %while$(whileIndex)_v$(valueNodeIndex) = call i64 @sollang_argument_count()" -> println
+                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = call i64 @sollang_argument_count()" -> println
                                         }
                                     (valueNode.kind == 6 or valueNode.kind == 9) and (valueNode.opcode == -214 or valueNode.opcode == -230) and valueNode.operand0 >= 0
                                         -> if {
@@ -1332,7 +1332,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     context.ir[valueNode.operand0] => whileIntegerArgument
                                                     valueNode -> integerNodeWidth(context, state) => whileTargetWidth
                                                     whileIntegerArgument -> integerNodeWidth(context, state) => whileInputWidth
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = " -> print
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = " -> print
                                                     whileIntegerArgument.kind == 3 -> if {
                                                         "add " -> print
                                                         valueNode -> writeIrType(context, state)
@@ -1362,10 +1362,10 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     whileBoundedResultTypeId >= 0 and valueNode.flags / 8 % 2 == 0
                                                         and not (valueNode -> targetsNativeFunction(context, state)) => whileBoundedResult
                                                     whileBoundedResult -> if {
-                                                        "  %while$(whileIndex)_bounded$(valueNodeIndex) = call " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_bounded$(valueNodeIndex) = call " -> print
                                                         whileBoundedResultTypeId -> writeValueAbiTypeId(context, state)
                                                     } else {
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = call " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = call " -> print
                                                         valueNode -> writeIrType(context, state)
                                                     }
                                                     valueNodeIndex -> writeResolvedCallTarget(valueNode, context, state)
@@ -1373,7 +1373,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     valueNode.operand0 -> emitWhileCallArgumentChain(valueNodeIndex, whileIndex, ownerIndex, 0, false, context, state)
                                                     ")" -> println
                                                     whileBoundedResult -> if {
-                                                        "while$(whileIndex)_v$(valueNodeIndex)" -> emitBoundedArrayHandle("%while$(whileIndex)_bounded$(valueNodeIndex)", whileBoundedResultTypeId, context, state)
+                                                        "while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))" -> emitBoundedArrayHandle("%while$(whileIndex -> valueNameId(state))_bounded$(valueNodeIndex)", whileBoundedResultTypeId, context, state)
                                                     }
                                                     valueNodeIndex -> emitCallTemporaryDrops(whileIndex, ownerIndex, context, state)
                                                 }
@@ -1397,35 +1397,35 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 -> if {
                                                     context.types[whileByteBaseTypeId!].first => whileByteBaseTypeId!
                                                     true => whileByteBaseReference!
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_base_source = load " -> print
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_base_source = load " -> print
                                                     whileByteBaseTypeId! -> writeSemanticTypeId(context, state)
                                                     ", ptr " -> print
                                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                     ", align 8" -> println
                                                 }
-                                            "  %while$(whileIndex)_v$(valueNodeIndex)_base = extractvalue " -> print
+                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_base = extractvalue " -> print
                                             whileByteBaseReference! -> if { whileByteBaseTypeId! -> writeSemanticTypeId(context, state) } else { whileByteBase -> writeTextLikeType }
                                             " " -> print
-                                            whileByteBaseReference! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_base_source" -> print } else {
+                                            whileByteBaseReference! -> if { "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_base_source" -> print } else {
                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                             }
                                             ", 0" -> println
                                             whileByteIndexWidth > 0 and whileByteIndexWidth < 64
                                                 -> if {
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index = " -> print
                                                     whileByteIndex -> integerNodeSigned(context, state)
                                                         -> if { "sext" -> print } else { "zext" -> print }
                                                     " i$(whileByteIndexWidth) " -> print
                                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> writeWhileIntegerIndexValue(whileByteIndexValue, whileByteIndexReadType, context, state)
                                                     " to i64" -> println
                                                 }
-                                            "  %while$(whileIndex)_v$(valueNodeIndex)_address = getelementptr i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_base, i64 " -> print
+                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_address = getelementptr i8, ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_base, i64 " -> print
                                             whileByteIndexWidth > 0 and whileByteIndexWidth < 64
-                                                -> if { "%while$(whileIndex)_v$(valueNodeIndex)_index" -> print } else {
+                                                -> if { "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index" -> print } else {
                                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> writeWhileIntegerIndexValue(whileByteIndexValue, whileByteIndexReadType, context, state)
                                                 }
                                             "" -> println
-                                            "  %while$(whileIndex)_v$(valueNodeIndex) = load i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_address, align 1" -> println
+                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = load i8, ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_address, align 1" -> println
                                             valueNodeIndex -> emitReadonlyScalarTemporaryDrop(whileIndex, ownerIndex, context, state)
                                         }
                                     (valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -203 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0
@@ -1465,7 +1465,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     true => whileIndexedReadonlyReference!
                                                     context.types[whileIndexedContainerTypeId!].kind != 12
                                                         -> if {
-                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_indexed_source = load " -> print
+                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_indexed_source = load " -> print
                                                             whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
                                                             ", ptr " -> print
                                                             WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
@@ -1488,7 +1488,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     whileIndexedArray -> isArgumentsType -> if {
                                                         whileIndexValue.kind != 3 and whileIndexWidth > 0 and whileIndexWidth < 64
                                                             -> if {
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_argument_index = " -> print
+                                                                "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_argument_index = " -> print
                                                                 whileIndexValue -> integerNodeSigned(context, state)
                                                                     -> if { "sext " -> print } else { "zext " -> print }
                                                                 whileIndexReadType >= 0 -> if { whileIndexReadType -> writeAggregateFieldTypeId(context, state) } else { whileIndexValue -> writeIrType(context, state) }
@@ -1496,13 +1496,13 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> writeWhileIntegerIndexValue(valueNode.operand1, whileIndexReadType, context, state)
                                                                 " to i64" -> println
                                                             }
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = call %sollang.text @sollang_argument(i64 " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = call %sollang.text @sollang_argument(i64 " -> print
                                                         whileIndexValue.kind == 3 -> if {
                                                             whileIndexValue -> writeIntegerLiteral(context, state)
                                                         } else {
                                                             whileIndexWidth > 0 and whileIndexWidth < 64
                                                                 -> if {
-                                                                    "%while$(whileIndex)_v$(valueNodeIndex)_argument_index" -> print
+                                                                    "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_argument_index" -> print
                                                                 } else {
                                                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> writeWhileIntegerIndexValue(valueNode.operand1, whileIndexReadType, context, state)
                                                                 }
@@ -1511,10 +1511,10 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     } else {
                                                         whileIndexedMutableParameterOrdinal >= 0 and not whileIndexedMutableUsesStructPointer
                                                             -> if {
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_data = load ptr, ptr " -> print
+                                                                "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = load ptr, ptr " -> print
                                                                 whileIndexedMutableParameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(whileIndexedMutableParameterOrdinal)_mut_ptr_addr" -> print }
                                                                 ", align 8" -> println
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_length = load i64, ptr " -> print
+                                                                "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_length = load i64, ptr " -> print
                                                                 whileIndexedMutableParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(whileIndexedMutableParameterOrdinal)_mut_len_addr" -> print }
                                                                 ", align 8" -> println
                                                             } else {
@@ -1524,10 +1524,10 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                     " " -> print
                                                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                                     ", ptr %while_index$(valueNodeIndex)_storage, align $(context.typeAligns[whileIndexedInlineValueType])" -> println
-                                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_data = getelementptr inbounds " -> print
+                                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = getelementptr inbounds " -> print
                                                                     whileIndexedInlineValueType -> writeValueAbiTypeId(context, state)
                                                                     ", ptr %while_index$(valueNodeIndex)_storage, i32 0, i32 1, i64 0" -> println
-                                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_length = extractvalue " -> print
+                                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_length = extractvalue " -> print
                                                                     whileIndexedInlineValueType -> writeValueAbiTypeId(context, state)
                                                                     " " -> print
                                                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
@@ -1537,24 +1537,24 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                         and context.types[whileIndexedContainerTypeId!].kind == 12
                                                                         -> if {
                                                                             # A readonly bounded reference points at inline length/data storage.
-                                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_data = getelementptr inbounds " -> print
+                                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = getelementptr inbounds " -> print
                                                                             whileIndexedContainerTypeId! -> writeValueAbiTypeId(context, state)
                                                                             ", ptr " -> print
                                                                             whileIndexedInlineMemberReference! -> if {
-                                                                                "%while$(whileIndex)_v$(valueNode.operand0)_address" -> print
+                                                                                "%while$(whileIndex -> valueNameId(state))_v$(valueNode.operand0 -> valueNameId(state))_address" -> print
                                                                             } else {
                                                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                                             }
                                                                             ", i32 0, i32 1, i64 0" -> println
-                                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_length = load i64, ptr " -> print
+                                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_length = load i64, ptr " -> print
                                                                             whileIndexedInlineMemberReference! -> if {
-                                                                                "%while$(whileIndex)_v$(valueNode.operand0)_address" -> print
+                                                                                "%while$(whileIndex -> valueNameId(state))_v$(valueNode.operand0 -> valueNameId(state))_address" -> print
                                                                             } else {
                                                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                                             }
                                                                             ", align 8" -> println
                                                                         } else {
-                                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
+                                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = extractvalue " -> print
                                                                             whileIndexedReadonlyReference! -> if {
                                                                                 whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
                                                                             } else {
@@ -1562,12 +1562,12 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                             }
                                                                             " " -> print
                                                                             whileIndexedReadonlyReference! -> if {
-                                                                                "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
+                                                                                "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_indexed_source" -> print
                                                                             } else {
                                                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                                             }
                                                                             ", 0" -> println
-                                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_length = extractvalue " -> print
+                                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_length = extractvalue " -> print
                                                                             whileIndexedReadonlyReference! -> if {
                                                                                 whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
                                                                             } else {
@@ -1575,7 +1575,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                             }
                                                                             " " -> print
                                                                             whileIndexedReadonlyReference! -> if {
-                                                                                "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
+                                                                                "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_indexed_source" -> print
                                                                             } else {
                                                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                                             }
@@ -1584,9 +1584,9 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 }
                                                             }
                                                         whileIndexWidth == 64 -> if {
-                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_index = add i64 0, " -> print
+                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index = add i64 0, " -> print
                                                         } else {
-                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
+                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index = " -> print
                                                             whileIndexValue -> integerNodeSigned(context, state)
                                                                 -> if { "sext " -> print } else { "zext " -> print }
                                                             whileIndexReadType >= 0 -> if { whileIndexReadType -> writeAggregateFieldTypeId(context, state) } else { whileIndexValue -> writeIrType(context, state) }
@@ -1594,18 +1594,18 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                         }
                                                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> writeWhileIntegerIndexValue(valueNode.operand1, whileIndexReadType, context, state)
                                                         whileIndexWidth == 64 -> if { "" -> println } else { " to i64" -> println }
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_in_bounds = icmp ult i64 %while$(whileIndex)_v$(valueNodeIndex)_index, %while$(whileIndex)_v$(valueNodeIndex)_length" -> println
-                                                        "  br i1 %while$(whileIndex)_v$(valueNodeIndex)_in_bounds, label %while$(whileIndex)_v$(valueNodeIndex)_index_ok, label %while$(whileIndex)_v$(valueNodeIndex)_index_fail" -> println
-                                                        "while$(whileIndex)_v$(valueNodeIndex)_index_fail:" -> println
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_in_bounds = icmp ult i64 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index, %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_length" -> println
+                                                        "  br i1 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_in_bounds, label %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index_ok, label %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index_fail" -> println
+                                                        "while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index_fail:" -> println
                                                         "  call void @llvm.trap()" -> println
                                                         "  unreachable" -> println
-                                                        "while$(whileIndex)_v$(valueNodeIndex)_index_ok:" -> println
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_ptr = getelementptr " -> print
+                                                        "while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index_ok:" -> println
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_ptr = getelementptr " -> print
                                                         valueNode -> writeIrType(context, state)
-                                                        ", ptr %while$(whileIndex)_v$(valueNodeIndex)_data, i64 %while$(whileIndex)_v$(valueNodeIndex)_index" -> println
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                                        ", ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data, i64 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_index" -> println
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = load " -> print
                                                         valueNode -> writeIrType(context, state)
-                                                        ", ptr %while$(whileIndex)_v$(valueNodeIndex)_ptr, align " -> print
+                                                        ", ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_ptr, align " -> print
                                                         valueNode -> storageAlign(context, state) -> writeDecimalLine
                                                     }
                                                 }
@@ -1616,29 +1616,29 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                             (whileIfCondition.kind == 8 and (whileIfCondition.opcode == -25 or whileIfCondition.opcode == -24) or (whileIfCondition.kind == 7 and whileIfCondition.opcode == -26)) => whileIfShortCircuit
                                             whileIfShortCircuit -> if {
                                                 WhileBranchRequest { whileIndex: valueNodeIndex, ownerIndex: ownerIndex, conditionIndex: valueNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
-                                                "while$(valueNodeIndex)_body:" -> println
-                                                "  br label %if$(valueNodeIndex)_then" -> println
-                                                "while$(valueNodeIndex)_exit:" -> println
-                                                "  br label %if$(valueNodeIndex)_else" -> println
+                                                "while$(valueNodeIndex -> valueNameId(state))_body:" -> println
+                                                "  br label %if$(valueNodeIndex -> valueNameId(state))_then" -> println
+                                                "while$(valueNodeIndex -> valueNameId(state))_exit:" -> println
+                                                "  br label %if$(valueNodeIndex -> valueNameId(state))_else" -> println
                                             } else {
                                                 "  br i1 " -> print
                                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
-                                                ", label %if$(valueNodeIndex)_then, label %if$(valueNodeIndex)_else" -> println
+                                                ", label %if$(valueNodeIndex -> valueNameId(state))_then, label %if$(valueNodeIndex -> valueNameId(state))_else" -> println
                                             }
-                                            "if$(valueNodeIndex)_then:" -> println
+                                            "if$(valueNodeIndex -> valueNameId(state))_then:" -> println
                                             valueNode.operand1 -> emitRegion(emissionOrder, context, state)
                                             valueNode.operand1 -> regionResultValueIndex(context, state) => whileThenStoreIndex
                                             valueNode -> emitIfResultStore(whileThenStoreIndex, ownerIndex, valueNodeIndex, 0, context, state)
-                                            "  br label %if$(valueNodeIndex)_merge" -> println
-                                            "if$(valueNodeIndex)_else:" -> println
+                                            "  br label %if$(valueNodeIndex -> valueNameId(state))_merge" -> println
+                                            "if$(valueNodeIndex -> valueNameId(state))_else:" -> println
                                             valueNode.nextOperand -> emitRegion(emissionOrder, context, state)
                                             valueNode.nextOperand -> regionResultValueIndex(context, state) => whileElseStoreIndex
                                             valueNode -> emitIfResultStore(whileElseStoreIndex, ownerIndex, valueNodeIndex, 1, context, state)
-                                            "  br label %if$(valueNodeIndex)_merge" -> println
-                                            "if$(valueNodeIndex)_merge:" -> println
-                                            "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                            "  br label %if$(valueNodeIndex -> valueNameId(state))_merge" -> println
+                                            "if$(valueNodeIndex -> valueNameId(state))_merge:" -> println
+                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = load " -> print
                                             valueNode -> writeIrType(context, state)
-                                            ", ptr %if$(valueNodeIndex)_result, align " -> print
+                                            ", ptr %if$(valueNodeIndex -> valueNameId(state))_result, align " -> print
                                             valueNode -> storageAlign(context, state) -> writeDecimalLine
                                         }
                                     valueNode.kind == 8 and (valueNode.operand0 < 0 or valueNode.operand1 < 0)
@@ -1659,7 +1659,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     whileLeftWidth > whileRightWidth -> if { whileLeftWidth => whileBinaryWidth! } else { whileRightWidth => whileBinaryWidth! }
                                                     whileLeftWidth < whileBinaryWidth! and left.kind != 3 and left.kind != 4
                                                         -> if {
-                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_left_wide = " -> print
+                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_left_wide = " -> print
                                                             left -> integerNodeSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
                                                             " i$(whileLeftWidth) " -> print
                                                             WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
@@ -1668,7 +1668,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                         }
                                                     whileRightWidth < whileBinaryWidth! and whileRight.kind != 3 and whileRight.kind != 4
                                                         -> if {
-                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_right_wide = " -> print
+                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_right_wide = " -> print
                                                             whileRight -> integerNodeSigned(context, state)
                                                                 -> if { "sext" -> print } else { "zext" -> print }
                                                             " i$(whileRightWidth) " -> print
@@ -1686,9 +1686,9 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 valueNodeIndex -> emitDeferredTextComparisonOperands(ownerIndex, context, state)
                                                 valueNode.opcode == grammar.tokenIdBangEqual()
                                                     -> if {
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_text_equal = call i1 @sollang_text_equal(%sollang.text " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_text_equal = call i1 @sollang_text_equal(%sollang.text " -> print
                                                     } else {
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = call i1 @sollang_text_equal(%sollang.text " -> print
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = call i1 @sollang_text_equal(%sollang.text " -> print
                                                     }
                                                 valueNode.operand0 -> writeTextComparisonOperand(valueNodeIndex, ownerIndex, 0, whileIndex, context, state)
                                                 ", %sollang.text " -> print
@@ -1696,10 +1696,10 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 ")" -> println
                                                 valueNode.opcode == grammar.tokenIdBangEqual()
                                                     -> if {
-                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = xor i1 %while$(whileIndex)_v$(valueNodeIndex)_text_equal, true" -> println
+                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = xor i1 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_text_equal, true" -> println
                                                     }
                                             } else {
-                                                "  %while$(whileIndex)_v$(valueNodeIndex) = " -> print
+                                                "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = " -> print
                                                 valueNode.kind == 7 -> if {
                                                     valueNode.opcode -> numericUnaryOperation(left.typeSymbol) -> print
                                                 } else { ((valueNode -> isValueComparison) and (valueNode.operand0 -> comparisonReadIsFloat(context)))
@@ -1743,13 +1743,13 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 } else {
                                                     valueNode -> isValueComparison -> if {
                                                         valueNode.operand0 -> writeComparisonOperandValue(ownerIndex, whileIndex, context, state)
-                                                    } else { whileLeftPromoted! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_left_wide" -> print } else {
+                                                    } else { whileLeftPromoted! -> if { "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_left_wide" -> print } else {
                                                             WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
                                                     } }
                                                     ", " -> print
                                                     valueNode -> isValueComparison -> if {
                                                         valueNode.operand1 -> writeComparisonOperandValue(ownerIndex, whileIndex, context, state)
-                                                    } else { whileRightPromoted! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_right_wide" -> print } else {
+                                                    } else { whileRightPromoted! -> if { "%while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_right_wide" -> print } else {
                                                             WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue(context, state)
                                                     } }
                                                     "" -> println
@@ -1761,13 +1761,13 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                             "  br i1 " -> print
                             WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: boolNodeIndex! } -> writeWhileValue(context, state)
                             ", label %" -> print
-                            boolTask.trueKind == 0 -> if { "while$(whileIndex)_body" -> print }
-                            boolTask.trueKind == 1 -> if { "while$(whileIndex)_exit" -> print }
-                            boolTask.trueKind == 2 -> if { "while$(whileIndex)_bool$(boolTask.trueNode)_rhs" -> print }
+                            boolTask.trueKind == 0 -> if { "while$(whileIndex -> valueNameId(state))_body" -> print }
+                            boolTask.trueKind == 1 -> if { "while$(whileIndex -> valueNameId(state))_exit" -> print }
+                            boolTask.trueKind == 2 -> if { "while$(whileIndex -> valueNameId(state))_bool$(boolTask.trueNode)_rhs" -> print }
                             ", label %" -> print
-                            boolTask.falseKind == 0 -> if { "while$(whileIndex)_body" -> print }
-                            boolTask.falseKind == 1 -> if { "while$(whileIndex)_exit" -> print }
-                            boolTask.falseKind == 2 -> if { "while$(whileIndex)_bool$(boolTask.falseNode)_rhs" -> print }
+                            boolTask.falseKind == 0 -> if { "while$(whileIndex -> valueNameId(state))_body" -> print }
+                            boolTask.falseKind == 1 -> if { "while$(whileIndex -> valueNameId(state))_exit" -> print }
+                            boolTask.falseKind == 2 -> if { "while$(whileIndex -> valueNameId(state))_bool$(boolTask.falseNode)_rhs" -> print }
                             "" -> println
                         }
                 }
@@ -1780,12 +1780,12 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
 # merge its true/false exits into the SSA value expected for the logical node.
 emitLogicalValue logicalIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     WhileBranchRequest { whileIndex: logicalIndex, ownerIndex: ownerIndex, conditionIndex: logicalIndex } -> emitWhileBranch(emissionOrder, context, state)
-    "while$(logicalIndex)_body:" -> println
+    "while$(logicalIndex -> valueNameId(state))_body:" -> println
     "  br label %logical$(logicalIndex)_merge" -> println
-    "while$(logicalIndex)_exit:" -> println
+    "while$(logicalIndex -> valueNameId(state))_exit:" -> println
     "  br label %logical$(logicalIndex)_merge" -> println
     "logical$(logicalIndex)_merge:" -> println
-    "  %v$(logicalIndex -> valueNameId(state)) = phi i1 [ true, %while$(logicalIndex)_body ], [ false, %while$(logicalIndex)_exit ]" -> println
+    "  %v$(logicalIndex -> valueNameId(state)) = phi i1 [ true, %while$(logicalIndex -> valueNameId(state))_body ], [ false, %while$(logicalIndex -> valueNameId(state))_exit ]" -> println
 }
 
 writeCleanupName edgeIndex: Int, bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -2141,9 +2141,9 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and ((ownedDropIndex! -> patternBindingNeedsOwnershipFlag(context, state))
             or (ownedDropIndex! -> namedBindingNeedsOwnershipFlag(state)))) => ownedDropPatternFlagGuard
         ownedDropPatternFlagGuard -> if {
-            "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_owned = load i1, ptr %v$(ownedDropIndex! -> valueNameId(state))_owned, align 1" -> println
-            "  br i1 %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_owned, label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_drop, label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done" -> println
-            "patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_drop:" -> println
+            "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_owned = load i1, ptr %v$(ownedDropIndex! -> valueNameId(state))_owned, align 1" -> println
+            "  br i1 %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_owned, label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_drop, label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_done" -> println
+            "patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_drop:" -> println
         }
         ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved!
             and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex
@@ -2172,8 +2172,8 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                         -> if {
                             "load %sollang.int_slice, ptr " -> print
                             ownedDropFrameRoot! >= 0 -> if {
-                                ownedDropFrameRoot! -> writeAsyncLocalAddress(context)
-                            } else { "%slot$(ownedDropRoot!)" -> print }
+                                ownedDropFrameRoot! -> writeAsyncLocalAddress(context, state)
+                            } else { "%slot$(ownedDropRoot! -> valueNameId(state))" -> print }
                             ", align 8" -> println
                         } else {
                             "freeze %sollang.int_slice " -> print
@@ -2204,15 +2204,15 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                         } else { ownedDropCandidate.typeId -> writeSemanticTypeId(context, state) }
                         ", ptr " -> print
                         ownedDropFrameRoot! >= 0 -> if {
-                            ownedDropFrameRoot! -> writeAsyncLocalAddress(context)
-                        } else { "%slot$(ownedDropRoot!)" -> print }
+                            ownedDropFrameRoot! -> writeAsyncLocalAddress(context, state)
+                        } else { "%slot$(ownedDropRoot! -> valueNameId(state))" -> print }
                         ", align " -> print
                         ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
                     }
                 ownedDropNeedsBoundedValue -> if {
                     # Local slots and expressions carry runtime handles; drop
                     # helpers receive canonical inline bounded values.
-                    "  %cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex)_handle = freeze %sollang.array.i32 " -> print
+                    "  %cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex -> valueNameId(state))_handle = freeze %sollang.array.i32 " -> print
                     ownedDropCandidate.flags == 1 or ownedDropFrameRoot! >= 0
                         -> if {
                             request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2222,7 +2222,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                         }
                     "" -> println
                     Arena(0) => prefixStorage!
-                    "cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex)" -> materialize(prefixStorage!) => prefix
+                    "cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex -> valueNameId(state))" -> materialize(prefixStorage!) => prefix
                     Arena(0) => valueStorage!
                     "%$(prefix)_handle" -> materialize(valueStorage!) => handle
                     prefix -> emitBoundedArrayValueFromHandle(handle, ownedDropCandidate.typeId, context, state)
@@ -2231,7 +2231,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 ownedDropCandidate.typeId -> writeSemanticTypeId(context, state)
                 " " -> print
                 ownedDropNeedsBoundedValue -> if {
-                    "%cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex)" -> print
+                    "%cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex -> valueNameId(state))" -> print
                 } else { (ownedDropCandidate.flags == 1 or ownedDropFrameRoot! >= 0) and not ownedDropNeedsInlineArrayReload!
                         -> if {
                             request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2258,7 +2258,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 ownedDropCandidate.flags == 1 -> if {
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
-                    "_current = load %sollang.array.i32, ptr %slot$(ownedDropRoot!), align " -> print
+                    "_current = load %sollang.array.i32, ptr %slot$(ownedDropRoot! -> valueNameId(state)), align " -> print
                     ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2281,7 +2281,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 ownedDropCandidate.flags == 1 -> if {
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
-                    "_current = load %sollang.int_dictionary, ptr %slot$(ownedDropRoot!), align " -> print
+                    "_current = load %sollang.int_dictionary, ptr %slot$(ownedDropRoot! -> valueNameId(state)), align " -> print
                     ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2304,7 +2304,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 ownedDropCandidate.flags == 1 -> if {
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
-                    "_current = load %sollang.dyn, ptr %slot$(ownedDropRoot!), align $ownedPointerAlignment" -> println
+                    "_current = load %sollang.dyn, ptr %slot$(ownedDropRoot! -> valueNameId(state)), align $ownedPointerAlignment" -> println
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                     "_data = extractvalue %sollang.dyn " -> print
@@ -2365,7 +2365,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 ownedDropIndex! -> emitAsyncBindingDropValue(ownedDropOwner!, ownedDropNameRoot, context, state) => ownedDropFromAsyncFrame
                 not ownedDropFromAsyncFrame and ownedDropCandidate.flags == 1
                     -> if {
-                        "  %dropg$(ownedDropNameRoot)_p0 = load %sollang.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot!), align " -> print
+                        "  %dropg$(ownedDropNameRoot)_p0 = load %sollang.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot! -> valueNameId(state)), align " -> print
                         ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
                     }
                 0 => ownedDropValueKind!
@@ -2432,12 +2432,12 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and context.types[ownedDropCandidate.typeId].kind == 4
             and not (ownedDropCandidate.typeId -> semanticTypeOwns(context, state))
             -> if {
-                "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue %sollang.int_slice %v$(ownedDropIndex! -> valueNameId(state)), 0" -> println
-                "  call void @sollang_free(ptr %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data)" -> println
+                "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_data = extractvalue %sollang.int_slice %v$(ownedDropIndex! -> valueNameId(state)), 0" -> println
+                "  call void @sollang_free(ptr %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_data)" -> println
             }
         ownedDropPatternFlagGuard -> if {
-            "  br label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done" -> println
-            "patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done:" -> println
+            "  br label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_done" -> println
+            "patternreturn$(request.edgeIndex)_b$(ownedDropIndex! -> valueNameId(state))_done:" -> println
         }
         ownedDropBeforeEdge! and ownedDropIsRoot! and ownedDropCandidateIsBinding
             and ownedDropCandidate.parent == request.regionIndex

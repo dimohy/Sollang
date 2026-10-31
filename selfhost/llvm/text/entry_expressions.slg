@@ -1344,7 +1344,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
     entryExpression.kind == 2 -> if {
         entryExpression -> sourceToken(context, state) => entryExpressionToken
         TextLiteralRequest { sourceModule: entryExpression.sourceModule, token: entryExpressionToken } -> textLiteralLength(context, state) => entryExpressionLength
-        "  %v$(entryExpressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex), 0" -> println
+        "  %v$(entryExpressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex -> valueNameId(state)), 0" -> println
         "  %v$(entryExpressionIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(entryExpressionIndex -> valueNameId(state))_ptr, i64 $entryExpressionLength, 1" -> println
         entryExpressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
     }
@@ -1466,7 +1466,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                 -> if {
                                     entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
                                     Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
-                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex), i64 $entryFieldTextLength }" -> print
+                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex -> valueNameId(state)), i64 $entryFieldTextLength }" -> print
                                 } else {
                                     entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
                                         -> if {
@@ -2143,7 +2143,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                             -> if { "1" -> print } else { "0" -> print }
                     }
                 } else { castEntryMutableValue -> if { "%v$(entryExpressionIndex -> valueNameId(state))_mutable_cast" -> print } else { entryExpression.operand0 -> writeValue(functionIndex, context, state) } }
-            ", ptr %slot$(entryMutableRoot), align " -> print
+            ", ptr %slot$(entryMutableRoot -> valueNameId(state)), align " -> print
             entryMutableBinding -> storageAlign(context, state) -> writeDecimalLine
         }
     entryExpression.kind == 24 -> if {
@@ -2550,7 +2550,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
             entryReadPrompt.kind == 2 -> if {
                 entryReadPrompt -> sourceToken(context, state) => entryReadPromptToken
                 Int(TextLiteralRequest { sourceModule: entryReadPrompt.sourceModule, token: entryReadPromptToken } -> textLiteralLength(context, state)) => entryReadPromptLength
-                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex), i64 $entryReadPromptLength)" -> println
+                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex -> valueNameId(state)), i64 $entryReadPromptLength)" -> println
             } else {
                 "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
             }
@@ -2695,7 +2695,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                             entryExpressionInterpolation[entryExpressionRootSearch!] => entryExpressionRoot
                                             entryExpressionRoot.sourceToken == runtimeArgument.payloadToken and entryExpressionRoot.parent < 0
                                                 -> if {
-                                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex!), i64 $(entryExpressionRoot.literalStart)" -> println
+                                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $(entryExpressionRoot.literalStart)" -> println
                                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
                                                         -> if {
                                                             "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!), i64 $(entryExpressionRoot.literalLength), i1 false)" -> println
@@ -2727,7 +2727,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                                         entryInterpolationMutableBinding! -> mutableBindingRoot(context, state) => entryInterpolationMutableRoot
                                                                         "  %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryInterpolationMutableIndex!)_mutable = load " -> print
                                                                         context.ir[entryInterpolationMutableBinding!] -> writeIrType(context, state)
-                                                                        ", ptr %slot$(entryInterpolationMutableRoot), align " -> print
+                                                                        ", ptr %slot$(entryInterpolationMutableRoot -> valueNameId(state)), align " -> print
                                                                         context.ir[entryInterpolationMutableBinding!] -> storageAlign(context, state) -> writeDecimalLine
                                                                     }
                                                                 }
@@ -2787,7 +2787,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                                 true => entryExpressionRootMutable!
                                                                 "  %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_mutable = load " -> print
                                                                 context.ir[entryExpressionRootBinding!] -> writeIrType(context, state)
-                                                                ", ptr %slot$(entryExpressionMutableRoot), align " -> print
+                                                                ", ptr %slot$(entryExpressionMutableRoot -> valueNameId(state)), align " -> print
                                                                 context.ir[entryExpressionRootBinding!] -> storageAlign(context, state) -> writeDecimalLine
                                                             }
                                                         }
@@ -3148,7 +3148,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                             entryExpressionRootSearch! + 1 => entryExpressionRootSearch!
                                         }
                                     UIntSize(runtimeArgumentLength) - entryExpressionSuffixStart! => entryExpressionSuffixLength
-                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex!), i64 $(entryExpressionSuffixStart!)" -> println
+                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $(entryExpressionSuffixStart!)" -> println
                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
                                         -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print } else {
                                             "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print
@@ -3218,7 +3218,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                         interpolationBindingIr! >= 0 -> if {
                                             Int(interpolationSegmentStart! - interpolationContentStart) => interpolationPartOffset
                                             Int(interpolationMatchStart! - interpolationSegmentStart!) => interpolationPartLength
-                                            "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex!), i64 $interpolationPartOffset" -> println
+                                            "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $interpolationPartOffset" -> println
                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
                                                 -> if {
                                                     "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!), i64 $interpolationPartLength, i1 false)" -> println
@@ -3241,15 +3241,15 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                     emittedInterpolation! -> if {
                                         Int(interpolationSegmentStart! - interpolationContentStart) => interpolationSuffixOffset
                                         Int(interpolationContentEnd - interpolationSegmentStart!) => interpolationSuffixLength
-                                        "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex!), i64 $interpolationSuffixOffset" -> println
+                                        "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $interpolationSuffixOffset" -> println
                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
                                             -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print } else {
                                                 "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print
                                             }
                                     } else {
                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                            -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex!), i64 $runtimeArgumentLength, i1 " -> print } else {
-                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex!), i64 $runtimeArgumentLength, i1 " -> print
+                                            -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
+                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
                                             }
                                     }
                                 }
@@ -3314,14 +3314,14 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
     }
     entryExpression.kind == 33 -> if { entryExpressionIndex -> emitBooleanWhen(entryOrder, context, state) }
     entryExpression.kind == 20 -> if {
-        "  br label %while$(entryExpressionIndex)_header" -> println
-        "while$(entryExpressionIndex)_header:" -> println
+        "  br label %while$(entryExpressionIndex -> valueNameId(state))_header" -> println
+        "while$(entryExpressionIndex -> valueNameId(state))_header:" -> println
         WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, conditionIndex: entryExpression.operand0 } -> emitWhileBranch(entryOrder, context, state)
-        "while$(entryExpressionIndex)_body:" -> println
+        "while$(entryExpressionIndex -> valueNameId(state))_body:" -> println
         entryExpression.operand1 -> emitRegion(entryOrder, context, state)
         OwnedDropRequest { regionIndex: entryExpression.operand1, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-        "  br label %while$(entryExpressionIndex)_header" -> println
-        "while$(entryExpressionIndex)_exit:" -> println
+        "  br label %while$(entryExpressionIndex -> valueNameId(state))_header" -> println
+        "while$(entryExpressionIndex -> valueNameId(state))_exit:" -> println
     }
     entryExpressionIndex -> plannedPartitionPredicateRoute(context, state) => entryCompletedPartitionPredicateRoute
     entryCompletedPartitionPredicateRoute >= 0 and context.streamPlan.partitionRoutes[entryCompletedPartitionPredicateRoute].predicateIr == entryExpressionIndex
@@ -3681,7 +3681,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                             entryCloseEachAncestorRequest -> irDescendsFrom(context, state) => entryNextInsideEach!
                         }
                         entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
-                            entryCloseEachIndex -> emitDirectEachEnd(false, context)
+                            entryCloseEachIndex -> emitDirectEachEnd(false, context, state)
                             entryCloseEachIndex -> emitStorageLifetimeEndsAfter(false, context)
                             entryActiveEachSize! - 1 => entryActiveEachSize!
                         }

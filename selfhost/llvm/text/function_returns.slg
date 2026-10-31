@@ -413,9 +413,9 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 and not dropCandidateMoved! and not dropCandidateReturned!
                 => dropNamedPathFlagGuard
             dropNamedPathFlagGuard -> if {
-                "  %localreturn$(functionIndex)_b$(dropIndex!)_owned = load i1, ptr %v$(dropIndex! -> valueNameId(state))_owned, align 1" -> println
-                "  br i1 %localreturn$(functionIndex)_b$(dropIndex!)_owned, label %localreturn$(functionIndex)_b$(dropIndex!)_drop, label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
-                "localreturn$(functionIndex)_b$(dropIndex!)_drop:" -> println
+                "  %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_owned = load i1, ptr %v$(dropIndex! -> valueNameId(state))_owned, align 1" -> println
+                "  br i1 %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_owned, label %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_drop, label %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_done" -> println
+                "localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_drop:" -> println
             }
             dropCandidate.operand0 => dropCandidateDropValueIndex
             dropCandidateInitialized! and dropCandidateIsRoot!
@@ -427,7 +427,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => fixedBackingAsyncRoot
                     fixedBackingAsyncRoot >= 0 -> if {
                         "  %dropfixedliteral$(dropIndex!)_restored = load %sollang.int_slice, ptr " -> print
-                        fixedBackingAsyncRoot -> writeAsyncLocalAddress(context)
+                        fixedBackingAsyncRoot -> writeAsyncLocalAddress(context, state)
                         ", align " -> print
                         dropCandidate -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                     }
@@ -455,7 +455,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         "  %drop$(dropIndex!)_restored = load " -> print
                         dropCandidate -> writeIrType(context, state)
                         ", ptr " -> print
-                        dropAsyncRoot -> writeAsyncLocalAddress(context)
+                        dropAsyncRoot -> writeAsyncLocalAddress(context, state)
                         ", align " -> print
                         dropCandidate -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                     }
@@ -487,7 +487,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                                 -> if {
                                     dropCandidate -> writeIrType(context, state)
                                 } else { dropCandidate.typeId -> writeSemanticTypeId(context, state) }
-                            ", ptr %slot$(dropCandidateRoot!), align " -> print
+                            ", ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
                             dropCandidate -> storageAlign(context, state) -> writeDecimalLine
                         }
                     context.types[dropCandidate.typeId].kind == 12 => dropBindingNeedsBoundedValue
@@ -532,7 +532,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
                     dropCandidate.flags == 1 -> if {
-                        "  %drop$(dropIndex!)_current = load %sollang.array.i32, ptr %slot$(dropCandidateRoot!), align " -> print
+                        "  %drop$(dropIndex!)_current = load %sollang.array.i32, ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
                         dropCandidate -> storageAlign(context, state) -> writeDecimalLine
                         "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %drop$(dropIndex!)_current, 0" -> println
                     } else {
@@ -545,7 +545,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     dropCandidate.flags == 1 -> if {
-                        "  %drop$(dropIndex!)_current = load %sollang.int_dictionary, ptr %slot$(dropCandidateRoot!), align " -> print
+                        "  %drop$(dropIndex!)_current = load %sollang.int_dictionary, ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
                         dropCandidate -> storageAlign(context, state) -> writeDecimalLine
                         "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary %drop$(dropIndex!)_current, 0" -> println
                     } else {
@@ -576,7 +576,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropIndex! -> emitAsyncBindingDropValue(functionIndex, dropIndex!, context, state) => dropFromAsyncFrame
                     not dropFromAsyncFrame and dropCandidate.flags == 1
                         -> if {
-                            "  %dropg$(dropIndex!)_p0 = load %sollang.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
+                            "  %dropg$(dropIndex!)_p0 = load %sollang.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot! -> valueNameId(state)), align " -> print
                             dropCandidate -> storageAlign(context, state) -> writeDecimalLine
                         }
                     0 => dropCandidateValueKind!
@@ -610,8 +610,8 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 and (returnedOwnedBindingRoot < 0 or returnedOwnedBindingRoot != dropCandidateRoot!)
                 -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex, context, state) }
             dropNamedPathFlagGuard -> if {
-                "  br label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
-                "localreturn$(functionIndex)_b$(dropIndex!)_done:" -> println
+                "  br label %localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_done" -> println
+                "localreturn$(functionIndex)_b$(dropIndex! -> valueNameId(state))_done:" -> println
             }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot!
                 and dropCandidate.parent == function.operand0

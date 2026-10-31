@@ -239,7 +239,7 @@ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrde
     regionNode.kind == 2 -> if {
         regionNode -> sourceToken(context, state) => regionTextToken
         TextLiteralRequest { sourceModule: regionNode.sourceModule, token: regionTextToken } -> textLiteralLength(context, state) => regionTextLength
-        "  %v$(regionNodeIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex), 0" -> println
+        "  %v$(regionNodeIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex -> valueNameId(state)), 0" -> println
         "  %v$(regionNodeIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(regionNodeIndex -> valueNameId(state))_ptr, i64 $regionTextLength, 1" -> println
         regionNodeIndex -> emitComparisonTextProducer(ownerIndex, context, state)
     }
@@ -485,7 +485,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                         } else { regionEmittedFieldValue.kind == 2 -> if {
                                 regionEmittedFieldValue -> sourceToken(context, state) => regionFieldTextToken
                                 Int(TextLiteralRequest { sourceModule: regionEmittedFieldValue.sourceModule, token: regionFieldTextToken } -> textLiteralLength(context, state)) => regionFieldTextLength
-                                "{ ptr @sollang_str_$(regionEmittedFieldIndex), i64 $regionFieldTextLength }" -> print
+                                "{ ptr @sollang_str_$(regionEmittedFieldIndex -> valueNameId(state)), i64 $regionFieldTextLength }" -> print
                             } else {
                                 regionEmittedFieldValue.kind == 3 or regionEmittedFieldValue.kind == 4
                                     -> if {
@@ -1075,7 +1075,7 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                 "  %v$(regionNodeIndex -> valueNameId(state))_data = getelementptr [$(regionArrayLength) x " -> print
                 regionNode -> writeArrayElementType(context, state)
                 "], ptr " -> print
-                staticFunction -> writeStaticReadonlyArraySymbol(regionNodeIndex, context)
+                staticFunction -> writeStaticReadonlyArraySymbol(regionNodeIndex, context, state)
                 ", i64 0, i64 0" -> println
             } else {
                 regionNodeIndex -> emitFixedStorageLifetimeStart(context, state)
@@ -1293,7 +1293,7 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
         } else {
             regionIndexedIsDictionary -> if {
                 regionNode.operand0 -> mutableStorageRoot(context, state) => regionIndexedMutableRoot
-                regionIndexedMutableRoot >= 0 -> if { "  %v$(regionNodeIndex -> valueNameId(state))_dictionary = load %sollang.int_dictionary, ptr %slot$(regionIndexedMutableRoot), align 8" -> println }
+                regionIndexedMutableRoot >= 0 -> if { "  %v$(regionNodeIndex -> valueNameId(state))_dictionary = load %sollang.int_dictionary, ptr %slot$(regionIndexedMutableRoot -> valueNameId(state)), align 8" -> println }
                 -1 => regionIndexedDictionaryKeyTypeId!
                 -1 => regionIndexedDictionaryValueTypeId!
                 regionIndexedContainerTypeId! >= 0 -> if {
@@ -1959,7 +1959,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
             regionReadPrompt.kind == 2 -> if {
                 regionReadPrompt -> sourceToken(context, state) => regionReadPromptToken
                 Int(TextLiteralRequest { sourceModule: regionReadPrompt.sourceModule, token: regionReadPromptToken } -> textLiteralLength(context, state)) => regionReadPromptLength
-                "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex), i64 $regionReadPromptLength)" -> println
+                "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex -> valueNameId(state)), i64 $regionReadPromptLength)" -> println
             } else {
                 "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
             }
@@ -2007,7 +2007,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                     regionExpressionInterpolation[regionExpressionRootSearch!] => regionExpressionRoot
                                     regionExpressionRoot.sourceToken == regionArgument.payloadToken and regionExpressionRoot.parent < 0
                                         -> if {
-                                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex), i64 $(regionExpressionRoot.literalStart)" -> println
+                                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $(regionExpressionRoot.literalStart)" -> println
                                             regionNode.symbol == -116 or regionNode.symbol == -117
                                                 -> if {
                                                     "  call void @sollang_runtime_eprint(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!), i64 $(regionExpressionRoot.literalLength), i1 false)" -> println
@@ -2084,7 +2084,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                                 regionExpressionRootMutableRoot >= 0 -> if {
                                                     "  %v$(regionNodeIndex -> valueNameId(state))_expression$(regionExpressionRootSearch!)_current = load " -> print
                                                     regionExpressionRootBindingNode -> writeIrType(context, state)
-                                                    ", ptr %slot$(regionExpressionRootMutableRoot), align " -> print
+                                                    ", ptr %slot$(regionExpressionRootMutableRoot -> valueNameId(state)), align " -> print
                                                     regionExpressionRootBindingNode -> storageAlign(context, state) -> writeDecimalLine
                                                     true => regionExpressionRootMutable!
                                                 }
@@ -2126,7 +2126,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                                                     regionExpressionMemberBinding! -> mutableBindingRoot(context, state) => regionExpressionMemberMutableRoot
                                                                     "  %v$(regionNodeIndex -> valueNameId(state))_expression$(regionExpressionRootSearch!)_member_current = load " -> print
                                                                     regionExpressionMemberBaseValue -> writeIrType(context, state)
-                                                                    ", ptr %slot$(regionExpressionMemberMutableRoot), align " -> print
+                                                                    ", ptr %slot$(regionExpressionMemberMutableRoot -> valueNameId(state)), align " -> print
                                                                     regionExpressionMemberBindingNode -> storageAlign(context, state) -> writeDecimalLine
                                                                     true => regionExpressionMemberBaseMutable!
                                                                 }
@@ -2385,15 +2385,15 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                     regionExpressionRootSearch! + 1 => regionExpressionRootSearch!
                                 }
                             UIntSize(regionArgumentLength) - regionExpressionSuffixStart! => regionExpressionSuffixLength
-                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex), i64 $(regionExpressionSuffixStart!)" -> println
+                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $(regionExpressionSuffixStart!)" -> println
                             regionNode.symbol == -116 or regionNode.symbol == -117
                                 -> if { "  call void @sollang_runtime_eprint(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print } else {
                                     "  call void @sollang_runtime_print(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print
                                 }
                         } else {
                             regionNode.symbol == -116 or regionNode.symbol == -117
-                                -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(regionArgumentIndex), i64 $regionArgumentLength, i1 " -> print } else {
-                                    "  call void @sollang_runtime_print(ptr @sollang_str_$(regionArgumentIndex), i64 $regionArgumentLength, i1 " -> print
+                                -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $regionArgumentLength, i1 " -> print } else {
+                                    "  call void @sollang_runtime_print(ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $regionArgumentLength, i1 " -> print
                                 }
                         }
                         regionNode.symbol == -102 or regionNode.symbol == -116

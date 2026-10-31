@@ -136,7 +136,7 @@ emitScopedTaskDrop bindingIndex: Int, ownerIndex: Int, regionIndex: Int, beforeA
     context.ir[ownerIndex].kind == 0 -> if { bindingIndex -> asyncFrameBindingRoot(ownerIndex, context, state) => frameRoot! }
     frameRoot! >= 0 -> if {
         "  %scope_task$(edgeIndex)_$(bindingIndex) = load %sollang.task, ptr " -> print
-        frameRoot! -> writeAsyncLocalAddress(context)
+        frameRoot! -> writeAsyncLocalAddress(context, state)
         ", align $(context.pointerBitWidth / 8)" -> println
     }
     "  %scope_task$(edgeIndex)_$(bindingIndex)_task_handle = extractvalue %sollang.task " -> print
@@ -503,34 +503,34 @@ emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterConte
     }
 }
 
-writeIfDirectBranchTargets expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
+writeIfDirectBranchTargets expression: typedIr.TypedIrNode, expressionIndex: Int, state: ref CoreEmitterState -> Unit uses Console {
     expression.opcode == -28 -> if {
-        ", label %if$(expressionIndex)_merge, label %if$(expressionIndex)_then" -> println
+        ", label %if$(expressionIndex -> valueNameId(state))_merge, label %if$(expressionIndex -> valueNameId(state))_then" -> println
     } else {
         expression.nextOperand >= 0 -> if {
-            ", label %if$(expressionIndex)_then, label %if$(expressionIndex)_else" -> println
+            ", label %if$(expressionIndex -> valueNameId(state))_then, label %if$(expressionIndex -> valueNameId(state))_else" -> println
         } else {
-            ", label %if$(expressionIndex)_then, label %if$(expressionIndex)_merge" -> println
+            ", label %if$(expressionIndex -> valueNameId(state))_then, label %if$(expressionIndex -> valueNameId(state))_merge" -> println
         }
     }
 }
 
-writeIfShortCircuitBodyTarget expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
+writeIfShortCircuitBodyTarget expression: typedIr.TypedIrNode, expressionIndex: Int, state: ref CoreEmitterState -> Unit uses Console {
     expression.opcode == -28 -> if {
-        "  br label %if$(expressionIndex)_merge" -> println
+        "  br label %if$(expressionIndex -> valueNameId(state))_merge" -> println
     } else {
-        "  br label %if$(expressionIndex)_then" -> println
+        "  br label %if$(expressionIndex -> valueNameId(state))_then" -> println
     }
 }
 
-writeIfShortCircuitExitTarget expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
+writeIfShortCircuitExitTarget expression: typedIr.TypedIrNode, expressionIndex: Int, state: ref CoreEmitterState -> Unit uses Console {
     expression.opcode == -28 -> if {
-        "  br label %if$(expressionIndex)_then" -> println
+        "  br label %if$(expressionIndex -> valueNameId(state))_then" -> println
     } else {
         expression.nextOperand >= 0 -> if {
-            "  br label %if$(expressionIndex)_else" -> println
+            "  br label %if$(expressionIndex -> valueNameId(state))_else" -> println
         } else {
-            "  br label %if$(expressionIndex)_merge" -> println
+            "  br label %if$(expressionIndex -> valueNameId(state))_merge" -> println
         }
     }
 }
@@ -2174,7 +2174,7 @@ emitBoundedCaptureTransport request: CaptureValueRequest, context: ref emitterCo
             sourcePrefix -> emitCurrentMutableParameterValueAt(request.bindingIndex, ordinal, request.callerIndex, context, state)
         } else { binding.kind != 10 and binding.flags == 1 -> if {
                 request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
-                "  %$(prefix)_source = load %sollang.array.i32, ptr %slot$(bindingRoot), align 8" -> println
+                "  %$(prefix)_source = load %sollang.array.i32, ptr %slot$(bindingRoot -> valueNameId(state)), align 8" -> println
             } else {
                 "  %$(prefix)_source = freeze %sollang.array.i32 " -> print
                 request -> emitCaptureValue(context, state)
@@ -2222,7 +2222,7 @@ emitCaptureTransport request: CaptureValueRequest, context: ref emitterContext.E
                     request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
                     "  %$(prefix) = load " -> print
                     binding -> writeIrType(context, state)
-                    ", ptr %slot$(bindingRoot), align " -> print
+                    ", ptr %slot$(bindingRoot -> valueNameId(state)), align " -> print
                     binding -> storageAlign(context, state) -> writeDecimalLine
                 }
         }
@@ -2273,7 +2273,7 @@ emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.Emi
                     "%$(prefix)_bounded_ref" -> print
                 } else { binding.kind != 10 and binding.flags == 1 -> if {
                         request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
-                        "%slot$(bindingRoot)" -> print
+                        "%slot$(bindingRoot -> valueNameId(state))" -> print
                     } else { request.interpolationIndex >= 0 -> if {
                             "%$(prefix)_ref" -> print
                         } else {
@@ -2800,7 +2800,7 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
             forwardedRootOrdinal >= 0 -> if {
                 forwardedRootOrdinal -> writeMutableStructParameterPointer
             } else {
-                "%slot$(mutableRootBinding)" -> print
+                "%slot$(mutableRootBinding -> valueNameId(state))" -> print
             }
             ", i32 0, i32 " -> print
             context.ir[mutableValueIndex].symbol -> writeDecimalLine
@@ -2815,7 +2815,7 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
                 and context.types[mutableTargetTypeId].length >= 0
                 and forwardedOrdinal < 0 -> if {
                     mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
-                    "  %$(label)_fixed = load %sollang.int_slice, ptr %slot$(mutableRoot), align " -> print
+                    "  %$(label)_fixed = load %sollang.int_slice, ptr %slot$(mutableRoot -> valueNameId(state)), align " -> print
                     context.ir[mutableRoot] -> storageAlign(context, state) -> writeDecimalLine
                     "  %$(label) = extractvalue %sollang.int_slice %$(label)_fixed, 0" -> println
                 } else {
@@ -2824,7 +2824,7 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
                         forwardedOrdinal -> writeMutableStructParameterPointer
                     } else {
                         mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
-                        "%slot$(mutableRoot)" -> print
+                        "%slot$(mutableRoot -> valueNameId(state))" -> print
                     }
                     ", i64 0" -> println
                 }
@@ -2842,7 +2842,7 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
             forwardedRootOrdinal >= 0 -> if {
                 forwardedRootOrdinal -> writeMutableStructParameterPointer
             } else {
-                "%slot$(mutableRootBinding)" -> print
+                "%slot$(mutableRootBinding -> valueNameId(state))" -> print
             }
             ", i32 0, i32 " -> print
             context.ir[mutableValueIndex].symbol -> writeDecimalLine
@@ -2887,13 +2887,13 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
                 mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
                 "  %$(label)_ptr = getelementptr inbounds " -> print
                 context.ir[mutableRoot] -> writeIrType(context, state)
-                ", ptr %slot$(mutableRoot), i32 0, i32 0" -> println
+                ", ptr %slot$(mutableRoot -> valueNameId(state)), i32 0, i32 0" -> println
                 "  %$(label)_len = getelementptr inbounds " -> print
                 context.ir[mutableRoot] -> writeIrType(context, state)
-                ", ptr %slot$(mutableRoot), i32 0, i32 1" -> println
+                ", ptr %slot$(mutableRoot -> valueNameId(state)), i32 0, i32 1" -> println
                 "  %$(label)_capacity = getelementptr inbounds " -> print
                 context.ir[mutableRoot] -> writeIrType(context, state)
-                ", ptr %slot$(mutableRoot), i32 0, i32 2" -> println
+                ", ptr %slot$(mutableRoot -> valueNameId(state)), i32 0, i32 2" -> println
                 "  %$(label)_0 = insertvalue %sollang.mutable_container poison, ptr %$(label)_ptr, 0" -> println
                 "  %$(label)_1 = insertvalue %sollang.mutable_container %$(label)_0, ptr %$(label)_len, 1" -> println
                 "  %$(label) = insertvalue %sollang.mutable_container %$(label)_1, ptr %$(label)_capacity, 2" -> println
@@ -3167,7 +3167,7 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
             roots[copyOrdinal!] => copyIndex
             interpolations[copyIndex] => copyRoot
             "  %$(prefix)_literal$(copyOrdinal!)_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(copyOrdinal! * 2)" -> println
-            "  %$(prefix)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex), i64 $(copyRoot.literalStart)" -> println
+            "  %$(prefix)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex -> valueNameId(state)), i64 $(copyRoot.literalStart)" -> println
             "  call void @llvm.memcpy.p0.p0.i64(ptr %$(prefix)_literal$(copyOrdinal!)_target, ptr %$(prefix)_literal$(copyOrdinal!)_source, i64 $(copyRoot.literalLength), i1 false)" -> println
             "  %$(prefix)_offset$(copyOrdinal! * 2 + 1) = add i64 %$(prefix)_offset$(copyOrdinal! * 2), $(copyRoot.literalLength)" -> println
             "  %$(prefix)_root$(copyOrdinal!)_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(copyOrdinal! * 2 + 1)" -> println
@@ -3177,7 +3177,7 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
         }
         rawLength - suffixStart! => suffixLength
         "  %$(prefix)_suffix_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(rootCount * 2)" -> println
-        "  %$(prefix)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex), i64 $(suffixStart!)" -> println
+        "  %$(prefix)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex -> valueNameId(state)), i64 $(suffixStart!)" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %$(prefix)_suffix_target, ptr %$(prefix)_suffix_source, i64 $(suffixLength), i1 false)" -> println
         "  %$(prefix)_value0 = insertvalue %sollang.text poison, ptr %$(prefix)_buffer, 0" -> println
         "  %$(prefix) = insertvalue %sollang.text %$(prefix)_value0, i64 %$(prefix)_length$(rootCount), 1" -> println
@@ -3281,7 +3281,7 @@ emitComparisonReferenceNameRead valueIndex: Int, ownerIndex: Int, whileIndex: In
     whileIndex < 0 and (valueIndex -> referenceParameterValueIsMaterialized(ownerIndex, context, state))
         -> if { return }
     valueIndex -> comparisonReadTypeId(context) => readTypeId
-    "  %cmpref$(whileIndex)_v$(valueIndex) = load " -> print
+    "  %cmpref$(whileIndex)_v$(valueIndex -> valueNameId(state)) = load " -> print
     readTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr " -> print
     ownerIndex -> writeForwardedReferenceValue(valueIndex, context, state)
@@ -3324,7 +3324,7 @@ writeComparisonOperandValue valueIndex: Int, ownerIndex: Int, whileIndex: Int, c
     valueIndex -> isComparisonReferenceName(context, state)
         -> if {
             whileIndex < 0 and (valueIndex -> referenceParameterValueIsMaterialized(ownerIndex, context, state))
-                -> if { "%v$(valueIndex -> valueNameId(state))" -> print } else { "%cmpref$(whileIndex)_v$(valueIndex)" -> print }
+                -> if { "%v$(valueIndex -> valueNameId(state))" -> print } else { "%cmpref$(whileIndex)_v$(valueIndex -> valueNameId(state))" -> print }
         } else {
             whileIndex >= 0 -> if {
                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
@@ -3337,7 +3337,7 @@ writeComparisonOperandValue valueIndex: Int, ownerIndex: Int, whileIndex: Int, c
 writeSubjectWhenValue whenIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[whenIndex].operand0 => subjectIndex
     (context.ir[subjectIndex] -> referenceValueTypeId(context, state)) >= 0
-        -> if { "%when$(whenIndex)_subject_read" -> print } else {
+        -> if { "%when$(whenIndex -> valueNameId(state))_subject_read" -> print } else {
             subjectIndex -> writeValue(ownerIndex, context, state)
         }
 }
@@ -3879,7 +3879,7 @@ emitLengthValue callIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
                     boundedMutableParameterOrdinal -> writeMutableStructParameterPointer
                 } else {
                     boundedMutableRoot! >= 0 -> if {
-                        "%slot$(boundedMutableRoot!)" -> print
+                        "%slot$(boundedMutableRoot! -> valueNameId(state))" -> print
                     } else { call.operand0 -> writeValue(ownerIndex, context, state) }
                 }
                 ", align $(boundedLayout.align)" -> println
@@ -3948,7 +3948,7 @@ emitLengthValue callIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
             mutableRoot! >= 0 -> if {
                 "  %v$(callIndex -> valueNameId(state))_length_source = load " -> print
                 valueTypeId! -> writeSemanticTypeId(context, state)
-                ", ptr %slot$(mutableRoot!), align 8" -> println
+                ", ptr %slot$(mutableRoot! -> valueNameId(state)), align 8" -> println
             }
             readonlyReference! -> if {
                 "  %v$(callIndex -> valueNameId(state))_length_source = load " -> print
@@ -3988,13 +3988,13 @@ emitCapacityIntNarrowing callIndex: Int, whileIndex: Int, state: ref CoreEmitter
         "v$(callIndex -> valueNameId(state))_capacity_ok:" -> println
         "  %v$(callIndex -> valueNameId(state)) = trunc i64 %v$(callIndex -> valueNameId(state))_raw to i32" -> println
     } else {
-        "  %while$(whileIndex)_v$(callIndex)_capacity_fits = icmp ule i64 %while$(whileIndex)_v$(callIndex)_raw, 2147483647" -> println
-        "  br i1 %while$(whileIndex)_v$(callIndex)_capacity_fits, label %while$(whileIndex)_v$(callIndex)_capacity_ok, label %while$(whileIndex)_v$(callIndex)_capacity_fail" -> println
-        "while$(whileIndex)_v$(callIndex)_capacity_fail:" -> println
+        "  %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_capacity_fits = icmp ule i64 %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_raw, 2147483647" -> println
+        "  br i1 %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_capacity_fits, label %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_capacity_ok, label %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_capacity_fail" -> println
+        "while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_capacity_fail:" -> println
         "  call void @llvm.trap()" -> println
         "  unreachable" -> println
-        "while$(whileIndex)_v$(callIndex)_capacity_ok:" -> println
-        "  %while$(whileIndex)_v$(callIndex) = trunc i64 %while$(whileIndex)_v$(callIndex)_raw to i32" -> println
+        "while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_capacity_ok:" -> println
+        "  %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state)) = trunc i64 %while$(whileIndex -> valueNameId(state))_v$(callIndex -> valueNameId(state))_raw to i32" -> println
     }
 }
 
@@ -4059,7 +4059,7 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         mutableRoot! >= 0 -> if {
             "  %v$(callIndex -> valueNameId(state))_capacity_source = load " -> print
             readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
-            ", ptr %slot$(mutableRoot!), align 8" -> println
+            ", ptr %slot$(mutableRoot! -> valueNameId(state)), align 8" -> println
         }
         readonlyReference! -> if {
             "  %v$(callIndex -> valueNameId(state))_capacity_source = load " -> print
@@ -4097,7 +4097,7 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
     call.operand0 -> canonicalMemberValueTypeId(context, state) => memberTypeId
     memberTypeId >= 0 and context.types[memberTypeId].kind == 12
         -> if {
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             capacity -> if {
                 " = add i64 0, $(context.types[memberTypeId].length)" -> println
@@ -4112,7 +4112,7 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
                 capacity -> if {
                     request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state)
                 } else {
-                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
+                    "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println
                 }
             }
             return
@@ -4126,7 +4126,7 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
         }
     boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12 and (capacity or boundedArrayReference!)
         -> if {
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             capacity -> if {
                 " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
@@ -4137,7 +4137,7 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
             }
             resultWidth == 32 -> if {
                 capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else {
-                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
+                    "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println
                 }
             }
             return
@@ -4145,11 +4145,11 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
     boundedTypeId >= 0 -> if {
         capacity -> if {
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             " = add i64 0, $(context.types[boundedTypeId].length)" -> println
             resultWidth == 32 -> if {
-                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println }
+                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println }
             }
             return
         }
@@ -4164,50 +4164,50 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
             -> if { call.operand0 -> mutableStorageRoot(context, state) => boundedMutableRoot! }
         boundedMutableParameterOrdinal >= 0 or boundedMutableRoot! >= 0 or boundedReadonlyReference!
             -> if {
-                "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load " -> print
+                "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source = load " -> print
                 boundedTypeId -> writeSemanticTypeId(context, state)
                 ", ptr " -> print
                 boundedMutableParameterOrdinal >= 0 -> if {
                     boundedMutableParameterOrdinal -> writeMutableStructParameterPointer
                 } else {
                     boundedMutableRoot! >= 0 -> if {
-                        "%slot$(boundedMutableRoot!)" -> print
+                        "%slot$(boundedMutableRoot! -> valueNameId(state))" -> print
                     } else {
                         WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
                     }
                 }
                 ", align $(boundedLayout.align)" -> println
             }
-        "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+        "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
         resultWidth == 32 -> if { "_raw" -> print }
         " = extractvalue " -> print
         boundedTypeId -> writeSemanticTypeId(context, state)
         " " -> print
         boundedMutableParameterOrdinal >= 0 or boundedMutableRoot! >= 0 or boundedReadonlyReference!
-            -> if { "%while$(request.whileIndex)_v$(request.nodeIndex)_length_source" -> print } else {
+            -> if { "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source" -> print } else {
                 WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
             }
         ", 0" -> println
         resultWidth == 32 -> if {
-            capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println }
+            capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println }
         }
         return
     }
     call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => mutableLengthParameterOrdinal
     mutableLengthParameterOrdinal >= 0 -> if {
         base -> isDictionaryType -> if {
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load %sollang.int_dictionary, ptr " -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source = load %sollang.int_dictionary, ptr " -> print
             mutableLengthParameterOrdinal -> writeMutableStructParameterPointer
             ", align 8" -> println
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             capacity -> if {
-                " = extractvalue %sollang.int_dictionary %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 2" -> println
+                " = extractvalue %sollang.int_dictionary %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source, 2" -> println
             } else {
-                " = extractvalue %sollang.int_dictionary %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 1" -> println
+                " = extractvalue %sollang.int_dictionary %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source, 1" -> println
             }
         } else {
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             " = load i64, ptr " -> print
             capacity -> if {
@@ -4218,15 +4218,15 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
             ", align 8" -> println
         }
         resultWidth == 32 -> if {
-            capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println }
+            capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println }
         }
     } else {
         base -> isArgumentsType -> if {
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             " = call i64 @sollang_argument_count()" -> println
             resultWidth == 32 -> if {
-                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println }
+                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println }
             }
         } else {
             base.typeId => valueTypeId!
@@ -4237,13 +4237,13 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
                     true => readonlyReference!
                 }
             readonlyReference! -> if {
-                "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load " -> print
+                "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source = load " -> print
                 valueTypeId! -> writeSemanticTypeId(context, state)
                 ", ptr " -> print
                 WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
                 ", align 8" -> println
             }
-            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))" -> print
             resultWidth == 32 -> if { "_raw" -> print }
             " = extractvalue " -> print
             readonlyReference! -> if {
@@ -4253,14 +4253,14 @@ emitWhileCollectionSizeValue request: WhileValueRequest, context: ref emitterCon
             }
             " " -> print
             readonlyReference! -> if {
-                "%while$(request.whileIndex)_v$(request.nodeIndex)_length_source" -> print
+                "%while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_length_source" -> print
             } else {
                 WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
             }
             ", " -> print
             capacity -> if { "2" -> println } else { "1" -> println }
             resultWidth == 32 -> if {
-                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println }
+                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex, state) } else { "  %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state)) = trunc i64 %while$(request.whileIndex -> valueNameId(state))_v$(request.nodeIndex -> valueNameId(state))_raw to i32" -> println }
             }
         }
     }
@@ -4413,7 +4413,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
     UIntSize(0) => suffixStart!
     roots -> each root {
         fragments[root] => fragment
-        "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex), i64 $(fragment.literalStart)" -> println
+        "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex -> valueNameId(state)), i64 $(fragment.literalStart)" -> println
         "  call void @$(writer)(ptr %$(prefix)_literal$(root), i64 $(fragment.literalLength), i1 false)" -> println
         root -> deferredTextCaptureType(fragments, leaf.sourceModule, ownerIndex, leafIndex, context, state) => typeId
         "  %$(prefix)_root$(root)_value = load " -> print
@@ -4425,7 +4425,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
     leaf -> sourceToken(context, state) => token
     TextLiteralRequest { sourceModule: leaf.sourceModule, token: token } -> textLiteralLength(context, state) => rawLength
     rawLength - suffixStart! => suffixLength
-    "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex), i64 $(suffixStart!)" -> println
+    "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex -> valueNameId(state)), i64 $(suffixStart!)" -> println
     "  call void @$(writer)(ptr %$(prefix)_suffix, i64 $(suffixLength), i1 " -> print
     newline -> if { "true)" -> println } else { "false)" -> println }
 }
@@ -4682,7 +4682,7 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: 
     ifIndex -> isDeferredTextChoice(context, state)
         -> if {
             valueIndex -> emitDeferredTextCaptureStore(ownerIndex, ifIndex, branchOrdinal, context, state)
-            "  store %sollang.text poison, ptr %if$(ifIndex)_result, align " -> print
+            "  store %sollang.text poison, ptr %if$(ifIndex -> valueNameId(state))_result, align " -> print
             resultNode -> storageAlign(context, state) -> writeDecimalLine
             return
         }
@@ -4698,13 +4698,13 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: 
                     (branchOrdinal == 0 -> if { resultNode.operand1 } else { resultNode.nextOperand }) => branchRegion
                     valueIndex -> fixedBranchTransferredBacking(branchRegion, context, state) => transferredBacking
                     transferredBacking < 0 -> if {
-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_source = extractvalue %sollang.int_slice " -> print
+                        "  %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_source = extractvalue %sollang.int_slice " -> print
                         valueIndex -> writeValue(ownerIndex, context, state)
                         ", 0" -> println
-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
-                        "  call void @llvm.memcpy.p0.p0.i64(ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, ptr %if$(ifIndex)_fixed$(branchOrdinal)_source, i64 $(context.typeSizes[resultNode.typeId]), i1 false)" -> println
-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_0 = insertvalue %sollang.int_slice poison, ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, 0" -> println
-                        "  %if$(ifIndex)_fixed$(branchOrdinal) = insertvalue %sollang.int_slice %if$(ifIndex)_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println
+                        "  %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_data = call ptr @sollang_alloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
+                        "  call void @llvm.memcpy.p0.p0.i64(ptr %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_data, ptr %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_source, i64 $(context.typeSizes[resultNode.typeId]), i1 false)" -> println
+                        "  %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_0 = insertvalue %sollang.int_slice poison, ptr %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_data, 0" -> println
+                        "  %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal) = insertvalue %sollang.int_slice %if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println
                         true => fixedBranchCopied!
                     }
                 }
@@ -4732,20 +4732,18 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: 
             resultNode -> writeIrType(context, state)
             " " -> print
             fixedBranchCopied! -> if {
-                "%if$(ifIndex)_fixed$(branchOrdinal)" -> print
+                "%if$(ifIndex -> valueNameId(state))_fixed$(branchOrdinal)" -> print
             } else {
                 resultWidth > 0 and valueWidth > 0 and resultWidth != valueWidth
                     -> if {
-                        "%if" -> print
-                        ifIndex -> writeDecimal
+                        "%if$(ifIndex -> valueNameId(state))" -> print
                         "_result_value" -> print
                         branchOrdinal -> writeDecimal
                     } else {
                         valueIndex -> writeValue(ownerIndex, context, state)
                     }
             }
-            ", ptr %if" -> print
-            ifIndex -> writeDecimal
+            ", ptr %if$(ifIndex -> valueNameId(state))" -> print
             "_result, align " -> print
             resultNode -> storageAlign(context, state) -> writeDecimalLine
         } else {

@@ -433,15 +433,15 @@ emitAsyncIntRoleReads nodeIndex: Int, context: ref emitterContext.EmitContext, s
     symbol! < range.symbolCount -> while {
         nodeIndex -> asyncIntIteratorForRole(node.sourceModule, symbol!, context, state) => iterator
         iterator >= 0 -> if {
-            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor = load i64, ptr %each$(iterator)_index_slot, align 8" -> println
+            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor = load i64, ptr %each$(iterator -> valueNameId(state))_index_slot, align 8" -> println
             "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex) = trunc i64 %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor to i32" -> println
         }
         symbol! + 1 => symbol!
     }
 }
 
-writeAsyncLocalAddress bindingIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
-    context.ir[bindingIndex].flags == 1 -> if { "%slot$(bindingIndex)" -> print } else { "%async_local$(bindingIndex)" -> print }
+writeAsyncLocalAddress bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[bindingIndex].flags == 1 -> if { "%slot$(bindingIndex -> valueNameId(state))" -> print } else { "%async_local$(bindingIndex)" -> print }
 }
 
 emitAsyncLocalStorage functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -454,13 +454,13 @@ emitAsyncLocalStorage functionIndex: Int, context: ref emitterContext.EmitContex
     bindingIndex! < end -> while {
         bindingIndex! -> asyncIntIteratorContextOffset(context, state) => iteratorOffset
         iteratorOffset >= 0 -> if {
-            "  %each$(bindingIndex!)_index_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset)" -> println
-            "  %each$(bindingIndex!)_limit_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset + 8)" -> println
+            "  %each$(bindingIndex! -> valueNameId(state))_index_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset)" -> println
+            "  %each$(bindingIndex! -> valueNameId(state))_limit_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset + 8)" -> println
         }
         (bindingIndex! -> asyncFrameBindingRoot(functionIndex, context, state)) == bindingIndex!
             -> if {
                 "  " -> print
-                bindingIndex! -> writeAsyncLocalAddress(context)
+                bindingIndex! -> writeAsyncLocalAddress(context, state)
                 " = alloca " -> print
                 context.ir[bindingIndex!] -> writeIrType(context, state)
                 ", align " -> print
@@ -480,7 +480,7 @@ emitAsyncLocalWrite bindingIndex: Int, functionIndex: Int, context: ref emitterC
             " " -> print
             context.ir[bindingIndex].operand0 -> writeValue(functionIndex, context, state)
             ", ptr " -> print
-            root -> writeAsyncLocalAddress(context)
+            root -> writeAsyncLocalAddress(context, state)
             ", align " -> print
             context.ir[root] -> asyncFrameValueAlign(context, state) -> writeDecimalLine
         }
@@ -500,7 +500,7 @@ emitAsyncAwaitResultWrite nodeIndex: Int, context: ref emitterContext.EmitContex
                             "  store " -> print
                             binding -> writeIrType(context, state)
                             " %v$(nodeIndex -> valueNameId(state)), ptr " -> print
-                            bindingIndex! -> writeAsyncLocalAddress(context)
+                            bindingIndex! -> writeAsyncLocalAddress(context, state)
                             ", align " -> print
                             binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                         }
@@ -555,11 +555,11 @@ emitBoundedAsyncFrameTransfer bindingIndex: Int, stateIndex: Int, typeId: Int, l
         ", ptr %$(prefix)_load_address, align $(context.typeAligns[typeId])" -> println
         "$(prefix)_handle" -> emitBoundedArrayHandle(valueName, typeId, context, state)
         "  store %sollang.array.i32 %$(prefix)_handle, ptr " -> print
-        bindingIndex -> writeAsyncLocalAddress(context)
+        bindingIndex -> writeAsyncLocalAddress(context, state)
         ", align 8" -> println
     } else {
         "  %$(prefix)_stored = load %sollang.array.i32, ptr " -> print
-        bindingIndex -> writeAsyncLocalAddress(context)
+        bindingIndex -> writeAsyncLocalAddress(context, state)
         ", align 8" -> println
         "$(prefix)_inline" -> emitBoundedArrayValueFromHandle(valueName, typeId, context, state)
         "  store " -> print
@@ -595,7 +595,7 @@ emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, cont
                     " = load " -> print
                     binding -> writeIrType(context, state)
                     ", ptr " -> print
-                    loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context) }
+                    loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context, state) }
                     ", align " -> print
                     binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                     "  store " -> print
@@ -603,7 +603,7 @@ emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, cont
                     " %async_frame$(point.state)_$(bindingIndex!)_" -> print
                     loading -> if { "loaded" -> print } else { "stored" -> print }
                     ", ptr " -> print
-                    loading -> if { bindingIndex! -> writeAsyncLocalAddress(context) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
+                    loading -> if { bindingIndex! -> writeAsyncLocalAddress(context, state) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
                     ", align " -> print
                     binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                 }
@@ -742,7 +742,7 @@ emitAsyncAwaitPoint nodeIndex: Int, producerIndex: Int, context: ref emitterCont
                 }
                 restoredTaskBinding! >= 0 -> if {
                     "  %v$(nodeIndex -> valueNameId(state))_pending_task = load %sollang.task, ptr " -> print
-                    restoredTaskBinding! -> writeAsyncLocalAddress(context)
+                    restoredTaskBinding! -> writeAsyncLocalAddress(context, state)
                     ", align $(context.pointerBitWidth / 8)" -> println
                 }
                 "  %v$(nodeIndex -> valueNameId(state))_pending_handle = extractvalue %sollang.task " -> print
@@ -1228,9 +1228,9 @@ staticReadonlyArrayReturnFunction valueIndex: Int, context: ref emitterContext.E
     -1
 }
 
-writeStaticReadonlyArraySymbol functionIndex: Int, literalIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+writeStaticReadonlyArraySymbol functionIndex: Int, literalIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[functionIndex] => function
-    "@sollang_static_array_m$(function.sourceModule)_s$(function.symbol)_v$(literalIndex)" -> print
+    "@sollang_static_array_m$(function.sourceModule)_s$(function.symbol)_v$(literalIndex -> valueNameId(state))" -> print
 }
 
 writeFunctionValueName operandIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -1251,7 +1251,7 @@ emitStaticReadonlyNumericArray functionIndex: Int, literalIndex: Int, context: r
         length! + 1 => length!
         context.ir[countIndex!].nextOperand => countIndex!
     }
-    functionIndex -> writeStaticReadonlyArraySymbol(literalIndex, context)
+    functionIndex -> writeStaticReadonlyArraySymbol(literalIndex, context, state)
     " = private unnamed_addr constant [$(length!) x " -> print
     literal -> writeArrayElementType(context, state)
     "] [" -> print
@@ -1691,7 +1691,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                     expression.kind == 2 -> if {
                         expression -> sourceToken(context, state) => expressionToken
                         TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
-                        "  %v$(expressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex), 0" -> println
+                        "  %v$(expressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex -> valueNameId(state)), 0" -> println
                         "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(expressionIndex -> valueNameId(state))_ptr, i64 $expressionLength, 1" -> println
                         expressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
                     }
@@ -1731,7 +1731,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                         false => nextInsideEach!
                         nextExpressionIndex! >= 0 -> if { NodeAncestorRequest { nodeIndex: nextExpressionIndex!, ownerIndex: activeEachIndex } -> irDescendsFrom(context, state) => nextInsideEach! }
                         nextInsideEach! -> if { false => closeEachProgress! } else {
-                            activeEachIndex -> emitDirectEachEnd(false, context)
+                            activeEachIndex -> emitDirectEachEnd(false, context, state)
                             activeEachIndex -> emitStorageLifetimeEndsAfter(false, context)
                             activeEachSize! - 1 => activeEachSize!
                         }
