@@ -1,0 +1,51 @@
+import sollang.compiler.llvm.scoped_names as names
+struct KeyData {
+    keyIndexBySymbol: [Int; ~]
+    starts: [Int; ~]
+    lengths: [Int; ~]
+    words: [UInt64; ~]
+    status: Int
+}
+
+borrowKeys data: ref KeyData -> names.Keys {
+    names.Keys { keyIndexBySymbol: data.keyIndexBySymbol -> names.borrowValues, starts: data.starts -> names.borrowValues,
+        lengths: data.lengths -> names.borrowValues, words: data.words -> names.borrowValues, status: data.status }
+}
+
+keys reverse: Bool -> KeyData {
+    [0, 4; ~] => starts
+    [4, 3; ~] => lengths
+    [UInt64(0), 127, 128, 18446744073709551615, 1, 2, 0; ~] => words
+    [0, 1, -1; ~] => order!
+    reverse -> if {
+        1 => order![0]
+        0 => order![1]
+    }
+    KeyData {
+        keyIndexBySymbol: order!,
+        starts: starts, lengths: lengths, words: words, status: 0
+    }
+}
+
+main {
+    keys(false) => firstKeys
+    keys(true) => secondKeys
+    firstKeys -> borrowKeys -> names.fromKeys => first
+    secondKeys -> borrowKeys -> names.fromKeys => second
+    first -> names.view(0) => firstA
+    first -> names.view(1) => firstB
+    second -> names.view(0) => secondA
+    second -> names.view(1) => secondB
+    firstA == "x007F8001FFFFFFFFFFFFFFFFFF01" => bounds
+    firstB == "x010200" => fullKey
+    firstA == secondB => orderA
+    firstB == secondA => orderB
+    firstA != firstB => distinct
+    first.starts[2] == -1 and first.lengths[2] == 0 => unassigned
+    "bounds=$bounds" -> println
+    "full-key=$fullKey" -> println
+    "order-a=$orderA" -> println
+    "order-b=$orderB" -> println
+    "distinct-key=$distinct" -> println
+    "unassigned=$unassigned" -> println
+}

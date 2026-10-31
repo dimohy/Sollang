@@ -5944,6 +5944,15 @@ emitter retains simple ASCII qualified names and uses a disjoint, complete
 UTF-8 hex encoding for other canonical names. Native-library symbol names
 remain governed by their explicit foreign-function declarations.
 
+The self-host emitter encodes complete declaration keys for internal function
+symbols. Keys retain logical namespace bytes and declaration scope/signature;
+physical source, symbol, AST and token positions are lookup coordinates only.
+Encoding each unsigned key word as canonical unsigned base-128 bytes and then
+hexadecimal preserves word boundaries and avoids hash-only identity. Function
+definitions, calls, runtime wrappers and specialization base names must use the
+same prepared key. This does not replace the independent naming rules for SSA
+values, type layouts, private globals or specialization arguments.
+
 Checked compilation admits syntax and library declarations before semantic
 lowering. A rejected function signature stops before call-context resolution
 and typed-IR construction: invalid mutable input storage and unused generic

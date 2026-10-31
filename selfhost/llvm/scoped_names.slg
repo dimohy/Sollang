@@ -1,0 +1,78 @@
+namespace sollang.compiler.llvm.scoped_names
+
+import sys.file as file
+
+# Complete declaration keys, not their hashes or lookup ordinals, own names.
+# Unsigned base-128 words followed by hexadecimal bytes are injective and use
+# only LLVM identifier characters. Source/symbol positions are lookup slots.
+public struct Keys {
+    public keyIndexBySymbol: ref [Int; ~]
+    public starts: ref [Int; ~]
+    public lengths: ref [Int; ~]
+    public words: ref [UInt64; ~]
+    public status: Int
+}
+
+public struct Names {
+    public starts: [Int; ~]
+    public lengths: [Int; ~]
+    public bytes: [UInt8; ~]
+    public status: Int
+}
+
+public borrowValues<T> values: ref [T; ~] -> ref [T; ~] => values
+
+appendNibble value: UInt64, bytes: mut [UInt8; ~] -> Unit {
+    value < 10 -> if {
+        bytes -> push(UInt8(value + 48))
+    } else { bytes -> push(UInt8(value + 55)) }
+}
+
+appendWord value: UInt64, bytes: mut [UInt8; ~] -> Unit {
+    value => remaining!
+    true => more!
+    more! -> while {
+        remaining! % 128 => current!
+        remaining! / 128 => remaining!
+        remaining! > 0 -> if { current! + 128 => current! }
+        current! / 16 -> appendNibble(bytes)
+        current! % 16 -> appendNibble(bytes)
+        remaining! > 0 => more!
+    }
+}
+
+public fromKeys keys: Keys -> Names {
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt8; ~] => bytes!
+    keys.status != 0 -> if {
+        Names { starts: starts!, lengths: lengths!, bytes: bytes!, status: keys.status } -> return
+    }
+    0 => slot!
+    slot! < (keys.keyIndexBySymbol -> len) -> while {
+        keys.keyIndexBySymbol[slot!] => keyIndex
+        keyIndex < 0 -> if {
+            starts! -> push(-1)
+            lengths! -> push(0)
+        } else {
+            bytes! -> len => start
+            starts! -> push(start)
+            bytes! -> push(120)
+            keys.starts[keyIndex] => first
+            first + keys.lengths[keyIndex] => end
+            first => cursor!
+            cursor! < end -> while {
+                keys.words[cursor!] -> appendWord(bytes!)
+                cursor! + 1 => cursor!
+            }
+            lengths! -> push((bytes! -> len) - start)
+        }
+        slot! + 1 => slot!
+    }
+    Names { starts: starts!, lengths: lengths!, bytes: bytes!, status: 0 }
+}
+
+public view names: ref Names, symbolSlot: Int -> Text {
+    names.bytes -> file.borrowBytes => text
+    text -> slice(UIntSize(names.starts[symbolSlot]), UIntSize(names.lengths[symbolSlot]))
+}
