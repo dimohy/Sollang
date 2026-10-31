@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -15,7 +15,7 @@ var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache",
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
 
-if (args.Length == 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors")
+if (args.Length == 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
@@ -28,6 +28,63 @@ if (args.Length == 3 && args[2] is "registered-type-universe-vectors" or "regist
         | BindingFlags.NonPublic, null, [program, 64], null)!;
     var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
     var types = bound.GetType().GetProperty("Types")!.GetValue(bound)!;
+    if (args[2] is "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors")
+    {
+        object Property(object value, string name) => value.GetType().GetProperty(name)!.GetValue(value)!;
+        var typeHash = (ulong)cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [types])!;
+        var emissions = (System.Collections.IDictionary)cacheType.GetMethod("BuildEmissionHashes", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [bound])!;
+        var sourceType = assembly.GetType("Sollang.Compiler.Cli.CompilationSource", true)!;
+        var create = cacheType.GetMethod("CreateModuleIdentity", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var stable = unitType.GetMethod("StableIdentity", [typeof(string)])!;
+        var sources = ((System.Collections.IEnumerable)Property(loaded, "Sources")).Cast<object>().ToArray();
+        if (args[2] == "registered-codegen-request-emission-only-vectors")
+        {
+            var omitted = emissions.Keys.Cast<string>().Order(StringComparer.Ordinal)
+                .First(name => sources.Any(source => (string)Property(source, "ModuleName") == name));
+            sources = sources.Where(source => (string)Property(source, "ModuleName") != omitted).ToArray();
+            var retained = Array.CreateInstance(sourceType, sources.Length);
+            for (var index = 0; index < sources.Length; index++) retained.SetValue(sources[index], index);
+            loaded.GetType().GetProperty("Sources")!.SetValue(loaded, retained);
+        }
+        var modules = sources.GroupBy(source => (string)Property(source, "ModuleName"), StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var array = Array.CreateInstance(sourceType, group.Count());
+                var index = 0;
+                foreach (var source in group) array.SetValue(source, index++);
+                return create.Invoke(null, [group.Key, array])!;
+            }).OrderBy(module => (ulong)stable.Invoke(null, [Property(module, "Identity")])!)
+            .ThenBy(module => (string)Property(module, "Identity"), StringComparer.Ordinal).ToArray();
+        var optionsType = assembly.GetType("Sollang.Compiler.Cli.CliOptions", true)!;
+        string[] command = ["build", .. paths, "-o", Path.Combine(directory, "unused-request.exe"), "--target", "windows-x64"];
+        var options = optionsType.GetMethod("Parse")!.Invoke(null, [command])!;
+        var cache = cacheType.GetMethod("Open")!.Invoke(null, [loaded, bound, options])!;
+        var reuse = Property(cache, "Reuse");
+        var keys = (System.Collections.IDictionary)Property(reuse, "ModuleKeys");
+        object Key(object key) => new { interfaceHash = Property(key, "InterfaceHash"), implementationHash = Property(key, "ImplementationHash") };
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            typeUniverseHash = typeHash,
+            modules = modules.Select(module => new
+            {
+                name = Property(module, "Identity"),
+                stableHash = stable.Invoke(null, [Property(module, "Identity")]),
+                implementationHash = Property(module, "ImplementationHash"),
+                interfaceHash = Property(module, "InterfaceHash"),
+                isStandardLibrary = Property(module, "IsStandardLibrary"),
+                imports = Property(module, "Imports")
+            }),
+            emissions = emissions.Keys.Cast<string>().Order(StringComparer.Ordinal)
+                .Select(name => new { name, hash = emissions[name] }),
+            prefix = Key(Property(reuse, "PrefixKey")),
+            suffix = Key(Property(reuse, "SuffixKey")),
+            moduleKeys = keys.Keys.Cast<string>().OrderBy(name => (ulong)stable.Invoke(null, [name])!)
+                .ThenBy(name => name, StringComparer.Ordinal).Select(name => new { name, key = Key(keys[name]!) })
+        }));
+        return;
+    }
     var records = new Dictionary<string, object>();
     foreach (var name in new[] { "Structs", "Enums", "Boxes", "References", "DynTraits", "StaticArrays", "DynamicArrays", "Dictionaries" })
         records[name] = types.GetType().GetProperty(name)!.GetValue(types)!;

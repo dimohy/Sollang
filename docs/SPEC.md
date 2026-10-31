@@ -6256,6 +6256,15 @@ Current backend:
   and shared role aliases occupy a separate identity space beyond the runtime
   arena; their field and payload identities remain linked to the actual types.
   They contribute metadata without making an open type a concrete runtime value.
+  Codegen requests compose current source-module interfaces, source implementation
+  hashes, ambient standard-library interfaces, complete type metadata, emission
+  identities and transitive dependency interfaces through the compiled key rules.
+  An emission module without a source entry receives the synthetic interface and
+  implementation rules. Whole implementation keys retain stable-hash/full-name
+  ordering across both source and synthetic entries. Prefix and suffix keys use
+  their distinct rules. Emission facts are explicit inputs; source text does not
+  replace unavailable function identities, and request construction alone does
+  not establish cache lookup, fragment consumption or publication.
   Parser builtin type-name classification uses one compiled C# catalog shared
   with parser source generation and the generated SLG policy. This classification
   preserves parser spelling and qualification decisions; it is distinct from

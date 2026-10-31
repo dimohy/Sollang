@@ -1,0 +1,219 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+import sollang.compiler.llvm.codegen_units as units
+
+public struct ModuleEmission {
+    public identity: Field
+    public hash: UInt64
+}
+
+public struct ModuleCodegenKey {
+    public identity: Field
+    public stableIdentity: UInt64
+    public interfaceHash: UInt64
+    public implementationHash: UInt64
+}
+
+public struct CodegenKey { public interfaceHash: UInt64, public implementationHash: UInt64 }
+
+public struct CompilationCodegenRequest {
+    public prefix: CodegenKey
+    public suffix: CodegenKey
+    public modules: [ModuleCodegenKey; ~]
+    public order: [Int; ~]
+}
+
+public enum CodegenRequestError { Catalog, DuplicateEmission, Dependency(ModuleDependencyError), Key(KeyError) }
+
+requestRule rule: ref plans.KeyRule, bindings: ref [Binding; ~] -> Result<UInt64, CodegenRequestError> {
+    rule -> hashRule(bindings) -> when {
+        Err(error) { Result<UInt64, CodegenRequestError>.Err(CodegenRequestError.Key(error)) }
+        Ok(hash) { Result<UInt64, CodegenRequestError>.Ok(hash) }
+    }
+}
+
+requestHash rule: ref plans.KeyRule, part: plans.KeyPart, value: UInt64 -> Result<UInt64, CodegenRequestError> {
+    [Binding { part: part, fields: [value -> hexField,; ~] }; ~] => bindings
+    rule -> requestRule(bindings)
+}
+
+moduleRequestHash module: ref CompilationModule, ambient: UInt64, universe: UInt64, emission: UInt64, dependencies: move [Field; ~] -> Result<UInt64, CodegenRequestError> {
+    [
+    Binding { part: plans.KeyPart.Identity, fields: [module.identity -> copyIdentityField,; ~] },
+    Binding { part: plans.KeyPart.SourceImplementation, fields: [module.implementationHash -> hexField,; ~] },
+    Binding { part: plans.KeyPart.AmbientStandardLibrary, fields: [ambient -> hexField,; ~] },
+    Binding { part: plans.KeyPart.TypeUniverse, fields: [universe -> hexField,; ~] },
+    Binding { part: plans.KeyPart.Emissions, fields: [emission -> hexField,; ~] },
+    Binding { part: plans.KeyPart.DependencyInterfaces, fields: dependencies }; ~
+    ] => bindings
+    plans.moduleImplementation() => rule
+    rule -> requestRule(bindings)
+}
+
+syntheticRequestKey emission: ref ModuleEmission, ambient: UInt64, universe: UInt64 -> Result<ModuleCodegenKey, CodegenRequestError> {
+    [Binding { part: plans.KeyPart.Identity, fields: [emission.identity -> copyIdentityField,; ~] }; ~] => interfaceBindings
+    plans.syntheticInterface() => interfaceRule
+    interfaceRule -> requestRule(interfaceBindings) -> when {
+        Err(error) { Result<ModuleCodegenKey, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => interfaceHash
+    [
+    Binding { part: plans.KeyPart.Identity, fields: [emission.identity -> copyIdentityField,; ~] },
+    Binding { part: plans.KeyPart.AmbientStandardLibrary, fields: [ambient -> hexField,; ~] },
+    Binding { part: plans.KeyPart.TypeUniverse, fields: [universe -> hexField,; ~] },
+    Binding { part: plans.KeyPart.Emissions, fields: [emission.hash -> hexField,; ~] }; ~
+    ] => implementationBindings
+    plans.syntheticImplementation() => implementationRule
+    implementationRule -> requestRule(implementationBindings) -> when {
+        Err(error) { Result<ModuleCodegenKey, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => implementationHash
+    Result<ModuleCodegenKey, CodegenRequestError>.Ok(ModuleCodegenKey {
+        identity: emission.identity -> copyIdentityField
+        stableIdentity: emission.identity -> fieldStableIdentity
+        interfaceHash: interfaceHash
+        implementationHash: implementationHash
+    })
+}
+
+fieldStableIdentity identity: ref Field -> UInt64 {
+    [UInt64; ~] => words!
+    identity.bytes -> each byte { words! -> push(UInt64(byte)) }
+    words! -> units.identityHash(0, words! -> len)
+}
+
+requestKeyBefore left: ref ModuleCodegenKey, right: ref ModuleCodegenKey -> Bool {
+    left.stableIdentity < right.stableIdentity
+        or (left.stableIdentity == right.stableIdentity and compareFieldText(left.identity, right.identity) <= 0)
+}
+
+requestKeyOrder modules: ref [ModuleCodegenKey; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    0 => index!
+    modules -> each module {
+        order! -> push(index!)
+        (order! -> len) - 1 => position!
+        position! > 0 -> while {
+            modules[order![position! - 1]] -> requestKeyBefore(module)
+                -> if { break }
+            order![position! - 1] => order![position!]
+            position! - 1 => position!
+        }
+        index! => order![position!]
+        index! + 1 => index!
+    }
+    order!
+}
+
+appendSourceRequestKey module: ref CompilationModule, catalog: ref CompilationModules, selected: Int, ambient: UInt64, universe: UInt64, emissions: ref [ModuleEmission; ~], keys: mut [ModuleCodegenKey; ~], interfaces: mut [Field; ~] -> Result<Unit, CodegenRequestError> {
+    arithmetic.envelopeChecksumSeed() => emissionHash!
+    emissions -> each emission {
+        compareFieldText(module.identity, emission.identity) == 0
+            -> if { emission.hash => emissionHash! }
+    }
+    catalog -> dependencyInterfaceFields(selected) -> when {
+        Err(error) { Result<Unit, CodegenRequestError>.Err(CodegenRequestError.Dependency(error)) -> return }
+        Ok(fields) { fields }
+    } => dependencies
+    module -> moduleRequestHash(ambient, universe, emissionHash!, dependencies) -> when {
+        Err(error) { Result<Unit, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => implementation
+    keys -> push(ModuleCodegenKey { identity: module.identity -> copyIdentityField, stableIdentity: module.stableIdentity, interfaceHash: module.interfaceHash, implementationHash: implementation })
+    interfaces -> push(module.identity -> copyIdentityField)
+    interfaces -> push(module.interfaceHash -> hexField)
+    Result<Unit, CodegenRequestError>.Ok
+}
+
+# Match Open: source, type and emission facts stay distinct until the compiled
+# rule selects their field stream. This does not substitute source text for an
+# unavailable emission identity set.
+public buildCompilationCodegenRequest catalog: ref CompilationModules, universe: UInt64, emissions: ref [ModuleEmission; ~] -> Result<CompilationCodegenRequest, CodegenRequestError> {
+    (catalog.order -> len) != (catalog.modules -> len)
+        -> if { Result<CompilationCodegenRequest, CodegenRequestError>.Err(CodegenRequestError.Catalog) -> return }
+    [Bool; ~] => seen!
+    catalog.modules -> each _ { seen! -> push(false) }
+    catalog.order -> each selected {
+        selected < 0 or selected >= (catalog.modules -> len)
+            -> if { Result<CompilationCodegenRequest, CodegenRequestError>.Err(CodegenRequestError.Catalog) -> return }
+        seen![selected] -> if { Result<CompilationCodegenRequest, CodegenRequestError>.Err(CodegenRequestError.Catalog) -> return }
+        true => seen![selected]
+    }
+    0 => emissionIndex!
+    emissions -> each emission {
+        0 => prior!
+        prior! < emissionIndex! -> while {
+            compareFieldText(emission.identity, emissions[prior!].identity) == 0
+                -> if { Result<CompilationCodegenRequest, CodegenRequestError>.Err(CodegenRequestError.DuplicateEmission) -> return }
+            prior! + 1 => prior!
+        }
+        emissionIndex! + 1 => emissionIndex!
+    }
+    catalog -> ambientStandardLibraryHash => ambient
+    [ModuleCodegenKey; ~] => keys!
+    [Field; ~] => interfaces!
+    catalog.order -> each selected {
+        catalog.modules[selected] -> appendSourceRequestKey(catalog, selected, ambient, universe, emissions, keys!, interfaces!) -> when {
+            Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+            Ok {}
+        }
+    }
+    emissions -> each emission {
+        false => present!
+        keys! -> each key { compareFieldText(key.identity, emission.identity) == 0
+                -> if { true => present! } }
+        not present! -> if {
+            emission -> syntheticRequestKey(ambient, universe) -> when {
+                Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+                Ok(key) { keys! -> push(key) }
+            }
+        }
+    }
+    keys! -> requestKeyOrder => order
+    [Field; ~] => implementations!
+    order -> each selected {
+        implementations! -> push(keys![selected].identity -> copyIdentityField)
+        implementations! -> push(keys![selected].interfaceHash -> hexField)
+        implementations! -> push(keys![selected].implementationHash -> hexField)
+    }
+    [Binding { part: plans.KeyPart.ModuleInterfaces, fields: interfaces! }; ~] => interfaceBindings
+    plans.wholeInterface() => interfaceRule
+    interfaceRule -> requestRule(interfaceBindings) -> when {
+        Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => wholeInterface
+    [Binding { part: plans.KeyPart.ModuleImplementations, fields: implementations! }; ~] => implementationBindings
+    plans.wholeImplementation() => implementationRule
+    implementationRule -> requestRule(implementationBindings) -> when {
+        Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => wholeImplementation
+    plans.prefixInterface() => prefixInterfaceRule
+    prefixInterfaceRule -> requestHash(plans.KeyPart.WholeInterface, wholeInterface) -> when {
+        Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => prefixInterface
+    plans.prefixImplementation() => prefixImplementationRule
+    prefixImplementationRule -> requestHash(plans.KeyPart.WholeImplementation, wholeImplementation) -> when {
+        Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => prefixImplementation
+    plans.suffixInterface() => suffixInterfaceRule
+    suffixInterfaceRule -> requestHash(plans.KeyPart.WholeInterface, wholeInterface) -> when {
+        Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => suffixInterface
+    plans.suffixImplementation() => suffixImplementationRule
+    suffixImplementationRule -> requestHash(plans.KeyPart.WholeImplementation, wholeImplementation) -> when {
+        Err(error) { Result<CompilationCodegenRequest, CodegenRequestError>.Err(error) -> return }
+        Ok(hash) { hash }
+    } => suffixImplementation
+    Result<CompilationCodegenRequest, CodegenRequestError>.Ok(CompilationCodegenRequest {
+        prefix: CodegenKey { interfaceHash: prefixInterface, implementationHash: prefixImplementation }
+        suffix: CodegenKey { interfaceHash: suffixInterface, implementationHash: suffixImplementation }
+        modules: keys!
+        order: order
+    })
+}

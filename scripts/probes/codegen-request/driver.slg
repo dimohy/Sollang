@@ -1,0 +1,62 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.test.codegen.request.facts as facts
+import sys.file as file
+import sys.process as process
+
+printModule module: ref keys.ModuleCodegenKey -> Unit uses Console, File {
+    module.identity.bytes -> file.borrowBytes => bytes
+    bytes -> slice(0, bytes -> len) => identity
+    "module:$identity:$(module.interfaceHash):$(module.implementationHash)" -> println
+}
+
+copyEmission emission: ref keys.ModuleEmission -> keys.ModuleEmission {
+    [UInt8; ~] => bytes!
+    emission.identity.bytes -> each byte { bytes! -> push(byte) }
+    keys.ModuleEmission { identity: keys.Field { bytes: bytes! }, hash: emission.hash }
+}
+
+invalidateOrder order: mut [Int; ~] -> Unit { order[1] => order[0] }
+
+verifyControls: -> Unit uses Console, Process {
+    facts.catalog() => catalog!
+    facts.emissions() => emissions!
+    emissions![0] -> copyEmission => duplicate
+    emissions! -> push(duplicate)
+    catalog! -> keys.buildCompilationCodegenRequest(facts.universe(), emissions!) -> when {
+        Ok(_) { process.exit(2) -> return }
+        Err(error) {
+            error -> when {
+                DuplicateEmission {}
+                else { process.exit(3) -> return }
+            }
+        }
+    }
+    "control:duplicate-emission" -> println
+    facts.emissions() => validEmissions
+    catalog!.order -> invalidateOrder
+    catalog! -> keys.buildCompilationCodegenRequest(facts.universe(), validEmissions) -> when {
+        Ok(_) { process.exit(4) -> return }
+        Err(error) {
+            error -> when {
+                Catalog {}
+                else { process.exit(5) -> return }
+            }
+        }
+    }
+    "control:invalid-catalog" -> println
+}
+
+verifyRequest: -> Unit uses Console, File, Process {
+    facts.catalog() => catalog
+    facts.emissions() => emissions
+    catalog -> keys.buildCompilationCodegenRequest(facts.universe(), emissions) -> when {
+        Err(_) { process.exit(1) -> return }
+        Ok(value) { value }
+    } => request
+    "prefix:$(request.prefix.interfaceHash):$(request.prefix.implementationHash)" -> println
+    "suffix:$(request.suffix.interfaceHash):$(request.suffix.implementationHash)" -> println
+    request.order -> each selected { request.modules[selected] -> printModule }
+    verifyControls()
+}
+
+main { verifyRequest() }

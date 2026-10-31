@@ -26,9 +26,14 @@ def main():
     parser.add_argument('--verify-source', action='store_true')
     parser.add_argument('--registered-sources', type=Path)
     parser.add_argument('--include-type-names', action='store_true')
+    parser.add_argument('--include-codegen-request', action='store_true')
+    parser.add_argument('--emission-only-projection', action='store_true')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     assert not args.include_type_names or args.registered_sources, "type names require registered sources"
+    assert not args.include_codegen_request or args.registered_sources, "codegen request requires registered sources"
+    assert not (args.include_type_names and args.include_codegen_request), "select one observation mode"
+    assert not args.emission_only_projection or args.include_codegen_request, "projection requires codegen request mode"
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -67,6 +72,8 @@ def main():
                       scope='Actual BuildTypeUniverseHash and table records: eight registered layout categories, '
                             'field/variant/type order, null fixed length, Unicode and category mutations. '
                             'Metadata-only; no Native type-pool selection or cache reuse claim.')
+        if args.include_codegen_request:
+            result['scope'] = 'Actual CSharp Open request, source modules, emission hashes and complete keys; no SLG production cache claim.'
         execution = VerificationExecution(ROOT, output, result,
                                          lambda: all(sha(p) == h for p, h in fingerprints.items()), sha)
         error = None
@@ -106,16 +113,25 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      ('registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors'],
+                                      ('registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors'],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
                 if args.registered_sources:
                     row = json.loads(done.stdout)
-                    assert set(row['records']) == {'Structs', 'Enums', 'Boxes', 'References', 'DynTraits',
-                                                   'StaticArrays', 'DynamicArrays', 'Dictionaries'}
-                    assert all(row['records'][name] for name in row['records']), 'missing registered category'
+                    if args.include_codegen_request:
+                        assert row['modules'] and row['emissions'] and isinstance(row['typeUniverseHash'], int)
+                        names = [entry['name'] for entry in row['moduleKeys']]
+                        assert len(names) == len(set(names))
+                        assert set(names) == {entry['name'] for entry in row['modules']} | {entry['name'] for entry in row['emissions']}
+                        if args.emission_only_projection:
+                            assert len(set(names) - {entry['name'] for entry in row['modules']}) == 1
+                        assert all(set(row[k]) == {'interfaceHash', 'implementationHash'} for k in ('prefix', 'suffix'))
+                    else:
+                        assert set(row['records']) == {'Structs', 'Enums', 'Boxes', 'References', 'DynTraits',
+                                                       'StaticArrays', 'DynamicArrays', 'Dictionaries'}
+                        assert all(row['records'][name] for name in row['records']), 'missing registered category'
                     result.update(status='passed', completed=1,
-                                  cases=[dict(id='actual-registered-types', passed=True, observation=row)])
+                                  cases=[dict(id='actual-codegen-request' if args.include_codegen_request else 'actual-registered-types', passed=True, observation=row)])
                 else:
                     rows = [json.loads(line) for line in done.stdout.splitlines()]
                     assert len(rows) == 9
