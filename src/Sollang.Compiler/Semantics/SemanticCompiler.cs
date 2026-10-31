@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using Sollang.Compiler.Diagnostics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.Semantics;
@@ -7558,7 +7559,8 @@ internal sealed partial class SemanticCompiler
                 functions,
                 bodyBindings,
                 callbackMutableBindings);
-            if (actualCallbackResultType != callbackResultType)
+            if (!BlockValueContractPolicy.AcceptsValue(
+                    actualCallbackResultType == callbackResultType, false, false))
             {
                 throw Error(
                     callbackResult.Expression.Line,
@@ -11190,8 +11192,11 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Line, target.Column, "yield may only flow onward to emit");
                 }
 
-                var yieldTypeMatches = currentType == yieldInputType.Value
-                    || (_types.IsReference(yieldInputType.Value)
+                var yieldInputIsReference = _types.IsReference(yieldInputType.Value);
+                var yieldTypeMatches = BlockValueContractPolicy.AcceptsValue(
+                    currentType == yieldInputType.Value,
+                    yieldInputIsReference,
+                    yieldInputIsReference
                         && currentType == _types.GetReference(yieldInputType.Value).ElementType);
                 if (!yieldTypeMatches)
                 {

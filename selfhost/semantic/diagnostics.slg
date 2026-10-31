@@ -9,6 +9,7 @@ import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.effects as effects
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.block_value_contract_policy as blockValueContract
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.library_imports as libraryImports
@@ -7027,6 +7028,30 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                 }
             statementIndex! + 1 => statementIndex!
         }
+    }
+
+    # Callback results use the same declared type decision as the C# binder.
+    # Unit callbacks bind statements without requiring a terminal value.
+    resolved.userBlockContracts -> each contract {
+        (prepared -> declarationBodyIsActive(resolved, contract.sourceModule, contract.callAst))
+            and contract.expectedResultTypeId >= 0 and contract.expectedResultTypeId < (resolved.types -> len)
+            -> if {
+                resolved.types[contract.expectedResultTypeId] => expected
+                not expected.containsParameter and not (expected.kind == 1 and expected.origin == 1 and expected.symbol == 0)
+                    -> if {
+                        (contract.actualResultTypeId >= 0 and not resolved.types[contract.actualResultTypeId].containsParameter) or contract.resultAst < 0
+                            -> if {
+                                not blockValueContract.acceptsValue(contract.actualResultTypeId == contract.expectedResultTypeId, false, false)
+                                    -> if {
+                                        package.ranges[contract.sourceModule] => range
+                                        contract.resultAst >= 0 -> if { contract.resultAst } else { contract.callAst } => locationAst
+                                        ExpressionOperandDiagnostic { code: 74, sourceModule: contract.sourceModule, astNode: contract.callAst, operandAst: contract.resultAst, operatorKind: contract.targetSourceModule, locationOffset: package.nodes[range.astStart + locationAst].start, operandTypeSymbol: contract.functionSymbol, operandTypeId: contract.expectedResultTypeId, firstTypeId: contract.actualResultTypeId } => candidate
+                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                            -> if { candidate => selected! }
+                                    }
+                            }
+                    }
+            }
     }
 
     # Check the committed callee against all seven closed caller capabilities.
