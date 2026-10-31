@@ -1,0 +1,83 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.type_ids as typeIds
+
+# Registration owns selection; this adapter reads one registered storage shape.
+# Its identities are the same canonical arena coordinates used by emitted ABI.
+public appendStorageTypeUniverseRecord records: mut keys.TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], layouts: ref TypeLayouts, typeId: Int -> Result<Unit, keys.TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (types -> len)
+        -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    (layouts.sizes -> len) != (types -> len) or (layouts.aligns -> len) != (types -> len) or (layouts.statuses -> len) != (types -> len)
+        -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    types[typeId] => type
+    type.status != 0 or type.containsParameter or type.first < 0 or type.first >= (types -> len)
+        -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    layouts.statuses[type.first] != 0
+        -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    plans.KeyPart.TypeBoxes => category!
+    type.kind != 6 -> if {
+        type.kind == 4 -> if { plans.KeyPart.TypeStaticArrays => category! } else {
+            type.kind == 3 -> if { plans.KeyPart.TypeDynamicArrays => category! } else {
+                type.kind != 5 -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+                plans.KeyPart.TypeDictionaries => category!
+            }
+        }
+    }
+    types[type.first] -> aggregateFieldLayout(layouts.sizes[type.first], layouts.aligns[type.first]) => element
+    TypeLayout { size: 0, align: 1, status: 0 } => value!
+    DictionaryEntryLayout { valueOffset: 0, stride: 0, align: 1 } => entry!
+    type.kind == 5 -> if {
+        type.second < 0 or type.second >= (types -> len)
+            -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        layouts.statuses[type.second] != 0
+            -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        types[type.second] -> aggregateFieldLayout(layouts.sizes[type.second], layouts.aligns[type.second]) => value!
+        element.size -> dictionaryEntryLayout(element.align, value!.size, value!.align) => entry!
+    }
+    category! -> keys.registeredTypeRule -> when {
+        Err(error) { Result<Unit, keys.TypeUniverseCaptureError>.Err(error -> keys.captureRecordError) -> return }
+        Ok(rule) {
+            [keys.Binding; ~] => bindings!
+            rule.parts -> each part {
+                part -> plans.partIndex => index
+                -1 => number!
+                index == (plans.KeyPart.TypeId -> plans.partIndex)
+                    -> if { typeId => number! }
+                index == (plans.KeyPart.TypeElement -> plans.partIndex)
+                    -> if { type.first => number! }
+                index == (plans.KeyPart.TypeSize -> plans.partIndex)
+                    -> if { element.size => number! }
+                index == (plans.KeyPart.TypeAlignment -> plans.partIndex)
+                    -> if { element.align => number! }
+                index == (plans.KeyPart.TypeLength -> plans.partIndex) and type.kind == 4
+                    -> if { type.length => number! }
+                index == (plans.KeyPart.TypeKey -> plans.partIndex)
+                    -> if { type.first => number! }
+                index == (plans.KeyPart.TypeValue -> plans.partIndex)
+                    -> if { type.second => number! }
+                index == (plans.KeyPart.TypeKeySize -> plans.partIndex)
+                    -> if { element.size => number! }
+                index == (plans.KeyPart.TypeKeyAlignment -> plans.partIndex)
+                    -> if { element.align => number! }
+                index == (plans.KeyPart.TypeValueOffset -> plans.partIndex)
+                    -> if { entry!.valueOffset => number! }
+                index == (plans.KeyPart.TypeValueSize -> plans.partIndex)
+                    -> if { value!.size => number! }
+                index == (plans.KeyPart.TypeValueAlignment -> plans.partIndex)
+                    -> if { value!.align => number! }
+                index == (plans.KeyPart.TypeEntryStride -> plans.partIndex)
+                    -> if { entry!.stride => number! }
+                number! < 0 -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidPart) -> return }
+                number! -> keys.integerLayoutField => field
+                bindings! -> push(keys.Binding { part: part, fields: [field,; ~] })
+            }
+            records -> keys.appendTypeUniverseRecord(category!, typeId, -1, bindings!) -> when {
+                Err(error) { Result<Unit, keys.TypeUniverseCaptureError>.Err(error -> keys.captureRecordError) -> return }
+                Ok {}
+            }
+        }
+    }
+    Result<Unit, keys.TypeUniverseCaptureError>.Ok
+}

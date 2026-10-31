@@ -1,0 +1,370 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.llvm.emitter.layout_arithmetic as layoutArithmetic
+
+public struct TypeLayoutRequest {
+    public types: [typeIds.SemanticType; ~]
+    public fields: [typeIds.NominalField; ~]
+    public typeId: Int
+    public pointerBitWidth: Int
+}
+
+public struct TypeLayout {
+    public size: Int
+    public align: Int
+    # 0 known, 1 unresolved dependency, 2 unsupported type, 4 layout overflow.
+    public status: Int
+}
+
+public struct TypeLayouts {
+    public sizes: [Int; ~]
+    public aligns: [Int; ~]
+    public statuses: [Int; ~]
+}
+
+public aggregateFieldLayout fieldType: typeIds.SemanticType, payloadSize: Int, payloadAlign: Int -> TypeLayout {
+    TypeLayout { size: payloadSize, align: payloadAlign, status: 0 } => result!
+    fieldType.kind == 4 -> if { TypeLayout { size: 16, align: 8, status: 0 } => result! }
+    result!
+}
+
+struct DictionaryEntryLayout {
+    valueOffset: Int
+    stride: Int
+    align: Int
+}
+
+dictionaryEntryLayout keySize: Int, keyAlign: Int, valueSize: Int, valueAlign: Int -> DictionaryEntryLayout {
+    keyAlign => align!
+    valueAlign > align! -> if { valueAlign => align! }
+    ((keySize + valueAlign - 1) / valueAlign) * valueAlign => valueOffset
+    ((valueOffset + valueSize + align! - 1) / align!) * align! => stride
+    DictionaryEntryLayout { valueOffset: valueOffset, stride: stride, align: align! }
+}
+
+struct BoundedDictionaryLayout {
+    bucketCapacity: Int
+    entriesOffset: Int
+    entryStride: Int
+    valueOffset: Int
+    keyAlign: Int
+    valueAlign: Int
+    storageSize: Int
+    size: Int
+    align: Int
+}
+
+boundedDictionaryLayout capacity: Int, keySize: Int, keyAlign: Int, valueSize: Int, valueAlign: Int -> BoundedDictionaryLayout {
+    Int((UInt64(capacity) * 8 + 6) / 7) => minimumBuckets
+    16 => bucketCapacity!
+    bucketCapacity! < minimumBuckets -> while { bucketCapacity! * 2 => bucketCapacity! }
+    keySize -> dictionaryEntryLayout(keyAlign, valueSize, valueAlign) => entryLayout
+    8 => align!
+    entryLayout.align > align! -> if { entryLayout.align => align! }
+    ((bucketCapacity! + 16 + entryLayout.align - 1) / entryLayout.align) * entryLayout.align => entriesOffset
+    ((entriesOffset + bucketCapacity! * entryLayout.stride + align! - 1) / align!) * align! => storageSize
+    ((8 + storageSize + align! - 1) / align!) * align! => size
+    BoundedDictionaryLayout {
+        bucketCapacity: bucketCapacity!
+        entriesOffset: entriesOffset
+        entryStride: entryLayout.stride
+        valueOffset: entryLayout.valueOffset
+        keyAlign: keyAlign
+        valueAlign: valueAlign
+        storageSize: storageSize
+        size: size
+        align: align!
+    }
+}
+
+public boundedArrayStorageLayout elementSize: Int, elementAlign: Int, capacity: Int -> TypeLayout {
+    elementSize -> layoutArithmetic.boundedArrayStorageLayout(elementAlign, capacity) -> when {
+        Ok(layout) { TypeLayout { size: layout.size, align: layout.align, status: 0 } }
+        Err(error) {
+            error -> when { InvalidInput { 2 } Overflow { 4 } } => status
+            TypeLayout { size: -1, align: 1, status: status }
+        }
+    }
+}
+
+# Computes target-aware storage facts from canonical recursive identity. Nominal
+# layouts are a fixed point over owner-to-field edges, so declaration order does
+# not affect nested structs and box indirection terminates recursive layouts.
+public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
+    request.pointerBitWidth / 8 => pointerSize
+    [Int; ~] => sizes!
+    [Int; ~] => aligns!
+    [Int; ~] => statuses!
+    0 => seedIndex!
+    seedIndex! < (request.types -> len) -> while {
+        request.types[seedIndex!] => current
+        -1 => size!
+        1 => align!
+        1 => status!
+        current.status != 0 -> if {
+            current.kind == 1 and (current.origin == 0 or current.origin == 2)
+                -> if { 1 => status! } else { 2 => status! }
+        } else {
+            current.kind == 1 -> if {
+                current.origin == 16 -> if {
+                    2 * pointerSize => size!
+                    pointerSize => align!
+                    0 => status!
+                }
+                current.origin == 1 -> if {
+                    current.symbol == 0 -> if {
+                        0 => size!
+                        0 => status!
+                    }
+                    current.symbol == 1 -> if {
+                        # %sollang.text is { ptr, i64 }. The i64 member keeps
+                        # 8-byte ABI alignment on wasm32, so its size is 16 on
+                        # both 32-bit WebAssembly and 64-bit native targets.
+                        16 => size!
+                        8 => align!
+                        0 => status!
+                    }
+                    current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14 or current.symbol == 19 or current.symbol == 20
+                        -> if {
+                            4 => size!
+                            4 => align!
+                            0 => status!
+                        }
+                    current.symbol == 3 or current.symbol == 8 or current.symbol == 23
+                        -> if {
+                            1 => size!
+                            1 => align!
+                            0 => status!
+                        }
+                    current.symbol == 4 or current.symbol == 9 -> if {
+                        2 => size!
+                        2 => align!
+                        0 => status!
+                    }
+                    current.symbol == 6 or current.symbol == 7 or current.symbol == 11 or current.symbol == 16 or current.symbol == 21 or current.symbol == 22
+                        -> if {
+                            8 => size!
+                            8 => align!
+                            0 => status!
+                        }
+                    current.symbol == 12 or current.symbol == 13
+                        -> if {
+                            pointerSize => size!
+                            pointerSize => align!
+                            0 => status!
+                        }
+                    current.symbol == 17 or current.symbol == 18 -> if {
+                        # %sollang.mapped_bytes is { ptr, i64, ptr, i64, i1 }.
+                        40 => size!
+                        8 => align!
+                        0 => status!
+                    }
+                    current.symbol == 24 -> if {
+                        # %sollang.source_text is { ptr, i64, ptr, i64 }.
+                        32 => size!
+                        8 => align!
+                        0 => status!
+                    }
+                    current.symbol == 25 -> if {
+                        # Range stores two Int bounds on every target.
+                        8 => size!
+                        4 => align!
+                        0 => status!
+                    }
+                }
+            }
+            current.kind == 2 -> if {
+                # Slices are { ptr, i64 }, not two pointer-width words.
+                16 => size!
+                8 => align!
+                0 => status!
+            }
+            current.kind == 3 -> if {
+                # Dynamic arrays are { ptr, i64, i64 }.
+                24 => size!
+                8 => align!
+                0 => status!
+            }
+            current.kind == 12 -> if {
+                # Canonical layout describes the inline value, independently
+                # of the descriptor used by local collection expressions.
+                1 => status!
+            }
+            current.kind == 5 -> if {
+                24 => size!
+                8 => align!
+                0 => status!
+            }
+            current.kind == 13 -> if {
+                # The byte storage is part of the value. Resolve its key and
+                # value layout before publishing the aggregate size.
+                1 => status!
+            }
+            current.kind == 14 -> if {
+                ((current.length + 63) / 64) * 8 => size!
+                8 => align!
+                0 => status!
+            }
+            current.kind == 6 -> if {
+                pointerSize => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 8 -> if {
+                pointerSize => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 9 -> if {
+                pointerSize => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 7 -> if {
+                current.origin == 4 and current.symbol == 2
+                    -> if {
+                        pointerSize * 2 => size!
+                        pointerSize => align!
+                        0 => status!
+                    }
+                current.origin == 4 and (current.symbol == 3 or current.symbol == 4)
+                    -> if {
+                        pointerSize * 3 => size!
+                        pointerSize => align!
+                        0 => status!
+                    }
+                current.origin == 4 and current.symbol == 5
+                    -> if {
+                        24 => size!
+                        8 => align!
+                        0 => status!
+                    }
+                current.origin == 4 and (current.symbol == 6 or current.symbol == 7)
+                    -> if {
+                        24 => size!
+                        8 => align!
+                        0 => status!
+                    }
+            }
+        }
+        sizes! -> push(size!)
+        aligns! -> push(align!)
+        statuses! -> push(status!)
+        seedIndex! + 1 => seedIndex!
+    }
+    true => changed!
+    changed! -> while {
+        false => changed!
+        0 => typeIndex!
+        typeIndex! < (request.types -> len) -> while {
+            statuses![typeIndex!] == 1 -> if {
+                request.types[typeIndex!] => current
+                current.kind == 4 -> if {
+                    current.first >= 0 and statuses![current.first] == 0 and current.length >= 0
+                        -> if {
+                            request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => elementLayout
+                            elementLayout.size * current.length => sizes![typeIndex!]
+                            elementLayout.align => aligns![typeIndex!]
+                            0 => statuses![typeIndex!]
+                            true => changed!
+                        }
+                }
+                current.kind == 12 -> if {
+                    current.first >= 0 and statuses![current.first] == 0 and current.length >= 0
+                        -> if {
+                            request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => boundedElementLayout
+                            boundedElementLayout.size -> boundedArrayStorageLayout(boundedElementLayout.align, current.length) => boundedLayout
+                            boundedLayout.size => sizes![typeIndex!]
+                            boundedLayout.align => aligns![typeIndex!]
+                            boundedLayout.status => statuses![typeIndex!]
+                            true => changed!
+                        }
+                }
+                current.kind == 13 -> if {
+                    current.length > 0 and current.first >= 0 and current.second >= 0
+                        and statuses![current.first] == 0 and statuses![current.second] == 0
+                        -> if {
+                            request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => dictionaryKeyLayout
+                            request.types[current.second] -> aggregateFieldLayout(sizes![current.second], aligns![current.second]) => dictionaryValueLayout
+                            current.length -> boundedDictionaryLayout(dictionaryKeyLayout.size, dictionaryKeyLayout.align, dictionaryValueLayout.size, dictionaryValueLayout.align) => dictionaryLayout
+                            dictionaryLayout.size => sizes![typeIndex!]
+                            dictionaryLayout.align => aligns![typeIndex!]
+                            0 => statuses![typeIndex!]
+                            true => changed!
+                        }
+                }
+                current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1)
+                    -> if {
+                        current.first >= 0 and statuses![current.first] == 0 and (current.second < 0 or statuses![current.second] == 0)
+                            -> if {
+                                request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => firstPayloadLayout
+                                firstPayloadLayout.size => payloadSize!
+                                current.second >= 0 -> if {
+                                    request.types[current.second] -> aggregateFieldLayout(sizes![current.second], aligns![current.second]) => secondPayloadLayout
+                                    secondPayloadLayout.size > payloadSize! -> if { secondPayloadLayout.size => payloadSize! }
+                                }
+                                (payloadSize! + 7) / 8 => payloadWords
+                                8 + payloadWords * 8 => sizes![typeIndex!]
+                                8 => aligns![typeIndex!]
+                                0 => statuses![typeIndex!]
+                                true => changed!
+                            }
+                    }
+                (current.kind == 1 and (current.origin == 0 or current.origin == 2)) or current.kind == 10
+                    -> if {
+                        0 => size!
+                        1 => align!
+                        true => ready!
+                        0 => fieldIndex!
+                        fieldIndex! < (request.fields -> len) -> while {
+                            request.fields[fieldIndex!] => field
+                            false => fieldBelongs!
+                            field.ownerType == typeIndex! -> if { true => fieldBelongs! }
+                            field.ownerType >= 0
+                                and field.ownerType < (request.types -> len)
+                                and current.kind == 1
+                                -> if {
+                                    request.types[field.ownerType] => fieldOwner
+                                    fieldOwner.kind == 1
+                                        and fieldOwner.module == current.module
+                                        and fieldOwner.symbol == current.symbol
+                                        -> if { true => fieldBelongs! }
+                                }
+                            field.status == 0 and fieldBelongs!
+                                -> if {
+                                    field.fieldType < 0 or statuses![field.fieldType] != 0
+                                        -> if { false => ready! } else {
+                                            request.types[field.fieldType] -> aggregateFieldLayout(sizes![field.fieldType], aligns![field.fieldType]) => fieldLayout
+                                            fieldLayout.align > align! -> if { fieldLayout.align => align! }
+                                            ((size! + fieldLayout.align - 1) / fieldLayout.align) * fieldLayout.align => size!
+                                            size! + fieldLayout.size => size!
+                                        }
+                                }
+                            fieldIndex! + 1 => fieldIndex!
+                        }
+                        ready! -> if {
+                            ((size! + align! - 1) / align!) * align! => sizes![typeIndex!]
+                            align! => aligns![typeIndex!]
+                            0 => statuses![typeIndex!]
+                            true => changed!
+                        }
+                    }
+            }
+            typeIndex! + 1 => typeIndex!
+        }
+    }
+    TypeLayouts { sizes: sizes!, aligns: aligns!, statuses: statuses! } => result
+    result
+}
+
+public layoutOf request: TypeLayoutRequest -> TypeLayout {
+    request.typeId => requestedType
+    request -> layoutsFor => layouts
+    requestedType >= 0 and requestedType < (layouts.sizes -> len)
+        -> if {
+            TypeLayout { size: layouts.sizes[requestedType], align: layouts.aligns[requestedType], status: layouts.statuses[requestedType] }
+        } else {
+            TypeLayout { size: -1, align: 1, status: 2 }
+        }
+}
