@@ -1,0 +1,103 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_name_policy as names
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+syntheticVariantName table: Text, ordinal: Int -> Result<Field, TypeUniverseCaptureError> {
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    0 => current!
+    cursor! <= (table -> len) -> while {
+        cursor! == (table -> len) or (table -> byte(cursor!)) == '|'
+            -> if {
+                current! == ordinal -> if {
+                    table -> slice(start!, cursor! - start!) -> textField => field
+                    Result<Field, TypeUniverseCaptureError>.Ok(field) -> return
+                }
+                current! + 1 => current!
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart)
+}
+
+appendSyntheticMember records: mut TypeUniverseRecords, category: plans.KeyPart, typeId: Int, ordinal: Int, name: ref Field, memberType: Int -> Result<Unit, TypeUniverseCaptureError> {
+    ordinal -> integerLayoutField => position
+    memberType -> integerLayoutField => valueType
+    name -> copyIdentityField => memberName
+    (category -> plans.partIndex) == (plans.KeyPart.TypeStructs -> plans.partIndex)
+        -> if { plans.KeyPart.TypeFieldIndex } else { plans.KeyPart.TypeVariantTag } => indexPart
+    [Binding { part: indexPart, fields: [position,; ~] }, Binding { part: plans.KeyPart.MemberName, fields: [memberName,; ~] }, Binding { part: plans.KeyPart.MemberType, fields: [valueType,; ~] }; ~] => bindings
+    records -> appendTypeUniverseRecord(category, typeId, ordinal, bindings) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) }
+        Ok { Result<Unit, TypeUniverseCaptureError>.Ok }
+    }
+}
+
+# Selection and finalized recursive ABI facts come from the committed caller.
+# Display names and builtin variant labels use the same compiled C# policy.
+public appendSyntheticTypeUniverseRecord records: mut TypeUniverseRecords, context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, finalSizes: ref [Int; ~], finalStatuses: ref [Int; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (semantic.types -> len) or (finalSizes -> len) != (semantic.types -> len) or (finalStatuses -> len) != (semantic.types -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    semantic.types[typeId] => type
+    type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1) => enumeration
+    not enumeration and type.kind != 10 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    finalStatuses[typeId] != 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    context -> resolvedTypeNameField(package, semantic, typeId) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+        Ok(field) { field }
+    } => name
+    typeId -> integerLayoutField => identity
+    "" -> textField => module
+    [Binding { part: plans.KeyPart.TypeId, fields: [identity,; ~] }, Binding { part: plans.KeyPart.TypeName, fields: [name,; ~] }, Binding { part: plans.KeyPart.TypeModule, fields: [module,; ~] }; ~] => bindings!
+    enumeration -> if {
+        finalSizes[typeId] < 8 or (finalSizes[typeId] - 8) % 8 != 0
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        (finalSizes[typeId] - 8) / 8 -> integerLayoutField => words
+        bindings! -> push(Binding { part: plans.KeyPart.TypePayloadWords, fields: [words,; ~] })
+    }
+    enumeration -> if { plans.KeyPart.TypeEnums } else { plans.KeyPart.TypeStructs } => category
+    records -> appendTypeUniverseRecord(category, typeId, -1, bindings!) -> when {
+        Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
+        Ok {}
+    }
+    enumeration -> if {
+        type.symbol == 0 -> if { names.optionVariantNames() } else { names.resultVariantNames() } => labels
+        0 => ordinal!
+        ordinal! < 2 -> while {
+            labels -> syntheticVariantName(ordinal!) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                Ok(field) { field }
+            } => label
+            type.first => payload!
+            type.symbol == 0 and ordinal! == 0 -> if { -1 => payload! }
+            type.symbol == 1 and ordinal! == 1 -> if { type.second => payload! }
+            records -> appendSyntheticMember(category, typeId, ordinal!, label, payload!) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                Ok {}
+            }
+            ordinal! + 1 => ordinal!
+        }
+    } else {
+        semantic.fields -> each field {
+            field.ownerType == typeId -> if {
+                field.labelToken >= 0 -> if {
+                    context -> typeTokenText(package, field.sourceModule, field.labelToken) -> textField
+                } else {
+                    "_" -> textField => label!
+                    field.ordinal -> integerLayoutField => ordinal
+                    ordinal.bytes -> each byte { label!.bytes -> push(byte) }
+                    label!
+                } => label
+                records -> appendSyntheticMember(category, typeId, field.ordinal, label, field.fieldType) -> when {
+                    Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                    Ok {}
+                }
+            }
+        }
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}

@@ -1293,11 +1293,13 @@ internal sealed partial class TypeDefinitionTable
         return id;
     }
 
+    private static readonly string[] OptionVariantNames = Shared.TypeNamePolicy.OptionVariantNames().Split('|');
+
     internal static BoundEnumDefinition CreateOptionDefinition(
         TypeId id, TypeId valueType, string displayName, int payloadWords) =>
         new(id, displayName, Array.AsReadOnly<BoundEnumVariant>([
-            new BoundEnumVariant("None", null, 0, 0, 0),
-            new BoundEnumVariant("Some", valueType, 1, 0, 0)
+            new BoundEnumVariant(OptionVariantNames[0], null, 0, 0, 0),
+            new BoundEnumVariant(OptionVariantNames[1], valueType, 1, 0, 0)
         ]), payloadWords, 0, 0, ModuleName: "", IsPublic: true);
 
     private void RegisterOptionShape(TypeId id, TypeId valueType, string displayName)
@@ -1322,11 +1324,13 @@ internal sealed partial class TypeDefinitionTable
         return id;
     }
 
+    private static readonly string[] ResultVariantNames = Shared.TypeNamePolicy.ResultVariantNames().Split('|');
+
     internal static BoundEnumDefinition CreateResultDefinition(
         TypeId id, TypeId okType, TypeId errorType, string displayName, int payloadWords) =>
         new(id, displayName, Array.AsReadOnly<BoundEnumVariant>([
-            new BoundEnumVariant("Ok", okType, 0, 0, 0),
-            new BoundEnumVariant("Err", errorType, 1, 0, 0)
+            new BoundEnumVariant(ResultVariantNames[0], okType, 0, 0, 0),
+            new BoundEnumVariant(ResultVariantNames[1], errorType, 1, 0, 0)
         ]), payloadWords, 0, 0, ModuleName: "", IsPublic: true);
 
     private void RegisterResultShape(TypeId id, TypeId okType, TypeId errorType, string displayName)

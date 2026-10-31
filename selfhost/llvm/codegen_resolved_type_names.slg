@@ -1,0 +1,172 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_name_policy as names
+
+appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => spellings
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical < 0 or canonical >= (spellings -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    spellings[canonical] => spelling
+    names.builtinDisplayOverrides() => table
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    cursor! <= (table -> len) -> while {
+        cursor! == (table -> len) or (table -> byte(cursor!)) == '|'
+            -> if {
+                start! => equal!
+                equal! < cursor! and (table -> byte(equal!)) != '='
+                    -> while { equal! + 1 => equal! }
+                equal! < cursor! and (table -> slice(start!, equal! - start!)) == spelling
+                    -> if {
+                        table -> slice(equal! + 1, cursor! - equal! - 1) -> appendTypeText(bytes)
+                        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+                    }
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    spelling -> appendTypeText(bytes)
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}
+
+appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    semantic.types[typeId] => type
+    type.kind == 1 -> if {
+        type.origin == 1 -> if { type.symbol -> appendResolvedBuiltinName(bytes) -> return }
+        type.module < 0 or type.module >= (package.ranges -> len) or type.module >= (context.identities -> len)
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        type.symbol < 0 or type.symbol >= package.ranges[type.module].symbolCount
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        context.sourceModule => previous
+        type.module => context.sourceModule
+        context -> declarationNameField(package, type.symbol) => name
+        type.origin == 16 -> if {
+            "dyn " -> appendTypeText(bytes)
+            [UInt8; ~] => module!
+            context -> appendTypeNamespace(package, type.module, context.identities[type.module], module!)
+            (module! -> len) > 0 -> if {
+                module! -> each byte { bytes -> push(byte) }
+                bytes -> push('.')
+            }
+        }
+        previous => context.sourceModule
+        name.bytes -> each byte { bytes -> push(byte) }
+        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+    }
+    type.kind == 10 -> if {
+        "(" -> appendTypeText(bytes)
+        type.first => current!
+        0 => ordinal!
+        current! >= 0 -> while {
+            current! >= (semantic.types -> len) or ordinal! >= (semantic.types -> len)
+                -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            semantic.types[current!] => field
+            field.kind != 11 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            ordinal! > 0 -> if { ", " -> appendTypeText(bytes) }
+            -1 => label!
+            -1 => source!
+            semantic.fields -> each member {
+                member.ownerType == typeId and member.ordinal == ordinal!
+                    -> if { member.labelToken => label!
+                        member.sourceModule => source! }
+            }
+            label! >= 0 -> if {
+                source! < 0 or source! >= (package.ranges -> len)
+                    -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                context -> typeTokenText(package, source!, label!) -> appendTypeText(bytes)
+                ": " -> appendTypeText(bytes)
+            }
+            context -> appendResolvedTypeName(package, semantic, field.first, visiting, bytes) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                Ok {}
+            }
+            field.second => current!
+            ordinal! + 1 => ordinal!
+        }
+        ordinal! != type.length -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        ")" -> appendTypeText(bytes)
+        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+    }
+    type.kind == 14 -> if {
+        "BitSet<" -> appendTypeText(bytes)
+        type.length -> integerLayoutField => length
+        length.bytes -> each byte { bytes -> push(byte) }
+        ">" -> appendTypeText(bytes)
+        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+    }
+    type.kind == 7 -> if {
+        ["Option<", "Result<", "Task<", "Stream<", "EventStream<", "Set<", "Deque<", "BinaryHeap<"] => prefixes
+        type.origin != 4 or type.symbol < 0 or type.symbol >= (prefixes -> len)
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        prefixes[type.symbol] -> appendTypeText(bytes)
+        context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes) -> when {
+            Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+            Ok {}
+        }
+        type.symbol == 1 -> if {
+            ", " -> appendTypeText(bytes)
+            context -> appendResolvedTypeName(package, semantic, type.second, visiting, bytes) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                Ok {}
+            }
+        }
+        ">" -> appendTypeText(bytes)
+        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+    }
+    type.kind == 6 or type.kind == 8 -> if {
+        type.kind == 6 -> if { "box " } else { "ref " } -> appendTypeText(bytes)
+        context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes) -> return
+    }
+    type.kind == 2 or type.kind == 3 or type.kind == 4 or type.kind == 12 or type.kind == 5 or type.kind == 13
+        -> if {
+            type.kind == 5 or type.kind == 13 => dictionary
+            dictionary -> if { "{" } else { "[" } -> appendTypeText(bytes)
+            context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes) -> when {
+                Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                Ok {}
+            }
+            dictionary -> if {
+                ": " -> appendTypeText(bytes)
+                context -> appendResolvedTypeName(package, semantic, type.second, visiting, bytes) -> when {
+                    Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+                    Ok {}
+                }
+            }
+            type.kind == 3 -> if { "; ~" -> appendTypeText(bytes) }
+            type.kind == 4 or type.kind == 12 or type.kind == 13
+                -> if {
+                    type.kind == 4 -> if { "; " } else { "; <=" } -> appendTypeText(bytes)
+                    type.length -> integerLayoutField => length
+                    length.bytes -> each byte { bytes -> push(byte) }
+                }
+            dictionary -> if { "}" } else { "]" } -> appendTypeText(bytes)
+            Result<Unit, TypeUniverseCaptureError>.Ok -> return
+        }
+    Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType)
+}
+
+appendResolvedTypeName context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (semantic.types -> len)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    visiting[typeId] or semantic.types[typeId].status != 0 or semantic.types[typeId].containsParameter
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    true => visiting[typeId]
+    context -> appendResolvedTypeNameCore(package, semantic, typeId, visiting, bytes) => result
+    false => visiting[typeId]
+    result
+}
+
+public resolvedTypeNameField context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int -> Result<Field, TypeUniverseCaptureError> {
+    [Bool; ~] => visiting!
+    semantic.types -> each _ { visiting! -> push(false) }
+    [UInt8; ~] => bytes!
+    context -> appendResolvedTypeName(package, semantic, typeId, visiting!, bytes!) -> when {
+        Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
+        Ok {}
+    }
+    Field { bytes: bytes! } => field
+    Result<Field, TypeUniverseCaptureError>.Ok(field)
+}

@@ -16551,40 +16551,7 @@ internal sealed partial class SemanticCompiler
             return $"EventStream<{FormatType(eventStreamValue)}>";
         }
 
-        return type switch
-        {
-            BoundType.Unit => "Unit",
-            BoundType.Text => "Text",
-            BoundType.Int => "Int",
-            BoundType.Int8 => "Int8",
-            BoundType.Int16 => "Int16",
-            BoundType.Int64 => "Long",
-            BoundType.UInt8 => "UInt8",
-            BoundType.UInt16 => "UInt16",
-            BoundType.UInt32 => "UInt32",
-            BoundType.UInt64 => "UInt64",
-            BoundType.Size => "Size",
-            BoundType.UIntSize => "UIntSize",
-            BoundType.CodePoint => "CodePoint",
-            BoundType.Arena => "Arena",
-            BoundType.SourceText => "SourceText",
-            BoundType.Arguments => "Arguments",
-            BoundType.MappedBytes => "MappedBytes",
-            BoundType.MutableMappedBytes => "MutableMappedBytes",
-            BoundType.Float32 => "Float",
-            BoundType.Float64 => "Double",
-            BoundType.Bool => "Bool",
-            BoundType.IntSlice => "[Int]",
-            BoundType.StaticIntArray => "[Int; N]",
-            BoundType.StaticTextArray => "[Text; N]",
-            BoundType.DynamicIntArray => "[Int; ~]",
-            BoundType.IntDictionaryView => "{Int: Int}",
-            BoundType.IntDictionary => "{Int: Int}",
-            BoundType.GenericParameter => "generic parameter",
-            BoundType.SecondaryGenericParameter => "secondary generic parameter",
-            BoundType.TertiaryGenericParameter => "tertiary generic parameter",
-            _ => type.ToString()
-        };
+        return SemanticTypeDisplayNames.Builtin(type);
     }
 
     private bool IsContainerType(BoundType type)

@@ -64,20 +64,74 @@ def verify_nominal(lines, records, builtin_ids):
         assert observed == [[str(part) for part in row] for row in expected], (name, observed, expected)
 
 
+def verify_synthetic(lines, records, builtin, pair):
+    definitions = []
+    for labels, types in [(['head', 'tail'], [builtin['Int64'], builtin['Float32']]),
+                          (['_0', '_1'], [builtin['Int'], builtin['Bool']])]:
+        rows = [r for r in records['Structs'] if r['IsProduct']
+                and [f['Name'] for f in r['Fields']] == labels
+                and [f['Type'] for f in r['Fields']] == types]
+        assert len(rows) == 1
+        definitions += rows
+    for payloads in ([None, pair], [pair, builtin['Bool']]):
+        rows = [r for r in records['Enums'] if [v['PayloadType'] for v in r['Variants']] == payloads]
+        assert len(rows) == 1
+        definitions += rows
+    expected = {r['Name']: r for r in definitions}
+    identities = {-1: -1}
+    observed = {}
+    current = None
+    for line in lines:
+        if line.startswith('builtin:'):
+            _, name, identity = line.split(':')
+            identities[int(identity)] = builtin[name]
+        elif line.startswith('declared:Pair:'):
+            identities[int(line.split(':')[-1])] = pair
+        elif line.startswith('struct:') or line.startswith('enum:'):
+            kind, identity, rest = line.split(':', 2)
+            parts = rest.rsplit(':', 1 if kind == 'struct' else 2)
+            name = parts[0]
+            assert name in expected and name not in observed
+            identities[int(identity)] = expected[name]['Id']
+            observed[name] = [[kind, identity, *parts]]
+            current = observed[name]
+        elif line == 'end-definition':
+            assert current is not None
+            current = None
+        else:
+            assert current is not None
+            current.append(line.split(':'))
+    assert current is None and set(observed) == set(expected)
+    for name, rows in observed.items():
+        reference = expected[name]
+        for row in rows:
+            coordinate = 1 if row[0] in ('struct', 'enum') else 3
+            row[coordinate] = str(identities[int(row[coordinate])])
+        if rows[0][0] == 'struct':
+            target = [['struct', reference['Id'], name, reference['ModuleName']]]
+            target += [['field', f['Index'], f['Name'], f['Type']] for f in reference['Fields']]
+        else:
+            target = [['enum', reference['Id'], name, reference['ModuleName'], reference['PayloadWords']]]
+            target += [['variant', v['Tag'], v['Name'], v['PayloadType'] if v['PayloadType'] is not None else -1]
+                       for v in reference['Variants']]
+        assert rows == [[str(p) for p in row] for row in target], (name, rows, target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-result', type=Path, required=True)
     parser.add_argument('--fixture-directory', type=Path)
-    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal'], default='reference')
+    parser.add_argument('--probe', choices=['reference', 'storage', 'nominal', 'synthetic'], default='reference')
     parser.add_argument('--emitter', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     compiler, output = args.compiler.resolve(), args.output.resolve()
     probe = ROOT / {'reference': 'scripts/probes/codegen-registered-types',
                     'storage': 'scripts/probes/codegen-storage-capture',
-                    'nominal': 'scripts/probes/codegen-nominal-capture'}[args.probe]
+                    'nominal': 'scripts/probes/codegen-nominal-capture',
+                    'synthetic': 'scripts/probes/codegen-synthetic-capture'}[args.probe]
     fixtures = sorted((args.fixture_directory or probe).glob('*.slg'))
     assert fixtures and (args.probe == 'nominal' or len(fixtures) == 1)
     manifest = probe / 'sources.txt'
@@ -89,7 +143,7 @@ def main():
         assert reference['inputHashes'][str(fixture.resolve())] == sha(fixture)
     records = reference['cases'][0]['observation']['records']
     declaration = {'reference': 'cache.registered', 'storage': 'cache.storage',
-                   'nominal': 'cache.nominal'}[args.probe] + '.Pair'
+                   'nominal': 'cache.nominal', 'synthetic': 'cache.synthetic'}[args.probe] + '.Pair'
     pair = [r['Id'] for r in records['Structs'] if r['Name'] == declaration]
     assert len(pair) == 1
     assert len([r for r in records['References'] if r['ElementType'] == pair[0]]) == 1
@@ -140,6 +194,8 @@ def main():
                     assert lines[0] == lines[1], lines
                 elif args.probe == 'nominal':
                     verify_nominal(lines, records, reference['cases'][0]['observation']['builtinTypeIds'])
+                elif args.probe == 'synthetic':
+                    verify_synthetic(lines, records, reference['cases'][0]['observation']['builtinTypeIds'], pair[0])
                 else:
                     assert len(lines) == 8, lines
                     observed = {}
