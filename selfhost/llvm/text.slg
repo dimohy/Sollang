@@ -4,6 +4,8 @@ import sollang.compiler.ast as ast
 import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.ir.stream as streamIr
 import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.codegen_units as codegenUnits
+import sys.process as process
 import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.number_format as numberFormat
@@ -35,7 +37,50 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
     context -> emitCoreWithEntry(state, true)
 }
 
+prepareCodegenFunctionGroups context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Result<codegenUnits.FunctionGroups, codegenUnits.FunctionGroupError> {
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => words!
+    0 => source!
+    source! < (context.sources -> len) -> while {
+        words! -> len => start
+        starts! -> push(start)
+        context.sources[source!] -> modules.appendLogicalNameWords(context.modules[source!], context.ranges[source!], context.tokens, words!)
+        lengths! -> push((words! -> len) - start)
+        source! + 1 => source!
+    }
+    codegenUnits.ModuleNames { starts: starts!, lengths: lengths!, words: words! } => names
+    [codegenUnits.ModuleFunction; ~] => functions!
+    0 => index!
+    index! < (context.ir -> len) -> while {
+        context.ir[index!].kind == 0
+            and (index! -> nativeFunctionReachable(state))
+            and not (context.ir[index!] -> isIntrinsicDeclaration)
+            and not (context.ir[index!] -> isComFunction(context, state))
+            and not (index! -> isStreamFunctionIr(context, state))
+            -> if { functions! -> push(codegenUnits.ModuleFunction { functionIndex: index!, sourceIndex: context.ir[index!].sourceModule }) }
+        index! + 1 => index!
+    }
+    functions! -> codegenUnits.planFunctions(names)
+}
+
+emitCodegenFunction functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState, usesAes: Bool -> Int uses Console, Process {
+    usesAes and (functionIndex -> isAes128EncryptBlockFunction(context, state))
+        -> if { functionIndex -> emitAes128FunctionSet(context, state) -> return }
+    functionIndex -> emitFunction(context, state)
+}
+
 emitCoreWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool -> Unit uses Console, Process {
+    context -> prepareCodegenFunctionGroups(state) -> when {
+        Ok(groups) { context -> emitCoreFunctionGroupsWithEntry(state, emitEntry, groups) }
+        Err(_) {
+            "; sollang compiler invariant: invalid codegen function grouping" -> println
+            process.exit(1)
+        }
+    }
+}
+
+emitCoreFunctionGroupsWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, groups: ref codegenUnits.FunctionGroups -> Unit uses Console, Process {
     context -> emitCorePreambleFeatures(false, state) => coreFeatures
     context -> emitRuntimeTaskResultCompletionFunctions(state)
     coreFeatures.usesArguments => usesArguments
@@ -43,39 +88,9 @@ emitCoreWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitte
     coreFeatures.usesComInterop => usesComInterop
     context -> usesAes128CpuSpecialization(state) => usesAes128Specialization
     context.pointerBitWidth / 8 => entryPointerAlignment
-    [Int; ~] => regularFunctionIndicesBeforeEntry!
-    [Int; ~] => regularFunctionIndicesAfterEntry!
-    [Int; ~] => aesFunctionIndicesBeforeEntry!
-    [Int; ~] => aesFunctionIndicesAfterEntry!
-    false => functionEntrySeen!
-    0 => functionIndexCollect!
-    functionIndexCollect! < (context.ir -> len) -> while {
-        context.ir[functionIndexCollect!].kind == 11
-            -> if { true => functionEntrySeen! }
-        context.ir[functionIndexCollect!].kind == 0
-            and (functionIndexCollect! -> nativeFunctionReachable(state))
-            and not (context.ir[functionIndexCollect!] -> isIntrinsicDeclaration)
-            and not (context.ir[functionIndexCollect!] -> isComFunction(context, state))
-            and not (functionIndexCollect! -> isStreamFunctionIr(context, state))
-            -> if {
-                usesAes128Specialization and (functionIndexCollect! -> isAes128EncryptBlockFunction(context, state))
-                    -> if {
-                        functionEntrySeen! -> if { aesFunctionIndicesAfterEntry! -> push(functionIndexCollect!) } else { aesFunctionIndicesBeforeEntry! -> push(functionIndexCollect!) }
-                    } else {
-                        functionEntrySeen! -> if { regularFunctionIndicesAfterEntry! -> push(functionIndexCollect!) } else { regularFunctionIndicesBeforeEntry! -> push(functionIndexCollect!) }
-                    }
-            }
-        functionIndexCollect! + 1 => functionIndexCollect!
-    }
-    regularFunctionIndicesBeforeEntry! -> parallel functionEmitIndex {
-        functionEmitIndex -> emitFunction(context, state)
-    } => functionEmissionStatusesBeforeEntry
-    0 => aesFunctionIndex!
-    aesFunctionIndex! < (aesFunctionIndicesBeforeEntry! -> len)
-        -> while {
-            aesFunctionIndicesBeforeEntry![aesFunctionIndex!] -> emitAes128FunctionSet(context, state) => aesFunctionEnd
-            aesFunctionIndex! + 1 => aesFunctionIndex!
-        }
+    groups.functions -> parallel functionEmitIndex {
+        functionEmitIndex -> emitCodegenFunction(context, state, usesAes128Specialization)
+    } => functionEmissionStatuses
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function
@@ -143,15 +158,6 @@ emitCoreWithEntry context: ref emitterContext.EmitContext, state: ref CoreEmitte
             functionIndex! + 1 => functionIndex!
         }
     }
-    regularFunctionIndicesAfterEntry! -> parallel functionEmitIndex {
-        functionEmitIndex -> emitFunction(context, state)
-    } => functionEmissionStatusesAfterEntry
-    0 => aesFunctionIndex!
-    aesFunctionIndex! < (aesFunctionIndicesAfterEntry! -> len)
-        -> while {
-            aesFunctionIndicesAfterEntry![aesFunctionIndex!] -> emitAes128FunctionSet(context, state) => aesFunctionEnd
-            aesFunctionIndex! + 1 => aesFunctionIndex!
-        }
     # Keep attribute group zero authoritative. LLVM assigns group zero to
     # llvm.trap when this line is absent, which would make every runtime helper
     # carrying #0 cold+noreturn and lets O1 miscompile returning platform calls.

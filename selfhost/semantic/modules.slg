@@ -23,6 +23,20 @@ public struct ImportEdge {
     public aliasToken: Int
 }
 
+public appendLogicalNameWords source: Text, identity: ModuleIdentity, range: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~], words: mut [UInt64; ~] -> Unit {
+    range.tokenStart + range.tokenCount => tokenEnd
+    tokens -> nextPathToken(range.tokenStart, tokenEnd, identity) => index!
+    index! < tokenEnd -> while {
+        tokens[index!] => token
+        UIntSize(0) => offset!
+        offset! < token.span.length -> while {
+            words -> push(UInt64(source -> byte(token.span.start + offset!)))
+            offset! + 1 => offset!
+        }
+        tokens -> nextPathToken(index! + 1, tokenEnd, identity) => index!
+    }
+}
+
 # Namespace trivia does not participate in parsed module identity. Keep the
 # token comparison after the hash prefilter so collisions never grant access.
 nextPathToken tokens: ref [syntax.SyntaxToken; ~], cursor: Int, tokenEnd: Int, identity: ModuleIdentity -> Int {

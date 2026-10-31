@@ -1,0 +1,26 @@
+import sollang.compiler.llvm.codegen_units as codegen
+
+main {
+    # The two retained identities share FNV hash 7277044346553309121.
+    # The larger ordinal name arrives first; the second source name is split.
+    "abageakabaiaaaaccacaalahabacbcaa" => text
+    [UInt64; ~] => words!
+    UIntSize(0) => index!
+    index! < (text -> len) -> while {
+        words! -> push(UInt64(text -> byte(index!)))
+        index! + 1 => index!
+    }
+    codegen.ModuleNames { starts: [16, 0, 0; ~], lengths: [16, 16, 16; ~], words: words! } => names
+    [codegen.ModuleFunction { functionIndex: 22, sourceIndex: 0 },
+    codegen.ModuleFunction { functionIndex: 11, sourceIndex: 1 },
+    codegen.ModuleFunction { functionIndex: 33, sourceIndex: 2 }; ~]
+        -> codegen.planFunctions(names) -> when {
+            Ok(plan) {
+                (plan.sources -> len) == 2 and plan.sources[0] == 1 and plan.sources[1] == 0 => distinctAndOrdered
+                (plan.functions -> len) == 3 and plan.functions[0] == 11 and plan.functions[1] == 33 and plan.functions[2] == 22 => functionsOrdered
+                "collision=$distinctAndOrdered" -> println
+                "functions=$functionsOrdered" -> println
+            }
+            Err(_) { "unexpected-error" -> println }
+        }
+}

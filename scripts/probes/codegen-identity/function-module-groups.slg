@@ -1,0 +1,56 @@
+import sollang.compiler.llvm.codegen_units as codegen
+
+same left: [Int; ~], right: [Int; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+rejected result: Result<codegen.FunctionGroups, codegen.FunctionGroupError> -> Bool {
+    result -> when {
+        Err(_) => true
+        Ok(_) => false
+    }
+}
+
+main {
+    "cache.alphacache.betacache.alpha" => text
+    [UInt64; ~] => words!
+    UIntSize(0) => byteIndex!
+    byteIndex! < (text -> len) -> while {
+        words! -> push(UInt64(text -> byte(byteIndex!)))
+        byteIndex! + 1 => byteIndex!
+    }
+    codegen.ModuleNames { starts: [0, 11, 21, 32; ~], lengths: [11, 10, 11, 0; ~], words: words! } => names
+    [codegen.ModuleFunction { functionIndex: 10, sourceIndex: 0 },
+    codegen.ModuleFunction { functionIndex: 20, sourceIndex: 1 },
+    codegen.ModuleFunction { functionIndex: 30, sourceIndex: 2 },
+    codegen.ModuleFunction { functionIndex: 40, sourceIndex: 3 }; ~] => functions
+    functions -> codegen.planFunctions(names) -> when {
+        Ok(plan) {
+            "sources=$(plan.sources -> same([3, 1, 0; ~]))" -> println
+            "starts=$(plan.starts -> same([0, 1, 2; ~]))" -> println
+            "lengths=$(plan.lengths -> same([1, 1, 2; ~]))" -> println
+            "functions=$(plan.functions -> same([40, 20, 10, 30; ~]))" -> println
+        }
+        Err(_) { "unexpected-error" -> println }
+    }
+    [codegen.ModuleFunction; ~] -> codegen.planFunctions(names) -> when {
+        Ok(plan) { "empty=$((plan.sources -> len) == 0 and (plan.functions -> len) == 0)" -> println }
+        Err(_) { "unexpected-error" -> println }
+    }
+    [codegen.ModuleFunction { functionIndex: 1, sourceIndex: 4 }; ~]
+        -> codegen.planFunctions(names) -> rejected => invalidSource
+    "invalid-source=$invalidSource" -> println
+    [codegen.ModuleFunction { functionIndex: -1, sourceIndex: 0 }; ~]
+        -> codegen.planFunctions(names) -> rejected => invalidFunction
+    "invalid-function=$invalidFunction" -> println
+    codegen.ModuleNames { starts: [0; ~], lengths: [1; ~], words: [255; ~] } => invalidNames
+    [codegen.ModuleFunction { functionIndex: 1, sourceIndex: 0 }; ~]
+        -> codegen.planFunctions(invalidNames) -> rejected => invalidUtf8
+    "invalid-utf8=$invalidUtf8" -> println
+}

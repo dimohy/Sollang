@@ -310,25 +310,9 @@ appendNamespaceWords package: ref analysis.PackageAnalysis, identity: modules.Mo
     words -> len => lengthIndex
     words -> push(0)
     package.ranges[identity.sourceIndex] => sourceRange
-    sourceRange.tokenStart => tokenIndex!
-    sourceRange.tokenStart + sourceRange.tokenCount => tokenEnd
-    tokenIndex! < tokenEnd -> while {
-        package.tokens[tokenIndex!] => token
-        token.span.start >= identity.pathStart + identity.pathLength
-            -> if { tokenEnd => tokenIndex! } else {
-                token.span.start >= identity.pathStart
-                    and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
-                    -> if {
-                        UIntSize(0) => byteIndex!
-                        byteIndex! < token.span.length -> while {
-                            package.sources[identity.sourceIndex] -> byte(token.span.start + byteIndex!) => value
-                            words -> push(UInt64(value))
-                            byteIndex! + 1 => byteIndex!
-                        }
-                    }
-                tokenIndex! + 1 => tokenIndex!
-            }
-    }
+    package.sources[identity.sourceIndex] -> len => sourceLength
+    package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    source -> modules.appendLogicalNameWords(identity, sourceRange, package.tokens, words)
     UInt64((words -> len) - lengthIndex - 1) => words[lengthIndex]
 }
 

@@ -12,6 +12,10 @@ Set-StrictMode -Version Latest
 $repo = Split-Path -Parent $PSScriptRoot
 $expectedRoot = [IO.Path]::GetFullPath((Join-Path $repo 'examples/regression/expected')) + [IO.Path]::DirectorySeparatorChar
 $canonical = Join-Path $repo 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'
+$compilerEntryManifests = @{
+    (Join-Path $repo 'tests/Sollang.ExampleTests/Fixtures/selfhost-stage2-driver.sources.txt') = 'tests/Sollang.ExampleTests/Fixtures/selfhost-stage2-driver.slg'
+    (Join-Path $repo 'selfhost/browser_driver.sources.txt') = 'selfhost/browser_driver.slg'
+}
 $headers = @{}
 $hashes = @{}
 function Repository-Path([string]$entry) {
@@ -58,10 +62,14 @@ if ($Manifest.Count -eq 0) { throw 'SOURCE_MANIFEST_SELECTION_EMPTY' }
 $plans = [Collections.Generic.List[object]]::new()
 foreach ($entry in $Manifest) {
     $path = Repository-Path $entry
-    if (-not $path.StartsWith($expectedRoot, [StringComparison]::OrdinalIgnoreCase) -or -not $path.EndsWith('.sources.txt', [StringComparison]::Ordinal) -or -not [IO.File]::Exists($path)) {
+    $isCompilerEntry = $compilerEntryManifests.ContainsKey($path)
+    if ((-not $path.StartsWith($expectedRoot, [StringComparison]::OrdinalIgnoreCase) -and -not $isCompilerEntry) -or -not $path.EndsWith('.sources.txt', [StringComparison]::Ordinal) -or -not [IO.File]::Exists($path)) {
         throw "SOURCE_MANIFEST_OUTPUT_INVALID: $entry"
     }
     $original = @([IO.File]::ReadAllLines($path) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($isCompilerEntry -and ($original.Count -eq 0 -or $original[0].Replace('\', '/') -cne $compilerEntryManifests[$path])) {
+        throw "SOURCE_MANIFEST_ENTRY_ROOT_INVALID: $entry"
+    }
     $selected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $modules = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $required = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)

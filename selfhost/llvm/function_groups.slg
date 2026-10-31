@@ -1,0 +1,96 @@
+namespace sollang.compiler.llvm.codegen_units
+
+public struct ModuleFunction {
+    public functionIndex: Int
+    public sourceIndex: Int
+}
+
+public struct ModuleNames {
+    public starts: [Int; ~]
+    public lengths: [Int; ~]
+    public words: [UInt64; ~]
+}
+
+public enum FunctionGroupError { Names, Source, Function, Identity }
+
+public struct FunctionGroups {
+    public sources: [Int; ~]
+    public starts: [Int; ~]
+    public lengths: [Int; ~]
+    public functions: [Int; ~]
+}
+
+# A logical namespace may span several source files. Group by its full identity,
+# order groups by the shared hash/ordinal rule, and retain source function order.
+public planFunctions functions: [ModuleFunction; ~], names: ref ModuleNames -> Result<FunctionGroups, FunctionGroupError> {
+    names.starts -> len => sourceCount
+    sourceCount != (names.lengths -> len) -> if { Result<FunctionGroups, FunctionGroupError>.Err(FunctionGroupError.Names) -> return }
+    [Int; ~] => representatives!
+    [UInt64; ~] => hashes!
+    [Int; ~] => memberships!
+    functions -> each function {
+        function.functionIndex < 0
+            -> if { Result<FunctionGroups, FunctionGroupError>.Err(FunctionGroupError.Function) -> return }
+        function.sourceIndex < 0 or function.sourceIndex >= sourceCount
+            -> if { Result<FunctionGroups, FunctionGroupError>.Err(FunctionGroupError.Source) -> return }
+        names.starts[function.sourceIndex] => start
+        names.lengths[function.sourceIndex] => length
+        names.words -> identityUtf8Valid(start, length)
+            -> unless { Result<FunctionGroups, FunctionGroupError>.Err(FunctionGroupError.Identity) -> return }
+        names.words -> identityHash(start, length) => hash
+        -1 => group!
+        0 => index!
+        index! < (representatives! -> len) -> while {
+            representatives![index!] => source
+            hashes![index!] == hash and (names.words -> identityOrder(start, length, names.starts[source], names.lengths[source])) == 0
+                -> if {
+                    index! => group!
+                    break
+                }
+            index! + 1 => index!
+        }
+        group! < 0 -> if {
+            representatives! -> len => group!
+            representatives! -> push(function.sourceIndex)
+            hashes! -> push(hash)
+        }
+        memberships! -> push(group!)
+    }
+    [Int; ~] => sources!
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [Int; ~] => orderedFunctions!
+    [Bool; ~] => emitted!
+    representatives! -> each source { emitted! -> push(false) }
+    0 => count!
+    count! < (representatives! -> len) -> while {
+        -1 => selected!
+        0 => candidate!
+        candidate! < (representatives! -> len) -> while {
+            not emitted![candidate!] -> if {
+                selected! < 0 -> if { candidate! => selected! } else {
+                    representatives![candidate!] => left
+                    representatives![selected!] => right
+                    (hashes![candidate!] -> lessUnsigned(hashes![selected!]))
+                        or (hashes![candidate!] == hashes![selected!]
+                        and (names.words -> identityOrder(names.starts[left], names.lengths[left], names.starts[right], names.lengths[right])) == -1)
+                        -> if { candidate! => selected! }
+                }
+            }
+            candidate! + 1 => candidate!
+        }
+        true => emitted![selected!]
+        sources! -> push(representatives![selected!])
+        orderedFunctions! -> len => start
+        starts! -> push(start)
+        0 => index!
+        index! < (functions -> len) -> while {
+            memberships![index!] == selected!
+                -> if { orderedFunctions! -> push(functions[index!].functionIndex) }
+            index! + 1 => index!
+        }
+        lengths! -> push((orderedFunctions! -> len) - start)
+        count! + 1 => count!
+    }
+    Result<FunctionGroups, FunctionGroupError>.Ok(FunctionGroups { sources: sources!, starts: starts!, lengths: lengths!, functions: orderedFunctions! })
+}
