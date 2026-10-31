@@ -23,10 +23,10 @@ emitPlannedJunctionValue expressionIndex: Int, ownerIndex: Int, context: ref emi
 emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.streamPlan.junctions[junctionIndex] => junction
     junctionIndex -> junctionRequiresConcurrent(context, state) => concurrent
-    "define internal void @sollang_join_$(junction.junctionIr -> valueNameId(state))_drop(ptr %context, i1 %destroy) {" -> println
+    "define internal void @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_drop(ptr %context, i1 %destroy) {" -> println
     "entry:" -> println
     concurrent -> if {
-        "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+        "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
         "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
         "  call void @sollang_stream_join_runtime_cancel(ptr %runtime)" -> println
     }
@@ -34,7 +34,7 @@ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitCont
     cancelInput! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + cancelInput!] => input
         context.types[input.typeId].symbol == 4 -> if {
-            "  %cancel_stream_address$(cancelInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(cancelInput!)" -> println
+            "  %cancel_stream_address$(cancelInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(cancelInput!)" -> println
             "  %cancel_stream$(cancelInput!) = load %sollang.event_stream, ptr %cancel_stream_address$(cancelInput!), align 8" -> println
             "  %cancel_context$(cancelInput!) = extractvalue %sollang.event_stream %cancel_stream$(cancelInput!), 0" -> println
             "  %cancel_callback$(cancelInput!) = extractvalue %sollang.event_stream %cancel_stream$(cancelInput!), 2" -> println
@@ -59,7 +59,7 @@ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitCont
         context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
         "%sollang.stream" => producerType!
         context.types[input.typeId].symbol == 4 -> if { "%sollang.event_stream" => producerType! }
-        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(dropInput!)" -> println
+        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(dropInput!)" -> println
         "  %drop_stream$(dropInput!) = load $(producerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
         "  %drop_context$(dropInput!) = extractvalue $(producerType!) %drop_stream$(dropInput!), 0" -> println
         "  %drop_callback$(dropInput!) = extractvalue $(producerType!) %drop_stream$(dropInput!), 2" -> println
@@ -79,7 +79,7 @@ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitCont
 emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[junction.junctionIr] => junctionNode
-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
+    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
     0 => contextField!
     contextField! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
@@ -89,9 +89,9 @@ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
         contextField! + 1 => contextField!
     }
     "i32 }" -> println
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
     "entry:" -> println
-    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
     "  %cursor = load i32, ptr %cursor_address, align 4" -> println
     "  switch i32 %cursor, label %done [" -> println
     0 => switchInput!
@@ -107,7 +107,7 @@ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
         "input$(nextInput!):" -> println
-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
         "  %stream$(nextInput!) = load $(producerType!), ptr %stream_address$(nextInput!), align 8" -> println
         "  %stream_context$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 0" -> println
         "  %stream_next$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 1" -> println
@@ -129,7 +129,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[junction.junctionIr] => junctionNode
     context.types[junctionNode.typeId].first => outputElementType
-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
+    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
     0 => contextField!
     contextField! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
@@ -139,9 +139,9 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
         contextField! + 1 => contextField!
     }
     "i1 }" -> println
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
     "entry:" -> println
-    "  %done_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %done_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
     "  %done_value = load i1, ptr %done_address, align 1" -> println
     junction.inputCount > 0 -> if { "  br i1 %done_value, label %done, label %input0" -> println } else { "  br label %done" -> println }
     0 => nextInput!
@@ -151,7 +151,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
         "input$(nextInput!):" -> println
-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
         "  %stream$(nextInput!) = load $(producerType!), ptr %stream_address$(nextInput!), align 8" -> println
         "  %stream_context$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 0" -> println
         "  %stream_next$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 1" -> println
@@ -194,7 +194,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
 
 emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.streamPlan.junctions[junctionIndex] => junction
-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
+    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
     0 => contextField!
     contextField! < junction.inputCount -> while {
         "%sollang.stream, " -> print
@@ -207,7 +207,7 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
         activeField! + 1 => activeField!
     }
     " }" -> println
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
     "entry:" -> println
     "  %checked_slot = alloca i32, align 4" -> println
     "  store i32 0, ptr %checked_slot, align 4" -> println
@@ -217,7 +217,7 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
     "  %all_checked = icmp sge i32 %checked, $(junction.inputCount)" -> println
     "  br i1 %all_checked, label %done, label %dispatch" -> println
     "dispatch:" -> println
-    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
     "  %cursor = load i32, ptr %cursor_address, align 4" -> println
     "  switch i32 %cursor, label %done [" -> println
     0 => switchInput!
@@ -229,11 +229,11 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
     0 => nextInput!
     nextInput! < junction.inputCount -> while {
         "input$(nextInput!):" -> println
-        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1 + nextInput!)" -> println
+        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1 + nextInput!)" -> println
         "  %active$(nextInput!) = load i1, ptr %active_address$(nextInput!), align 1" -> println
         "  br i1 %active$(nextInput!), label %pull$(nextInput!), label %advance$(nextInput!)" -> println
         "pull$(nextInput!):" -> println
-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
         "  %stream$(nextInput!) = load %sollang.stream, ptr %stream_address$(nextInput!), align 8" -> println
         "  %stream_context$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 0" -> println
         "  %stream_next$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 1" -> println
@@ -263,7 +263,7 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[junction.junctionIr] => junctionNode
     context.types[junctionNode.typeId].first => outputElementType
-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
+    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
     0 => streamField!
     streamField! < junction.inputCount -> while {
         "%sollang.stream, " -> print
@@ -283,10 +283,10 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
         cacheField! + 1 => cacheField!
     }
     " }" -> println
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
     "entry:" -> println
-    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
-    "  %state_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %state_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
     "  %state = load i32, ptr %state_address, align 4" -> println
     "  switch i32 %state, label %done [" -> println
     "    i32 0, label %initial0" -> println
@@ -297,11 +297,11 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
         context.streamPlan.junctionInputs[junction.inputStart + initialInput!] => input
         context.types[input.typeId].first => inputElementType
         "initial$(initialInput!):" -> println
-        "  %initial_stream_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(initialInput!)" -> println
+        "  %initial_stream_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(initialInput!)" -> println
         "  %initial_stream$(initialInput!) = load %sollang.stream, ptr %initial_stream_address$(initialInput!), align 8" -> println
         "  %initial_context$(initialInput!) = extractvalue %sollang.stream %initial_stream$(initialInput!), 0" -> println
         "  %initial_next$(initialInput!) = extractvalue %sollang.stream %initial_stream$(initialInput!), 1" -> println
-        "  %cache_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + initialInput!)" -> println
+        "  %cache_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + initialInput!)" -> println
         "  %initial_has$(initialInput!) = call i1 %initial_next$(initialInput!)(ptr %initial_context$(initialInput!), ptr %cache_address$(initialInput!))" -> println
         "  br i1 %initial_has$(initialInput!), label %initial_value$(initialInput!), label %initial_failed" -> println
         "initial_value$(initialInput!):" -> println
@@ -334,15 +334,15 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
     0 => nextInput!
     nextInput! < junction.inputCount -> while {
         "input$(nextInput!):" -> println
-        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2 + nextInput!)" -> println
+        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2 + nextInput!)" -> println
         "  %active$(nextInput!) = load i1, ptr %active_address$(nextInput!), align 1" -> println
         "  br i1 %active$(nextInput!), label %pull$(nextInput!), label %advance$(nextInput!)" -> println
         "pull$(nextInput!):" -> println
-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
         "  %stream$(nextInput!) = load %sollang.stream, ptr %stream_address$(nextInput!), align 8" -> println
         "  %stream_context$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 0" -> println
         "  %stream_next$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 1" -> println
-        "  %update_cache$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + nextInput!)" -> println
+        "  %update_cache$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + nextInput!)" -> println
         "  %has_value$(nextInput!) = call i1 %stream_next$(nextInput!)(ptr %stream_context$(nextInput!), ptr %update_cache$(nextInput!))" -> println
         "  br i1 %has_value$(nextInput!), label %value$(nextInput!), label %exhausted$(nextInput!)" -> println
         "value$(nextInput!):" -> println
@@ -364,7 +364,7 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
     snapshotField! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + snapshotField!] => snapshotInput
         context.types[snapshotInput.typeId].first => snapshotType
-        "  %snapshot_cache$(snapshotField!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + snapshotField!)" -> println
+        "  %snapshot_cache$(snapshotField!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + snapshotField!)" -> println
         "  %snapshot_value$(snapshotField!) = load " -> print
         snapshotType -> writeSemanticTypeId(context, state)
         ", ptr %snapshot_cache$(snapshotField!), align $(context.typeAligns[snapshotType])" -> println
@@ -406,7 +406,7 @@ junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitC
 
 emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.streamPlan.junctions[junctionIndex] => junction
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_pull(ptr %context, i32 %index, ptr %slot) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_pull(ptr %context, i32 %index, ptr %slot) {" -> println
     "entry:" -> println
     "  switch i32 %index, label %invalid [" -> println
     0 => switchInput!
@@ -422,7 +422,7 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
         "input$(pullInput!):" -> println
-        "  %stream_address$(pullInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(pullInput!)" -> println
+        "  %stream_address$(pullInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(pullInput!)" -> println
         "  %stream$(pullInput!) = load $(producerType!), ptr %stream_address$(pullInput!), align 8" -> println
         "  %stream_context$(pullInput!) = extractvalue $(producerType!) %stream$(pullInput!), 0" -> println
         "  %stream_next$(pullInput!) = extractvalue $(producerType!) %stream$(pullInput!), 1" -> println
@@ -435,7 +435,7 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
     "  unreachable" -> println
     "}" -> println
 
-    "define internal void @sollang_join_$(junction.junctionIr -> valueNameId(state))_drop_item(ptr %context, i32 %index, ptr %slot) {" -> println
+    "define internal void @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_drop_item(ptr %context, i32 %index, ptr %slot) {" -> println
     "entry:" -> println
     false => hasOwnedInput!
     0 => ownedSearch!
@@ -486,7 +486,7 @@ emitConcurrentJunctionDrop junctionIndex: Int, context: ref emitterContext.EmitC
 
 emitConcurrentMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.streamPlan.junctions[junctionIndex] => junction
-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
+    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
     0 => contextField!
     contextField! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
@@ -495,9 +495,9 @@ emitConcurrentMergeJunctionRuntime junctionIndex: Int, context: ref emitterConte
     }
     "ptr }" -> println
     junctionIndex -> emitConcurrentJunctionInputCallbacks(context, state)
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
     "entry:" -> println
-    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
     "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
     "  %index_address = alloca i32, align 4" -> println
     "  %kind_address = alloca i32, align 4" -> println
@@ -537,7 +537,7 @@ emitConcurrentLatestSnapshot junctionIndex: Int, snapshotOrdinal: Int, context: 
     snapshotInput! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + snapshotInput!] => input
         context.types[input.typeId].first => elementType
-        "  %snapshot$(snapshotOrdinal)_cache$(snapshotInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + snapshotInput!)" -> println
+        "  %snapshot$(snapshotOrdinal)_cache$(snapshotInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + snapshotInput!)" -> println
         "  %snapshot$(snapshotOrdinal)_value$(snapshotInput!) = load " -> print
         elementType -> writeSemanticTypeId(context, state)
         ", ptr %snapshot$(snapshotOrdinal)_cache$(snapshotInput!), align $(context.typeAligns[elementType])" -> println
@@ -554,7 +554,7 @@ emitConcurrentLatestSnapshot junctionIndex: Int, snapshotOrdinal: Int, context: 
 
 emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.streamPlan.junctions[junctionIndex] => junction
-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
+    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
     0 => contextField!
     contextField! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
@@ -571,9 +571,9 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
     }
     " }" -> println
     junctionIndex -> emitConcurrentJunctionInputCallbacks(context, state)
-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
     "entry:" -> println
-    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
     "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
     "  %index_address = alloca i32, align 4" -> println
     "  %kind_address = alloca i32, align 4" -> println
@@ -598,7 +598,7 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
         "input$(eventInput!):" -> println
         "  %kind$(eventInput!) = load i32, ptr %kind_address, align 4" -> println
         "  %is_value$(eventInput!) = icmp eq i32 %kind$(eventInput!), 0" -> println
-        "  %initialized_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2), i32 $(eventInput!)" -> println
+        "  %initialized_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2), i32 $(eventInput!)" -> println
         "  br i1 %is_value$(eventInput!), label %value$(eventInput!), label %completion$(eventInput!)" -> println
         "completion$(eventInput!):" -> println
         "  %was_initialized$(eventInput!) = load i1, ptr %initialized_address$(eventInput!), align 1" -> println
@@ -611,7 +611,7 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
         "  %item$(eventInput!) = load " -> print
         elementType -> writeSemanticTypeId(context, state)
         ", ptr %slot$(eventInput! -> valueNameId(state)), align $(context.typeAligns[elementType])" -> println
-        "  %cache$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + eventInput!)" -> println
+        "  %cache$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + eventInput!)" -> println
         "  store " -> print
         elementType -> writeSemanticTypeId(context, state)
         " %item$(eventInput!), ptr %cache$(eventInput!), align $(context.typeAligns[elementType])" -> println
@@ -620,13 +620,13 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
         "  br i1 %already_initialized$(eventInput!), label %ready_check$(eventInput!), label %initialize$(eventInput!)" -> println
         "initialize$(eventInput!):" -> println
         "  store i1 true, ptr %initialized_address$(eventInput!), align 1" -> println
-        "  %initialized_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+        "  %initialized_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
         "  %initialized_count$(eventInput!) = load i32, ptr %initialized_count_address$(eventInput!), align 4" -> println
         "  %next_initialized_count$(eventInput!) = add i32 %initialized_count$(eventInput!), 1" -> println
         "  store i32 %next_initialized_count$(eventInput!), ptr %initialized_count_address$(eventInput!), align 4" -> println
         "  br label %ready_check$(eventInput!)" -> println
         "ready_check$(eventInput!):" -> println
-        "  %current_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+        "  %current_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
         "  %current_count$(eventInput!) = load i32, ptr %current_count_address$(eventInput!), align 4" -> println
         "  %ready$(eventInput!) = icmp eq i32 %current_count$(eventInput!), $(junction.inputCount)" -> println
         "  br i1 %ready$(eventInput!), label %snapshot$(eventInput!), label %wait" -> println
@@ -689,7 +689,7 @@ emitJunctionInputValue expressionIndex: Int, junctionIndex: Int, inputOrdinal: I
 emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[expressionIndex] => expression
-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
     0 => inputIndex!
@@ -699,43 +699,43 @@ emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, 
         context.types[input.typeId] => inputType
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
         "  store $(producerType!) " -> print
         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
-    "  %join$(expressionIndex -> valueNameId(state))_done = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_done = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store i1 false, ptr %join$(expressionIndex -> valueNameId(state))_done, align 1" -> println
     "%sollang.stream" => resultType!
     context.types[expression.typeId].symbol == 4
         -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
+    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
 }
 
 emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[expressionIndex] => expression
-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
         expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
         "  store %sollang.stream " -> print
         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
-    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_cursor, align 4" -> println
     0 => activeIndex!
     activeIndex! < junction.inputCount -> while {
-        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1 + activeIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1 + activeIndex!)" -> println
         "  store i1 true, ptr %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!), align 1" -> println
         activeIndex! + 1 => activeIndex!
     }
@@ -743,33 +743,33 @@ emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int
     context.types[expression.typeId].symbol == 4
         -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
+    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
 }
 
 emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[expressionIndex] => expression
-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
         expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
         "  store %sollang.stream " -> print
         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
-    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_cursor, align 4" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_state = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_state = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_state, align 4" -> println
     0 => activeIndex!
     activeIndex! < junction.inputCount -> while {
-        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2 + activeIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2 + activeIndex!)" -> println
         "  store i1 true, ptr %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!), align 1" -> println
         activeIndex! + 1 => activeIndex!
     }
@@ -777,13 +777,13 @@ emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
     context.types[expression.typeId].symbol == 4
         -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
+    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
 }
 
 emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.junctions[junctionIndex] => junction
-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
     "  %join$(expressionIndex -> valueNameId(state))_allocated = icmp ne ptr %join$(expressionIndex -> valueNameId(state))_context, null" -> println
@@ -799,18 +799,18 @@ emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex
         context.types[input.typeId] => inputType
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
         "  store $(producerType!) " -> print
         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
     junction.policy == 3 -> if {
-        "  %join$(expressionIndex -> valueNameId(state))_initialized_count = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_initialized_count = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
         "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_initialized_count, align 4" -> println
         0 => initializedInput!
         initializedInput! < junction.inputCount -> while {
-            "  %join$(expressionIndex -> valueNameId(state))_initialized$(initializedInput!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2), i32 $(initializedInput!)" -> println
+            "  %join$(expressionIndex -> valueNameId(state))_initialized$(initializedInput!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2), i32 $(initializedInput!)" -> println
             "  store i1 false, ptr %join$(expressionIndex -> valueNameId(state))_initialized$(initializedInput!), align 1" -> println
             initializedInput! + 1 => initializedInput!
         }
@@ -835,24 +835,24 @@ emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex
         }
         sizeInput! + 1 => sizeInput!
     }
-    "  %join$(expressionIndex -> valueNameId(state))_runtime = call ptr @sollang_stream_join_runtime_create(i32 $(junction.inputCount), i64 %join$(expressionIndex -> valueNameId(state))_item_max$(junction.inputCount - 1), ptr @sollang_join_$(expressionIndex -> valueNameId(state))_pull, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop_item, ptr %join$(expressionIndex -> valueNameId(state))_context)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_runtime = call ptr @sollang_stream_join_runtime_create(i32 $(junction.inputCount), i64 %join$(expressionIndex -> valueNameId(state))_item_max$(junction.inputCount - 1), ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_pull, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop_item, ptr %join$(expressionIndex -> valueNameId(state))_context)" -> println
     "  %join$(expressionIndex -> valueNameId(state))_runtime_created = icmp ne ptr %join$(expressionIndex -> valueNameId(state))_runtime, null" -> println
     "  br i1 %join$(expressionIndex -> valueNameId(state))_runtime_created, label %join$(expressionIndex -> valueNameId(state))_runtime_ready, label %join$(expressionIndex -> valueNameId(state))_runtime_failed" -> println
     "join$(expressionIndex -> valueNameId(state))_runtime_failed:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "join$(expressionIndex -> valueNameId(state))_runtime_ready:" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_runtime_address = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_runtime_address = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store ptr %join$(expressionIndex -> valueNameId(state))_runtime, ptr %join$(expressionIndex -> valueNameId(state))_runtime_address, align 8" -> println
     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue %sollang.event_stream poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
+    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
 }
 
 emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[expressionIndex] => expression
-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
     0 => inputIndex!
@@ -862,18 +862,18 @@ emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
         context.types[input.typeId] => inputType
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
         "  store $(producerType!) " -> print
         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
-    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_cursor, align 4" -> println
     "%sollang.stream" => resultType!
     context.types[expression.typeId].symbol == 4
         -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
+    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
+    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
 }

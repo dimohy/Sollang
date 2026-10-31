@@ -3,10 +3,21 @@ namespace sollang.compiler.llvm.text
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.scoped_names as scopedNames
 
-# IR indices remain addresses into the shared tables. Printed SSA values use
-# disjoint source scopes and source-local ordinals, so another source's body
-# growth cannot rename an unchanged value or alias an inlined source value.
+# SSA values belong to emitted function partitions, including their copied
+# inline bodies. Source coordinates cannot participate in local numbering.
 prepareValueNames context: ref emitterContext.EmitContext -> [UInt64; ~] {
+    [UInt64; ~] => names!
+    UInt64(0) => ordinal!
+    context.ir -> each node {
+        node.kind == 0 or node.kind == 11 -> if { 0 => ordinal! }
+        names! -> push(ordinal!)
+        ordinal! + 1 => ordinal!
+    }
+    names!
+}
+
+# Program-wide auxiliary symbols need a separate namespace from local SSA.
+prepareGlobalValueNames context: ref emitterContext.EmitContext -> [UInt64; ~] {
     [UInt64; ~] => counters!
     0 => source!
     source! <= (context.sources -> len) -> while {
@@ -25,6 +36,10 @@ prepareValueNames context: ref emitterContext.EmitContext -> [UInt64; ~] {
 
 valueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
     state.frozenValueNames[nodeIndex]
+}
+
+globalValueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
+    state.frozenGlobalValueNames[nodeIndex]
 }
 
 # A declaration's complete key owns the printed symbol. Physical source and

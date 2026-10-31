@@ -5969,6 +5969,9 @@ hexadecimal preserves word boundaries and avoids hash-only identity. Function
 definitions, calls, runtime wrappers and specialization base names must use the
 same prepared key. This does not replace the independent naming rules for SSA
 values, type layouts, private globals or specialization arguments.
+SSA value and label ordinals are local to the emitted function partition.
+Program-wide auxiliary symbols use a separate naming domain; resetting local
+counters must not merge string literals, static storage or callback symbols.
 
 Checked compilation admits syntax and library declarations before semantic
 lowering. A rejected function signature stops before call-context resolution

@@ -1,0 +1,929 @@
+diff --git a/docs/SPEC.md b/docs/SPEC.md
+index 4cf8f1913..4dfe53037 100644
+--- a/docs/SPEC.md
++++ b/docs/SPEC.md
+@@ -5969,6 +5969,9 @@ hexadecimal preserves word boundaries and avoids hash-only identity. Function
+ definitions, calls, runtime wrappers and specialization base names must use the
+ same prepared key. This does not replace the independent naming rules for SSA
+ values, type layouts, private globals or specialization arguments.
++SSA value and label ordinals are local to the emitted function partition.
++Program-wide auxiliary symbols use a separate naming domain; resetting local
++counters must not merge string literals, static storage or callback symbols.
+ 
+ Checked compilation admits syntax and library declarations before semantic
+ lowering. A rejected function signature stops before call-context resolution
+diff --git a/selfhost/llvm/text/call_arguments.slg b/selfhost/llvm/text/call_arguments.slg
+index a384ebc62..1768615d3 100644
+--- a/selfhost/llvm/text/call_arguments.slg
++++ b/selfhost/llvm/text/call_arguments.slg
+@@ -965,7 +965,7 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal:
+                                                     } else {
+                                                         argument -> sourceToken(context, state) => textArgumentToken
+                                                         Int(TextLiteralRequest { sourceModule: argument.sourceModule, token: textArgumentToken } -> textLiteralLength(context, state)) => textArgumentLength
+-                                                        "{ ptr @sollang_str_$(argumentIndex -> valueNameId(state)), i64 $textArgumentLength }" -> print
++                                                        "{ ptr @sollang_str_$(argumentIndex -> globalValueNameId(state)), i64 $textArgumentLength }" -> print
+                                                     }
+                                             } else {
+                                                 argument.kind == 3 or argument.kind == 4 -> if {
+diff --git a/selfhost/llvm/text/container_control.slg b/selfhost/llvm/text/container_control.slg
+index d9e55c7d7..db3b03824 100644
+--- a/selfhost/llvm/text/container_control.slg
++++ b/selfhost/llvm/text/container_control.slg
+@@ -74,7 +74,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
+                 value.kind == 2 -> if {
+                     value -> sourceToken(context, state) => whileTextToken
+                     Int(TextLiteralRequest { sourceModule: value.sourceModule, token: whileTextToken } -> textLiteralLength(context, state)) => whileTextLength
+-                    "{ ptr @sollang_str_$(request.nodeIndex -> valueNameId(state)), i64 $whileTextLength }" -> print
++                    "{ ptr @sollang_str_$(request.nodeIndex -> globalValueNameId(state)), i64 $whileTextLength }" -> print
+                 } else {
+                     value.kind == 3 or value.kind == 4 -> if {
+                         value -> sourceToken(context, state) => valueToken
+diff --git a/selfhost/llvm/text/containers.slg b/selfhost/llvm/text/containers.slg
+index c75cdff49..3819bee4e 100644
+--- a/selfhost/llvm/text/containers.slg
++++ b/selfhost/llvm/text/containers.slg
+@@ -1687,7 +1687,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
+                 materializeInterpolations[materializeCopyIndex] => materializeCopyRoot
+                 "  %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_target = getelementptr i8, ptr %materialize$(materializeIndex -> valueNameId(state))_target, i64 %materialize$(materializeIndex -> valueNameId(state))_copy_offset" -> print
+                 materializeCopyOrdinal! * 2 -> writeDecimalLine
+-                "  %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> valueNameId(state)), i64 $(materializeCopyRoot.literalStart)" -> println
++                "  %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> globalValueNameId(state)), i64 $(materializeCopyRoot.literalStart)" -> println
+                 "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_target, ptr %materialize$(materializeIndex -> valueNameId(state))_literal$(materializeCopyOrdinal!)_source, i64 $(materializeCopyRoot.literalLength), i1 false)" -> println
+                 "  %materialize$(materializeIndex -> valueNameId(state))_copy_offset" -> print
+                 materializeCopyOrdinal! * 2 + 1 -> writeDecimal
+@@ -1709,7 +1709,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
+         materializeSuffixRawLength - materializeSuffixStart! => materializeSuffixLength
+         "  %materialize$(materializeIndex -> valueNameId(state))_suffix_target = getelementptr i8, ptr %materialize$(materializeIndex -> valueNameId(state))_target, i64 %materialize$(materializeIndex -> valueNameId(state))_copy_offset" -> print
+         materializeRootCount * 2 -> writeDecimalLine
+-        "  %materialize$(materializeIndex -> valueNameId(state))_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> valueNameId(state)), i64 $(materializeSuffixStart!)" -> println
++        "  %materialize$(materializeIndex -> valueNameId(state))_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex -> globalValueNameId(state)), i64 $(materializeSuffixStart!)" -> println
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex -> valueNameId(state))_suffix_target, ptr %materialize$(materializeIndex -> valueNameId(state))_suffix_source, i64 $(materializeSuffixLength), i1 false)" -> println
+     } else {
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex -> valueNameId(state))_target, ptr %materialize$(materializeIndex -> valueNameId(state))_source_ptr, i64 %materialize$(materializeIndex -> valueNameId(state))_source_length, i1 false)" -> println
+diff --git a/selfhost/llvm/text/control_region_expressions.slg b/selfhost/llvm/text/control_region_expressions.slg
+index ffaa72962..49ae26a48 100644
+--- a/selfhost/llvm/text/control_region_expressions.slg
++++ b/selfhost/llvm/text/control_region_expressions.slg
+@@ -239,7 +239,7 @@ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrde
+     regionNode.kind == 2 -> if {
+         regionNode -> sourceToken(context, state) => regionTextToken
+         TextLiteralRequest { sourceModule: regionNode.sourceModule, token: regionTextToken } -> textLiteralLength(context, state) => regionTextLength
+-        "  %v$(regionNodeIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex -> valueNameId(state)), 0" -> println
++        "  %v$(regionNodeIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex -> globalValueNameId(state)), 0" -> println
+         "  %v$(regionNodeIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(regionNodeIndex -> valueNameId(state))_ptr, i64 $regionTextLength, 1" -> println
+         regionNodeIndex -> emitComparisonTextProducer(ownerIndex, context, state)
+     }
+@@ -485,7 +485,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
+                         } else { regionEmittedFieldValue.kind == 2 -> if {
+                                 regionEmittedFieldValue -> sourceToken(context, state) => regionFieldTextToken
+                                 Int(TextLiteralRequest { sourceModule: regionEmittedFieldValue.sourceModule, token: regionFieldTextToken } -> textLiteralLength(context, state)) => regionFieldTextLength
+-                                "{ ptr @sollang_str_$(regionEmittedFieldIndex -> valueNameId(state)), i64 $regionFieldTextLength }" -> print
++                                "{ ptr @sollang_str_$(regionEmittedFieldIndex -> globalValueNameId(state)), i64 $regionFieldTextLength }" -> print
+                             } else {
+                                 regionEmittedFieldValue.kind == 3 or regionEmittedFieldValue.kind == 4
+                                     -> if {
+@@ -1959,7 +1959,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
+             regionReadPrompt.kind == 2 -> if {
+                 regionReadPrompt -> sourceToken(context, state) => regionReadPromptToken
+                 Int(TextLiteralRequest { sourceModule: regionReadPrompt.sourceModule, token: regionReadPromptToken } -> textLiteralLength(context, state)) => regionReadPromptLength
+-                "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex -> valueNameId(state)), i64 $regionReadPromptLength)" -> println
++                "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex -> globalValueNameId(state)), i64 $regionReadPromptLength)" -> println
+             } else {
+                 "  %v$(regionNodeIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+             }
+@@ -2007,7 +2007,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                     regionExpressionInterpolation[regionExpressionRootSearch!] => regionExpressionRoot
+                                     regionExpressionRoot.sourceToken == regionArgument.payloadToken and regionExpressionRoot.parent < 0
+                                         -> if {
+-                                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $(regionExpressionRoot.literalStart)" -> println
++                                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $(regionExpressionRoot.literalStart)" -> println
+                                             regionNode.symbol == -116 or regionNode.symbol == -117
+                                                 -> if {
+                                                     "  call void @sollang_runtime_eprint(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_literal$(regionExpressionSegment!), i64 $(regionExpressionRoot.literalLength), i1 false)" -> println
+@@ -2385,15 +2385,15 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                     regionExpressionRootSearch! + 1 => regionExpressionRootSearch!
+                                 }
+                             UIntSize(regionArgumentLength) - regionExpressionSuffixStart! => regionExpressionSuffixLength
+-                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $(regionExpressionSuffixStart!)" -> println
++                            "  %v$(regionNodeIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $(regionExpressionSuffixStart!)" -> println
+                             regionNode.symbol == -116 or regionNode.symbol == -117
+                                 -> if { "  call void @sollang_runtime_eprint(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print } else {
+                                     "  call void @sollang_runtime_print(ptr %v$(regionNodeIndex -> valueNameId(state))_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print
+                                 }
+                         } else {
+                             regionNode.symbol == -116 or regionNode.symbol == -117
+-                                -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $regionArgumentLength, i1 " -> print } else {
+-                                    "  call void @sollang_runtime_print(ptr @sollang_str_$(regionArgumentIndex -> valueNameId(state)), i64 $regionArgumentLength, i1 " -> print
++                                -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $regionArgumentLength, i1 " -> print } else {
++                                    "  call void @sollang_runtime_print(ptr @sollang_str_$(regionArgumentIndex -> globalValueNameId(state)), i64 $regionArgumentLength, i1 " -> print
+                                 }
+                         }
+                         regionNode.symbol == -102 or regionNode.symbol == -116
+diff --git a/selfhost/llvm/text/core_calls.slg b/selfhost/llvm/text/core_calls.slg
+index 94ec44207..9aba22791 100644
+--- a/selfhost/llvm/text/core_calls.slg
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -3166,7 +3166,7 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
+             roots[copyOrdinal!] => copyIndex
+             interpolations[copyIndex] => copyRoot
+             "  %$(prefix)_literal$(copyOrdinal!)_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(copyOrdinal! * 2)" -> println
+-            "  %$(prefix)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex -> valueNameId(state)), i64 $(copyRoot.literalStart)" -> println
++            "  %$(prefix)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex -> globalValueNameId(state)), i64 $(copyRoot.literalStart)" -> println
+             "  call void @llvm.memcpy.p0.p0.i64(ptr %$(prefix)_literal$(copyOrdinal!)_target, ptr %$(prefix)_literal$(copyOrdinal!)_source, i64 $(copyRoot.literalLength), i1 false)" -> println
+             "  %$(prefix)_offset$(copyOrdinal! * 2 + 1) = add i64 %$(prefix)_offset$(copyOrdinal! * 2), $(copyRoot.literalLength)" -> println
+             "  %$(prefix)_root$(copyOrdinal!)_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(copyOrdinal! * 2 + 1)" -> println
+@@ -3176,7 +3176,7 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
+         }
+         rawLength - suffixStart! => suffixLength
+         "  %$(prefix)_suffix_target = getelementptr i8, ptr %$(prefix)_buffer, i64 %$(prefix)_offset$(rootCount * 2)" -> println
+-        "  %$(prefix)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex -> valueNameId(state)), i64 $(suffixStart!)" -> println
++        "  %$(prefix)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex -> globalValueNameId(state)), i64 $(suffixStart!)" -> println
+         "  call void @llvm.memcpy.p0.p0.i64(ptr %$(prefix)_suffix_target, ptr %$(prefix)_suffix_source, i64 $(suffixLength), i1 false)" -> println
+         "  %$(prefix)_value0 = insertvalue %sollang.text poison, ptr %$(prefix)_buffer, 0" -> println
+         "  %$(prefix) = insertvalue %sollang.text %$(prefix)_value0, i64 %$(prefix)_length$(rootCount), 1" -> println
+@@ -4412,7 +4412,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
+     UIntSize(0) => suffixStart!
+     roots -> each root {
+         fragments[root] => fragment
+-        "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex -> valueNameId(state)), i64 $(fragment.literalStart)" -> println
++        "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex -> globalValueNameId(state)), i64 $(fragment.literalStart)" -> println
+         "  call void @$(writer)(ptr %$(prefix)_literal$(root), i64 $(fragment.literalLength), i1 false)" -> println
+         root -> deferredTextCaptureType(fragments, leaf.sourceModule, ownerIndex, leafIndex, context, state) => typeId
+         "  %$(prefix)_root$(root)_value = load " -> print
+@@ -4424,7 +4424,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
+     leaf -> sourceToken(context, state) => token
+     TextLiteralRequest { sourceModule: leaf.sourceModule, token: token } -> textLiteralLength(context, state) => rawLength
+     rawLength - suffixStart! => suffixLength
+-    "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex -> valueNameId(state)), i64 $(suffixStart!)" -> println
++    "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex -> globalValueNameId(state)), i64 $(suffixStart!)" -> println
+     "  call void @$(writer)(ptr %$(prefix)_suffix, i64 $(suffixLength), i1 " -> print
+     newline -> if { "true)" -> println } else { "false)" -> println }
+ }
+diff --git a/selfhost/llvm/text/core_prepare.slg b/selfhost/llvm/text/core_prepare.slg
+index e85b351af..083801290 100644
+--- a/selfhost/llvm/text/core_prepare.slg
++++ b/selfhost/llvm/text/core_prepare.slg
+@@ -586,6 +586,7 @@ prepareCoreEmitterStateWithRoots context: ref emitterContext.EmitContext, roots:
+     }
+     CoreEmitterState {
+         frozenValueNames: context -> prepareValueNames
++        frozenGlobalValueNames: context -> prepareGlobalValueNames
+         frozenCanonicalInterpolationRootByIr: canonicalRootByIr!
+         frozenDeferredTextValues: [Bool; ~]
+         frozenDeferredTextCaptureLeaves: [Bool; ~]
+diff --git a/selfhost/llvm/text/entry_expressions.slg b/selfhost/llvm/text/entry_expressions.slg
+index 67c526b44..be910a7c4 100644
+--- a/selfhost/llvm/text/entry_expressions.slg
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -1344,7 +1344,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+     entryExpression.kind == 2 -> if {
+         entryExpression -> sourceToken(context, state) => entryExpressionToken
+         TextLiteralRequest { sourceModule: entryExpression.sourceModule, token: entryExpressionToken } -> textLiteralLength(context, state) => entryExpressionLength
+-        "  %v$(entryExpressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex -> valueNameId(state)), 0" -> println
++        "  %v$(entryExpressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex -> globalValueNameId(state)), 0" -> println
+         "  %v$(entryExpressionIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(entryExpressionIndex -> valueNameId(state))_ptr, i64 $entryExpressionLength, 1" -> println
+         entryExpressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
+     }
+@@ -1466,7 +1466,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+                                 -> if {
+                                     entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
+                                     Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
+-                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex -> valueNameId(state)), i64 $entryFieldTextLength }" -> print
++                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex -> globalValueNameId(state)), i64 $entryFieldTextLength }" -> print
+                                 } else {
+                                     entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
+                                         -> if {
+@@ -2550,7 +2550,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+             entryReadPrompt.kind == 2 -> if {
+                 entryReadPrompt -> sourceToken(context, state) => entryReadPromptToken
+                 Int(TextLiteralRequest { sourceModule: entryReadPrompt.sourceModule, token: entryReadPromptToken } -> textLiteralLength(context, state)) => entryReadPromptLength
+-                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex -> valueNameId(state)), i64 $entryReadPromptLength)" -> println
++                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex -> globalValueNameId(state)), i64 $entryReadPromptLength)" -> println
+             } else {
+                 "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+             }
+@@ -2695,7 +2695,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                             entryExpressionInterpolation[entryExpressionRootSearch!] => entryExpressionRoot
+                                             entryExpressionRoot.sourceToken == runtimeArgument.payloadToken and entryExpressionRoot.parent < 0
+                                                 -> if {
+-                                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $(entryExpressionRoot.literalStart)" -> println
++                                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $(entryExpressionRoot.literalStart)" -> println
+                                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                                         -> if {
+                                                             "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!), i64 $(entryExpressionRoot.literalLength), i1 false)" -> println
+@@ -3148,7 +3148,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                             entryExpressionRootSearch! + 1 => entryExpressionRootSearch!
+                                         }
+                                     UIntSize(runtimeArgumentLength) - entryExpressionSuffixStart! => entryExpressionSuffixLength
+-                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $(entryExpressionSuffixStart!)" -> println
++                                    "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $(entryExpressionSuffixStart!)" -> println
+                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                         -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print } else {
+                                             "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print
+@@ -3218,7 +3218,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                         interpolationBindingIr! >= 0 -> if {
+                                             Int(interpolationSegmentStart! - interpolationContentStart) => interpolationPartOffset
+                                             Int(interpolationMatchStart! - interpolationSegmentStart!) => interpolationPartLength
+-                                            "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $interpolationPartOffset" -> println
++                                            "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $interpolationPartOffset" -> println
+                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                                 -> if {
+                                                     "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!), i64 $interpolationPartLength, i1 false)" -> println
+@@ -3241,15 +3241,15 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
+                                     emittedInterpolation! -> if {
+                                         Int(interpolationSegmentStart! - interpolationContentStart) => interpolationSuffixOffset
+                                         Int(interpolationContentEnd - interpolationSegmentStart!) => interpolationSuffixLength
+-                                        "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $interpolationSuffixOffset" -> println
++                                        "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $interpolationSuffixOffset" -> println
+                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
+                                             -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print } else {
+                                                 "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print
+                                             }
+                                     } else {
+                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
+-                                            -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
+-                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> valueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
++                                            -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
++                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
+                                             }
+                                     }
+                                 }
+diff --git a/selfhost/llvm/text/foundation.slg b/selfhost/llvm/text/foundation.slg
+index b920ec2f4..c8f4331d5 100644
+--- a/selfhost/llvm/text/foundation.slg
++++ b/selfhost/llvm/text/foundation.slg
+@@ -469,6 +469,7 @@ struct BodySchedulePlan {
+ }
+ struct CoreEmitterState {
+     frozenValueNames: [UInt64; ~]
++    frozenGlobalValueNames: [UInt64; ~]
+     frozenCanonicalInterpolationRootByIr: [Int; ~]
+     frozenDeferredTextValues: [Bool; ~]
+     frozenDeferredTextCaptureLeaves: [Bool; ~]
+diff --git a/selfhost/llvm/text/function_calls.slg b/selfhost/llvm/text/function_calls.slg
+index 80db4f323..5cb9a5671 100644
+--- a/selfhost/llvm/text/function_calls.slg
++++ b/selfhost/llvm/text/function_calls.slg
+@@ -115,7 +115,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+             readPrompt.kind == 2 -> if {
+                 readPrompt -> sourceToken(context, state) => readPromptToken
+                 Int(TextLiteralRequest { sourceModule: readPrompt.sourceModule, token: readPromptToken } -> textLiteralLength(context, state)) => readPromptLength
+-                "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex -> valueNameId(state)), i64 $readPromptLength)" -> println
++                "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex -> globalValueNameId(state)), i64 $readPromptLength)" -> println
+             } else {
+                 "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+             }
+@@ -178,7 +178,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                                     functionExpressionInterpolation[functionExpressionRootIndex] => functionExpressionRoot
+                                     functionExpressionRoot.sourceToken == runtimeArgument.payloadToken and functionExpressionRoot.parent < 0
+                                         -> if {
+-                                            "  %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> valueNameId(state)), i64 $(functionExpressionRoot.literalStart)" -> println
++                                            "  %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $(functionExpressionRoot.literalStart)" -> println
+                                             expression.symbol == -116 or expression.symbol == -117
+                                                 -> if {
+                                                     "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
+@@ -473,7 +473,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                                     functionExpressionRootSearch! + 1 => functionExpressionRootSearch!
+                                 }
+                             UIntSize(runtimeArgumentLength) - functionExpressionSuffixStart! => functionExpressionSuffixLength
+-                            "  %v$(expressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> valueNameId(state)), i64 $(functionExpressionSuffixStart!)" -> println
++                            "  %v$(expressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $(functionExpressionSuffixStart!)" -> println
+                             expression.symbol == -116 or expression.symbol == -117
+                                 -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print } else {
+                                     "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print
+@@ -581,7 +581,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                                     -> if {
+                                         Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationPartOffset
+                                         Int(functionInterpolationMatchStart! - functionInterpolationSegmentStart!) => functionInterpolationPartLength
+-                                        "  %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> valueNameId(state)), i64 $functionInterpolationPartOffset" -> println
++                                        "  %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $functionInterpolationPartOffset" -> println
+                                         expression.symbol == -116 or expression.symbol == -117
+                                             -> if {
+                                                 "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
+@@ -608,15 +608,15 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
+                             functionEmittedInterpolation! -> if {
+                                 Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationSuffixOffset
+                                 Int(functionInterpolationContentEnd - functionInterpolationSegmentStart!) => functionInterpolationSuffixLength
+-                                "  %v$(expressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> valueNameId(state)), i64 $functionInterpolationSuffixOffset" -> println
++                                "  %v$(expressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $functionInterpolationSuffixOffset" -> println
+                                 expression.symbol == -116 or expression.symbol == -117
+                                     -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print } else {
+                                         "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print
+                                     }
+                             } else {
+                                 expression.symbol == -116 or expression.symbol == -117
+-                                    -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(runtimeArgumentIndex -> valueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
+-                                        "  call void @sollang_runtime_print(ptr @sollang_str_$(runtimeArgumentIndex -> valueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
++                                    -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
++                                        "  call void @sollang_runtime_print(ptr @sollang_str_$(runtimeArgumentIndex -> globalValueNameId(state)), i64 $runtimeArgumentLength, i1 " -> print
+                                     }
+                             }
+                         }
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index 590ca7945..abc99e740 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -903,7 +903,7 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
+                         } else { emittedFieldValue.kind == 2 -> if {
+                                 emittedFieldValue -> sourceToken(context, state) => fieldTextToken
+                                 Int(TextLiteralRequest { sourceModule: emittedFieldValue.sourceModule, token: fieldTextToken } -> textLiteralLength(context, state)) => fieldTextLength
+-                                "{ ptr @sollang_str_$(emittedFieldIndex -> valueNameId(state)), i64 $fieldTextLength }" -> print
++                                "{ ptr @sollang_str_$(emittedFieldIndex -> globalValueNameId(state)), i64 $fieldTextLength }" -> print
+                             } else {
+                                 emittedFieldValue.kind == 3 or emittedFieldValue.kind == 4
+                                     -> if {
+diff --git a/selfhost/llvm/text/functions.slg b/selfhost/llvm/text/functions.slg
+index a9bc7605a..fe44c3735 100644
+--- a/selfhost/llvm/text/functions.slg
++++ b/selfhost/llvm/text/functions.slg
+@@ -1230,7 +1230,7 @@ staticReadonlyArrayReturnFunction valueIndex: Int, context: ref emitterContext.E
+ 
+ writeStaticReadonlyArraySymbol functionIndex: Int, literalIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.ir[functionIndex] => function
+-    "@sollang_static_array_m$(function.sourceModule)_s$(function.symbol)_v$(literalIndex -> valueNameId(state))" -> print
++    "@sollang_static_array_m$(function.sourceModule)_s$(function.symbol)_v$(literalIndex -> globalValueNameId(state))" -> print
+ }
+ 
+ writeFunctionValueName operandIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+@@ -1688,7 +1688,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+                     expression.kind == 2 -> if {
+                         expression -> sourceToken(context, state) => expressionToken
+                         TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
+-                        "  %v$(expressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex -> valueNameId(state)), 0" -> println
++                        "  %v$(expressionIndex -> valueNameId(state))_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex -> globalValueNameId(state)), 0" -> println
+                         "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(expressionIndex -> valueNameId(state))_ptr, i64 $expressionLength, 1" -> println
+                         expressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
+                     }
+diff --git a/selfhost/llvm/text/platform_io.slg b/selfhost/llvm/text/platform_io.slg
+index cd976d6d5..5e0f8582a 100644
+--- a/selfhost/llvm/text/platform_io.slg
++++ b/selfhost/llvm/text/platform_io.slg
+@@ -2514,7 +2514,7 @@ writeFileScalarArgument request: WhileValueRequest, pathIndex: Int, context: ref
+     path.kind == 2 -> if {
+         path -> sourceToken(context, state) => token
+         Int(TextLiteralRequest { sourceModule: path.sourceModule, token: token } -> textLiteralLength(context, state)) => length
+-        "{ ptr @sollang_str_$(pathIndex -> valueNameId(state)), i64 $length }" -> print
++        "{ ptr @sollang_str_$(pathIndex -> globalValueNameId(state)), i64 $length }" -> print
+     } else {
+         request.whileIndex >= 0 -> if {
+             WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: pathIndex } -> writeWhileValue(context, state)
+diff --git a/selfhost/llvm/text/runtime_preamble.slg b/selfhost/llvm/text/runtime_preamble.slg
+index 38fd621ae..a81d4dcc1 100644
+--- a/selfhost/llvm/text/runtime_preamble.slg
++++ b/selfhost/llvm/text/runtime_preamble.slg
+@@ -693,7 +693,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                 textConstant -> sourceToken(context, state) => textToken
+                 TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
+                 textLiteralRequest -> textLiteralLength(context, state) => textLength
+-                "@sollang_str_$(textGlobalIndex! -> valueNameId(state)) = private unnamed_addr constant [$textLength x i8] " -> print
++                "@sollang_str_$(textGlobalIndex! -> globalValueNameId(state)) = private unnamed_addr constant [$textLength x i8] " -> print
+                 textLiteralRequest -> emitTextLiteralConstant(context, state)
+             }
+             textGlobalIndex! + 1 => textGlobalIndex!
+diff --git a/selfhost/llvm/text/stream_junctions.slg b/selfhost/llvm/text/stream_junctions.slg
+index 7b87c5afe..f2ffe789e 100644
+--- a/selfhost/llvm/text/stream_junctions.slg
++++ b/selfhost/llvm/text/stream_junctions.slg
+@@ -23,10 +23,10 @@ emitPlannedJunctionValue expressionIndex: Int, ownerIndex: Int, context: ref emi
+ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+     junctionIndex -> junctionRequiresConcurrent(context, state) => concurrent
+-    "define internal void @sollang_join_$(junction.junctionIr -> valueNameId(state))_drop(ptr %context, i1 %destroy) {" -> println
++    "define internal void @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_drop(ptr %context, i1 %destroy) {" -> println
+     "entry:" -> println
+     concurrent -> if {
+-        "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++        "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+         "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+         "  call void @sollang_stream_join_runtime_cancel(ptr %runtime)" -> println
+     }
+@@ -34,7 +34,7 @@ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitCont
+     cancelInput! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + cancelInput!] => input
+         context.types[input.typeId].symbol == 4 -> if {
+-            "  %cancel_stream_address$(cancelInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(cancelInput!)" -> println
++            "  %cancel_stream_address$(cancelInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(cancelInput!)" -> println
+             "  %cancel_stream$(cancelInput!) = load %sollang.event_stream, ptr %cancel_stream_address$(cancelInput!), align 8" -> println
+             "  %cancel_context$(cancelInput!) = extractvalue %sollang.event_stream %cancel_stream$(cancelInput!), 0" -> println
+             "  %cancel_callback$(cancelInput!) = extractvalue %sollang.event_stream %cancel_stream$(cancelInput!), 2" -> println
+@@ -59,7 +59,7 @@ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitCont
+         context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+         "%sollang.stream" => producerType!
+         context.types[input.typeId].symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+-        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(dropInput!)" -> println
++        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(dropInput!)" -> println
+         "  %drop_stream$(dropInput!) = load $(producerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
+         "  %drop_context$(dropInput!) = extractvalue $(producerType!) %drop_stream$(dropInput!), 0" -> println
+         "  %drop_callback$(dropInput!) = extractvalue $(producerType!) %drop_stream$(dropInput!), 2" -> println
+@@ -79,7 +79,7 @@ emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitCont
+ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[junction.junctionIr] => junctionNode
+-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
++    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
+     0 => contextField!
+     contextField! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+@@ -89,9 +89,9 @@ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+         contextField! + 1 => contextField!
+     }
+     "i32 }" -> println
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
+     "entry:" -> println
+-    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+     "  %cursor = load i32, ptr %cursor_address, align 4" -> println
+     "  switch i32 %cursor, label %done [" -> println
+     0 => switchInput!
+@@ -107,7 +107,7 @@ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+         "%sollang.stream" => producerType!
+         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+         "input$(nextInput!):" -> println
+-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
++        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+         "  %stream$(nextInput!) = load $(producerType!), ptr %stream_address$(nextInput!), align 8" -> println
+         "  %stream_context$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 0" -> println
+         "  %stream_next$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 1" -> println
+@@ -129,7 +129,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[junction.junctionIr] => junctionNode
+     context.types[junctionNode.typeId].first => outputElementType
+-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
++    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
+     0 => contextField!
+     contextField! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+@@ -139,9 +139,9 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
+         contextField! + 1 => contextField!
+     }
+     "i1 }" -> println
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
+     "entry:" -> println
+-    "  %done_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %done_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+     "  %done_value = load i1, ptr %done_address, align 1" -> println
+     junction.inputCount > 0 -> if { "  br i1 %done_value, label %done, label %input0" -> println } else { "  br label %done" -> println }
+     0 => nextInput!
+@@ -151,7 +151,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
+         "%sollang.stream" => producerType!
+         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+         "input$(nextInput!):" -> println
+-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
++        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+         "  %stream$(nextInput!) = load $(producerType!), ptr %stream_address$(nextInput!), align 8" -> println
+         "  %stream_context$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 0" -> println
+         "  %stream_next$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 1" -> println
+@@ -194,7 +194,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
+ 
+ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
++    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
+     0 => contextField!
+     contextField! < junction.inputCount -> while {
+         "%sollang.stream, " -> print
+@@ -207,7 +207,7 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
+         activeField! + 1 => activeField!
+     }
+     " }" -> println
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
+     "entry:" -> println
+     "  %checked_slot = alloca i32, align 4" -> println
+     "  store i32 0, ptr %checked_slot, align 4" -> println
+@@ -217,7 +217,7 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
+     "  %all_checked = icmp sge i32 %checked, $(junction.inputCount)" -> println
+     "  br i1 %all_checked, label %done, label %dispatch" -> println
+     "dispatch:" -> println
+-    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+     "  %cursor = load i32, ptr %cursor_address, align 4" -> println
+     "  switch i32 %cursor, label %done [" -> println
+     0 => switchInput!
+@@ -229,11 +229,11 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
+     0 => nextInput!
+     nextInput! < junction.inputCount -> while {
+         "input$(nextInput!):" -> println
+-        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1 + nextInput!)" -> println
++        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1 + nextInput!)" -> println
+         "  %active$(nextInput!) = load i1, ptr %active_address$(nextInput!), align 1" -> println
+         "  br i1 %active$(nextInput!), label %pull$(nextInput!), label %advance$(nextInput!)" -> println
+         "pull$(nextInput!):" -> println
+-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
++        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+         "  %stream$(nextInput!) = load %sollang.stream, ptr %stream_address$(nextInput!), align 8" -> println
+         "  %stream_context$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 0" -> println
+         "  %stream_next$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 1" -> println
+@@ -263,7 +263,7 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[junction.junctionIr] => junctionNode
+     context.types[junctionNode.typeId].first => outputElementType
+-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
++    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
+     0 => streamField!
+     streamField! < junction.inputCount -> while {
+         "%sollang.stream, " -> print
+@@ -283,10 +283,10 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+         cacheField! + 1 => cacheField!
+     }
+     " }" -> println
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
+     "entry:" -> println
+-    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+-    "  %state_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
++    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %state_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+     "  %state = load i32, ptr %state_address, align 4" -> println
+     "  switch i32 %state, label %done [" -> println
+     "    i32 0, label %initial0" -> println
+@@ -297,11 +297,11 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+         context.streamPlan.junctionInputs[junction.inputStart + initialInput!] => input
+         context.types[input.typeId].first => inputElementType
+         "initial$(initialInput!):" -> println
+-        "  %initial_stream_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(initialInput!)" -> println
++        "  %initial_stream_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(initialInput!)" -> println
+         "  %initial_stream$(initialInput!) = load %sollang.stream, ptr %initial_stream_address$(initialInput!), align 8" -> println
+         "  %initial_context$(initialInput!) = extractvalue %sollang.stream %initial_stream$(initialInput!), 0" -> println
+         "  %initial_next$(initialInput!) = extractvalue %sollang.stream %initial_stream$(initialInput!), 1" -> println
+-        "  %cache_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + initialInput!)" -> println
++        "  %cache_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + initialInput!)" -> println
+         "  %initial_has$(initialInput!) = call i1 %initial_next$(initialInput!)(ptr %initial_context$(initialInput!), ptr %cache_address$(initialInput!))" -> println
+         "  br i1 %initial_has$(initialInput!), label %initial_value$(initialInput!), label %initial_failed" -> println
+         "initial_value$(initialInput!):" -> println
+@@ -334,15 +334,15 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+     0 => nextInput!
+     nextInput! < junction.inputCount -> while {
+         "input$(nextInput!):" -> println
+-        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2 + nextInput!)" -> println
++        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2 + nextInput!)" -> println
+         "  %active$(nextInput!) = load i1, ptr %active_address$(nextInput!), align 1" -> println
+         "  br i1 %active$(nextInput!), label %pull$(nextInput!), label %advance$(nextInput!)" -> println
+         "pull$(nextInput!):" -> println
+-        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
++        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(nextInput!)" -> println
+         "  %stream$(nextInput!) = load %sollang.stream, ptr %stream_address$(nextInput!), align 8" -> println
+         "  %stream_context$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 0" -> println
+         "  %stream_next$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 1" -> println
+-        "  %update_cache$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + nextInput!)" -> println
++        "  %update_cache$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + nextInput!)" -> println
+         "  %has_value$(nextInput!) = call i1 %stream_next$(nextInput!)(ptr %stream_context$(nextInput!), ptr %update_cache$(nextInput!))" -> println
+         "  br i1 %has_value$(nextInput!), label %value$(nextInput!), label %exhausted$(nextInput!)" -> println
+         "value$(nextInput!):" -> println
+@@ -364,7 +364,7 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+     snapshotField! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + snapshotField!] => snapshotInput
+         context.types[snapshotInput.typeId].first => snapshotType
+-        "  %snapshot_cache$(snapshotField!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + snapshotField!)" -> println
++        "  %snapshot_cache$(snapshotField!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + snapshotField!)" -> println
+         "  %snapshot_value$(snapshotField!) = load " -> print
+         snapshotType -> writeSemanticTypeId(context, state)
+         ", ptr %snapshot_cache$(snapshotField!), align $(context.typeAligns[snapshotType])" -> println
+@@ -406,7 +406,7 @@ junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitC
+ 
+ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_pull(ptr %context, i32 %index, ptr %slot) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_pull(ptr %context, i32 %index, ptr %slot) {" -> println
+     "entry:" -> println
+     "  switch i32 %index, label %invalid [" -> println
+     0 => switchInput!
+@@ -422,7 +422,7 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
+         "%sollang.stream" => producerType!
+         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+         "input$(pullInput!):" -> println
+-        "  %stream_address$(pullInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(pullInput!)" -> println
++        "  %stream_address$(pullInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(pullInput!)" -> println
+         "  %stream$(pullInput!) = load $(producerType!), ptr %stream_address$(pullInput!), align 8" -> println
+         "  %stream_context$(pullInput!) = extractvalue $(producerType!) %stream$(pullInput!), 0" -> println
+         "  %stream_next$(pullInput!) = extractvalue $(producerType!) %stream$(pullInput!), 1" -> println
+@@ -435,7 +435,7 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
+     "  unreachable" -> println
+     "}" -> println
+ 
+-    "define internal void @sollang_join_$(junction.junctionIr -> valueNameId(state))_drop_item(ptr %context, i32 %index, ptr %slot) {" -> println
++    "define internal void @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_drop_item(ptr %context, i32 %index, ptr %slot) {" -> println
+     "entry:" -> println
+     false => hasOwnedInput!
+     0 => ownedSearch!
+@@ -486,7 +486,7 @@ emitConcurrentJunctionDrop junctionIndex: Int, context: ref emitterContext.EmitC
+ 
+ emitConcurrentMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
++    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
+     0 => contextField!
+     contextField! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+@@ -495,9 +495,9 @@ emitConcurrentMergeJunctionRuntime junctionIndex: Int, context: ref emitterConte
+     }
+     "ptr }" -> println
+     junctionIndex -> emitConcurrentJunctionInputCallbacks(context, state)
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
+     "entry:" -> println
+-    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+     "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+     "  %index_address = alloca i32, align 4" -> println
+     "  %kind_address = alloca i32, align 4" -> println
+@@ -537,7 +537,7 @@ emitConcurrentLatestSnapshot junctionIndex: Int, snapshotOrdinal: Int, context:
+     snapshotInput! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + snapshotInput!] => input
+         context.types[input.typeId].first => elementType
+-        "  %snapshot$(snapshotOrdinal)_cache$(snapshotInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + snapshotInput!)" -> println
++        "  %snapshot$(snapshotOrdinal)_cache$(snapshotInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + snapshotInput!)" -> println
+         "  %snapshot$(snapshotOrdinal)_value$(snapshotInput!) = load " -> print
+         elementType -> writeSemanticTypeId(context, state)
+         ", ptr %snapshot$(snapshotOrdinal)_cache$(snapshotInput!), align $(context.typeAligns[elementType])" -> println
+@@ -554,7 +554,7 @@ emitConcurrentLatestSnapshot junctionIndex: Int, snapshotOrdinal: Int, context:
+ 
+ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+-    "%sollang.join.$(junction.junctionIr -> valueNameId(state)) = type { " -> print
++    "%sollang.join.$(junction.junctionIr -> globalValueNameId(state)) = type { " -> print
+     0 => contextField!
+     contextField! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+@@ -571,9 +571,9 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
+     }
+     " }" -> println
+     junctionIndex -> emitConcurrentJunctionInputCallbacks(context, state)
+-    "define internal i1 @sollang_join_$(junction.junctionIr -> valueNameId(state))_next(ptr %context, ptr %output) {" -> println
++    "define internal i1 @sollang_join_$(junction.junctionIr -> globalValueNameId(state))_next(ptr %context, ptr %output) {" -> println
+     "entry:" -> println
+-    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+     "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+     "  %index_address = alloca i32, align 4" -> println
+     "  %kind_address = alloca i32, align 4" -> println
+@@ -598,7 +598,7 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
+         "input$(eventInput!):" -> println
+         "  %kind$(eventInput!) = load i32, ptr %kind_address, align 4" -> println
+         "  %is_value$(eventInput!) = icmp eq i32 %kind$(eventInput!), 0" -> println
+-        "  %initialized_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2), i32 $(eventInput!)" -> println
++        "  %initialized_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 2), i32 $(eventInput!)" -> println
+         "  br i1 %is_value$(eventInput!), label %value$(eventInput!), label %completion$(eventInput!)" -> println
+         "completion$(eventInput!):" -> println
+         "  %was_initialized$(eventInput!) = load i1, ptr %initialized_address$(eventInput!), align 1" -> println
+@@ -611,7 +611,7 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
+         "  %item$(eventInput!) = load " -> print
+         elementType -> writeSemanticTypeId(context, state)
+         ", ptr %slot$(eventInput! -> valueNameId(state)), align $(context.typeAligns[elementType])" -> println
+-        "  %cache$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + eventInput!)" -> println
++        "  %cache$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 3 + eventInput!)" -> println
+         "  store " -> print
+         elementType -> writeSemanticTypeId(context, state)
+         " %item$(eventInput!), ptr %cache$(eventInput!), align $(context.typeAligns[elementType])" -> println
+@@ -620,13 +620,13 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
+         "  br i1 %already_initialized$(eventInput!), label %ready_check$(eventInput!), label %initialize$(eventInput!)" -> println
+         "initialize$(eventInput!):" -> println
+         "  store i1 true, ptr %initialized_address$(eventInput!), align 1" -> println
+-        "  %initialized_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
++        "  %initialized_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+         "  %initialized_count$(eventInput!) = load i32, ptr %initialized_count_address$(eventInput!), align 4" -> println
+         "  %next_initialized_count$(eventInput!) = add i32 %initialized_count$(eventInput!), 1" -> println
+         "  store i32 %next_initialized_count$(eventInput!), ptr %initialized_count_address$(eventInput!), align 4" -> println
+         "  br label %ready_check$(eventInput!)" -> println
+         "ready_check$(eventInput!):" -> println
+-        "  %current_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> valueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
++        "  %current_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr -> globalValueNameId(state)), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+         "  %current_count$(eventInput!) = load i32, ptr %current_count_address$(eventInput!), align 4" -> println
+         "  %ready$(eventInput!) = icmp eq i32 %current_count$(eventInput!), $(junction.inputCount)" -> println
+         "  br i1 %ready$(eventInput!), label %snapshot$(eventInput!), label %wait" -> println
+@@ -689,7 +689,7 @@ emitJunctionInputValue expressionIndex: Int, junctionIndex: Int, inputOrdinal: I
+ emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[expressionIndex] => expression
+-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
+     0 => inputIndex!
+@@ -699,43 +699,43 @@ emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int,
+         context.types[input.typeId] => inputType
+         "%sollang.stream" => producerType!
+         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+         "  store $(producerType!) " -> print
+         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
+         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
+         inputIndex! + 1 => inputIndex!
+     }
+-    "  %join$(expressionIndex -> valueNameId(state))_done = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_done = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+     "  store i1 false, ptr %join$(expressionIndex -> valueNameId(state))_done, align 1" -> println
+     "%sollang.stream" => resultType!
+     context.types[expression.typeId].symbol == 4
+         -> if { "%sollang.event_stream" => resultType! }
+     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
+-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
++    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
+ }
+ 
+ emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[expressionIndex] => expression
+-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
+     0 => inputIndex!
+     inputIndex! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+         expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
+-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+         "  store %sollang.stream " -> print
+         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
+         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
+         inputIndex! + 1 => inputIndex!
+     }
+-    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_cursor, align 4" -> println
+     0 => activeIndex!
+     activeIndex! < junction.inputCount -> while {
+-        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1 + activeIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1 + activeIndex!)" -> println
+         "  store i1 true, ptr %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!), align 1" -> println
+         activeIndex! + 1 => activeIndex!
+     }
+@@ -743,33 +743,33 @@ emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int
+     context.types[expression.typeId].symbol == 4
+         -> if { "%sollang.event_stream" => resultType! }
+     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
+-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
++    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
+ }
+ 
+ emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[expressionIndex] => expression
+-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
+     0 => inputIndex!
+     inputIndex! < junction.inputCount -> while {
+         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+         expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
+-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+         "  store %sollang.stream " -> print
+         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
+         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
+         inputIndex! + 1 => inputIndex!
+     }
+-    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_cursor, align 4" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_state = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_state = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
+     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_state, align 4" -> println
+     0 => activeIndex!
+     activeIndex! < junction.inputCount -> while {
+-        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2 + activeIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2 + activeIndex!)" -> println
+         "  store i1 true, ptr %join$(expressionIndex -> valueNameId(state))_active$(activeIndex!), align 1" -> println
+         activeIndex! + 1 => activeIndex!
+     }
+@@ -777,13 +777,13 @@ emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
+     context.types[expression.typeId].symbol == 4
+         -> if { "%sollang.event_stream" => resultType! }
+     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
+-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
++    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
+ }
+ 
+ emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.streamPlan.junctions[junctionIndex] => junction
+-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_allocated = icmp ne ptr %join$(expressionIndex -> valueNameId(state))_context, null" -> println
+@@ -799,18 +799,18 @@ emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex
+         context.types[input.typeId] => inputType
+         "%sollang.stream" => producerType!
+         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+         "  store $(producerType!) " -> print
+         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
+         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
+         inputIndex! + 1 => inputIndex!
+     }
+     junction.policy == 3 -> if {
+-        "  %join$(expressionIndex -> valueNameId(state))_initialized_count = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_initialized_count = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 1)" -> println
+         "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_initialized_count, align 4" -> println
+         0 => initializedInput!
+         initializedInput! < junction.inputCount -> while {
+-            "  %join$(expressionIndex -> valueNameId(state))_initialized$(initializedInput!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2), i32 $(initializedInput!)" -> println
++            "  %join$(expressionIndex -> valueNameId(state))_initialized$(initializedInput!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount + 2), i32 $(initializedInput!)" -> println
+             "  store i1 false, ptr %join$(expressionIndex -> valueNameId(state))_initialized$(initializedInput!), align 1" -> println
+             initializedInput! + 1 => initializedInput!
+         }
+@@ -835,24 +835,24 @@ emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex
+         }
+         sizeInput! + 1 => sizeInput!
+     }
+-    "  %join$(expressionIndex -> valueNameId(state))_runtime = call ptr @sollang_stream_join_runtime_create(i32 $(junction.inputCount), i64 %join$(expressionIndex -> valueNameId(state))_item_max$(junction.inputCount - 1), ptr @sollang_join_$(expressionIndex -> valueNameId(state))_pull, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop_item, ptr %join$(expressionIndex -> valueNameId(state))_context)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_runtime = call ptr @sollang_stream_join_runtime_create(i32 $(junction.inputCount), i64 %join$(expressionIndex -> valueNameId(state))_item_max$(junction.inputCount - 1), ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_pull, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop_item, ptr %join$(expressionIndex -> valueNameId(state))_context)" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_runtime_created = icmp ne ptr %join$(expressionIndex -> valueNameId(state))_runtime, null" -> println
+     "  br i1 %join$(expressionIndex -> valueNameId(state))_runtime_created, label %join$(expressionIndex -> valueNameId(state))_runtime_ready, label %join$(expressionIndex -> valueNameId(state))_runtime_failed" -> println
+     "join$(expressionIndex -> valueNameId(state))_runtime_failed:" -> println
+     "  call void @llvm.trap()" -> println
+     "  unreachable" -> println
+     "join$(expressionIndex -> valueNameId(state))_runtime_ready:" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_runtime_address = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_runtime_address = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+     "  store ptr %join$(expressionIndex -> valueNameId(state))_runtime, ptr %join$(expressionIndex -> valueNameId(state))_runtime_address, align 8" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue %sollang.event_stream poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
+-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
++    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue %sollang.event_stream %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
+ }
+ 
+ emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[expressionIndex] => expression
+-    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr null, i32 1" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_size_pointer = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr null, i32 1" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_size = ptrtoint ptr %join$(expressionIndex -> valueNameId(state))_size_pointer to i64" -> println
+     "  %join$(expressionIndex -> valueNameId(state))_context = call ptr @sollang_alloc(i64 %join$(expressionIndex -> valueNameId(state))_size)" -> println
+     0 => inputIndex!
+@@ -862,18 +862,18 @@ emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
+         context.types[input.typeId] => inputType
+         "%sollang.stream" => producerType!
+         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+-        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
++        "  %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(inputIndex!)" -> println
+         "  store $(producerType!) " -> print
+         "%join$(expressionIndex -> valueNameId(state))_source$(inputIndex!)" -> print
+         ", ptr %join$(expressionIndex -> valueNameId(state))_input$(inputIndex!), align 8" -> println
+         inputIndex! + 1 => inputIndex!
+     }
+-    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> valueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_cursor = getelementptr %sollang.join.$(expressionIndex -> globalValueNameId(state)), ptr %join$(expressionIndex -> valueNameId(state))_context, i32 0, i32 $(junction.inputCount)" -> println
+     "  store i32 0, ptr %join$(expressionIndex -> valueNameId(state))_cursor, align 4" -> println
+     "%sollang.stream" => resultType!
+     context.types[expression.typeId].symbol == 4
+         -> if { "%sollang.event_stream" => resultType! }
+     "  %join$(expressionIndex -> valueNameId(state))_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex -> valueNameId(state))_context, 0" -> println
+-    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_next, 1" -> println
+-    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> valueNameId(state))_drop, 2" -> println
++    "  %join$(expressionIndex -> valueNameId(state))_with_next = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_context, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_next, 1" -> println
++    "  %v$(expressionIndex -> valueNameId(state)) = insertvalue $(resultType!) %join$(expressionIndex -> valueNameId(state))_with_next, ptr @sollang_join_$(expressionIndex -> globalValueNameId(state))_drop, 2" -> println
+ }
+diff --git a/selfhost/llvm/text/value_names.slg b/selfhost/llvm/text/value_names.slg
+index 25ef06402..6b676aae6 100644
+--- a/selfhost/llvm/text/value_names.slg
++++ b/selfhost/llvm/text/value_names.slg
+@@ -3,10 +3,21 @@ namespace sollang.compiler.llvm.text
+ import sollang.compiler.llvm.emitter.context as emitterContext
+ import sollang.compiler.llvm.scoped_names as scopedNames
+ 
+-# IR indices remain addresses into the shared tables. Printed SSA values use
+-# disjoint source scopes and source-local ordinals, so another source's body
+-# growth cannot rename an unchanged value or alias an inlined source value.
++# SSA values belong to emitted function partitions, including their copied
++# inline bodies. Source coordinates cannot participate in local numbering.
+ prepareValueNames context: ref emitterContext.EmitContext -> [UInt64; ~] {
++    [UInt64; ~] => names!
++    UInt64(0) => ordinal!
++    context.ir -> each node {
++        node.kind == 0 or node.kind == 11 -> if { 0 => ordinal! }
++        names! -> push(ordinal!)
++        ordinal! + 1 => ordinal!
++    }
++    names!
++}
++
++# Program-wide auxiliary symbols need a separate namespace from local SSA.
++prepareGlobalValueNames context: ref emitterContext.EmitContext -> [UInt64; ~] {
+     [UInt64; ~] => counters!
+     0 => source!
+     source! <= (context.sources -> len) -> while {
+@@ -27,6 +38,10 @@ valueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
+     state.frozenValueNames[nodeIndex]
+ }
+ 
++globalValueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
++    state.frozenGlobalValueNames[nodeIndex]
++}
++
+ # A declaration's complete key owns the printed symbol. Physical source and
+ # symbol ordinals are only coordinates into the prepared name table.
+ functionSymbolName sourceModule: Int, symbol: Int, context: ref emitterContext.EmitContext -> Text {
