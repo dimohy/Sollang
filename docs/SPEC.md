@@ -967,7 +967,8 @@ source form without changing semantics:
   array or dictionary element whose declared value type requires a growable
   array. The stored value must still satisfy that exact element type.
   A declared growable function or method result likewise suppresses the
-  warning for its returned owner, including an explicit return. Synthetic
+  warning for its returned owner, including an explicit return and the named
+  tail value of a source block-function body. Synthetic
   input and `self` symbols do not replace the enclosing declaration's result
   contract when they share its AST node.
   Selected owning `append` and `updated` intrinsics also require the source
@@ -1903,6 +1904,10 @@ main {
 `value -> yield` evaluates its inputs in the producer scope before binding the
 callback's roles in the caller scope and executing its body in source order.
 Source positions in the producer and caller files cannot reorder these phases.
+
+The producer retains its lexical local-owner scope across inlining and `yield`.
+Returning a producer-local owned value follows the declared result contract;
+lowering must preserve its distinction from an outer borrowed owner.
 
 The compiler is not required to lower this as a runtime closure. For built-in
 block functions such as `each`, the backend may specialize the call at compile
