@@ -8828,18 +8828,19 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
         }
         partialMoveIndex! + 1 => partialMoveIndex!
     }
-    # Block calls that create owned storage need a named owner at the call site.
+    # Container results need a named binding, including inline fixed storage.
     # The AST keeps an explicit `=> name` in secondaryToken. Reject the unbound
     # form before code generation so malformed ownership cannot reach LLVM.
     0 => ownedBlockCallIndex!
     ownedBlockCallIndex! < (typed -> len) -> while {
         typed[ownedBlockCallIndex!] => ownedBlockCall
-        ownedBlockCall.kind == 6
+        (ownedBlockCall.kind == 6 or (ownedBlockCall.kind == 19 and ownedBlockCall.opcode == -227))
             and ownedBlockCall.sourceModule >= 0
             and ownedBlockCall.sourceModule < (prepared.package.ranges -> len)
             and ownedBlockCall.astNode >= 0
-            and ownedBlockCall.typeId >= 0
+            and ownedBlockCall.typeId >= 0 and ownedBlockCall.typeId < (types -> len)
             -> if {
+                types[ownedBlockCall.typeId] => ownedBlockResultType
                 prepared.package.ranges[ownedBlockCall.sourceModule] => ownedBlockRange
                 ownedBlockCall.astNode < ownedBlockRange.astCount
                     -> if {
@@ -8847,6 +8848,9 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         ownedBlockAst.kind == 48
                             and ownedBlockAst.secondaryToken < 0
                             and ((ownedBlockCall.opcode == -207 or ownedBlockCall.opcode == -209)
+                            or ownedBlockResultType.kind == 4 or ownedBlockResultType.kind == 12
+                            or (ownedBlockResultType -> typeIds.isDynamicArrayFamily)
+                            or (ownedBlockResultType -> typeIds.isDictionaryFamily)
                             or (prepared -> semanticTypeContainsOwnedStorageCached(types, fields, ownedStorageByType!, ownedBlockCall.typeId)))
                             -> if {
                                 diagnostics! -> appendBodyDiagnostic(ownedBlockCallIndex!, OwnershipDiagnostic {

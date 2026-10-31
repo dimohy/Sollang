@@ -2978,6 +2978,10 @@ conflicting occurrences of a parameter are rejected in argument order. A
 user-block source passed to `ref T` must have an addressable owner or reference,
 and code generation preserves that borrow rather than passing the value as `T`.
 An explicit user-block result binding has the function's declared result type.
+A user-block result must have an explicit named binding when its declared return
+is a fixed, growable or bounded array, any dictionary, or another type containing
+owned storage. This also applies to bounded inline containers with scalar elements.
+A readonly reference result is excluded from that container classification.
 The source input, callback input, callback result, and function result retain
 their separate contracts, including when the result is used only in interpolation.
 User-block runtime argument inference visits the source value and then the
