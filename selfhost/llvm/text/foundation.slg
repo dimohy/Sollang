@@ -238,13 +238,13 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
         context.ir[nodeIndex!] => node
         nodeIndex! -> emitDeferredTextCaptureAllocas(ownerIndex, context, state)
         node.kind == 6 and node.opcode == -235 -> if {
-            "  %v$(nodeIndex!)_environment_slot = alloca " -> print
+            "  %v$(nodeIndex! -> valueNameId(state))_environment_slot = alloca " -> print
             node -> writeIrType(context, state)
             ", align 8" -> println
         }
         node -> isBoundedDictionaryLiteral(context) -> if {
             node.typeId -> boundedDictionaryLayoutForType(context) => dictionaryLayout
-            "  %v$(nodeIndex!)_owner = alloca %sollang.bounded_dictionary.t$(node.typeId), align $(dictionaryLayout.align)" -> println
+            "  %v$(nodeIndex! -> valueNameId(state))_owner = alloca %sollang.bounded_dictionary.t$(node.typeId), align $(dictionaryLayout.align)" -> println
         }
         nodeIndex! -> boundedDictionaryIndexScratchTypeId(context, state) => dictionaryScratchType
         dictionaryScratchType >= 0 -> if {
@@ -279,10 +279,10 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                     -> if {
                         nodeIndex! -> checkedStorageAllocation(context) -> when {
                             None { }
-                            Some(allocation) { "  %v$(nodeIndex!)_data = getelementptr i8, ptr %stack_slot$(allocation.slot), i64 0" -> println }
+                            Some(allocation) { "  %v$(nodeIndex! -> valueNameId(state))_data = getelementptr i8, ptr %stack_slot$(allocation.slot), i64 0" -> println }
                         }
                     } else {
-                        "  %v$(nodeIndex!)_data = alloca [$fixedArrayByteLength x i8], align " -> print
+                        "  %v$(nodeIndex! -> valueNameId(state))_data = alloca [$fixedArrayByteLength x i8], align " -> print
                         node -> arrayElementAlign(context, state) -> writeDecimalLine
                     }
             }
@@ -337,7 +337,7 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                         -> if { matchResultOwnerBodyIndex => matchResultTypeIndex! }
                 }
             context.ir[matchResultTypeIndex!] => matchResultType
-            "  %v$(nodeIndex!)_subject_slot = alloca " -> print
+            "  %v$(nodeIndex! -> valueNameId(state))_subject_slot = alloca " -> print
             subject -> writeIrType(context, state)
             ", align 8" -> println
             nodeIndex! -> controlValueUsed(ownerIndex, context, state) => matchValueUsed!
@@ -358,7 +358,7 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                 and (nodeIndex! -> enumMatchHasConcreteArmValues(context, state))
                 and not (matchResultType.typeOrigin == 1 and matchResultType.typeSymbol == 0)
                 -> if {
-                    "  %v$(nodeIndex!)_result = alloca " -> print
+                    "  %v$(nodeIndex! -> valueNameId(state))_result = alloca " -> print
                     matchResultType -> writeIrType(context, state)
                     ", align " -> print
                     matchResultType -> storageAlign(context, state) -> writeDecimalLine
@@ -370,8 +370,8 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
         # the selected arm changes it to true after loading the payload.
         nodeIndex! -> namedBindingNeedsOwnershipFlag(state)
             -> if {
-                "  %v$(nodeIndex!)_owned = alloca i1, align 1" -> println
-                "  store i1 true, ptr %v$(nodeIndex!)_owned, align 1" -> println
+                "  %v$(nodeIndex! -> valueNameId(state))_owned = alloca i1, align 1" -> println
+                "  store i1 true, ptr %v$(nodeIndex! -> valueNameId(state))_owned, align 1" -> println
             }
         node.kind == 27 -> if {
             node.operand1 => ownedArmIndex!
@@ -380,8 +380,8 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                     => ownedArmBindingIndex
                 ownedArmBindingIndex -> patternBindingNeedsOwnershipFlag(context, state)
                     -> if {
-                        "  %v$(ownedArmBindingIndex)_owned = alloca i1, align 1" -> println
-                        "  store i1 false, ptr %v$(ownedArmBindingIndex)_owned, align 1" -> println
+                        "  %v$(ownedArmBindingIndex -> valueNameId(state))_owned = alloca i1, align 1" -> println
+                        "  store i1 false, ptr %v$(ownedArmBindingIndex -> valueNameId(state))_owned, align 1" -> println
                     }
                 context.ir[ownedArmIndex!].nextOperand => ownedArmIndex!
             }
@@ -389,14 +389,14 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
         (node.kind == 6 or node.kind == 9)
             and (node.opcode == -216 or node.opcode == -217 or node.opcode == -304 or node.opcode == -305)
             -> if {
-                "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_result_slot = alloca " -> print
                 node -> writeIrType(context, state)
                 ", align 8" -> println
             }
         (node.kind == 6 or node.kind == 9)
             and (node.opcode -> typedIr.isSocketResultOpcode)
             -> if {
-                "  %v$(nodeIndex!)_socket_result_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_socket_result_slot = alloca " -> print
                 node -> writeIrType(context, state)
                 ", align 8" -> println
             }
@@ -416,11 +416,11 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                 context.ir[scalarIndex] => scalar
                 scalar.typeId => scalarTypeId!
                 scalarTypeId! < 0 -> if { scalar.typeSymbol => scalarTypeId! }
-                "  %v$(nodeIndex!)_file_write_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_write_slot = alloca " -> print
                 scalarTypeId! -> writeSemanticTypeId(context, state)
                 ", align " -> print
                 context.typeAligns[scalarTypeId!] -> writeDecimalLine
-                "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_result_slot = alloca " -> print
                 node -> writeIrType(context, state)
                 ", align 8" -> println
             }
@@ -430,7 +430,7 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                 context.ir[scalarIndex] => scalar
                 scalar.typeId => scalarTypeId!
                 scalarTypeId! < 0 -> if { scalar.typeSymbol => scalarTypeId! }
-                "  %v$(nodeIndex!)_file_write_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_write_slot = alloca " -> print
                 scalarTypeId! == 23 -> if { "i8" -> print } else { scalarTypeId! -> writeSemanticTypeId(context, state) }
                 ", align " -> print
                 context.typeAligns[scalarTypeId!] -> writeDecimalLine
@@ -439,14 +439,14 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
             -> if {
                 context.types[node.typeId].first => optionTypeId
                 context.types[optionTypeId].first => scalarTypeId
-                "  %v$(nodeIndex!)_file_read_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_read_slot = alloca " -> print
                 scalarTypeId == 23 -> if { "i8" -> print } else { scalarTypeId -> writeSemanticTypeId(context, state) }
                 ", align " -> print
                 context.typeAligns[scalarTypeId] -> writeDecimalLine
-                "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_result_slot = alloca " -> print
                 node -> writeIrType(context, state)
                 ", align 8" -> println
-                "  %v$(nodeIndex!)_file_option_slot = alloca " -> print
+                "  %v$(nodeIndex! -> valueNameId(state))_file_option_slot = alloca " -> print
                 optionTypeId -> writeSemanticTypeId(context, state)
                 ", align 8" -> println
             }
@@ -468,6 +468,7 @@ struct BodySchedulePlan {
     failureTerminal: Int
 }
 struct CoreEmitterState {
+    frozenValueNames: [UInt64; ~]
     frozenCanonicalInterpolationRootByIr: [Int; ~]
     frozenDeferredTextValues: [Bool; ~]
     frozenDeferredTextCaptureLeaves: [Bool; ~]
@@ -917,18 +918,18 @@ emitBoundedDictionaryControlStore prefix: Text, storagePointer: Text, slot: Text
     prefix -> emitDictionaryControlStore(storagePointer, slot, control, "$(layout.bucketCapacity)")
 }
 
-emitBoundedDictionaryLiteralOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+emitBoundedDictionaryLiteralOwner nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[nodeIndex].typeId => dictionaryTypeId
     dictionaryTypeId -> boundedDictionaryLayoutForType(context) => layout
-    "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) zeroinitializer, ptr %v$(nodeIndex)_owner, align $(layout.align)" -> println
-    "v$(nodeIndex)" -> emitBoundedDictionaryStoragePointer("%v$(nodeIndex)_owner", dictionaryTypeId)
+    "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) zeroinitializer, ptr %v$(nodeIndex -> valueNameId(state))_owner, align $(layout.align)" -> println
+    "v$(nodeIndex -> valueNameId(state))" -> emitBoundedDictionaryStoragePointer("%v$(nodeIndex -> valueNameId(state))_owner", dictionaryTypeId)
 }
 
-emitEmptyBoundedDictionaryLiteral nodeIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
-    nodeIndex -> emitBoundedDictionaryLiteralOwner(context)
+emitEmptyBoundedDictionaryLiteral nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodeIndex -> emitBoundedDictionaryLiteralOwner(context, state)
     context.ir[nodeIndex].typeId => dictionaryTypeId
     dictionaryTypeId -> boundedDictionaryLayoutForType(context) => layout
-    "  %v$(nodeIndex) = load %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex)_owner, align $(layout.align)" -> println
+    "  %v$(nodeIndex -> valueNameId(state)) = load %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex -> valueNameId(state))_owner, align $(layout.align)" -> println
 }
 
 isBoundedDictionaryLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
@@ -989,7 +990,7 @@ emitBoundedDictionaryLiteralOperand nodeIndex: Int, ownerIndex: Int, typeId: Int
         "" -> println
         valueName -> return
     }
-    "%v$(nodeIndex)" -> materialize(storage)
+    "%v$(nodeIndex -> valueNameId(state))" -> materialize(storage)
 }
 
 emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -1000,7 +1001,7 @@ emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: 
     dictionaryType.second => valueTypeId
     context.types[keyTypeId] => keyType
     dictionaryTypeId -> boundedDictionaryLayoutForType(context) => layout
-    nodeIndex -> emitBoundedDictionaryLiteralOwner(context)
+    nodeIndex -> emitBoundedDictionaryLiteralOwner(context, state)
     false => textKey!
     keyType.kind == 1 and keyType.origin == 1 and keyType.symbol == 1
         -> if { true => textKey! }
@@ -1051,24 +1052,24 @@ emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: 
         "  %$(prefix)_h2_zero = icmp eq i64 %$(prefix)_h2_raw, 0" -> println
         "  %$(prefix)_h2_value = select i1 %$(prefix)_h2_zero, i64 1, i64 %$(prefix)_h2_raw" -> println
         "  %$(prefix)_h2 = trunc i64 %$(prefix)_h2_value to i8" -> println
-        prefix -> emitBoundedDictionaryProbe("%v$(nodeIndex)_storage", keyName, "%$(prefix)_hash", "%$(prefix)_h2", dictionaryTypeId, false, context, state)
+        prefix -> emitBoundedDictionaryProbe("%v$(nodeIndex -> valueNameId(state))_storage", keyName, "%$(prefix)_hash", "%$(prefix)_h2", dictionaryTypeId, false, context, state)
         "  br label %$(prefix)_insert" -> println
         "$(prefix)_insert:" -> println
-        "$(prefix)_key" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex)_storage", "%$(prefix)_slot", 0, layout)
+        "$(prefix)_key" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", 0, layout)
         "  store " -> print
         keyTypeId -> writeSemanticTypeId(context, state)
         " $(keyName), ptr %$(prefix)_key_ptr, align $(layout.keyAlign)" -> println
-        "$(prefix)_value" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex)_storage", "%$(prefix)_slot", layout.valueOffset, layout)
+        "$(prefix)_value" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", layout.valueOffset, layout)
         "  store " -> print
         valueTypeId -> writeAggregateFieldTypeId(context, state)
         " $(valueName), ptr %$(prefix)_value_ptr, align $(layout.valueAlign)" -> println
-        "$(prefix)_control" -> emitBoundedDictionaryControlStore("%v$(nodeIndex)_storage", "%$(prefix)_slot", "%$(prefix)_h2", layout)
+        "$(prefix)_control" -> emitBoundedDictionaryControlStore("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", "%$(prefix)_h2", layout)
         valueNode.nextOperand => keyIndex!
         entryIndex! + 1 => entryIndex!
     }
-    "  %v$(nodeIndex)_length_ptr = getelementptr inbounds %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex)_owner, i32 0, i32 0" -> println
-    "  store i64 $(entryIndex!), ptr %v$(nodeIndex)_length_ptr, align 8" -> println
-    "  %v$(nodeIndex) = load %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex)_owner, align $(layout.align)" -> println
+    "  %v$(nodeIndex -> valueNameId(state))_length_ptr = getelementptr inbounds %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex -> valueNameId(state))_owner, i32 0, i32 0" -> println
+    "  store i64 $(entryIndex!), ptr %v$(nodeIndex -> valueNameId(state))_length_ptr, align 8" -> println
+    "  %v$(nodeIndex -> valueNameId(state)) = load %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex -> valueNameId(state))_owner, align $(layout.align)" -> println
 }
 
 emitBoundedDictionaryIndex nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -1146,13 +1147,13 @@ emitBoundedDictionaryIndex nodeIndex: Int, ownerIndex: Int, context: ref emitter
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "$(prefix)_found:" -> println
-    "v$(nodeIndex)_value" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_slot", layout.valueOffset, layout)
+    "v$(nodeIndex -> valueNameId(state))_value" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_slot", layout.valueOffset, layout)
     "  " -> print
     nodeIndex -> writeMemberStorageValueName(context, state)
     " = load " -> print
     valueTypeId -> writeAggregateFieldTypeId(context, state)
-    ", ptr %v$(nodeIndex)_value_ptr, align $(layout.valueAlign)" -> println
-    "v$(nodeIndex)" -> emitStoredBoundedValueHandle(valueTypeId, context, state)
+    ", ptr %v$(nodeIndex -> valueNameId(state))_value_ptr, align $(layout.valueAlign)" -> println
+    "v$(nodeIndex -> valueNameId(state))" -> emitStoredBoundedValueHandle(valueTypeId, context, state)
 }
 
 # Emits a complete probe and leaves control in the found block with
@@ -1543,7 +1544,7 @@ emitInterpolationLexicalLoad labelIndex: Int, nodeIndex: Int, node: interpolatio
     bindingIndex >= 0 -> if {
         bindingIndex -> asyncFrameBindingRoot(ownerIndex, context, state) => asyncRoot
         asyncRoot >= 0 -> if {
-            "  %v$(labelIndex)_expression$(nodeIndex)_mutable = load " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable = load " -> print
             context.ir[asyncRoot] -> writeIrType(context, state)
             ", ptr " -> print
             asyncRoot -> writeAsyncLocalAddress(context)
@@ -1555,7 +1556,7 @@ emitInterpolationLexicalLoad labelIndex: Int, nodeIndex: Int, node: interpolatio
         binding.kind == 17 -> if {
             bindingIndex -> mutableStorageRoot(context, state) => storageRoot
             storageRoot >= 0 -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex)_mutable = load " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable = load " -> print
                 binding -> writeIrType(context, state)
                 ", ptr %slot$(storageRoot), align 8" -> println
             }
@@ -1566,31 +1567,31 @@ emitInterpolationLexicalLoad labelIndex: Int, nodeIndex: Int, node: interpolatio
                 parameterOrdinal >= 0 -> if {
                     binding -> mutableBorrowUsesStructPointer(context)
                         -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable = load " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable = load " -> print
                             binding -> writeIrType(context, state)
                             ", ptr " -> print
                             parameterOrdinal -> writeMutableStructParameterPointer
                             ", align " -> print
                             binding -> storageAlign(context, state) -> writeDecimalLine
                         } else {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable_ptr = load ptr, ptr " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable_ptr = load ptr, ptr " -> print
                             parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
                             ", align 8" -> println
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable_len = load i64, ptr " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable_len = load i64, ptr " -> print
                             parameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(parameterOrdinal)_mut_len_addr" -> print }
                             ", align 8" -> println
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable_capacity = load i64, ptr " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable_capacity = load i64, ptr " -> print
                             parameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(parameterOrdinal)_mut_capacity_addr" -> print }
                             ", align 8" -> println
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable0 = insertvalue " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable0 = insertvalue " -> print
                             binding -> writeIrType(context, state)
-                            " poison, ptr %v$(labelIndex)_expression$(nodeIndex)_mutable_ptr, 0" -> println
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable1 = insertvalue " -> print
+                            " poison, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable_ptr, 0" -> println
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable1 = insertvalue " -> print
                             binding -> writeIrType(context, state)
-                            " %v$(labelIndex)_expression$(nodeIndex)_mutable0, i64 %v$(labelIndex)_expression$(nodeIndex)_mutable_len, 1" -> println
-                            "  %v$(labelIndex)_expression$(nodeIndex)_mutable = insertvalue " -> print
+                            " %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable0, i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable_len, 1" -> println
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable = insertvalue " -> print
                             binding -> writeIrType(context, state)
-                            " %v$(labelIndex)_expression$(nodeIndex)_mutable1, i64 %v$(labelIndex)_expression$(nodeIndex)_mutable_capacity, 2" -> println
+                            " %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable1, i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable_capacity, 2" -> println
                         }
                 }
             }
@@ -1770,47 +1771,47 @@ emitInterpolationIntegerConversionChecks labelIndex: Int, nodeIndex: Int, nodes:
     targetSigned -> if { targetWidth! - 1 => targetUpperBits! }
     targetBuiltin == 14 -> if { 21 => targetUpperBits! }
     Arena(0) => diagnosticNames!
-    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(diagnosticNames!) => diagnosticPrefix
+    "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(diagnosticNames!) => diagnosticPrefix
     sourceSigned and (not targetSigned or sourceWidth > targetWidth!)
         -> if {
             conversion.typeSymbol -> numericLiteralRange.minimumText(context.pointerBitWidth) => lowerBound
-            "  %v$(labelIndex)_expression$(nodeIndex)_lower_valid = icmp sge i$(sourceWidth) " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_lower_valid = icmp sge i$(sourceWidth) " -> print
             labelIndex -> writeInterpolationValue(conversion.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", $lowerBound" -> println
-            "  br i1 %v$(labelIndex)_expression$(nodeIndex)_lower_valid, label %v$(labelIndex)_expression$(nodeIndex)_lower_ok, label %v$(labelIndex)_expression$(nodeIndex)_lower_fail" -> println
-            "v$(labelIndex)_expression$(nodeIndex)_lower_fail:" -> println
+            "  br i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_lower_valid, label %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_lower_ok, label %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_lower_fail" -> println
+            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_lower_fail:" -> println
             ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "lower", "numeric_conversion_lower", context, state)
-            "v$(labelIndex)_expression$(nodeIndex)_lower_ok:" -> println
+            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_lower_ok:" -> println
         }
     sourceUpperBits! > targetUpperBits! -> if {
         conversion.typeSymbol -> numericLiteralRange.maximumText(context.pointerBitWidth) => upperBound
-        "  %v$(labelIndex)_expression$(nodeIndex)_upper_valid = icmp " -> print
+        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_upper_valid = icmp " -> print
         sourceSigned -> if { "sle" -> print } else { "ule" -> print }
         " i$(sourceWidth) " -> print
         labelIndex -> writeInterpolationValue(conversion.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
         ", $upperBound" -> println
-        "  br i1 %v$(labelIndex)_expression$(nodeIndex)_upper_valid, label %v$(labelIndex)_expression$(nodeIndex)_upper_ok, label %v$(labelIndex)_expression$(nodeIndex)_upper_fail" -> println
-        "v$(labelIndex)_expression$(nodeIndex)_upper_fail:" -> println
+        "  br i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_upper_valid, label %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_upper_ok, label %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_upper_fail" -> println
+        "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_upper_fail:" -> println
         ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "upper", "numeric_conversion_upper", context, state)
-        "v$(labelIndex)_expression$(nodeIndex)_upper_ok:" -> println
+        "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_upper_ok:" -> println
     }
     targetBuiltin == 14 and sourceUpperBits! >= 16
         -> if {
-            "  %v$(labelIndex)_expression$(nodeIndex)_below_surrogate = icmp " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_below_surrogate = icmp " -> print
             sourceSigned -> if { "slt" -> print } else { "ult" -> print }
             " i$(sourceWidth) " -> print
             labelIndex -> writeInterpolationValue(conversion.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", 55296" -> println
-            "  %v$(labelIndex)_expression$(nodeIndex)_above_surrogate = icmp " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_above_surrogate = icmp " -> print
             sourceSigned -> if { "sgt" -> print } else { "ugt" -> print }
             " i$(sourceWidth) " -> print
             labelIndex -> writeInterpolationValue(conversion.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", 57343" -> println
-            "  %v$(labelIndex)_expression$(nodeIndex)_valid_scalar = or i1 %v$(labelIndex)_expression$(nodeIndex)_below_surrogate, %v$(labelIndex)_expression$(nodeIndex)_above_surrogate" -> println
-            "  br i1 %v$(labelIndex)_expression$(nodeIndex)_valid_scalar, label %v$(labelIndex)_expression$(nodeIndex)_scalar_ok, label %v$(labelIndex)_expression$(nodeIndex)_scalar_fail" -> println
-            "v$(labelIndex)_expression$(nodeIndex)_scalar_fail:" -> println
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_valid_scalar = or i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_below_surrogate, %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_above_surrogate" -> println
+            "  br i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_valid_scalar, label %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_scalar_ok, label %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_scalar_fail" -> println
+            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_scalar_fail:" -> println
             ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "scalar", "numeric_conversion_surrogate", context, state)
-            "v$(labelIndex)_expression$(nodeIndex)_scalar_ok:" -> println
+            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_scalar_ok:" -> println
         }
 }
 
@@ -1847,11 +1848,11 @@ writeDirectFoldRoleValue node: interpolation.InterpolationNode, sourceModule: In
     false
 }
 
-writeParallelRoleValue node: interpolation.InterpolationNode, sourceModule: Int, beforeIndex: Int, context: ref emitterContext.EmitContext -> Bool uses Console {
+writeParallelRoleValue node: interpolation.InterpolationNode, sourceModule: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
     node.kind == 1 -> if {
         sourceModule -> parallelRoleSymbolOwner(node.symbol, beforeIndex, context) => parallelOwner
         parallelOwner >= 0 -> if {
-            "%v$(parallelOwner)_item" -> print
+            "%v$(parallelOwner -> valueNameId(state))_item" -> print
             true -> return
         }
     }
@@ -1894,7 +1895,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
         valueIndex -> writeValue(ownerIndex, context, state)
         return
     }
-    node -> writeParallelRoleValue(sourceModule, beforeIndex, context)
+    node -> writeParallelRoleValue(sourceModule, beforeIndex, context, state)
         -> if { return }
     node.kind == 1 -> if {
         node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
@@ -1905,7 +1906,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
             }
         (bindingIndex -> asyncFrameBindingRoot(ownerIndex, context, state)) >= 0
             -> if {
-                "%v$(labelIndex)_expression$(nodeIndex)_mutable" -> print
+                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable" -> print
                 return
             }
     }
@@ -1974,7 +1975,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                         -> if {
                             context.ir[bindingIndex] => interpolationParameter
                             interpolationParameter.flags / 2 % 2 == 1 -> if {
-                                "%v$(labelIndex)_expression$(nodeIndex)_mutable" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable" -> print
                             } else {
                                 context -> writeParameterReference(ownerIndex, node.symbol) => parameterWritten
                             }
@@ -1982,11 +1983,11 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                             bindingIndex >= 0 -> if {
                                 context.ir[bindingIndex] => interpolationBinding
                                 interpolationBinding.kind == 29 -> if {
-                                    "%v$(bindingIndex)" -> print
+                                    "%v$(bindingIndex -> valueNameId(state))" -> print
                                 } else {
                                     bindingIndex -> mutableStorageRoot(context, state) => storageRoot
                                     storageRoot >= 0 -> if {
-                                        "%v$(labelIndex)_expression$(nodeIndex)_mutable" -> print
+                                        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mutable" -> print
                                     } else {
                                         context.ir[interpolationBinding.operand0] => interpolationBindingValue
                                         interpolationBindingValue.kind == 3 or interpolationBindingValue.kind == 4
@@ -2007,7 +2008,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                         }
                 }
             } else {
-                "%v$(labelIndex)_expression$(nodeIndex)" -> print
+                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
             }
         }
     }
@@ -2043,7 +2044,7 @@ interpolationReferenceValueTypeId nodeIndex: Int, nodes: ref [interpolation.Inte
 }
 
 emitInterpolationReferenceValue labelIndex: Int, nodeIndex: Int, valueTypeId: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
-    "  %v$(labelIndex)_expression$(nodeIndex)_reference_value = load " -> print
+    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_reference_value = load " -> print
     valueTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr " -> print
     labelIndex -> writeInterpolationValue(nodeIndex, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -2079,7 +2080,7 @@ interpolationCallArgumentUsesValue nodeIndex: Int, nodes: ref [interpolation.Int
 writeInterpolationScalarValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     nodeIndex -> interpolationReferenceValueTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => referenceValueTypeId
     referenceValueTypeId >= 0 -> if {
-        "%v$(labelIndex)_expression$(nodeIndex)_reference_value" -> print
+        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_reference_value" -> print
     } else {
         labelIndex -> writeInterpolationValue(nodeIndex, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
     }
@@ -2395,7 +2396,7 @@ emitInterpolationResultPropagation labelIndex: Int, nodeIndex: Int, nodes: ref [
     "  %interpolation$(labelIndex)_try$(nodeIndex)_ok_addr = getelementptr inbounds " -> print
     resultTypeId -> writeSemanticTypeId(context, state)
     ", ptr %interpolation$(labelIndex)_try$(nodeIndex)_slot, i32 0, i32 1" -> println
-    "  %v$(labelIndex)_expression$(nodeIndex) = load " -> print
+    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = load " -> print
     okTypeId -> writeSemanticTypeId(context, state)
     ", ptr %interpolation$(labelIndex)_try$(nodeIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
 }
@@ -2450,7 +2451,7 @@ emitInterpolationCallReferenceArgumentAllocas labelIndex: Int, nodeIndex: Int, n
                     context,
                     state) -> if {
                         context.types[context.ir[parameterIndex!].typeId].first => referenceOwnerType
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(argumentOrdinal!)_ref = alloca " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(argumentOrdinal!)_ref = alloca " -> print
                         referenceOwnerType -> writeSemanticTypeId(context, state)
                         ", align $(context.typeAligns[referenceOwnerType])" -> println
                     }
@@ -2466,7 +2467,7 @@ emitInterpolationFixedAllocas labelIndex: Int, nodeIndex: Int, nodes: ref [inter
     nodes[nodeIndex] => node
     node.kind == 3 and (node.opcode == -24 or node.opcode == -25)
         -> if {
-            "  %v$(labelIndex)_expression$(nodeIndex)_logical_slot = alloca i1, align 1" -> println
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_logical_slot = alloca i1, align 1" -> println
         }
     node.kind == 11 and node.operand0 >= 0 -> if {
         node -> semanticInterpolationNodeIndex(sourceModule, context) => semanticIndex
@@ -2489,7 +2490,7 @@ emitInterpolationFixedAllocas labelIndex: Int, nodeIndex: Int, nodes: ref [inter
             receiverTypeId >= 0 and context.types[receiverTypeId].kind == 13
                 -> if {
                     receiverTypeId -> boundedDictionaryLayoutForType(context) => layout
-                    "  %v$(labelIndex)_expression$(nodeIndex)_owner = alloca %sollang.bounded_dictionary.t$(receiverTypeId), align $(layout.align)" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_owner = alloca %sollang.bounded_dictionary.t$(receiverTypeId), align $(layout.align)" -> println
                 }
         }
     node.kind == 6 and node.opcode == -243 and node.operand0 >= 0 and node.operand1 >= 0
@@ -2517,7 +2518,7 @@ emitInterpolationFixedAllocas labelIndex: Int, nodeIndex: Int, nodes: ref [inter
                             ArrayStorageIdentity { resultDomain: 1, resultIndex: nodeIndex, labelIndex: labelIndex } => identity
                             arrayType.length * (literal.elementTypeId -> arrayElementStorageSize(context, state)) => byteLength
                             "  " -> print
-                            identity -> writeArrayStorageIdentity("_data")
+                            identity -> writeArrayStorageIdentity("_data", state)
                             " = alloca [$byteLength x i8], align " -> print
                             literal.elementTypeId -> arrayElementStorageAlign(context, state) -> writeDecimalLine
                         }
@@ -2765,7 +2766,7 @@ emitBoundedInterpolationDictionaryIndex labelIndex: Int, nodeIndex: Int, nodes: 
     dictionaryType.second => valueTypeId
     dictionaryTypeId -> boundedDictionaryLayoutForType(context) => layout
     Arena(0) => labelStorage!
-    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(labelStorage!) => prefix
+    "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(labelStorage!) => prefix
     isReference -> if {
         "  %$(prefix)_owner = freeze ptr " -> print
         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -2807,7 +2808,7 @@ emitInterpolationDictionaryIndex labelIndex: Int, nodeIndex: Int, nodes: ref [in
     keyType.symbol == 12 or keyType.symbol == 13 -> if { context.pointerBitWidth => hashWidth! }
     keyType.symbol -> integerSigned(context, state) => hashSigned
     Arena(0) => labelStorage!
-    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(labelStorage!) => prefix
+    "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(labelStorage!) => prefix
     "  %$(prefix)_dictionary = " -> print
     isReference -> if { "load %sollang.int_dictionary, ptr " -> print } else { "freeze %sollang.int_dictionary " -> print }
     labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -2885,7 +2886,7 @@ emitInterpolationContextualStruct labelIndex: Int, nodeIndex: Int, nodes: ref [i
             -> if { fieldCount! + 1 => fieldCount! }
     }
     fieldCount! == 0 -> if {
-        "  %v$(labelIndex)_expression$(nodeIndex) = freeze " -> print
+        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = freeze " -> print
         typeId -> writeSemanticTypeId(context, state)
         " poison" -> println
         return
@@ -2921,22 +2922,22 @@ emitInterpolationContextualStruct labelIndex: Int, nodeIndex: Int, nodes: ref [i
         context.fields[fieldIndex!].fieldType => fieldValueType
         context.types[fieldValueType].kind == 12 -> if {
             Arena(0) => prefixStorage!
-            "v$(labelIndex)_expression$(nodeIndex)_field$(ordinal!)_bounded" -> materialize(prefixStorage!) => prefix
+            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_field$(ordinal!)_bounded" -> materialize(prefixStorage!) => prefix
             prefix -> emitInterpolationBoundedValue(labelIndex, valueIndex!, fieldValueType, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
         }
         ordinal! + 1 == fieldCount! -> if {
-            "  %v$(labelIndex)_expression$(nodeIndex) = insertvalue " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = insertvalue " -> print
         } else {
-            "  %v$(labelIndex)_expression$(nodeIndex)_field$(ordinal!) = insertvalue " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_field$(ordinal!) = insertvalue " -> print
         }
         typeId -> writeSemanticTypeId(context, state)
         ordinal! == 0 -> if { " poison, " -> print } else {
-            " %v$(labelIndex)_expression$(nodeIndex)_field$(ordinal! - 1), " -> print
+            " %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_field$(ordinal! - 1), " -> print
         }
         context.fields[fieldIndex!].fieldType -> writeSemanticTypeId(context, state)
         " " -> print
         context.types[fieldValueType].kind == 12 -> if {
-            "%v$(labelIndex)_expression$(nodeIndex)_field$(ordinal!)_bounded" -> print
+            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_field$(ordinal!)_bounded" -> print
         } else { labelIndex -> writeInterpolationValue(valueIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
         ", $(ordinal!)" -> println
         ordinal! + 1 => ordinal!
@@ -2987,30 +2988,30 @@ emitInterpolationCallTemporaryDrops labelIndex: Int, callIndex: Int, targetIndex
         temporaryOrdinals![temporaryIndex!] => temporaryOrdinal
         temporaryOwner -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => temporaryTypeId
         context.types[temporaryTypeId].kind == 4 -> if {
-            "  %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal) = extractvalue %sollang.int_slice " -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal) = extractvalue %sollang.int_slice " -> print
             labelIndex -> writeInterpolationValue(temporaryOwner, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", 0" -> println
             temporaryTypeId -> semanticTypeOwns(context, state)
                 -> if {
-                    "  %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal)_elements = load " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal)_elements = load " -> print
                     temporaryTypeId -> writeSemanticTypeId(context, state)
-                    ", ptr %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal), align $(context.typeAligns[temporaryTypeId])" -> println
+                    ", ptr %v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal), align $(context.typeAligns[temporaryTypeId])" -> println
                     "  call void @sollang_drop_t$(temporaryTypeId)(" -> print
                     temporaryTypeId -> writeSemanticTypeId(context, state)
-                    " %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal)_elements)" -> println
+                    " %v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal)_elements)" -> println
                 }
-            "  call void @sollang_free(ptr %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal))" -> println
+            "  call void @sollang_free(ptr %v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal))" -> println
         } else {
             context.types[temporaryTypeId].kind == 12 -> if {
                 Arena(0) => prefixStorage!
-                "v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal)_bounded" -> materialize(prefixStorage!) => prefix
+                "v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal)_bounded" -> materialize(prefixStorage!) => prefix
                 prefix -> emitInterpolationBoundedValue(labelIndex, temporaryOwner, temporaryTypeId, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             }
             "  call void @sollang_drop_t$(temporaryTypeId)(" -> print
             temporaryTypeId -> writeSemanticTypeId(context, state)
             " " -> print
             context.types[temporaryTypeId].kind == 12 -> if {
-                "%v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal)_bounded" -> print
+                "%v$(labelIndex -> valueNameId(state))_expression$(callIndex)_temporary$(temporaryOrdinal)_bounded" -> print
             } else { labelIndex -> writeInterpolationValue(temporaryOwner, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
             ")" -> println
         }
@@ -3065,7 +3066,7 @@ writeInterpolationArrayElementValue labelIndex: Int, elementNode: Int, elementTy
     elementNode -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => sourceTypeId
     sourceTypeId >= 0 and context.types[sourceTypeId].kind == 8
         -> if {
-            "%v$(labelIndex)_expression$(elementNode)_reference_value" -> print
+            "%v$(labelIndex -> valueNameId(state))_expression$(elementNode)_reference_value" -> print
             return
         }
     context.types[elementTypeId] => elementType
@@ -3127,18 +3128,18 @@ emitInterpolationArray labelIndex: Int, nodeIndex: Int, nodes: ref [interpolatio
         context.types[literal.elementTypeId].kind == 12
             -> if {
                 Arena(0) => prefixStorage!
-                "v$(labelIndex)_expression$(nodeIndex)_element$(position!)_bounded" -> materialize(prefixStorage!) => prefix
+                "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_element$(position!)_bounded" -> materialize(prefixStorage!) => prefix
                 prefix -> emitInterpolationBoundedValue(labelIndex, elementNode, literal.elementTypeId, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             }
         identity -> emitArrayElementStorePrefix(position!, literal.elementTypeId, -1, context, state)
         context.types[literal.elementTypeId].kind == 12
             -> if {
-                "%v$(labelIndex)_expression$(nodeIndex)_element$(position!)_bounded" -> print
+                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_element$(position!)_bounded" -> print
             } else { labelIndex -> writeInterpolationArrayElementValue(elementNode, literal.elementTypeId, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
-        identity -> emitArrayElementStoreSuffix(position!, literal.elementTypeId -> arrayElementStorageAlign(context, state))
+        identity -> emitArrayElementStoreSuffix(position!, literal.elementTypeId -> arrayElementStorageAlign(context, state), state)
         position! + 1 => position!
     }
-    identity -> emitArrayStorageCarrier(length, capacity!, arrayType.kind == 2 or arrayType.kind == 4)
+    identity -> emitArrayStorageCarrier(length, capacity!, arrayType.kind == 2 or arrayType.kind == 4, state)
 }
 
 emitInterpolationSubtree labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, lexicalLoads: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -3156,7 +3157,7 @@ emitInterpolationSubtree labelIndex: Int, nodeIndex: Int, nodes: ref [interpolat
             labelIndex -> emitInterpolationSubtree(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state)
             "  store i1 " -> print
             node.opcode == -25 -> if { "0" -> print } else { "1" -> print }
-            ", ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
+            ", ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_logical_slot, align 1" -> println
             "  br i1 " -> print
             labelIndex -> writeInterpolationScalarValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", label %interpolation$(labelIndex)_logical$(nodeIndex)_" -> print
@@ -3168,10 +3169,10 @@ emitInterpolationSubtree labelIndex: Int, nodeIndex: Int, nodes: ref [interpolat
             labelIndex -> emitInterpolationSubtree(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state)
             "  store i1 " -> print
             labelIndex -> writeInterpolationScalarValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
-            ", ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
+            ", ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_logical_slot, align 1" -> println
             "  br label %interpolation$(labelIndex)_logical$(nodeIndex)_end" -> println
             "interpolation$(labelIndex)_logical$(nodeIndex)_end:" -> println
-            "  %v$(labelIndex)_expression$(nodeIndex) = load i1, ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = load i1, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_logical_slot, align 1" -> println
         } else {
             (node.kind == 8 or node.kind == 10) and node.argumentCount > 3
                 -> if {
@@ -3340,7 +3341,7 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 unaryType.kind == 1 and unaryType.origin == 1 and (unaryBuiltin == 20 or unaryBuiltin == 21)
                     -> if {
                         node.opcode -> numericUnaryOperation(unaryBuiltin) => operation
-                        "  %v$(labelIndex)_expression$(nodeIndex) = $operation " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = $operation " -> print
                         unaryBuiltin == 20 -> if { "float " -> print } else { "double " -> print }
                         unaryBuiltin -> numericUnaryZero -> print
                         ", " -> print
@@ -3356,23 +3357,23 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
         and context.binaryComparisonDiagnosticByNode[semanticIndex].textEquality
         -> if {
             node.opcode == grammar.tokenIdBangEqual() -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex)_text_equal = call i1 @sollang_text_equal(%sollang.text " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_text_equal = call i1 @sollang_text_equal(%sollang.text " -> print
             } else {
-                "  %v$(labelIndex)_expression$(nodeIndex) = call i1 @sollang_text_equal(%sollang.text " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = call i1 @sollang_text_equal(%sollang.text " -> print
             }
             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", %sollang.text " -> print
             labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ")" -> println
             node.opcode == grammar.tokenIdBangEqual() -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex) = xor i1 %v$(labelIndex)_expression$(nodeIndex)_text_equal, true" -> println
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = xor i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_text_equal, true" -> println
             }
             return
         }
     node -> interpolationFloatComparisonBuiltin(sourceModule, context) => floatComparisonBuiltin
     floatComparisonBuiltin >= 0 -> if {
         node.opcode -> floatBinaryOperation => comparisonOperation
-        "  %v$(labelIndex)_expression$(nodeIndex) = $(comparisonOperation) " -> print
+        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = $(comparisonOperation) " -> print
         floatComparisonBuiltin == 20 -> if { "float " -> print } else { "double " -> print }
         labelIndex -> writeInterpolationFloatScalarValue(node.operand0, floatComparisonBuiltin, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
         ", " -> print
@@ -3398,7 +3399,7 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                                 node.opcode == grammar.tokenIdSlash() -> if { "fdiv" => floatOperation! }
                                 node.opcode == grammar.tokenIdPercent() -> if { "frem" => floatOperation! }
                                 floatOperation! != "" -> if {
-                                    "  %v$(labelIndex)_expression$(nodeIndex) = $(floatOperation!) " -> print
+                                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = $(floatOperation!) " -> print
                                     builtin == 20 -> if { "float " -> print } else { "double " -> print }
                                     labelIndex -> writeInterpolationFloatScalarValue(node.operand0, builtin, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                                     ", " -> print
@@ -3446,7 +3447,7 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             and leftWidth < operationWidth!
             and nodes[node.operand0].kind != 0
             -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex)_left_wide = " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_left_wide = " -> print
                 node.operand0 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     -> if { "sext" -> print } else { "zext" -> print }
                 " i$(leftWidth) " -> print
@@ -3459,14 +3460,14 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             and rightWidth! < operationWidth!
             and nodes[node.operand1].kind != 0
             -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex)_right_wide = " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_right_wide = " -> print
                 node.operand1 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     -> if { "sext" -> print } else { "zext" -> print }
                 " i$(rightWidth!) " -> print
                 labelIndex -> writeInterpolationScalarValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 " to i$(operationWidth!)" -> println
             }
-        "  %v$(labelIndex)_expression$(nodeIndex) = $(operation!) " -> print
+        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = $(operation!) " -> print
         boolOperands! -> if { "i1 " -> print } else { "i$(operationWidth!) " -> print }
         node.kind == 2 and node.opcode != -26 -> if {
             "0, " -> print
@@ -3477,7 +3478,7 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 and leftWidth > 0
                 and leftWidth < operationWidth!
                 and nodes[node.operand0].kind != 0
-                -> if { "%v$(labelIndex)_expression$(nodeIndex)_left_wide" -> print } else {
+                -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_left_wide" -> print } else {
                     labelIndex -> writeInterpolationScalarValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 }
             ", " -> print
@@ -3488,7 +3489,7 @@ emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     and rightWidth! > 0
                     and rightWidth! < operationWidth!
                     and nodes[node.operand1].kind != 0
-                    -> if { "%v$(labelIndex)_expression$(nodeIndex)_right_wide" -> print } else {
+                    -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_right_wide" -> print } else {
                         labelIndex -> writeInterpolationScalarValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     }
                 "" -> println
@@ -3556,14 +3557,14 @@ emitInterpolationSetContains prefix: Text, labelIndex: Int, nodeIndex: Int, node
     "$(prefix)_not_found:" -> println
     "  br label %$(prefix)_complete" -> println
     "$(prefix)_complete:" -> println
-    "  %v$(labelIndex)_expression$(nodeIndex) = phi i1 [ true, %$(prefix)_present ], [ false, %$(prefix)_not_found ]" -> println
+    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = phi i1 [ true, %$(prefix)_present ], [ false, %$(prefix)_not_found ]" -> println
 }
 
 emitInterpolationCallTargetLoad labelIndex: Int, nodeIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[functionIndex] => function
     function -> isNativeFunction(context, state) -> if {
         function -> isImportedLibraryFunction(context, state) => imported
-        "  %v$(labelIndex)_expression$(nodeIndex)_target = load ptr, ptr " -> print
+        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_target = load ptr, ptr " -> print
         function.sourceModule -> writeNativeFunctionPointerSlot(function.symbol, imported, context)
         ", align 8" -> println
     }
@@ -3594,7 +3595,7 @@ writeInterpolationCaptureEnvironment labelIndex: Int, nodeIndex: Int, functionIn
 writeInterpolationCallTarget labelIndex: Int, nodeIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[functionIndex] => function
     function -> isNativeFunction(context, state) -> if {
-        " %v$(labelIndex)_expression$(nodeIndex)_target" -> print
+        " %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_target" -> print
     } else {
         " @sollang_m$(function.sourceModule)_s$(function.symbol)" -> print
         context -> emitterContext.isGenericInstance(functionIndex)
@@ -3603,9 +3604,9 @@ writeInterpolationCallTarget labelIndex: Int, nodeIndex: Int, functionIndex: Int
     "(" -> print
 }
 
-emitInterpolationIndexBounds labelIndex: Int, nodeIndex: Int, category: Text -> Unit uses Console {
-    "  %v$(labelIndex)_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex)_expression$(nodeIndex)_index, %v$(labelIndex)_expression$(nodeIndex)_length" -> println
-    "  br i1 %v$(labelIndex)_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_$(category)$(nodeIndex)_valid, label %interpolation$(labelIndex)_$(category)$(nodeIndex)_invalid" -> println
+emitInterpolationIndexBounds labelIndex: Int, nodeIndex: Int, category: Text, state: ref CoreEmitterState -> Unit uses Console {
+    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index, %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length" -> println
+    "  br i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_$(category)$(nodeIndex)_valid, label %interpolation$(labelIndex)_$(category)$(nodeIndex)_invalid" -> println
     "interpolation$(labelIndex)_$(category)$(nodeIndex)_invalid:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
@@ -3663,12 +3664,12 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             # Callback-role operands may lack a separate lexical type record.
             memberField.ownerType => memberOwnerTypeId!
             memberOwnerReference! -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex)_address = getelementptr inbounds " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_address = getelementptr inbounds " -> print
                 memberOwnerTypeId! -> writeSemanticTypeId(context, state)
                 ", ptr " -> print
                 labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 ", i32 0, i32 $(memberField.ordinal)" -> println
-                "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                 context.types[memberField.fieldType].kind == 12
                     -> if { "_bounded_value" -> print }
                 " = load " -> print
@@ -3678,9 +3679,9 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     } else {
                         memberField.fieldType -> writeSemanticTypeId(context, state)
                     }
-                ", ptr %v$(labelIndex)_expression$(nodeIndex)_address, align $(context.typeAligns[memberField.fieldType])" -> println
+                ", ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_address, align $(context.typeAligns[memberField.fieldType])" -> println
             } else {
-                "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                 context.types[memberField.fieldType].kind == 12
                     -> if { "_bounded_value" -> print }
                 " = extractvalue " -> print
@@ -3692,7 +3693,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             context.types[memberField.fieldType].kind == 12
                 -> if {
                     Arena(0) => prefixStorage!
-                    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
+                    "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
                     prefix -> emitStoredBoundedValueHandle(memberField.fieldType, context, state)
                 }
         } else {
@@ -3706,12 +3707,12 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     and not (computedMethod -> isNativeFunction(context, state)) => computedUsesBoundedInput
                 computedUsesBoundedInput -> if {
                     Arena(0) => prefixStorage!
-                    "v$(labelIndex)_expression$(nodeIndex)_arg0_bounded" -> materialize(prefixStorage!) => prefix
+                    "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg0_bounded" -> materialize(prefixStorage!) => prefix
                     prefix -> emitInterpolationBoundedValue(labelIndex, node.operand0, computedBoundedInput, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 }
                 labelIndex -> emitInterpolationCaptureEnvironment(nodeIndex, computedMethodIndex, ownerIndex, context, state)
                 labelIndex -> emitInterpolationCallTargetLoad(nodeIndex, computedMethodIndex, context, state)
-                "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                 computedBoundedResult >= 0 -> if { "_bounded_value" -> print }
                 " = call " -> print
                 computedBoundedResult >= 0 -> if {
@@ -3724,12 +3725,12 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 } else { computedParameter -> writeIrType(context, state) }
                 " " -> print
                 computedUsesBoundedInput -> if {
-                    "%v$(labelIndex)_expression$(nodeIndex)_arg0_bounded" -> print
+                    "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg0_bounded" -> print
                 } else { labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
                 ")" -> println
                 computedBoundedResult >= 0 -> if {
                     Arena(0) => prefixStorage!
-                    "v$(labelIndex)_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
+                    "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
                     prefix -> emitStoredBoundedValueHandle(computedBoundedResult, context, state)
                 }
             }
@@ -3752,14 +3753,14 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         and not (callTarget -> isNativeFunction(context, state))
                         -> if {
                             Arena(0) => prefixStorage!
-                            "v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_bounded" -> materialize(prefixStorage!) => prefix
+                            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_bounded" -> materialize(prefixStorage!) => prefix
                             prefix -> emitInterpolationBoundedValue(labelIndex, projectionArgumentIndex!, boundedInput, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
                     context.ir[projectionParameterIndex!].flags / 2 % 2 == 1
                         -> if {
                             nodes[projectionArgumentIndex!] -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => mutableBindingIndex
                             mutableBindingIndex >= 0 -> if {
-                                "v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_mutable"
+                                "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_mutable"
                                     -> emitMutableBorrowPlace(projectionParameterIndex!, mutableBindingIndex, ownerIndex, context, state)
                             }
                         }
@@ -3774,16 +3775,16 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         context.types[context.ir[projectionParameterIndex!].typeId].first => referenceOwnerType
                         context.types[referenceOwnerType].kind == 12 -> if {
                             Arena(0) => prefixStorage!
-                            "v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_ref_value" -> materialize(prefixStorage!) => prefix
+                            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_ref_value" -> materialize(prefixStorage!) => prefix
                             prefix -> emitInterpolationBoundedValue(labelIndex, projectionArgumentIndex!, referenceOwnerType, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
                         "  store " -> print
                         referenceOwnerType -> writeSemanticTypeId(context, state)
                         " " -> print
                         context.types[referenceOwnerType].kind == 12 -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_ref_value" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_ref_value" -> print
                         } else { labelIndex -> writeInterpolationValue(projectionArgumentIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
-                        ", ptr %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_ref, align $(context.typeAligns[referenceOwnerType])" -> println
+                        ", ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_ref, align $(context.typeAligns[referenceOwnerType])" -> println
                     }
                     projectionArgumentIndex! -> interpolationCallArgumentNeedsSliceProjection(
                     projectionParameterIndex!,
@@ -3800,25 +3801,25 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         projectionReference and projectionTypeId! >= 0 and context.types[projectionTypeId!].kind == 12 => boundedSliceReference
                         boundedSliceReference -> if {
                             Arena(0) => prefixStorage!
-                            "v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> materialize(prefixStorage!) => prefix
+                            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> materialize(prefixStorage!) => prefix
                             prefix -> emitInterpolationBoundedReference(labelIndex, projectionArgumentIndex!, projectionTypeId!, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_data = extractvalue " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_data = extractvalue " -> print
                         projectionTypeId! -> writeInterpolationRuntimeTypeId(context, state)
                         " " -> print
                         boundedSliceReference -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> print
                         } else { labelIndex -> writeInterpolationValue(projectionArgumentIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
                         ", 0" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_length = extractvalue " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_length = extractvalue " -> print
                         projectionTypeId! -> writeInterpolationRuntimeTypeId(context, state)
                         " " -> print
                         boundedSliceReference -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> print
                         } else { labelIndex -> writeInterpolationValue(projectionArgumentIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
                         ", 1" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0 = insertvalue %sollang.int_slice poison, ptr %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_data, 0" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice = insertvalue %sollang.int_slice %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0, i64 %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_length, 1" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0 = insertvalue %sollang.int_slice poison, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_data, 0" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice = insertvalue %sollang.int_slice %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0, i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_length, 1" -> println
                     }
                     projectionArgumentOrdinal! == 0 -> if { callTarget.nextOperand => projectionParameterIndex! } else { context.ir[projectionParameterIndex!].nextOperand => projectionParameterIndex! }
                     projectionArgumentOrdinal! + 1 => projectionArgumentOrdinal!
@@ -3826,7 +3827,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 }
             labelIndex -> emitInterpolationCaptureEnvironment(nodeIndex, callTargetFunction, ownerIndex, context, state)
             labelIndex -> emitInterpolationCallTargetLoad(nodeIndex, callTargetFunction, context, state)
-            "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
             boundedCallResult >= 0 -> if { "_bounded_value" -> print }
             " = call " -> print
             boundedCallResult >= 0 -> if {
@@ -3847,7 +3848,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                             -> if {
                                 "ptr " -> print
                             } else { "%sollang.mutable_container " -> print }
-                        "%v$(labelIndex)_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_mutable" -> print
+                        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_mutable" -> print
                     } else {
                         callParameter -> boundedArrayValueTypeId(context, state) => boundedArgumentType
                         boundedArgumentType >= 0 and not (callTarget -> isNativeFunction(context, state)) => boundedArgument
@@ -3857,7 +3858,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         " " -> print
                         nodes[callArgumentIndex!] => callArgument
                         boundedArgument -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_bounded" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_bounded" -> print
                         } else { callArgumentIndex! -> interpolationCallArgumentNeedsReferenceSlot(
                             callParameterIndex!,
                             nodes,
@@ -3866,7 +3867,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                             beforeIndex,
                             context,
                             state) -> if {
-                                "%v$(labelIndex)_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_ref" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_ref" -> print
                             } else { callArgumentIndex! -> interpolationCallArgumentNeedsSliceProjection(
                                 callParameterIndex!,
                                 nodes,
@@ -3875,13 +3876,13 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                                 beforeIndex,
                                 context,
                                 state) -> if {
-                                    "%v$(labelIndex)_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_slice" -> print
+                                    "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_arg$(callArgumentOrdinal!)_slice" -> print
                                 } else {
                                     context.types[callParameter.typeId] => parameterType
                                     callArgumentIndex! -> interpolationReferenceReadTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => argumentReadTypeId
                                     parameterType.kind != 8 and argumentReadTypeId >= 0 and argumentReadTypeId == callParameter.typeId
                                         -> if {
-                                            "%v$(labelIndex)_expression$(callArgumentIndex!)_reference_value" -> print
+                                            "%v$(labelIndex -> valueNameId(state))_expression$(callArgumentIndex!)_reference_value" -> print
                                         } else { parameterType.kind == 1 and parameterType.origin == 1
                                                 and ((parameterType.symbol -> typeIds.canonicalBuiltinSymbol) == 20
                                                 or (parameterType.symbol -> typeIds.canonicalBuiltinSymbol) == 21)
@@ -3909,7 +3910,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             ")" -> println
             boundedCallResult >= 0 -> if {
                 Arena(0) => prefixStorage!
-                "v$(labelIndex)_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
+                "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
                 prefix -> emitStoredBoundedValueHandle(boundedCallResult, context, state)
             }
             labelIndex -> emitInterpolationCallTemporaryDrops(nodeIndex, callTargetFunction, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -3944,7 +3945,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             and conversionSourceFloatWidth! != conversionTargetFloatWidth!
             and not conversionLiteralToFloat
             -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = " -> print
                 conversionSourceFloatWidth! > conversionTargetFloatWidth!
                     -> if { "fptrunc " -> print }
                 conversionSourceFloatWidth! < conversionTargetFloatWidth!
@@ -3957,7 +3958,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
         not conversionSourceIsFloat! and conversionSourceWidth > 0 and conversionTargetFloatWidth! > 0
             and not conversionLiteralToFloat
             -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = " -> print
                 node.operand0 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     -> if { "sitofp" -> print } else { "uitofp" -> print }
                 " i$(conversionSourceWidth) " -> print
@@ -3966,7 +3967,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             }
         conversionSourceIsFloat! and conversionTargetWidth! > 0
             -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = " -> print
                 node.typeSymbol -> integerSigned(context, state)
                     -> if { "fptosi " -> print } else { "fptoui " -> print }
                 conversionSourceFloatWidth! == 32 -> if { "float " -> print } else { "double " -> print }
@@ -3980,7 +3981,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         labelIndex -> emitInterpolationIntegerConversionChecks(nodeIndex, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         node.typeSymbol == 23 or conversionSourceWidth != conversionTargetWidth!
                             -> if {
-                                "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
+                                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = " -> print
                                 node.typeSymbol == 23 -> if {
                                     "icmp ne i$(conversionSourceWidth) " -> print
                                     labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -4021,43 +4022,43 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                             context.types[lengthSourceType].kind == 8 => boundedReference
                             boundedReference -> if {
                                 Arena(0) => prefixStorage!
-                                "v$(labelIndex)_expression$(nodeIndex)_length_source" -> materialize(prefixStorage!) => prefix
+                                "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length_source" -> materialize(prefixStorage!) => prefix
                                 prefix -> emitInterpolationBoundedReference(labelIndex, node.operand0, bitSetLengthTypeId!, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             }
-                            "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                             lengthResultWidth == 32 -> if { "_raw" -> print }
                             " = extractvalue %sollang.array.i32 " -> print
                             boundedReference -> if {
-                                "%v$(labelIndex)_expression$(nodeIndex)_length_source" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length_source" -> print
                             } else { labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
                             ", 1" -> println
                             true => lengthFromI64!
                         } else { context.types[bitSetLengthTypeId!].kind == 4 -> if {
-                                "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                                 lengthResultWidth == 32 -> if { "_raw" -> print }
                                 " = add i64 0, $(context.types[bitSetLengthTypeId!].length)" -> println
                                 true => lengthFromI64!
                             } else {
-                                "  %v$(labelIndex)_expression$(nodeIndex) = add i32 0, $(context.types[bitSetLengthTypeId!].length)" -> println
+                                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = add i32 0, $(context.types[bitSetLengthTypeId!].length)" -> println
                         } }
                 } else { lengthReference! -> if {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_length_source = load " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length_source = load " -> print
                         bitSetLengthTypeId! -> writeSemanticTypeId(context, state)
                         ", ptr " -> print
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         ", align $(context.typeAligns[bitSetLengthTypeId!])" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                         lengthResultWidth == 32 -> if { "_raw" -> print }
                         " = extractvalue " -> print
                         bitSetLengthTypeId! -> writeSemanticTypeId(context, state)
-                        " %v$(labelIndex)_expression$(nodeIndex)_length_source" -> print
+                        " %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length_source" -> print
                         context.types[bitSetLengthTypeId!].kind == 13
                             -> if { ", 0" -> println } else { ", 1" -> println }
                         true => lengthFromI64!
                     } else {
                         base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => baseBinding
                         baseBinding >= 0 -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                             lengthResultWidth == 32 -> if { "_raw" -> print }
                             " = extractvalue " -> print
                             context.ir[baseBinding] -> writeIrType(context, state)
@@ -4076,7 +4077,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                             projectedBaseTypeId! >= 0 -> if {
                                 context.types[projectedBaseTypeId!] => projectedBaseType
                                 projectedBaseType.kind == 4 -> if {
-                                    "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                                     lengthResultWidth == 32 -> if { "_raw" -> print }
                                     " = add i64 0, $(projectedBaseType.length)" -> println
                                     true => lengthFromI64!
@@ -4089,7 +4090,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                                     and projectedBaseType.origin == 1
                                     and (projectedBaseType.symbol == 1
                                     or projectedBaseType.symbol == 15)) -> if {
-                                        "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                                         lengthResultWidth == 32 -> if { "_raw" -> print }
                                         " = extractvalue " -> print
                                         projectedBaseType.kind == 2 -> if {
@@ -4106,7 +4107,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         }
                 } }
             lengthFromI64! and lengthResultWidth == 32 -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex) = trunc i64 %v$(labelIndex)_expression$(nodeIndex)_raw to i32" -> println
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = trunc i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_raw to i32" -> println
             }
         }
         node.opcode == -236 -> if {
@@ -4122,31 +4123,31 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             capacityField >= 0 -> if {
                 context.types[capacityType!].kind == 13 or context.types[capacityType!].kind == 12
                     -> if {
-                        "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                         capacityResultWidth == 32 -> if { "_raw" -> print }
                         " = add i64 0, $(context.types[capacityType!].length)" -> println
                     } else {
                         capacityReference! -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_capacity_source = load " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_capacity_source = load " -> print
                             capacityType! -> writeSemanticTypeId(context, state)
                             ", ptr " -> print
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             ", align 8" -> println
                         }
-                        "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                         capacityResultWidth == 32 -> if { "_raw" -> print }
                         " = extractvalue " -> print
                         capacityType! -> writeSemanticTypeId(context, state)
                         " " -> print
                         capacityReference! -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_capacity_source" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_capacity_source" -> print
                         } else {
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
                         ", $capacityField" -> println
                     }
                 capacityResultWidth == 32 -> if {
-                    "  %v$(labelIndex)_expression$(nodeIndex) = trunc i64 %v$(labelIndex)_expression$(nodeIndex)_raw to i32" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = trunc i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_raw to i32" -> println
                 }
             }
         }
@@ -4168,19 +4169,19 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         bitSetBinding -> mutableStorageRoot(context, state) => bitSetStorageRoot!
                     }
                     bitSetStorageRoot! >= 0 -> if {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(bitSetStorageRoot!), align 8" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(bitSetStorageRoot!), align 8" -> println
                     } else {
                         bitSetReference! -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr " -> print
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             ", align 8" -> println
                         }
                     }
                     0 => countWord!
                     countWord! < wordCount -> while {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_word$(countWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word$(countWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
                         bitSetStorageRoot! >= 0 or bitSetReference! -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_source" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print
                         } else {
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
@@ -4188,32 +4189,32 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         countWord! == wordCount - 1 and bitCount % 64 != 0
                             -> if {
                                 bitCount -> bitSetCountTailMask => tailMask
-                                "  %v$(labelIndex)_expression$(nodeIndex)_tail$(countWord!) = and i64 %v$(labelIndex)_expression$(nodeIndex)_word$(countWord!), $tailMask" -> println
+                                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_tail$(countWord!) = and i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word$(countWord!), $tailMask" -> println
                             }
-                        "  %v$(labelIndex)_expression$(nodeIndex)_pop$(countWord!) = call i64 @llvm.ctpop.i64(i64 " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_pop$(countWord!) = call i64 @llvm.ctpop.i64(i64 " -> print
                         countWord! == wordCount - 1 and bitCount % 64 != 0
                             -> if {
-                                "%v$(labelIndex)_expression$(nodeIndex)_tail$(countWord!)" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_tail$(countWord!)" -> print
                             } else {
-                                "%v$(labelIndex)_expression$(nodeIndex)_word$(countWord!)" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word$(countWord!)" -> print
                             }
                         ")" -> println
                         countWord! > 0 -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_sum$(countWord!) = add i64 " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_sum$(countWord!) = add i64 " -> print
                             countWord! == 1 -> if {
-                                "%v$(labelIndex)_expression$(nodeIndex)_pop0" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_pop0" -> print
                             } else {
-                                "%v$(labelIndex)_expression$(nodeIndex)_sum$(countWord! - 1)" -> print
+                                "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_sum$(countWord! - 1)" -> print
                             }
-                            ", %v$(labelIndex)_expression$(nodeIndex)_pop$(countWord!)" -> println
+                            ", %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_pop$(countWord!)" -> println
                         }
                         countWord! + 1 => countWord!
                     }
-                    "  %v$(labelIndex)_expression$(nodeIndex) = trunc i64 " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = trunc i64 " -> print
                     wordCount == 1 -> if {
-                        "%v$(labelIndex)_expression$(nodeIndex)_pop0" -> print
+                        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_pop0" -> print
                     } else {
-                        "%v$(labelIndex)_expression$(nodeIndex)_sum$(wordCount - 1)" -> print
+                        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_sum$(wordCount - 1)" -> print
                     }
                     " to i32" -> println
                 }
@@ -4230,37 +4231,37 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 -> if {
                     context.types[containsTypeId!].length => containsBitCount
                     (containsBitCount + 63) / 64 => containsWordCount
-                    "  %v$(labelIndex)_expression$(nodeIndex)_valid = icmp ult i32 " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_valid = icmp ult i32 " -> print
                     labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     ", $containsBitCount" -> println
-                    "  br i1 %v$(labelIndex)_expression$(nodeIndex)_valid, label %bitset$(labelIndex)_$(nodeIndex)_index_ok, label %bitset$(labelIndex)_$(nodeIndex)_index_fail" -> println
+                    "  br i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_valid, label %bitset$(labelIndex)_$(nodeIndex)_index_ok, label %bitset$(labelIndex)_$(nodeIndex)_index_fail" -> println
                     "bitset$(labelIndex)_$(nodeIndex)_index_fail:" -> println
                     "  call void @llvm.trap()" -> println
                     "  unreachable" -> println
                     "bitset$(labelIndex)_$(nodeIndex)_index_ok:" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_index = zext i32 " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index = zext i32 " -> print
                     labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     " to i64" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_word_index = lshr i64 %v$(labelIndex)_expression$(nodeIndex)_index, 6" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_bit_index = and i64 %v$(labelIndex)_expression$(nodeIndex)_index, 63" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_mask = shl i64 1, %v$(labelIndex)_expression$(nodeIndex)_bit_index" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word_index = lshr i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index, 6" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_bit_index = and i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index, 63" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mask = shl i64 1, %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_bit_index" -> println
                     base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => containsBinding
                     -1 => containsRoot!
                     containsBinding >= 0 -> if { containsBinding -> mutableStorageRoot(context, state) => containsRoot! }
                     containsRoot! >= 0 -> if {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr %slot$(containsRoot!), align 8" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr %slot$(containsRoot!), align 8" -> println
                     } else {
                         containsReference! -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.bitset.t$(containsTypeId!), ptr " -> print
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             ", align 8" -> println
                         }
                     }
                     0 => containsWord!
                     containsWord! < containsWordCount -> while {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_word$(containsWord!) = extractvalue %sollang.bitset.t$(containsTypeId!) " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word$(containsWord!) = extractvalue %sollang.bitset.t$(containsTypeId!) " -> print
                         containsRoot! >= 0 or containsReference! -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_source" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print
                         } else {
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
@@ -4269,24 +4270,24 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     }
                     1 => containsSelectWord!
                     containsSelectWord! < containsWordCount -> while {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_is_word$(containsSelectWord!) = icmp eq i64 %v$(labelIndex)_expression$(nodeIndex)_word_index, $(containsSelectWord!)" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)_selected$(containsSelectWord!) = select i1 %v$(labelIndex)_expression$(nodeIndex)_is_word$(containsSelectWord!), i64 %v$(labelIndex)_expression$(nodeIndex)_word$(containsSelectWord!), i64 " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_is_word$(containsSelectWord!) = icmp eq i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word_index, $(containsSelectWord!)" -> println
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_selected$(containsSelectWord!) = select i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_is_word$(containsSelectWord!), i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word$(containsSelectWord!), i64 " -> print
                         containsSelectWord! == 1 -> if {
-                            "%v$(labelIndex)_expression$(nodeIndex)_word0" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word0" -> print
                         } else {
-                            "%v$(labelIndex)_expression$(nodeIndex)_selected$(containsSelectWord! - 1)" -> print
+                            "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_selected$(containsSelectWord! - 1)" -> print
                         }
                         "" -> println
                         containsSelectWord! + 1 => containsSelectWord!
                     }
-                    "  %v$(labelIndex)_expression$(nodeIndex)_masked = and i64 " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_masked = and i64 " -> print
                     containsWordCount == 1 -> if {
-                        "%v$(labelIndex)_expression$(nodeIndex)_word0" -> print
+                        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_word0" -> print
                     } else {
-                        "%v$(labelIndex)_expression$(nodeIndex)_selected$(containsWordCount - 1)" -> print
+                        "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_selected$(containsWordCount - 1)" -> print
                     }
-                    ", %v$(labelIndex)_expression$(nodeIndex)_mask" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex) = icmp ne i64 %v$(labelIndex)_expression$(nodeIndex)_masked, 0" -> println
+                    ", %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_mask" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = icmp ne i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_masked, 0" -> println
                 }
             containsTypeId! >= 0 and context.types[containsTypeId!].kind == 7
                 and context.types[containsTypeId!].origin == 4 and context.types[containsTypeId!].symbol == 5
@@ -4303,35 +4304,35 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 }
             byteTypeId! >= 0 -> if {
                 byteReference! -> if {
-                    "  %v$(labelIndex)_expression$(nodeIndex)_source = load " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load " -> print
                     byteTypeId! -> writeSemanticTypeId(context, state)
                     ", ptr " -> print
                     labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     ", align 8" -> println
                 }
-                "  %v$(labelIndex)_expression$(nodeIndex)_base = extractvalue " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_base = extractvalue " -> print
                 byteTypeId! -> writeSemanticTypeId(context, state)
                 " " -> print
-                byteReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                byteReference! -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print } else {
                     labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 }
                 ", 0" -> println
-                "  %v$(labelIndex)_expression$(nodeIndex)_length = extractvalue " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length = extractvalue " -> print
                 byteTypeId! -> writeSemanticTypeId(context, state)
                 " " -> print
-                byteReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                byteReference! -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print } else {
                     labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 }
                 ", 1" -> println
                 node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => byteIndexWidth
-                "  %v$(labelIndex)_expression$(nodeIndex)_index = " -> print
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index = " -> print
                 byteIndexWidth < 64 -> if { "zext i$(byteIndexWidth) " -> print } else { "add i64 0, " -> print }
                 labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 byteIndexWidth < 64 -> if { " to i64" -> print }
                 "" -> println
-                labelIndex -> emitInterpolationIndexBounds(nodeIndex, "byte")
-                "  %v$(labelIndex)_expression$(nodeIndex)_address = getelementptr i8, ptr %v$(labelIndex)_expression$(nodeIndex)_base, i64 %v$(labelIndex)_expression$(nodeIndex)_index" -> println
-                "  %v$(labelIndex)_expression$(nodeIndex) = load i8, ptr %v$(labelIndex)_expression$(nodeIndex)_address, align 1" -> println
+                labelIndex -> emitInterpolationIndexBounds(nodeIndex, "byte", state)
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_address = getelementptr i8, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_base, i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index" -> println
+                "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = load i8, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_address, align 1" -> println
             }
         }
         node.opcode == -203 and node.operand1 >= 0 and node.operand2 >= 0
@@ -4360,13 +4361,13 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => argumentIndexWidth
                     argumentIndexWidth > 0 and argumentIndexWidth < 64
                         -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_index = zext i$(argumentIndexWidth) " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index = zext i$(argumentIndexWidth) " -> print
                             labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             " to i64" -> println
                         }
-                    "  %v$(labelIndex)_expression$(nodeIndex) = call %sollang.text @sollang_argument(i64 " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = call %sollang.text @sollang_argument(i64 " -> print
                     argumentIndexWidth > 0 and argumentIndexWidth < 64
-                        -> if { "%v$(labelIndex)_expression$(nodeIndex)_index" -> print } else {
+                        -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index" -> print } else {
                             labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
                     ")" -> println
@@ -4377,35 +4378,35 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 and (context.types[indexedContainerTypeId!].symbol == 17 or context.types[indexedContainerTypeId!].symbol == 18)
                 -> if {
                     indexedReference! -> if {
-                        "  %v$(labelIndex)_expression$(nodeIndex)_source = load %sollang.mapped_bytes, ptr " -> print
+                        "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load %sollang.mapped_bytes, ptr " -> print
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         ", align 8" -> println
                     }
                     node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => mappedIndexWidth!
                     mappedIndexWidth! <= 0 -> if { 32 => mappedIndexWidth! }
-                    "  %v$(labelIndex)_expression$(nodeIndex)_index = " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index = " -> print
                     mappedIndexWidth! < 64 -> if { "zext i$(mappedIndexWidth!) " -> print } else { "add i64 0, " -> print }
                     labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     mappedIndexWidth! < 64 -> if { " to i64" -> print }
                     "" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_length = extractvalue %sollang.mapped_bytes " -> print
-                    indexedReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length = extractvalue %sollang.mapped_bytes " -> print
+                    indexedReference! -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print } else {
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     }
                     ", 1" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex)_expression$(nodeIndex)_index, %v$(labelIndex)_expression$(nodeIndex)_length" -> println
-                    "  br i1 %v$(labelIndex)_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_mapped$(nodeIndex)_valid, label %interpolation$(labelIndex)_mapped$(nodeIndex)_invalid" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index, %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length" -> println
+                    "  br i1 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_mapped$(nodeIndex)_valid, label %interpolation$(labelIndex)_mapped$(nodeIndex)_invalid" -> println
                     "interpolation$(labelIndex)_mapped$(nodeIndex)_invalid:" -> println
                     "  call void @llvm.trap()" -> println
                     "  unreachable" -> println
                     "interpolation$(labelIndex)_mapped$(nodeIndex)_valid:" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_data = extractvalue %sollang.mapped_bytes " -> print
-                    indexedReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_data = extractvalue %sollang.mapped_bytes " -> print
+                    indexedReference! -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print } else {
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     }
                     ", 0" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_ptr = getelementptr i8, ptr %v$(labelIndex)_expression$(nodeIndex)_data, i64 %v$(labelIndex)_expression$(nodeIndex)_index" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex) = load i8, ptr %v$(labelIndex)_expression$(nodeIndex)_ptr, align 1" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_ptr = getelementptr i8, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_data, i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex) = load i8, ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_ptr, align 1" -> println
                 }
             indexedContainerTypeId! >= 0
                 and (context.types[indexedContainerTypeId!].kind == 5 or context.types[indexedContainerTypeId!].kind == 13)
@@ -4422,12 +4423,12 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     indexedReference! and indexedContainerType.kind == 12
                         -> if {
                             Arena(0) => prefixStorage!
-                            "v$(labelIndex)_expression$(nodeIndex)_source" -> materialize(prefixStorage!) => prefix
+                            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> materialize(prefixStorage!) => prefix
                             prefix -> emitInterpolationBoundedReference(labelIndex, node.operand0, indexedContainerTypeId!, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                         }
                     indexedReference! and indexedContainerType.kind != 4 and indexedContainerType.kind != 12
                         -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_source = load " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source = load " -> print
                             indexedContainerTypeId! -> writeSemanticTypeId(context, state)
                             ", ptr " -> print
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -4437,22 +4438,22 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     # pointer/length carrier used by the runtime ABI.
                     indexedContainerType.kind == 4 and indexedReference!
                         -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_carrier = load %sollang.int_slice, ptr " -> print
+                            "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_carrier = load %sollang.int_slice, ptr " -> print
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             ", align 8" -> println
                         }
-                    "  %v$(labelIndex)_expression$(nodeIndex)_data = extractvalue " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_data = extractvalue " -> print
                     indexedContainerType.kind == 4 -> if { "%sollang.int_slice" -> print } else { indexedContainerTypeId! -> writeInterpolationRuntimeTypeId(context, state) }
                     " " -> print
                     indexedReference! -> if {
-                        indexedContainerType.kind == 4 -> if { "%v$(labelIndex)_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print }
+                        indexedContainerType.kind == 4 -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print }
                     } else {
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     }
                     ", 0" -> println
                     node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexedSubscriptWidth!
                     indexedSubscriptWidth! <= 0 -> if { 32 => indexedSubscriptWidth! }
-                    "  %v$(labelIndex)_expression$(nodeIndex)_index = " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index = " -> print
                     indexedSubscriptWidth! < 64 -> if {
                         node.operand1 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             -> if { "sext" -> print } else { "zext" -> print }
@@ -4461,30 +4462,30 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     indexedSubscriptWidth! < 64 -> if { " to i64" -> print }
                     "" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_length = extractvalue " -> print
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_length = extractvalue " -> print
                     indexedContainerType.kind == 4 -> if { "%sollang.int_slice" -> print } else { indexedContainerTypeId! -> writeInterpolationRuntimeTypeId(context, state) }
                     " " -> print
                     indexedReference! -> if {
-                        indexedContainerType.kind == 4 -> if { "%v$(labelIndex)_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print }
+                        indexedContainerType.kind == 4 -> if { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_source" -> print }
                     } else {
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     }
                     ", 1" -> println
-                    labelIndex -> emitInterpolationIndexBounds(nodeIndex, "array")
-                    "  %v$(labelIndex)_expression$(nodeIndex)_ptr = getelementptr " -> print
+                    labelIndex -> emitInterpolationIndexBounds(nodeIndex, "array", state)
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_ptr = getelementptr " -> print
                     indexedElementTypeId -> writeSemanticTypeId(context, state)
-                    ", ptr %v$(labelIndex)_expression$(nodeIndex)_data, i64 %v$(labelIndex)_expression$(nodeIndex)_index" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)" -> print
+                    ", ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_data, i64 %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_index" -> println
+                    "  %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> print
                     context.types[indexedElementTypeId].kind == 12
                         -> if { "_bounded_value" -> print }
                     " = load " -> print
                     indexedElementTypeId -> writeSemanticTypeId(context, state)
-                    ", ptr %v$(labelIndex)_expression$(nodeIndex)_ptr, align " -> print
+                    ", ptr %v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)_ptr, align " -> print
                     context.typeAligns[indexedElementTypeId] -> writeDecimalLine
                     context.types[indexedElementTypeId].kind == 12
                         -> if {
                             Arena(0) => prefixStorage!
-                            "v$(labelIndex)_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
+                            "v$(labelIndex -> valueNameId(state))_expression$(nodeIndex)" -> materialize(prefixStorage!) => prefix
                             prefix -> emitStoredBoundedValueHandle(indexedElementTypeId, context, state)
                         }
                 }
@@ -4976,13 +4977,13 @@ emitMappedBytesExpression expressionIndex: Int, ownerIndex: Int, context: ref em
     expression.flags / 4 % 2 == 1 -> if {
         optionIndex! => sizeIndex!
     }
-    "  %v$(expressionIndex)_path_data = extractvalue %sollang.text " -> print
+    "  %v$(expressionIndex -> valueNameId(state))_path_data = extractvalue %sollang.text " -> print
     pathIndex -> writeValue(ownerIndex, context, state)
     ", 0" -> println
-    "  %v$(expressionIndex)_path_length = extractvalue %sollang.text " -> print
+    "  %v$(expressionIndex -> valueNameId(state))_path_length = extractvalue %sollang.text " -> print
     pathIndex -> writeValue(ownerIndex, context, state)
     ", 1" -> println
-    "  %v$(expressionIndex) = call %sollang.mapped_bytes @sollang_map_file(ptr %v$(expressionIndex)_path_data, i64 %v$(expressionIndex)_path_length, i64 " -> print
+    "  %v$(expressionIndex -> valueNameId(state)) = call %sollang.mapped_bytes @sollang_map_file(ptr %v$(expressionIndex -> valueNameId(state))_path_data, i64 %v$(expressionIndex -> valueNameId(state))_path_length, i64 " -> print
     offsetIndex! >= 0 -> if { offsetIndex! -> writeValue(ownerIndex, context, state) } else { "0" -> print }
     ", i64 " -> print
     lengthIndex! >= 0 -> if { lengthIndex! -> writeValue(ownerIndex, context, state) } else { "0" -> print }
@@ -4990,9 +4991,9 @@ emitMappedBytesExpression expressionIndex: Int, ownerIndex: Int, context: ref em
     sizeIndex! >= 0 -> if { sizeIndex! -> writeValue(ownerIndex, context, state) } else { "0" -> print }
     expression.opcode == -307
         -> if { ", i1 true)" -> println } else { ", i1 false)" -> println }
-    "  %v$(expressionIndex)_mapped_data = extractvalue %sollang.mapped_bytes %v$(expressionIndex), 0" -> println
-    "  %v$(expressionIndex)_mapped_valid = icmp ne ptr %v$(expressionIndex)_mapped_data, null" -> println
-    "  br i1 %v$(expressionIndex)_mapped_valid, label %mapped$(expressionIndex)_open_ok, label %mapped$(expressionIndex)_open_fail" -> println
+    "  %v$(expressionIndex -> valueNameId(state))_mapped_data = extractvalue %sollang.mapped_bytes %v$(expressionIndex -> valueNameId(state)), 0" -> println
+    "  %v$(expressionIndex -> valueNameId(state))_mapped_valid = icmp ne ptr %v$(expressionIndex -> valueNameId(state))_mapped_data, null" -> println
+    "  br i1 %v$(expressionIndex -> valueNameId(state))_mapped_valid, label %mapped$(expressionIndex)_open_ok, label %mapped$(expressionIndex)_open_fail" -> println
     "mapped$(expressionIndex)_open_fail:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
@@ -5001,15 +5002,15 @@ emitMappedBytesExpression expressionIndex: Int, ownerIndex: Int, context: ref em
 
 emitMappedBytesFlush expressionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[expressionIndex] => expression
-    "  %v$(expressionIndex)_mapped_base = extractvalue %sollang.mapped_bytes " -> print
+    "  %v$(expressionIndex -> valueNameId(state))_mapped_base = extractvalue %sollang.mapped_bytes " -> print
     expression.operand0 -> writeValue(ownerIndex, context, state)
     ", 2" -> println
-    "  %v$(expressionIndex)_mapped_length = extractvalue %sollang.mapped_bytes " -> print
+    "  %v$(expressionIndex -> valueNameId(state))_mapped_length = extractvalue %sollang.mapped_bytes " -> print
     expression.operand0 -> writeValue(ownerIndex, context, state)
     ", 3" -> println
-    "  %v$(expressionIndex)_mapped_flush_ok = call i32 @sollang_mapped_flush(ptr %v$(expressionIndex)_mapped_base, i64 %v$(expressionIndex)_mapped_length)" -> println
-    "  %v$(expressionIndex)_mapped_flush_succeeded = icmp ne i32 %v$(expressionIndex)_mapped_flush_ok, 0" -> println
-    "  br i1 %v$(expressionIndex)_mapped_flush_succeeded, label %mapped$(expressionIndex)_flush_ok, label %mapped$(expressionIndex)_flush_fail" -> println
+    "  %v$(expressionIndex -> valueNameId(state))_mapped_flush_ok = call i32 @sollang_mapped_flush(ptr %v$(expressionIndex -> valueNameId(state))_mapped_base, i64 %v$(expressionIndex -> valueNameId(state))_mapped_length)" -> println
+    "  %v$(expressionIndex -> valueNameId(state))_mapped_flush_succeeded = icmp ne i32 %v$(expressionIndex -> valueNameId(state))_mapped_flush_ok, 0" -> println
+    "  br i1 %v$(expressionIndex -> valueNameId(state))_mapped_flush_succeeded, label %mapped$(expressionIndex)_flush_ok, label %mapped$(expressionIndex)_flush_fail" -> println
     "mapped$(expressionIndex)_flush_fail:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
@@ -5132,7 +5133,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                 " " -> print
                 eachReadonlyReference! -> if { "%each$(eachIndex)_source" -> print } else {
                     eachSource.kind == 5 and owner.operand1 >= 0 and eachSource.symbol == context.ir[owner.operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(eachNode.operand0)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(eachNode.operand0 -> valueNameId(state))" -> print }
                 }
                 ", 0" -> println
                 "  %each$(eachIndex)_length = extractvalue " -> print
@@ -5140,7 +5141,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                 " " -> print
                 eachReadonlyReference! -> if { "%each$(eachIndex)_source" -> print } else {
                     eachSource.kind == 5 and owner.operand1 >= 0 and eachSource.symbol == context.ir[owner.operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(eachNode.operand0)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(eachNode.operand0 -> valueNameId(state))" -> print }
                 }
                 ", 1" -> println
             }
@@ -5207,7 +5208,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                             -> if { true => eachRoleIsItem! }
                     }
                 eachRoleIsItem! -> if {
-                    "  %v$(eachRoleUseIndex!) = freeze " -> print
+                    "  %v$(eachRoleUseIndex! -> valueNameId(state)) = freeze " -> print
                     eachSource -> writeDirectEachElementType(context, state)
                     " %each$(eachIndex)_item" -> println
                 }

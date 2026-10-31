@@ -69,7 +69,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                 return
             }
             value.kind == 29 -> if {
-                "%v$(request.nodeIndex)" -> print
+                "%v$(request.nodeIndex -> valueNameId(state))" -> print
             } else {
                 value.kind == 2 -> if {
                     value -> sourceToken(context, state) => whileTextToken
@@ -89,7 +89,7 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                             and value.operand0 >= 0
                             and value.operand0 < (context.ir -> len)
                             and context.ir[value.operand0].kind == 29 -> if {
-                                "%v$(value.operand0)" -> print
+                                "%v$(value.operand0 -> valueNameId(state))" -> print
                             } else {
                                 -1 => whileParameterOrdinal!
                                 request.ownerIndex >= 0
@@ -143,10 +143,10 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                                         or value.kind == 33 or value.kind == 34 or value.kind == 35
                                         or (value.kind == 8 and (value.opcode == -24 or value.opcode == -25))
                                         -> if {
-                                            "%v$(request.nodeIndex)" -> print
+                                            "%v$(request.nodeIndex -> valueNameId(state))" -> print
                                         } else {
                                             capturedWhileValue! or whileEachRoleOwner >= 0 or whileParallelRoleOwner >= 0
-                                                -> if { "%v$(request.nodeIndex)" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
+                                                -> if { "%v$(request.nodeIndex -> valueNameId(state))" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
                                         }
                                 }
                             }
@@ -387,7 +387,7 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                         }
                     } else {
                         request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                            -> if { "%arg" -> print } else { "%v$(assignmentValueIndex)" -> print }
+                            -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                     }
                 ", ptr %assign$(request.nodeIndex)_value_ptr, align " -> print
                 assignmentValueTypeId! >= 0 -> if { context.typeAligns[assignmentValueTypeId!] -> writeDecimalLine } else { assignmentBinding.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
@@ -472,7 +472,7 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                         assignmentReferenceValueIsMaterialized! -> unless {
                             "  %assign$(request.nodeIndex)_referenced_value = load " -> print
                             assignmentTargetElementTypeId -> writeSemanticTypeId(context, state)
-                            ", ptr %v$(assignmentValueIndex), align " -> print
+                            ", ptr %v$(assignmentValueIndex -> valueNameId(state)), align " -> print
                             context.typeAligns[assignmentTargetElementTypeId] -> writeDecimalLine
                         }
                     }
@@ -500,7 +500,7 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                     assignmentValue -> writeIrType(context, state)
                     " " -> print
                     request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(assignmentValueIndex)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                     " to " -> print
                     assignmentBinding -> writeArrayElementType(context, state)
                     "" -> println
@@ -528,11 +528,11 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                     } else {
                         assignmentValueIsReference! -> if {
                             assignmentReferenceValueIsMaterialized!
-                                -> if { "%v$(assignmentValueIndex)" -> print } else { "%assign$(request.nodeIndex)_referenced_value" -> print }
+                                -> if { "%v$(assignmentValueIndex -> valueNameId(state))" -> print } else { "%assign$(request.nodeIndex)_referenced_value" -> print }
                         } else {
                             castAssignmentValue -> if { "%assign$(request.nodeIndex)_value_cast" -> print } else {
                                 request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                                    -> if { "%arg" -> print } else { "%v$(assignmentValueIndex)" -> print }
+                                    -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                             }
                         }
                     }
@@ -628,7 +628,7 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                     assignmentValue -> writeIrType(context, state)
                     " " -> print
                     request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(assignmentValueIndex)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                     " to " -> print
                     assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state)
                     "" -> println
@@ -678,7 +678,7 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                 " " -> print
                 materializeFixedAssignment! -> if {
                     request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(assignmentValueIndex)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                 } else {
                     assignmentValue.kind == 3 or assignmentValue.kind == 4
                         -> if {
@@ -692,7 +692,7 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                         } else {
                             castAssignmentValue -> if { "%member_assign$(request.nodeIndex)_value_cast" -> print } else {
                                 request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                                    -> if { "%arg" -> print } else { "%v$(assignmentValueIndex)" -> print }
+                                    -> if { "%arg" -> print } else { "%v$(assignmentValueIndex -> valueNameId(state))" -> print }
                             }
                         }
                 }
@@ -1264,7 +1264,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                             (valueNode -> isFixedArrayType)
                                                 and not (valueNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
                                                 -> if {
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_data = getelementptr i8, ptr %v$(valueNodeIndex)_data, i64 0" -> println
+                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_data = getelementptr i8, ptr %v$(valueNodeIndex -> valueNameId(state))_data, i64 0" -> println
                                                 } else {
                                                     whileArrayCapacity! * (valueNode -> arrayElementSize(context, state)) => whileArrayByteLength
                                                     whileArrayByteLength == 0 -> if {
@@ -1785,7 +1785,7 @@ emitLogicalValue logicalIndex: Int, ownerIndex: Int, emissionOrder: [Int], conte
     "while$(logicalIndex)_exit:" -> println
     "  br label %logical$(logicalIndex)_merge" -> println
     "logical$(logicalIndex)_merge:" -> println
-    "  %v$(logicalIndex) = phi i1 [ true, %while$(logicalIndex)_body ], [ false, %while$(logicalIndex)_exit ]" -> println
+    "  %v$(logicalIndex -> valueNameId(state)) = phi i1 [ true, %while$(logicalIndex)_body ], [ false, %while$(logicalIndex)_exit ]" -> println
 }
 
 writeCleanupName edgeIndex: Int, bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -2141,7 +2141,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and ((ownedDropIndex! -> patternBindingNeedsOwnershipFlag(context, state))
             or (ownedDropIndex! -> namedBindingNeedsOwnershipFlag(state)))) => ownedDropPatternFlagGuard
         ownedDropPatternFlagGuard -> if {
-            "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_owned = load i1, ptr %v$(ownedDropIndex!)_owned, align 1" -> println
+            "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_owned = load i1, ptr %v$(ownedDropIndex! -> valueNameId(state))_owned, align 1" -> println
             "  br i1 %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_owned, label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_drop, label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done" -> println
             "patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_drop:" -> println
         }
@@ -2423,7 +2423,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and not fixedBackingTransferred!
             and ownedDropCandidate.symbol != ownedTransferredSymbol!
             -> if {
-                ownedBackingValue! -> emitPromotedFixedBackingDrop(request.edgeIndex, context)
+                ownedBackingValue! -> emitPromotedFixedBackingDrop(request.edgeIndex, context, state)
             }
         ownedDropIsPattern and ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved!
             and ownedDropCandidate.parent == request.regionIndex
@@ -2432,7 +2432,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and context.types[ownedDropCandidate.typeId].kind == 4
             and not (ownedDropCandidate.typeId -> semanticTypeOwns(context, state))
             -> if {
-                "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue %sollang.int_slice %v$(ownedDropIndex!), 0" -> println
+                "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue %sollang.int_slice %v$(ownedDropIndex! -> valueNameId(state)), 0" -> println
                 "  call void @sollang_free(ptr %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data)" -> println
             }
         ownedDropPatternFlagGuard -> if {

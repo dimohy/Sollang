@@ -332,16 +332,16 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
                 okType.first < 0 or okType.length < 0 -> if {
                     "; sollang compiler error S038: fixed-array try payload lacks canonical element or static length at ir $tryIndex (type $okTypeId)" -> println
                 }
-                "  %v$(tryIndex) = load %sollang.int_slice, ptr %try$(tryIndex)_ok_addr, align $(context.pointerBitWidth / 8)" -> println
+                "  %v$(tryIndex -> valueNameId(state)) = load %sollang.int_slice, ptr %try$(tryIndex)_ok_addr, align $(context.pointerBitWidth / 8)" -> println
             } else { okType.kind == 12 -> if {
-                    "  %v$(tryIndex)_bounded_value = load " -> print
+                    "  %v$(tryIndex -> valueNameId(state))_bounded_value = load " -> print
                     okTypeId -> writeValueAbiTypeId(context, state)
                     ", ptr %try$(tryIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
                     Arena(0) => prefixStorage!
-                    "v$(tryIndex)" -> materialize(prefixStorage!) => prefix
+                    "v$(tryIndex -> valueNameId(state))" -> materialize(prefixStorage!) => prefix
                     prefix -> emitStoredBoundedValueHandle(okTypeId, context, state)
                 } else {
-                    "  %v$(tryIndex) = load " -> print
+                    "  %v$(tryIndex -> valueNameId(state)) = load " -> print
                     okTypeId -> writeSemanticTypeId(context, state)
                     ", ptr %try$(tryIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
                 }
@@ -1203,7 +1203,7 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
         "when$(whenIndex)_end:" -> println
         whenValueUsed! and not (booleanWhen.typeOrigin == 1 and booleanWhen.typeSymbol == 0)
             -> if {
-                "  %v$(whenIndex) = load " -> print
+                "  %v$(whenIndex -> valueNameId(state)) = load " -> print
                 booleanWhen -> writeIrType(context, state)
                 ", ptr %if$(whenIndex)_result, align " -> print
                 booleanWhen -> storageAlign(context, state) -> writeDecimalLine
@@ -1344,7 +1344,7 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
         "when$(whenIndex)_end:" -> println
         whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0)
             -> if {
-                "  %v$(whenIndex) = load " -> print
+                "  %v$(whenIndex -> valueNameId(state)) = load " -> print
                 subjectWhen -> writeIrType(context, state)
                 ", ptr %if$(whenIndex)_result, align " -> print
                 subjectWhen -> storageAlign(context, state) -> writeDecimalLine
@@ -1364,7 +1364,7 @@ writeEnumMatchInput matchIndex: Int, subjectIndex: Int, ownerIndex: Int, conditi
     } else {
         (context.ir[subjectIndex] -> referenceValueTypeId(context, state)) >= 0
             -> if {
-                "%v$(matchIndex)_condition_subject" -> print
+                "%v$(matchIndex -> valueNameId(state))_condition_subject" -> print
             } else {
                 WhileValueRequest { whileIndex: conditionIndex, ownerIndex: ownerIndex, nodeIndex: subjectIndex } -> writeWhileValue(context, state)
             }
@@ -1464,14 +1464,14 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
         -> if { false => matchAllArmsReturn! }
     conditionIndex >= 0 and (context.ir[match.operand0] -> referenceValueTypeId(context, state)) >= 0
         -> if {
-            "  %v$(matchIndex)_condition_subject = load " -> print
+            "  %v$(matchIndex -> valueNameId(state))_condition_subject = load " -> print
             subject -> writeIrType(context, state)
             ", ptr " -> print
             WhileValueRequest { whileIndex: conditionIndex, ownerIndex: matchOwner!, nodeIndex: match.operand0 } -> writeWhileValue(context, state)
             ", align " -> print
             subject -> storageAlign(context, state) -> writeDecimalLine
         }
-    "  %v$(matchIndex)_tag = extractvalue " -> print
+    "  %v$(matchIndex -> valueNameId(state))_tag = extractvalue " -> print
     subject -> writeIrType(context, state)
     " " -> print
     matchIndex -> writeEnumMatchInput(match.operand0, matchOwner!, conditionIndex, context, state)
@@ -1480,7 +1480,7 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
     subject -> writeIrType(context, state)
     " " -> print
     matchIndex -> writeEnumMatchInput(match.operand0, matchOwner!, conditionIndex, context, state)
-    ", ptr %v$(matchIndex)_subject_slot, align 8" -> println
+    ", ptr %v$(matchIndex -> valueNameId(state))_subject_slot, align 8" -> println
     match.operand1 => armIndex!
     0 => armOrdinal!
     armIndex! >= 0 -> while {
@@ -1488,8 +1488,8 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
         arm.opcode < 0 -> if {
             "  br label %match$(matchIndex)_arm$(armOrdinal!)" -> println
         } else {
-            "  %v$(matchIndex)_is_arm$(armOrdinal!) = icmp eq i32 %v$(matchIndex)_tag, $(arm.opcode)" -> println
-            "  br i1 %v$(matchIndex)_is_arm$(armOrdinal!), label %match$(matchIndex)_arm$(armOrdinal!), label %match$(matchIndex)_next$(armOrdinal!)" -> println
+            "  %v$(matchIndex -> valueNameId(state))_is_arm$(armOrdinal!) = icmp eq i32 %v$(matchIndex -> valueNameId(state))_tag, $(arm.opcode)" -> println
+            "  br i1 %v$(matchIndex -> valueNameId(state))_is_arm$(armOrdinal!), label %match$(matchIndex)_arm$(armOrdinal!), label %match$(matchIndex)_next$(armOrdinal!)" -> println
         }
         "match$(matchIndex)_arm$(armOrdinal!):" -> println
         armIndex! -> matchArmBindingValueIndex(context, state) => armBindingIndex
@@ -1500,39 +1500,39 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
             context.ir[armBindingIndex] => armBinding
             not (armBinding.typeOrigin == 1 and armBinding.typeSymbol == 0)
                 -> if {
-                    "  %v$(matchIndex)_arm$(armOrdinal!)_payload = getelementptr inbounds " -> print
+                    "  %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_payload = getelementptr inbounds " -> print
                     subject -> writeIrType(context, state)
-                    ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
+                    ", ptr %v$(matchIndex -> valueNameId(state))_subject_slot, i32 0, i32 1" -> println
                     armBinding -> effectiveTypeId(context, state) => matchArmBindingTypeId
                     matchArmBindingTypeId >= 0
                         and context.types[matchArmBindingTypeId].kind == 4
                         and context.types[matchArmBindingTypeId].length >= 0
                         -> if {
-                            "  %v$(armBindingIndex) = load %sollang.int_slice, ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align 8" -> println
+                            "  %v$(armBindingIndex -> valueNameId(state)) = load %sollang.int_slice, ptr %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_payload, align 8" -> println
                         } else { matchArmBindingTypeId >= 0 and context.types[matchArmBindingTypeId].kind == 12
                                 -> if {
-                                    "  %v$(armBindingIndex)_bounded_value = load " -> print
+                                    "  %v$(armBindingIndex -> valueNameId(state))_bounded_value = load " -> print
                                     matchArmBindingTypeId -> writeValueAbiTypeId(context, state)
-                                    ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align $(context.typeAligns[matchArmBindingTypeId])" -> println
+                                    ", ptr %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_payload, align $(context.typeAligns[matchArmBindingTypeId])" -> println
                                     Arena(0) => prefixStorage!
-                                    "v$(armBindingIndex)" -> materialize(prefixStorage!) => prefix
+                                    "v$(armBindingIndex -> valueNameId(state))" -> materialize(prefixStorage!) => prefix
                                     prefix -> emitStoredBoundedValueHandle(matchArmBindingTypeId, context, state)
                                 } else {
-                                    "  %v$(armBindingIndex) = load " -> print
+                                    "  %v$(armBindingIndex -> valueNameId(state)) = load " -> print
                                     armBinding -> writeIrType(context, state)
-                                    ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align " -> print
+                                    ", ptr %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_payload, align " -> print
                                     armBinding -> storageAlign(context, state) -> writeDecimalLine
                                 }
                         }
                 }
             armBindingHasOwnershipFlag -> if {
-                "  store i1 true, ptr %v$(armBindingIndex)_owned, align 1" -> println
+                "  store i1 true, ptr %v$(armBindingIndex -> valueNameId(state))_owned, align 1" -> println
             }
             armBindingIndex -> asyncFrameBindingRoot(matchOwner!, context, state) => patternFrameRoot
             patternFrameRoot >= 0 -> if {
                 "  store " -> print
                 armBinding -> writeIrType(context, state)
-                " %v$(armBindingIndex), ptr " -> print
+                " %v$(armBindingIndex -> valueNameId(state)), ptr " -> print
                 patternFrameRoot -> writeAsyncLocalAddress(context)
                 ", align " -> print
                 armBinding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
@@ -1595,21 +1595,21 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                     context.types[safeMatchTypeIndex!].kind => resolvedMatchTypeKind
                     (armBindingIndex >= 0 and armValue.kind == 19 and armValue.operand0 < 0 and (matchResultType.typeKind == 7 or (matchResultType.typeId >= 0 and resolvedMatchTypeKind == 7))) => emptyPayloadlessArm
                     directArmPayload -> if {
-                        "  %v$(matchIndex)_arm$(armOrdinal!)_direct_payload = getelementptr inbounds " -> print
+                        "  %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_payload = getelementptr inbounds " -> print
                         subject -> writeIrType(context, state)
-                        ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
+                        ", ptr %v$(matchIndex -> valueNameId(state))_subject_slot, i32 0, i32 1" -> println
                         context.types[safeMatchTypeIndex!].kind == 12
                             -> if {
-                                "  %v$(matchIndex)_arm$(armOrdinal!)_direct_value_bounded_value = load " -> print
+                                "  %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_value_bounded_value = load " -> print
                                 safeMatchTypeIndex! -> writeValueAbiTypeId(context, state)
-                                ", ptr %v$(matchIndex)_arm$(armOrdinal!)_direct_payload, align $(context.typeAligns[safeMatchTypeIndex!])" -> println
+                                ", ptr %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_payload, align $(context.typeAligns[safeMatchTypeIndex!])" -> println
                                 Arena(0) => prefixStorage!
-                                "v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> materialize(prefixStorage!) => prefix
+                                "v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_value" -> materialize(prefixStorage!) => prefix
                                 prefix -> emitStoredBoundedValueHandle(safeMatchTypeIndex!, context, state)
                             } else {
-                                "  %v$(matchIndex)_arm$(armOrdinal!)_direct_value = load " -> print
+                                "  %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_value = load " -> print
                                 matchResultType -> writeIrType(context, state)
-                                ", ptr %v$(matchIndex)_arm$(armOrdinal!)_direct_payload, align " -> print
+                                ", ptr %v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_payload, align " -> print
                                 matchResultType -> storageAlign(context, state) -> writeDecimalLine
                             }
                     }
@@ -1641,9 +1641,9 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                         -> if { "poison" -> print } else {
                             fixedArmResultPromoted! -> if { "%return_fixed$(armIndex!)" -> print } else {
                                 convertsArmInteger -> if { "%match$(matchIndex)_arm$(armOrdinal!)_result_value" -> print } else {
-                                    directArmPayload -> if { "%v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> print } else {
+                                    directArmPayload -> if { "%v$(matchIndex -> valueNameId(state))_arm$(armOrdinal!)_direct_value" -> print } else {
                                         emptyPayloadlessArm -> if { "zeroinitializer" -> print } else {
-                                            armValueUsesBlockBinding -> if { "%v$(armBindingIndex)" -> print } else {
+                                            armValueUsesBlockBinding -> if { "%v$(armBindingIndex -> valueNameId(state))" -> print } else {
                                                 armValue.kind == 3 or armValue.kind == 4 -> if {
                                                     armValue -> sourceToken(context, state) => armValueToken
                                                     armValue.kind == 3 -> if { armValue -> writeIntegerLiteral(context, state) } else {
@@ -1657,7 +1657,7 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                                 }
                             }
                         }
-                    ", ptr %v$(matchIndex)_result, align " -> print
+                    ", ptr %v$(matchIndex -> valueNameId(state))_result, align " -> print
                     matchResultType -> storageAlign(context, state) -> writeDecimalLine
                     matchIndex -> isDeferredTextChoice(context, state)
                         -> if {
@@ -1683,8 +1683,8 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                 and (armBindingCopied! or not armBindingMoved!)
                 -> if {
                     armBindingHasOwnershipFlag -> if {
-                        "  %v$(armBindingIndex)_still_owned = load i1, ptr %v$(armBindingIndex)_owned, align 1" -> println
-                        "  br i1 %v$(armBindingIndex)_still_owned, label %match$(matchIndex)_arm$(armOrdinal!)_drop, label %match$(matchIndex)_arm$(armOrdinal!)_drop_done" -> println
+                        "  %v$(armBindingIndex -> valueNameId(state))_still_owned = load i1, ptr %v$(armBindingIndex -> valueNameId(state))_owned, align 1" -> println
+                        "  br i1 %v$(armBindingIndex -> valueNameId(state))_still_owned, label %match$(matchIndex)_arm$(armOrdinal!)_drop, label %match$(matchIndex)_arm$(armOrdinal!)_drop_done" -> println
                         "match$(matchIndex)_arm$(armOrdinal!)_drop:" -> println
                         armBindingIndex -> emitPatternBindingDrop(emittedArmRegion, context, state)
                         "  br label %match$(matchIndex)_arm$(armOrdinal!)_drop_done" -> println
@@ -1710,9 +1710,9 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
         "match$(matchIndex)_merge:" -> println
         matchValueUsed! and not (matchResultType.typeOrigin == 1 and matchResultType.typeSymbol == 0)
             -> if {
-                "  %v$(matchIndex) = load " -> print
+                "  %v$(matchIndex -> valueNameId(state)) = load " -> print
                 matchResultType -> writeIrType(context, state)
-                ", ptr %v$(matchIndex)_result, align " -> print
+                ", ptr %v$(matchIndex -> valueNameId(state))_result, align " -> print
                 matchResultType -> storageAlign(context, state) -> writeDecimalLine
             }
     }
@@ -1737,7 +1737,7 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
             conditionalCondition -> sourceToken(context, state) => conditionalConditionToken
             (context.sources[conditionalCondition.sourceModule] -> byte(conditionalConditionToken.span.start)) == 116
                 -> if { "1" -> print } else { "0" -> print }
-        } else { "%v$conditionalConditionIndex" -> print }
+        } else { "%v$(conditionalConditionIndex -> valueNameId(state))" -> print }
         control -> writeIfDirectBranchTargets(controlIndex)
     }
     "if$(controlIndex)_then:" -> println
@@ -1763,7 +1763,7 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
     "if$(controlIndex)_merge:" -> println
     conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
         -> if {
-            "  %v$(controlIndex) = load " -> print
+            "  %v$(controlIndex -> valueNameId(state)) = load " -> print
             control -> writeIrType(context, state)
             ", ptr %if$(controlIndex)_result, align " -> print
             control -> storageAlign(context, state) -> writeDecimalLine

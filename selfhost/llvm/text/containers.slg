@@ -37,12 +37,12 @@ emitBoxIntrinsic boxIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
     context.ir[boxIndex] => boxNode
     context.types[boxNode.typeId].first => boxElementType
     boxNode.operand0 -> aggregateValueIndex(context, state) => boxValueIndex
-    "  %v$(boxIndex) = call ptr @sollang_alloc(i64 $(context.typeSizes[boxElementType]))" -> println
+    "  %v$(boxIndex -> valueNameId(state)) = call ptr @sollang_alloc(i64 $(context.typeSizes[boxElementType]))" -> println
     "  store " -> print
     boxElementType -> writeSemanticTypeId(context, state)
     " " -> print
     boxValueIndex -> writeValue(ownerIndex, context, state)
-    ", ptr %v$(boxIndex), align $(context.typeAligns[boxElementType])" -> println
+    ", ptr %v$(boxIndex -> valueNameId(state)), align $(context.typeAligns[boxElementType])" -> println
 }
 
 mutableBindingRoot bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -219,7 +219,7 @@ emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.Emi
     context.ir[arenaIndex] => arenaNode
     context.ir[arenaNode.operand0] => arenaCapacity
     arenaCapacity -> integerNodeWidth(context, state) => arenaCapacityWidth
-    "  %v$(arenaIndex)_capacity_i64 = " -> print
+    "  %v$(arenaIndex -> valueNameId(state))_capacity_i64 = " -> print
     arenaCapacity.kind == 3 -> if {
         "add i64 0, " -> print
         arenaCapacity -> writeIntegerLiteral(context, state)
@@ -228,22 +228,22 @@ emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.Emi
         arenaCapacityWidth < 64 -> if {
             arenaCapacity -> integerNodeSigned(context, state)
                 -> if { "sext" -> print } else { "zext" -> print }
-            " i$(arenaCapacityWidth) %v$(arenaNode.operand0) to i64" -> println
+            " i$(arenaCapacityWidth) %v$(arenaNode.operand0 -> valueNameId(state)) to i64" -> println
         } else {
-            "add i64 %v$(arenaNode.operand0), 0" -> println
+            "add i64 %v$(arenaNode.operand0 -> valueNameId(state)), 0" -> println
         }
     }
-    "  %v$(arenaIndex)_capacity_positive = icmp ugt i64 %v$(arenaIndex)_capacity_i64, 0" -> println
-    "  %v$(arenaIndex)_allocation = select i1 %v$(arenaIndex)_capacity_positive, i64 %v$(arenaIndex)_capacity_i64, i64 1" -> println
-    "  %v$(arenaIndex)_capacity_valid = " -> print
+    "  %v$(arenaIndex -> valueNameId(state))_capacity_positive = icmp ugt i64 %v$(arenaIndex -> valueNameId(state))_capacity_i64, 0" -> println
+    "  %v$(arenaIndex -> valueNameId(state))_allocation = select i1 %v$(arenaIndex -> valueNameId(state))_capacity_positive, i64 %v$(arenaIndex -> valueNameId(state))_capacity_i64, i64 1" -> println
+    "  %v$(arenaIndex -> valueNameId(state))_capacity_valid = " -> print
     arenaCapacity -> integerNodeSigned(context, state)
         -> if {
-            "icmp sge i64 %v$(arenaIndex)_capacity_i64, 0" -> println
+            "icmp sge i64 %v$(arenaIndex -> valueNameId(state))_capacity_i64, 0" -> println
         } else { "and i1 true, true" -> println }
-    "  %v$(arenaIndex)_data = call ptr @sollang_raw_arena_create(i64 %v$(arenaIndex)_allocation, i1 %v$(arenaIndex)_capacity_valid)" -> println
-    "  %v$(arenaIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(arenaIndex)_data, 0" -> println
-    "  %v$(arenaIndex)_1 = insertvalue %sollang.array.i32 %v$(arenaIndex)_0, i64 0, 1" -> println
-    "  %v$(arenaIndex) = insertvalue %sollang.array.i32 %v$(arenaIndex)_1, i64 %v$(arenaIndex)_allocation, 2" -> println
+    "  %v$(arenaIndex -> valueNameId(state))_data = call ptr @sollang_raw_arena_create(i64 %v$(arenaIndex -> valueNameId(state))_allocation, i1 %v$(arenaIndex -> valueNameId(state))_capacity_valid)" -> println
+    "  %v$(arenaIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %v$(arenaIndex -> valueNameId(state))_data, 0" -> println
+    "  %v$(arenaIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %v$(arenaIndex -> valueNameId(state))_0, i64 0, 1" -> println
+    "  %v$(arenaIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %v$(arenaIndex -> valueNameId(state))_1, i64 %v$(arenaIndex -> valueNameId(state))_allocation, 2" -> println
 }
 
 # Keep allocation and bounds-check blocks inside shared helpers. Caller CFG
@@ -332,8 +332,8 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
     }
 }
 
-writeRawArenaStorageAddress callIndex: Int, ordinal: Int, field: Int -> Unit uses Console {
-    ordinal < 0 -> if { "%v$(callIndex)_arena_addr$(field)" -> print } else {
+writeRawArenaStorageAddress callIndex: Int, ordinal: Int, field: Int, state: ref CoreEmitterState -> Unit uses Console {
+    ordinal < 0 -> if { "%v$(callIndex -> valueNameId(state))_arena_addr$(field)" -> print } else {
         ordinal == 0 -> if { "%arg_mut_" -> print } else { "%arg$(ordinal)_mut_" -> print }
         field -> when {
             == 0 { "ptr_addr" -> print }
@@ -347,7 +347,7 @@ emitRawArenaSizeArgument argumentIndex: Int, callIndex: Int, ordinal: Int, owner
     argumentIndex -> aggregateValueIndex(context, state) => valueIndex
     context.ir[valueIndex] => argument
     argument -> integerNodeWidth(context, state) => width
-    "  %v$(callIndex)_arena_size$(ordinal) = " -> print
+    "  %v$(callIndex -> valueNameId(state))_arena_size$(ordinal) = " -> print
     width < 64 -> if {
         argument -> integerNodeSigned(context, state)
             -> if { "sext" -> print } else { "zext" -> print }
@@ -359,10 +359,10 @@ emitRawArenaSizeArgument argumentIndex: Int, callIndex: Int, ordinal: Int, owner
         valueIndex -> writeValue(ownerIndex, context, state)
         "" -> println
     }
-    "  %v$(callIndex)_arena_valid$(ordinal) = " -> print
+    "  %v$(callIndex -> valueNameId(state))_arena_valid$(ordinal) = " -> print
     argument -> integerNodeSigned(context, state)
         -> if {
-            "icmp sge i64 %v$(callIndex)_arena_size$(ordinal), 0" -> println
+            "icmp sge i64 %v$(callIndex -> valueNameId(state))_arena_size$(ordinal), 0" -> println
         } else { "and i1 true, true" -> println }
 }
 
@@ -384,13 +384,13 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
     borrowOrdinal < 0 and storageRoot >= 0 -> if {
         0 => field!
         field! < 3 -> while {
-            "  %v$(callIndex)_arena_addr$(field!) = getelementptr %sollang.array.i32, ptr %slot$(storageRoot), i32 0, i32 $(field!)" -> println
+            "  %v$(callIndex -> valueNameId(state))_arena_addr$(field!) = getelementptr %sollang.array.i32, ptr %slot$(storageRoot), i32 0, i32 $(field!)" -> println
             field! + 1 => field!
         }
     }
     signature.operation == 5 -> if {
         "  store i64 0, ptr " -> print
-        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1)
+        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1, state)
         ", align 8" -> println
         return
     }
@@ -402,34 +402,34 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         }
         call.operand1 -> emitRawArenaSizeArgument(callIndex, 0, ownerIndex, context, state)
         alignmentIndex -> emitRawArenaSizeArgument(callIndex, 1, ownerIndex, context, state)
-        "  %v$(callIndex)_arena_sizes_valid = and i1 %v$(callIndex)_arena_valid0, %v$(callIndex)_arena_valid1" -> println
-        "  %v$(callIndex)_arena_offset = call i64 @sollang_raw_arena_alloc(ptr " -> print
-        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 0)
+        "  %v$(callIndex -> valueNameId(state))_arena_sizes_valid = and i1 %v$(callIndex -> valueNameId(state))_arena_valid0, %v$(callIndex -> valueNameId(state))_arena_valid1" -> println
+        "  %v$(callIndex -> valueNameId(state))_arena_offset = call i64 @sollang_raw_arena_alloc(ptr " -> print
+        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 0, state)
         ", ptr " -> print
-        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1)
+        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1, state)
         ", ptr " -> print
-        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 2)
-        ", i64 %v$(callIndex)_arena_size0, i64 %v$(callIndex)_arena_size1, i1 %v$(callIndex)_arena_sizes_valid)" -> println
-        "  %v$(callIndex) = " -> print
+        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 2, state)
+        ", i64 %v$(callIndex -> valueNameId(state))_arena_size0, i64 %v$(callIndex -> valueNameId(state))_arena_size1, i1 %v$(callIndex -> valueNameId(state))_arena_sizes_valid)" -> println
+        "  %v$(callIndex -> valueNameId(state)) = " -> print
         context.pointerBitWidth == 32 -> if {
-            "trunc i64 %v$(callIndex)_arena_offset to i32" -> println
-        } else { "add i64 0, %v$(callIndex)_arena_offset" -> println }
+            "trunc i64 %v$(callIndex -> valueNameId(state))_arena_offset to i32" -> println
+        } else { "add i64 0, %v$(callIndex -> valueNameId(state))_arena_offset" -> println }
         return
     }
     signature.operation == 3 or signature.operation == 4 => needsData
     borrowOrdinal >= 0 or storageRoot >= 0 -> if {
-        "  %v$(callIndex)_arena_used = load i64, ptr " -> print
-        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1)
+        "  %v$(callIndex -> valueNameId(state))_arena_used = load i64, ptr " -> print
+        callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1, state)
         ", align 8" -> println
         needsData -> if {
-            "  %v$(callIndex)_arena_data = load ptr, ptr " -> print
-            callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 0)
+            "  %v$(callIndex -> valueNameId(state))_arena_data = load ptr, ptr " -> print
+            callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 0, state)
             ", align 1" -> println
         }
     } else {
         context.ir[call.operand0] => receiver
         receiver.typeId >= 0 and context.types[receiver.typeId].kind == 8 => readonlyReference
-        "  %v$(callIndex)_arena_source = " -> print
+        "  %v$(callIndex -> valueNameId(state))_arena_source = " -> print
         readonlyReference -> if {
             "load %sollang.array.i32, ptr " -> print
             call.operand0 -> writeValue(ownerIndex, context, state)
@@ -439,22 +439,22 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
             call.operand0 -> writeValue(ownerIndex, context, state)
             "" -> println
         }
-        "  %v$(callIndex)_arena_used = extractvalue %sollang.array.i32 %v$(callIndex)_arena_source, 1" -> println
+        "  %v$(callIndex -> valueNameId(state))_arena_used = extractvalue %sollang.array.i32 %v$(callIndex -> valueNameId(state))_arena_source, 1" -> println
         needsData -> if {
-            "  %v$(callIndex)_arena_data = extractvalue %sollang.array.i32 %v$(callIndex)_arena_source, 0" -> println
+            "  %v$(callIndex -> valueNameId(state))_arena_data = extractvalue %sollang.array.i32 %v$(callIndex -> valueNameId(state))_arena_source, 0" -> println
         }
     }
     signature.operation == 2 -> if {
-        "  %v$(callIndex) = " -> print
+        "  %v$(callIndex -> valueNameId(state)) = " -> print
         context.pointerBitWidth == 32 -> if {
-            "trunc i64 %v$(callIndex)_arena_used to i32" -> println
-        } else { "add i64 0, %v$(callIndex)_arena_used" -> println }
+            "trunc i64 %v$(callIndex -> valueNameId(state))_arena_used to i32" -> println
+        } else { "add i64 0, %v$(callIndex -> valueNameId(state))_arena_used" -> println }
         return
     }
     call.operand1 -> emitRawArenaSizeArgument(callIndex, 0, ownerIndex, context, state)
-    "  %v$(callIndex)_arena_byte = call ptr @sollang_raw_arena_at(ptr %v$(callIndex)_arena_data, i64 %v$(callIndex)_arena_used, i64 %v$(callIndex)_arena_size0)" -> println
+    "  %v$(callIndex -> valueNameId(state))_arena_byte = call ptr @sollang_raw_arena_at(ptr %v$(callIndex -> valueNameId(state))_arena_data, i64 %v$(callIndex -> valueNameId(state))_arena_used, i64 %v$(callIndex -> valueNameId(state))_arena_size0)" -> println
     signature.operation == 4 -> if {
-        "  %v$(callIndex) = load i8, ptr %v$(callIndex)_arena_byte, align 1" -> println
+        "  %v$(callIndex -> valueNameId(state)) = load i8, ptr %v$(callIndex -> valueNameId(state))_arena_byte, align 1" -> println
     } else {
         context.ir[call.operand1].nextOperand => byteIndex
         byteIndex < 0 -> if {
@@ -463,7 +463,7 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         }
         "  store i8 " -> print
         byteIndex -> writeValue(ownerIndex, context, state)
-        ", ptr %v$(callIndex)_arena_byte, align 1" -> println
+        ", ptr %v$(callIndex -> valueNameId(state))_arena_byte, align 1" -> println
     }
 }
 
@@ -471,11 +471,11 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
     request.whileIndex => collectionIndex
     context.ir[collectionIndex] => collectionNode
     collectionNode.opcode == -240 -> if {
-        "  %v$(collectionIndex) = freeze %sollang.bitset.t$(collectionNode.typeId) zeroinitializer" -> println
+        "  %v$(collectionIndex -> valueNameId(state)) = freeze %sollang.bitset.t$(collectionNode.typeId) zeroinitializer" -> println
     } else {
         context.ir[collectionNode.operand0] => collectionCapacity
         collectionCapacity -> integerNodeWidth(context, state) => collectionCapacityWidth
-        "  %v$(collectionIndex)_requested = " -> print
+        "  %v$(collectionIndex -> valueNameId(state))_requested = " -> print
         collectionCapacity.kind == 3 -> if {
             "add i64 0, " -> print
             collectionCapacity -> writeIntegerLiteral(context, state)
@@ -484,13 +484,13 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
             collectionCapacityWidth < 64 -> if {
                 collectionCapacity -> integerNodeSigned(context, state)
                     -> if { "sext" -> print } else { "zext" -> print }
-                " i$(collectionCapacityWidth) %v$(collectionNode.operand0) to i64" -> println
+                " i$(collectionCapacityWidth) %v$(collectionNode.operand0 -> valueNameId(state)) to i64" -> println
             } else {
-                "add i64 %v$(collectionNode.operand0), 0" -> println
+                "add i64 %v$(collectionNode.operand0 -> valueNameId(state)), 0" -> println
             }
         }
-        "  %v$(collectionIndex)_nonnegative = icmp sge i64 %v$(collectionIndex)_requested, 0" -> println
-        "  br i1 %v$(collectionIndex)_nonnegative, label %collection$(collectionIndex)_capacity_ok, label %collection$(collectionIndex)_capacity_fail" -> println
+        "  %v$(collectionIndex -> valueNameId(state))_nonnegative = icmp sge i64 %v$(collectionIndex -> valueNameId(state))_requested, 0" -> println
+        "  br i1 %v$(collectionIndex -> valueNameId(state))_nonnegative, label %collection$(collectionIndex)_capacity_ok, label %collection$(collectionIndex)_capacity_fail" -> println
         "collection$(collectionIndex)_capacity_fail:" -> println
         "  call void @llvm.trap()" -> println
         "  unreachable" -> println
@@ -499,66 +499,66 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
         collectionNode.opcode == -239 -> if {
             context.types[collectionNode.typeId].first => heapElementType
             context.typeSizes[heapElementType] => heapElementSize
-            "  %v$(collectionIndex)_bytes = mul i64 %v$(collectionIndex)_requested, $heapElementSize" -> println
-            "  %v$(collectionIndex)_has_bytes = icmp ugt i64 %v$(collectionIndex)_bytes, 0" -> println
-            "  %v$(collectionIndex)_allocation = select i1 %v$(collectionIndex)_has_bytes, i64 %v$(collectionIndex)_bytes, i64 1" -> println
-            "  %v$(collectionIndex)_data = call ptr @sollang_alloc(i64 %v$(collectionIndex)_allocation)" -> println
-            "  %v$(collectionIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex)_data, 0" -> println
-            "  %v$(collectionIndex)_1 = insertvalue %sollang.array.i32 %v$(collectionIndex)_0, i64 0, 1" -> println
-            "  %v$(collectionIndex) = insertvalue %sollang.array.i32 %v$(collectionIndex)_1, i64 %v$(collectionIndex)_requested, 2" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_bytes = mul i64 %v$(collectionIndex -> valueNameId(state))_requested, $heapElementSize" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_has_bytes = icmp ugt i64 %v$(collectionIndex -> valueNameId(state))_bytes, 0" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_allocation = select i1 %v$(collectionIndex -> valueNameId(state))_has_bytes, i64 %v$(collectionIndex -> valueNameId(state))_bytes, i64 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_data = call ptr @sollang_alloc(i64 %v$(collectionIndex -> valueNameId(state))_allocation)" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex -> valueNameId(state))_data, 0" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_0, i64 0, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_1, i64 %v$(collectionIndex -> valueNameId(state))_requested, 2" -> println
         }
         collectionNode.opcode == -238 -> if {
             context.types[collectionNode.typeId].first => dequeElementType
             context.typeSizes[dequeElementType] => dequeElementSize
-            "  %v$(collectionIndex)_below_minimum = icmp ult i64 %v$(collectionIndex)_requested, 4" -> println
-            "  %v$(collectionIndex)_minimum = select i1 %v$(collectionIndex)_below_minimum, i64 4, i64 %v$(collectionIndex)_requested" -> println
-            "  %v$(collectionIndex)_minus_one = sub i64 %v$(collectionIndex)_minimum, 1" -> println
-            "  %v$(collectionIndex)_shift1 = lshr i64 %v$(collectionIndex)_minus_one, 1" -> println
-            "  %v$(collectionIndex)_round1 = or i64 %v$(collectionIndex)_minus_one, %v$(collectionIndex)_shift1" -> println
-            "  %v$(collectionIndex)_shift2 = lshr i64 %v$(collectionIndex)_round1, 2" -> println
-            "  %v$(collectionIndex)_round2 = or i64 %v$(collectionIndex)_round1, %v$(collectionIndex)_shift2" -> println
-            "  %v$(collectionIndex)_shift4 = lshr i64 %v$(collectionIndex)_round2, 4" -> println
-            "  %v$(collectionIndex)_round4 = or i64 %v$(collectionIndex)_round2, %v$(collectionIndex)_shift4" -> println
-            "  %v$(collectionIndex)_shift8 = lshr i64 %v$(collectionIndex)_round4, 8" -> println
-            "  %v$(collectionIndex)_round8 = or i64 %v$(collectionIndex)_round4, %v$(collectionIndex)_shift8" -> println
-            "  %v$(collectionIndex)_shift16 = lshr i64 %v$(collectionIndex)_round8, 16" -> println
-            "  %v$(collectionIndex)_round16 = or i64 %v$(collectionIndex)_round8, %v$(collectionIndex)_shift16" -> println
-            "  %v$(collectionIndex)_shift32 = lshr i64 %v$(collectionIndex)_round16, 32" -> println
-            "  %v$(collectionIndex)_round32 = or i64 %v$(collectionIndex)_round16, %v$(collectionIndex)_shift32" -> println
-            "  %v$(collectionIndex)_capacity = add i64 %v$(collectionIndex)_round32, 1" -> println
-            "  %v$(collectionIndex)_payload_bytes = mul i64 %v$(collectionIndex)_capacity, $dequeElementSize" -> println
-            "  %v$(collectionIndex)_bytes = add i64 %v$(collectionIndex)_payload_bytes, 8" -> println
-            "  %v$(collectionIndex)_data = call ptr @sollang_alloc(i64 %v$(collectionIndex)_bytes)" -> println
-            "  store i64 0, ptr %v$(collectionIndex)_data, align 8" -> println
-            "  %v$(collectionIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex)_data, 0" -> println
-            "  %v$(collectionIndex)_1 = insertvalue %sollang.array.i32 %v$(collectionIndex)_0, i64 0, 1" -> println
-            "  %v$(collectionIndex) = insertvalue %sollang.array.i32 %v$(collectionIndex)_1, i64 %v$(collectionIndex)_capacity, 2" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_below_minimum = icmp ult i64 %v$(collectionIndex -> valueNameId(state))_requested, 4" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_minimum = select i1 %v$(collectionIndex -> valueNameId(state))_below_minimum, i64 4, i64 %v$(collectionIndex -> valueNameId(state))_requested" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_minus_one = sub i64 %v$(collectionIndex -> valueNameId(state))_minimum, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift1 = lshr i64 %v$(collectionIndex -> valueNameId(state))_minus_one, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round1 = or i64 %v$(collectionIndex -> valueNameId(state))_minus_one, %v$(collectionIndex -> valueNameId(state))_shift1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift2 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round1, 2" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round2 = or i64 %v$(collectionIndex -> valueNameId(state))_round1, %v$(collectionIndex -> valueNameId(state))_shift2" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift4 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round2, 4" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round4 = or i64 %v$(collectionIndex -> valueNameId(state))_round2, %v$(collectionIndex -> valueNameId(state))_shift4" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift8 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round4, 8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round8 = or i64 %v$(collectionIndex -> valueNameId(state))_round4, %v$(collectionIndex -> valueNameId(state))_shift8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift16 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round8, 16" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round16 = or i64 %v$(collectionIndex -> valueNameId(state))_round8, %v$(collectionIndex -> valueNameId(state))_shift16" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift32 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round16, 32" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round32 = or i64 %v$(collectionIndex -> valueNameId(state))_round16, %v$(collectionIndex -> valueNameId(state))_shift32" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_capacity = add i64 %v$(collectionIndex -> valueNameId(state))_round32, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_payload_bytes = mul i64 %v$(collectionIndex -> valueNameId(state))_capacity, $dequeElementSize" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_bytes = add i64 %v$(collectionIndex -> valueNameId(state))_payload_bytes, 8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_data = call ptr @sollang_alloc(i64 %v$(collectionIndex -> valueNameId(state))_bytes)" -> println
+            "  store i64 0, ptr %v$(collectionIndex -> valueNameId(state))_data, align 8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex -> valueNameId(state))_data, 0" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_0, i64 0, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_1, i64 %v$(collectionIndex -> valueNameId(state))_capacity, 2" -> println
         }
         collectionNode.opcode == -237 -> if {
             context.types[collectionNode.typeId].first => setElementType
             context.typeSizes[setElementType] => setElementSize
-            "  %v$(collectionIndex)_scaled = mul i64 %v$(collectionIndex)_requested, 8" -> println
-            "  %v$(collectionIndex)_rounded_entries = add i64 %v$(collectionIndex)_scaled, 6" -> println
-            "  %v$(collectionIndex)_required = udiv i64 %v$(collectionIndex)_rounded_entries, 7" -> println
-            "  %v$(collectionIndex)_below_minimum = icmp ult i64 %v$(collectionIndex)_required, 16" -> println
-            "  %v$(collectionIndex)_minimum = select i1 %v$(collectionIndex)_below_minimum, i64 16, i64 %v$(collectionIndex)_required" -> println
-            "  %v$(collectionIndex)_minus_one = sub i64 %v$(collectionIndex)_minimum, 1" -> println
-            "  %v$(collectionIndex)_shift1 = lshr i64 %v$(collectionIndex)_minus_one, 1" -> println
-            "  %v$(collectionIndex)_round1 = or i64 %v$(collectionIndex)_minus_one, %v$(collectionIndex)_shift1" -> println
-            "  %v$(collectionIndex)_shift2 = lshr i64 %v$(collectionIndex)_round1, 2" -> println
-            "  %v$(collectionIndex)_round2 = or i64 %v$(collectionIndex)_round1, %v$(collectionIndex)_shift2" -> println
-            "  %v$(collectionIndex)_shift4 = lshr i64 %v$(collectionIndex)_round2, 4" -> println
-            "  %v$(collectionIndex)_round4 = or i64 %v$(collectionIndex)_round2, %v$(collectionIndex)_shift4" -> println
-            "  %v$(collectionIndex)_shift8 = lshr i64 %v$(collectionIndex)_round4, 8" -> println
-            "  %v$(collectionIndex)_round8 = or i64 %v$(collectionIndex)_round4, %v$(collectionIndex)_shift8" -> println
-            "  %v$(collectionIndex)_shift16 = lshr i64 %v$(collectionIndex)_round8, 16" -> println
-            "  %v$(collectionIndex)_round16 = or i64 %v$(collectionIndex)_round8, %v$(collectionIndex)_shift16" -> println
-            "  %v$(collectionIndex)_shift32 = lshr i64 %v$(collectionIndex)_round16, 32" -> println
-            "  %v$(collectionIndex)_round32 = or i64 %v$(collectionIndex)_round16, %v$(collectionIndex)_shift32" -> println
-            "  %v$(collectionIndex)_capacity = add i64 %v$(collectionIndex)_round32, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_scaled = mul i64 %v$(collectionIndex -> valueNameId(state))_requested, 8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_rounded_entries = add i64 %v$(collectionIndex -> valueNameId(state))_scaled, 6" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_required = udiv i64 %v$(collectionIndex -> valueNameId(state))_rounded_entries, 7" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_below_minimum = icmp ult i64 %v$(collectionIndex -> valueNameId(state))_required, 16" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_minimum = select i1 %v$(collectionIndex -> valueNameId(state))_below_minimum, i64 16, i64 %v$(collectionIndex -> valueNameId(state))_required" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_minus_one = sub i64 %v$(collectionIndex -> valueNameId(state))_minimum, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift1 = lshr i64 %v$(collectionIndex -> valueNameId(state))_minus_one, 1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round1 = or i64 %v$(collectionIndex -> valueNameId(state))_minus_one, %v$(collectionIndex -> valueNameId(state))_shift1" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift2 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round1, 2" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round2 = or i64 %v$(collectionIndex -> valueNameId(state))_round1, %v$(collectionIndex -> valueNameId(state))_shift2" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift4 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round2, 4" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round4 = or i64 %v$(collectionIndex -> valueNameId(state))_round2, %v$(collectionIndex -> valueNameId(state))_shift4" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift8 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round4, 8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round8 = or i64 %v$(collectionIndex -> valueNameId(state))_round4, %v$(collectionIndex -> valueNameId(state))_shift8" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift16 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round8, 16" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round16 = or i64 %v$(collectionIndex -> valueNameId(state))_round8, %v$(collectionIndex -> valueNameId(state))_shift16" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_shift32 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round16, 32" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_round32 = or i64 %v$(collectionIndex -> valueNameId(state))_round16, %v$(collectionIndex -> valueNameId(state))_shift32" -> println
+            "  %v$(collectionIndex -> valueNameId(state))_capacity = add i64 %v$(collectionIndex -> valueNameId(state))_round32, 1" -> println
             setElementSize -> dictionaryEntryLayout(context.typeAligns[setElementType], 0, 1) => setEntryLayout
-            "v$(collectionIndex)" -> emitGrowableDictionaryAllocation("%v$(collectionIndex)_capacity", setEntryLayout)
-            "v$(collectionIndex)" -> emitGrowableDictionaryOwner("%v$(collectionIndex)_storage", "0", "%v$(collectionIndex)_capacity")
+            "v$(collectionIndex -> valueNameId(state))" -> emitGrowableDictionaryAllocation("%v$(collectionIndex -> valueNameId(state))_capacity", setEntryLayout)
+            "v$(collectionIndex -> valueNameId(state))" -> emitGrowableDictionaryOwner("%v$(collectionIndex -> valueNameId(state))_storage", "0", "%v$(collectionIndex -> valueNameId(state))_capacity")
         }
     }
 }
@@ -587,41 +587,41 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
     (bitCount + 63) / 64 => wordCount
 
     call.opcode == -245 -> if {
-        "  %v$(callIndex) = add i32 0, $bitCount" -> println
+        "  %v$(callIndex -> valueNameId(state)) = add i32 0, $bitCount" -> println
     }
 
     call.opcode == -244 -> if {
         call.operand0 -> mutableStorageRoot(context, state) => countRoot
         countRoot >= 0 -> if {
-            "  %v$(callIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(countRoot), align 8" -> println
+            "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(countRoot), align 8" -> println
         }
         0 => countWord!
         countWord! < wordCount -> while {
-            "  %v$(callIndex)_word$(countWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
-            countRoot >= 0 -> if { "%v$(callIndex)_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+            "  %v$(callIndex -> valueNameId(state))_word$(countWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
+            countRoot >= 0 -> if { "%v$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
             ", 0, $(countWord!)" -> println
             countWord! == wordCount - 1 and bitCount % 64 != 0
                 -> if {
                     bitCount -> bitSetCountTailMask => tailMask
-                    "  %v$(callIndex)_tail$(countWord!) = and i64 %v$(callIndex)_word$(countWord!), $tailMask" -> println
+                    "  %v$(callIndex -> valueNameId(state))_tail$(countWord!) = and i64 %v$(callIndex -> valueNameId(state))_word$(countWord!), $tailMask" -> println
                 }
-            "  %v$(callIndex)_pop$(countWord!) = call i64 @llvm.ctpop.i64(i64 " -> print
+            "  %v$(callIndex -> valueNameId(state))_pop$(countWord!) = call i64 @llvm.ctpop.i64(i64 " -> print
             countWord! == wordCount - 1 and bitCount % 64 != 0
                 -> if {
-                    "%v$(callIndex)_tail$(countWord!)" -> print
+                    "%v$(callIndex -> valueNameId(state))_tail$(countWord!)" -> print
                 } else {
-                    "%v$(callIndex)_word$(countWord!)" -> print
+                    "%v$(callIndex -> valueNameId(state))_word$(countWord!)" -> print
                 }
             ")" -> println
             countWord! > 0 -> if {
-                "  %v$(callIndex)_sum$(countWord!) = add i64 " -> print
-                countWord! == 1 -> if { "%v$(callIndex)_pop0" -> print } else { "%v$(callIndex)_sum$(countWord! - 1)" -> print }
-                ", %v$(callIndex)_pop$(countWord!)" -> println
+                "  %v$(callIndex -> valueNameId(state))_sum$(countWord!) = add i64 " -> print
+                countWord! == 1 -> if { "%v$(callIndex -> valueNameId(state))_pop0" -> print } else { "%v$(callIndex -> valueNameId(state))_sum$(countWord! - 1)" -> print }
+                ", %v$(callIndex -> valueNameId(state))_pop$(countWord!)" -> println
             }
             countWord! + 1 => countWord!
         }
-        "  %v$(callIndex) = trunc i64 " -> print
-        wordCount == 1 -> if { "%v$(callIndex)_pop0" -> print } else { "%v$(callIndex)_sum$(wordCount - 1)" -> print }
+        "  %v$(callIndex -> valueNameId(state)) = trunc i64 " -> print
+        wordCount == 1 -> if { "%v$(callIndex -> valueNameId(state))_pop0" -> print } else { "%v$(callIndex -> valueNameId(state))_sum$(wordCount - 1)" -> print }
         " to i32" -> println
     }
 
@@ -630,7 +630,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
             call.operand1 -> aggregateValueIndex(context, state) => bitIndexValue
             context.ir[bitIndexValue] => bitIndex
             bitIndex -> integerNodeWidth(context, state) => bitIndexWidth
-            "  %v$(callIndex)_index = " -> print
+            "  %v$(callIndex -> valueNameId(state))_index = " -> print
             bitIndexWidth < 64 -> if {
                 bitIndex -> integerNodeSigned(context, state)
                     -> if { "sext" -> print } else { "zext" -> print }
@@ -642,60 +642,60 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
                 bitIndexValue -> writeValue(ownerIndex, context, state)
                 "" -> println
             }
-            "  %v$(callIndex)_nonnegative = icmp sge i64 %v$(callIndex)_index, 0" -> println
-            "  %v$(callIndex)_below_limit = icmp ult i64 %v$(callIndex)_index, $bitCount" -> println
-            "  %v$(callIndex)_valid = and i1 %v$(callIndex)_nonnegative, %v$(callIndex)_below_limit" -> println
-            "  br i1 %v$(callIndex)_valid, label %bitset$(callIndex)_index_ok, label %bitset$(callIndex)_index_fail" -> println
+            "  %v$(callIndex -> valueNameId(state))_nonnegative = icmp sge i64 %v$(callIndex -> valueNameId(state))_index, 0" -> println
+            "  %v$(callIndex -> valueNameId(state))_below_limit = icmp ult i64 %v$(callIndex -> valueNameId(state))_index, $bitCount" -> println
+            "  %v$(callIndex -> valueNameId(state))_valid = and i1 %v$(callIndex -> valueNameId(state))_nonnegative, %v$(callIndex -> valueNameId(state))_below_limit" -> println
+            "  br i1 %v$(callIndex -> valueNameId(state))_valid, label %bitset$(callIndex)_index_ok, label %bitset$(callIndex)_index_fail" -> println
             "bitset$(callIndex)_index_fail:" -> println
             "  call void @llvm.trap()" -> println
             "  unreachable" -> println
             "bitset$(callIndex)_index_ok:" -> println
-            "  %v$(callIndex)_word_index = lshr i64 %v$(callIndex)_index, 6" -> println
-            "  %v$(callIndex)_bit_index = and i64 %v$(callIndex)_index, 63" -> println
-            "  %v$(callIndex)_mask = shl i64 1, %v$(callIndex)_bit_index" -> println
+            "  %v$(callIndex -> valueNameId(state))_word_index = lshr i64 %v$(callIndex -> valueNameId(state))_index, 6" -> println
+            "  %v$(callIndex -> valueNameId(state))_bit_index = and i64 %v$(callIndex -> valueNameId(state))_index, 63" -> println
+            "  %v$(callIndex -> valueNameId(state))_mask = shl i64 1, %v$(callIndex -> valueNameId(state))_bit_index" -> println
 
             call.opcode == -241 or call.opcode == -242 -> if {
                 call.operand0 -> mutableStorageRoot(context, state) => mutationRoot
                 call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutationParameter
-                "  %v$(callIndex)_word_ptr = getelementptr inbounds %sollang.bitset.t$(bitSetTypeId!), ptr " -> print
+                "  %v$(callIndex -> valueNameId(state))_word_ptr = getelementptr inbounds %sollang.bitset.t$(bitSetTypeId!), ptr " -> print
                 mutationRoot >= 0 -> if {
                     "%slot$(mutationRoot)" -> print
                 } else {
                     mutationParameter -> writeMutableStructParameterPointer
                 }
-                ", i32 0, i32 0, i64 %v$(callIndex)_word_index" -> println
-                "  %v$(callIndex)_word = load i64, ptr %v$(callIndex)_word_ptr, align 8" -> println
+                ", i32 0, i32 0, i64 %v$(callIndex -> valueNameId(state))_word_index" -> println
+                "  %v$(callIndex -> valueNameId(state))_word = load i64, ptr %v$(callIndex -> valueNameId(state))_word_ptr, align 8" -> println
                 call.opcode == -241 -> if {
-                    "  %v$(callIndex)_updated = or i64 %v$(callIndex)_word, %v$(callIndex)_mask" -> println
+                    "  %v$(callIndex -> valueNameId(state))_updated = or i64 %v$(callIndex -> valueNameId(state))_word, %v$(callIndex -> valueNameId(state))_mask" -> println
                 } else {
-                    "  %v$(callIndex)_inverse = xor i64 %v$(callIndex)_mask, -1" -> println
-                    "  %v$(callIndex)_updated = and i64 %v$(callIndex)_word, %v$(callIndex)_inverse" -> println
+                    "  %v$(callIndex -> valueNameId(state))_inverse = xor i64 %v$(callIndex -> valueNameId(state))_mask, -1" -> println
+                    "  %v$(callIndex -> valueNameId(state))_updated = and i64 %v$(callIndex -> valueNameId(state))_word, %v$(callIndex -> valueNameId(state))_inverse" -> println
                 }
-                "  store i64 %v$(callIndex)_updated, ptr %v$(callIndex)_word_ptr, align 8" -> println
+                "  store i64 %v$(callIndex -> valueNameId(state))_updated, ptr %v$(callIndex -> valueNameId(state))_word_ptr, align 8" -> println
             } else {
                 call.operand0 -> mutableStorageRoot(context, state) => containsRoot
                 containsRoot >= 0 -> if {
-                    "  %v$(callIndex)_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(containsRoot), align 8" -> println
+                    "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(containsRoot), align 8" -> println
                 }
                 0 => containsWord!
                 containsWord! < wordCount -> while {
-                    "  %v$(callIndex)_word$(containsWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
-                    containsRoot >= 0 -> if { "%v$(callIndex)_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+                    "  %v$(callIndex -> valueNameId(state))_word$(containsWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
+                    containsRoot >= 0 -> if { "%v$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
                     ", 0, $(containsWord!)" -> println
                     containsWord! + 1 => containsWord!
                 }
                 1 => containsSelectWord!
                 containsSelectWord! < wordCount -> while {
-                    "  %v$(callIndex)_is_word$(containsSelectWord!) = icmp eq i64 %v$(callIndex)_word_index, $(containsSelectWord!)" -> println
-                    "  %v$(callIndex)_selected$(containsSelectWord!) = select i1 %v$(callIndex)_is_word$(containsSelectWord!), i64 %v$(callIndex)_word$(containsSelectWord!), i64 " -> print
-                    containsSelectWord! == 1 -> if { "%v$(callIndex)_word0" -> print } else { "%v$(callIndex)_selected$(containsSelectWord! - 1)" -> print }
+                    "  %v$(callIndex -> valueNameId(state))_is_word$(containsSelectWord!) = icmp eq i64 %v$(callIndex -> valueNameId(state))_word_index, $(containsSelectWord!)" -> println
+                    "  %v$(callIndex -> valueNameId(state))_selected$(containsSelectWord!) = select i1 %v$(callIndex -> valueNameId(state))_is_word$(containsSelectWord!), i64 %v$(callIndex -> valueNameId(state))_word$(containsSelectWord!), i64 " -> print
+                    containsSelectWord! == 1 -> if { "%v$(callIndex -> valueNameId(state))_word0" -> print } else { "%v$(callIndex -> valueNameId(state))_selected$(containsSelectWord! - 1)" -> print }
                     "" -> println
                     containsSelectWord! + 1 => containsSelectWord!
                 }
-                "  %v$(callIndex)_masked = and i64 " -> print
-                wordCount == 1 -> if { "%v$(callIndex)_word0" -> print } else { "%v$(callIndex)_selected$(wordCount - 1)" -> print }
-                ", %v$(callIndex)_mask" -> println
-                "  %v$(callIndex) = icmp ne i64 %v$(callIndex)_masked, 0" -> println
+                "  %v$(callIndex -> valueNameId(state))_masked = and i64 " -> print
+                wordCount == 1 -> if { "%v$(callIndex -> valueNameId(state))_word0" -> print } else { "%v$(callIndex -> valueNameId(state))_selected$(wordCount - 1)" -> print }
+                ", %v$(callIndex -> valueNameId(state))_mask" -> println
+                "  %v$(callIndex -> valueNameId(state)) = icmp ne i64 %v$(callIndex -> valueNameId(state))_masked, 0" -> println
             }
         }
 }
@@ -840,7 +840,7 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
             "  %deque$(callIndex)_slot = getelementptr " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
             ", ptr %deque$(callIndex)_payload, i64 %deque$(callIndex)_physical" -> println
-            "  %v$(callIndex) = load " -> print
+            "  %v$(callIndex -> valueNameId(state)) = load " -> print
             elementTypeId -> writeSemanticTypeId(context, state)
             ", ptr %deque$(callIndex)_slot, align $elementAlign" -> println
             call.opcode == -250 or call.opcode == -251 -> if {
@@ -1022,7 +1022,7 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
         "heap$(callIndex)" -> materialize(diagnosticNames!) => diagnosticPrefix
         ownerIndex -> emitRuntimeTrapForOwner(diagnosticPrefix, "empty", "binary_heap_empty", context, state)
         "heap$(callIndex)_read:" -> println
-        "  %v$(callIndex) = load " -> print
+        "  %v$(callIndex -> valueNameId(state)) = load " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
         ", ptr %heap$(callIndex)_data, align $elementAlign" -> println
         call.opcode == -254 -> if {
@@ -1420,7 +1420,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
         "set$(callIndex)_duplicate:" -> println
         "  br label %set$(callIndex)_complete" -> println
         "set$(callIndex)_complete:" -> println
-        "  %v$(callIndex) = phi i1 [ true, %set$(callIndex)_inserted ], [ false, %set$(callIndex)_duplicate ]" -> println
+        "  %v$(callIndex -> valueNameId(state)) = phi i1 [ true, %set$(callIndex)_inserted ], [ false, %set$(callIndex)_duplicate ]" -> println
     } else {
         "set$(callIndex)_missing:" -> println
         "  br label %set$(callIndex)_not_found" -> println
@@ -1462,7 +1462,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
             "set$(callIndex)_not_found:" -> println
             "  br label %set$(callIndex)_complete" -> println
             "set$(callIndex)_complete:" -> println
-            "  %v$(callIndex) = phi i1 [ true, %set$(callIndex)_removed ], [ false, %set$(callIndex)_not_found ]" -> println
+            "  %v$(callIndex -> valueNameId(state)) = phi i1 [ true, %set$(callIndex)_removed ], [ false, %set$(callIndex)_not_found ]" -> println
         } else {
             "  br label %set$(callIndex)_present" -> println
             "set$(callIndex)_present:" -> println
@@ -1470,7 +1470,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
             "set$(callIndex)_not_found:" -> println
             "  br label %set$(callIndex)_complete" -> println
             "set$(callIndex)_complete:" -> println
-            "  %v$(callIndex) = phi i1 [ true, %set$(callIndex)_present ], [ false, %set$(callIndex)_not_found ]" -> println
+            "  %v$(callIndex -> valueNameId(state)) = phi i1 [ true, %set$(callIndex)_present ], [ false, %set$(callIndex)_not_found ]" -> println
         }
     }
 }
@@ -1565,7 +1565,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
                                     -> if { "sext" -> print } else { "zext" -> print }
                                 " i$(materializeIntegerWidth) " -> print
                                 materializeReferenceValueTypeId >= 0 -> if {
-                                    "%v$(materializeIndex)_expression$(materializeInterpolationIndex)_reference_value" -> print
+                                    "%v$(materializeIndex -> valueNameId(state))_expression$(materializeInterpolationIndex)_reference_value" -> print
                                 } else {
                                     materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
                                 }
@@ -1579,7 +1579,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
                                 "%materialize$(materializeIndex)_root$(materializeRootOrdinal!)_integer" -> print
                             } else {
                                 materializeReferenceValueTypeId >= 0 -> if {
-                                    "%v$(materializeIndex)_expression$(materializeInterpolationIndex)_reference_value" -> print
+                                    "%v$(materializeIndex -> valueNameId(state))_expression$(materializeInterpolationIndex)_reference_value" -> print
                                 } else {
                                     materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
                                 }
@@ -1589,14 +1589,14 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
                         } else {
                             "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_ptr = extractvalue %sollang.text " -> print
                             materializeReferenceValueTypeId >= 0 -> if {
-                                "%v$(materializeIndex)_expression$(materializeInterpolationIndex)_reference_value" -> print
+                                "%v$(materializeIndex -> valueNameId(state))_expression$(materializeInterpolationIndex)_reference_value" -> print
                             } else {
                                 materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
                             }
                             ", 0" -> println
                             "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_length = extractvalue %sollang.text " -> print
                             materializeReferenceValueTypeId >= 0 -> if {
-                                "%v$(materializeIndex)_expression$(materializeInterpolationIndex)_reference_value" -> print
+                                "%v$(materializeIndex -> valueNameId(state))_expression$(materializeInterpolationIndex)_reference_value" -> print
                             } else {
                                 materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
                             }
@@ -1628,13 +1628,13 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
         "  %materialize$(materializeIndex)_source_ptr = extractvalue %sollang.text " -> print
         materializeChoice -> if { "%calltext$(materializeIndex)_arg0" -> print } else {
             request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and materializeText.kind == 5 and materializeText.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                -> if { "%arg" -> print } else { "%v$(materializeNode.operand0)" -> print }
+                -> if { "%arg" -> print } else { "%v$(materializeNode.operand0 -> valueNameId(state))" -> print }
         }
         ", 0" -> println
         "  %materialize$(materializeIndex)_source_length = extractvalue %sollang.text " -> print
         materializeChoice -> if { "%calltext$(materializeIndex)_arg0" -> print } else {
             request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and materializeText.kind == 5 and materializeText.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                -> if { "%arg" -> print } else { "%v$(materializeNode.operand0)" -> print }
+                -> if { "%arg" -> print } else { "%v$(materializeNode.operand0 -> valueNameId(state))" -> print }
         }
         ", 1" -> println
     }
@@ -1729,8 +1729,8 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
         materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_capacity_addr" -> print } else { "%materialize$(materializeIndex)_capacity_addr" -> print }
     }
     ", align 8" -> println
-    "  %v$(materializeIndex)_0 = insertvalue %sollang.text poison, ptr %materialize$(materializeIndex)_target, 0" -> println
-    "  %v$(materializeIndex) = insertvalue %sollang.text %v$(materializeIndex)_0, i64 %materialize$(materializeIndex)_source_length" -> print
+    "  %v$(materializeIndex -> valueNameId(state))_0 = insertvalue %sollang.text poison, ptr %materialize$(materializeIndex)_target, 0" -> println
+    "  %v$(materializeIndex -> valueNameId(state)) = insertvalue %sollang.text %v$(materializeIndex -> valueNameId(state))_0, i64 %materialize$(materializeIndex)_source_length" -> print
     materializeRootCount > 0 -> if { materializeRootCount -> writeDecimal }
     ", 1" -> println
 }
@@ -2093,13 +2093,13 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
             ", align 8" -> println
         } else {
             "  %push$(pushIndex)_data = extractvalue %sollang.array.i32 " -> print
-            pushReturnsOwner -> if { pushNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%v$(pushNode.operand0)" -> print }
+            pushReturnsOwner -> if { pushNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%v$(pushNode.operand0 -> valueNameId(state))" -> print }
             ", 0" -> println
             "  %push$(pushIndex)_length = extractvalue %sollang.array.i32 " -> print
-            pushReturnsOwner -> if { pushNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%v$(pushNode.operand0)" -> print }
+            pushReturnsOwner -> if { pushNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%v$(pushNode.operand0 -> valueNameId(state))" -> print }
             ", 1" -> println
             "  %push$(pushIndex)_capacity = extractvalue %sollang.array.i32 " -> print
-            pushReturnsOwner -> if { pushNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%v$(pushNode.operand0)" -> print }
+            pushReturnsOwner -> if { pushNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state) } else { "%v$(pushNode.operand0 -> valueNameId(state))" -> print }
             ", 2" -> println
         }
     "  %push$(pushIndex)_full = icmp eq i64 %push$(pushIndex)_length, %push$(pushIndex)_capacity" -> println
@@ -2174,7 +2174,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
         " " -> print
         pushValueParameterOrdinal! >= 0 -> if {
             pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
-        } else { "%v$(pushValueIndex)" -> print }
+        } else { "%v$(pushValueIndex -> valueNameId(state))" -> print }
         " to " -> print
         pushSource -> writeArrayElementType(context, state)
         "" -> println
@@ -2198,7 +2198,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
             castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
                 pushValueParameterOrdinal! >= 0 -> if {
                     pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
-                } else { "%v$(pushValueIndex)" -> print }
+                } else { "%v$(pushValueIndex -> valueNameId(state))" -> print }
             }
         }
     }
@@ -2208,7 +2208,7 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
     "  %push$(pushIndex)_array0 = insertvalue %sollang.array.i32 poison, ptr %push$(pushIndex)_append_data, 0" -> println
     "  %push$(pushIndex)_array1 = insertvalue %sollang.array.i32 %push$(pushIndex)_array0, i64 %push$(pushIndex)_new_length, 1" -> println
     "  " -> print
-    pushReturnsOwner -> if { "%v$(pushIndex)" -> print } else { "%push$(pushIndex)_array2" -> print }
+    pushReturnsOwner -> if { "%v$(pushIndex -> valueNameId(state))" -> print } else { "%push$(pushIndex)_array2" -> print }
     " = insertvalue %sollang.array.i32 %push$(pushIndex)_array1, i64 %push$(pushIndex)_append_capacity, 2" -> println
     pushReturnsOwner -> if { return }
     pushBorrowOrdinal >= 0 and not pushStructMember
@@ -2451,7 +2451,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
             putKeyIsText! -> if {
                 "  %put$(putIndex)_hash = call i64 @sollang_dictionary_hash_text(%sollang.text " -> print
                 request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                    -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    -> if { "%arg" -> print } else { "%v$(putKeyIndex -> valueNameId(state))" -> print }
                 ")" -> println
             } else {
                 putKeyIsNominal -> if {
@@ -2460,7 +2460,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                     putKeyTypeId! -> writeSemanticTypeId(context, state)
                     " " -> print
                     request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(putKeyIndex -> valueNameId(state))" -> print }
                     ")" -> println
                     "  %put$(putIndex)_hash_key = sext i32 %put$(putIndex)_hash_value to i64" -> println
                     "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_hash_key, 32" -> println
@@ -2540,7 +2540,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                     putKeyTypeId! -> writeSemanticTypeId(context, state)
                     " " -> print
                     request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(putKeyIndex -> valueNameId(state))" -> print }
                     ")" -> println
                 }
             putNode.opcode == -303 -> if {
@@ -2555,7 +2555,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                             request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0
                                 and context.ir[request.ownerIndex].operand1 >= 0 and putValue.kind == 5
                                 and putValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-                                -> if { "%arg" -> print } else { "%v$(putValueIndex)" -> print }
+                                -> if { "%arg" -> print } else { "%v$(putValueIndex -> valueNameId(state))" -> print }
                         }
                         ")" -> println
                     }
@@ -2697,12 +2697,12 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
             }
             "put$(putIndex)_complete:" -> println
             putReturnsOwner -> if {
-                "  %v$(putIndex) = phi %sollang.int_dictionary [ " -> print
+                "  %v$(putIndex -> valueNameId(state)) = phi %sollang.int_dictionary [ " -> print
                 putNode.operand0 -> writeFunctionValueName(request.ownerIndex, context, state)
                 ", %put$(putIndex)_update_in_place ], [ %put$(putIndex)_in_place_result, %put$(putIndex)_insert_in_place ], [ %put$(putIndex)_result3, %put$(putIndex)_insert ]" -> println
             }
             putNode.opcode == -303 -> if {
-                "  %v$(putIndex) = phi i1 [ false, %put$(putIndex)_update_in_place ], [ true, %put$(putIndex)_insert_in_place ]" -> print
+                "  %v$(putIndex -> valueNameId(state)) = phi i1 [ false, %put$(putIndex)_update_in_place ], [ true, %put$(putIndex)_insert_in_place ]" -> print
                 not putBounded! -> if { ", [ true, %put$(putIndex)_insert ]" -> print }
                 "" -> println
             }
@@ -2836,7 +2836,7 @@ emitBoundedDictionaryPut request: WhileValueRequest, context: ref emitterContext
     "  br label %$(prefix)_complete" -> println
     "$(prefix)_complete:" -> println
     putNode.opcode == -303 -> if {
-        "  %v$(putIndex) = phi i1 [ false, %$(prefix)_update ], [ true, %$(prefix)_insert ]" -> println
+        "  %v$(putIndex -> valueNameId(state)) = phi i1 [ false, %$(prefix)_update ], [ true, %$(prefix)_insert ]" -> println
     }
 }
 
@@ -2866,8 +2866,8 @@ emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext
             exchangeBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(exchangeBorrowOrdinal)_mut_len_addr" -> print }
             ", align 8" -> println
         } else {
-            "  %exchange$(exchangeIndex)_data = extractvalue %sollang.array.i32 %v$(exchangeNode.operand0), 0" -> println
-            "  %exchange$(exchangeIndex)_length = extractvalue %sollang.array.i32 %v$(exchangeNode.operand0), 1" -> println
+            "  %exchange$(exchangeIndex)_data = extractvalue %sollang.array.i32 %v$(exchangeNode.operand0 -> valueNameId(state)), 0" -> println
+            "  %exchange$(exchangeIndex)_length = extractvalue %sollang.array.i32 %v$(exchangeNode.operand0 -> valueNameId(state)), 1" -> println
         }
     exchangeLeft -> integerNodeWidth(context, state) => exchangeLeftWidth
     exchangeLeft.kind != 3 and exchangeLeftWidth > 0 and exchangeLeftWidth < 64
@@ -2876,7 +2876,7 @@ emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext
             exchangeLeft -> integerNodeSigned(context, state)
                 -> if { "sext " -> print } else { "zext " -> print }
             exchangeLeft -> writeIrType(context, state)
-            " %v$(exchangeLeftIndex) to i64" -> println
+            " %v$(exchangeLeftIndex -> valueNameId(state)) to i64" -> println
         }
     exchangeRight -> integerNodeWidth(context, state) => exchangeRightWidth
     exchangeRight.kind != 3 and exchangeRightWidth > 0 and exchangeRightWidth < 64
@@ -2885,18 +2885,18 @@ emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext
             exchangeRight -> integerNodeSigned(context, state)
                 -> if { "sext " -> print } else { "zext " -> print }
             exchangeRight -> writeIrType(context, state)
-            " %v$(exchangeRightIndex) to i64" -> println
+            " %v$(exchangeRightIndex -> valueNameId(state)) to i64" -> println
         }
     "  %exchange$(exchangeIndex)_left_in_bounds = icmp ult i64 " -> print
     exchangeLeft.kind == 3 -> if { exchangeLeft -> writeIntegerLiteral(context, state) } else {
         exchangeLeftWidth > 0 and exchangeLeftWidth < 64
-            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex)" -> print }
+            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex -> valueNameId(state))" -> print }
     }
     ", %exchange$(exchangeIndex)_length" -> println
     "  %exchange$(exchangeIndex)_right_in_bounds = icmp ult i64 " -> print
     exchangeRight.kind == 3 -> if { exchangeRight -> writeIntegerLiteral(context, state) } else {
         exchangeRightWidth > 0 and exchangeRightWidth < 64
-            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex)" -> print }
+            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex -> valueNameId(state))" -> print }
     }
     ", %exchange$(exchangeIndex)_length" -> println
     "  %exchange$(exchangeIndex)_in_bounds = and i1 %exchange$(exchangeIndex)_left_in_bounds, %exchange$(exchangeIndex)_right_in_bounds" -> println
@@ -2908,12 +2908,12 @@ emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext
     "  %exchange$(exchangeIndex)_same = icmp eq i64 " -> print
     exchangeLeft.kind == 3 -> if { exchangeLeft -> writeIntegerLiteral(context, state) } else {
         exchangeLeftWidth > 0 and exchangeLeftWidth < 64
-            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex)" -> print }
+            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex -> valueNameId(state))" -> print }
     }
     ", " -> print
     exchangeRight.kind == 3 -> if { exchangeRight -> writeIntegerLiteral(context, state) } else {
         exchangeRightWidth > 0 and exchangeRightWidth < 64
-            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex)" -> print }
+            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex -> valueNameId(state))" -> print }
     }
     "" -> println
     "  br i1 %exchange$(exchangeIndex)_same, label %exchange$(exchangeIndex)_done, label %exchange$(exchangeIndex)_swap" -> println
@@ -2923,7 +2923,7 @@ emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext
     ", ptr %exchange$(exchangeIndex)_data, i64 " -> print
     exchangeLeft.kind == 3 -> if { exchangeLeft -> writeIntegerLiteral(context, state) } else {
         exchangeLeftWidth > 0 and exchangeLeftWidth < 64
-            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex)" -> print }
+            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex -> valueNameId(state))" -> print }
     }
     "" -> println
     "  %exchange$(exchangeIndex)_right_ptr = getelementptr " -> print
@@ -2931,7 +2931,7 @@ emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext
     ", ptr %exchange$(exchangeIndex)_data, i64 " -> print
     exchangeRight.kind == 3 -> if { exchangeRight -> writeIntegerLiteral(context, state) } else {
         exchangeRightWidth > 0 and exchangeRightWidth < 64
-            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex)" -> print }
+            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex -> valueNameId(state))" -> print }
     }
     "" -> println
     "  %exchange$(exchangeIndex)_left_value = load " -> print
@@ -2993,13 +2993,13 @@ emitBoundedDictionaryTake request: WhileValueRequest, context: ref emitterContex
     "" -> println
     "$(prefix)_find" -> emitBoundedDictionaryFindRequiredSlot("%$(prefix)_storage", "%$(prefix)_query", dictionaryTypeId, false, context, state)
     "$(prefix)_value" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_find_slot", layout.valueOffset, layout)
-    "  %v$(takeIndex)" -> print
+    "  %v$(takeIndex -> valueNameId(state))" -> print
     context.types[valueTypeId].kind == 12 -> if { "_bounded_value" -> print }
     " = load " -> print
     valueTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr %$(prefix)_value_ptr, align $(layout.valueAlign)" -> println
     Arena(0) => takenPrefixStorage!
-    "v$(takeIndex)" -> materialize(takenPrefixStorage!) => takenPrefix
+    "v$(takeIndex -> valueNameId(state))" -> materialize(takenPrefixStorage!) => takenPrefix
     takenPrefix -> emitStoredBoundedValueHandle(valueTypeId, context, state)
     keyTypeId -> semanticTypeOwns(context, state)
         -> if {
@@ -3157,7 +3157,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
         takeEntryLayout -> writeDictionaryEntryStorageType
         ", ptr %take$(takeIndex)_values, i64 %take$(takeIndex)_find_index" -> println
-        "  %v$(takeIndex)" -> print
+        "  %v$(takeIndex -> valueNameId(state))" -> print
         takeValueTypeId! >= 0 and context.types[takeValueTypeId!].kind == 12
             -> if { "_bounded_value" -> print }
         " = load " -> print
@@ -3167,7 +3167,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         takeValueTypeId! >= 0 and context.types[takeValueTypeId!].kind == 12
             -> if {
                 Arena(0) => takenPrefixStorage!
-                "v$(takeIndex)" -> materialize(takenPrefixStorage!) => takenPrefix
+                "v$(takeIndex -> valueNameId(state))" -> materialize(takenPrefixStorage!) => takenPrefix
                 takenPrefix -> emitStoredBoundedValueHandle(takeValueTypeId!, context, state)
             }
         takeKeyTypeId! >= 0 and (takeKeyTypeId! -> semanticTypeOwns(context, state))
@@ -3208,9 +3208,9 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
                 takeBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_capacity_addr" -> print }
                 ", align 8" -> println
             } else {
-                "  %take$(takeIndex)_data = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 0" -> println
-                "  %take$(takeIndex)_length = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 1" -> println
-                "  %take$(takeIndex)_capacity = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 2" -> println
+                "  %take$(takeIndex)_data = extractvalue %sollang.array.i32 %v$(takeNode.operand0 -> valueNameId(state)), 0" -> println
+                "  %take$(takeIndex)_length = extractvalue %sollang.array.i32 %v$(takeNode.operand0 -> valueNameId(state)), 1" -> println
+                "  %take$(takeIndex)_capacity = extractvalue %sollang.array.i32 %v$(takeNode.operand0 -> valueNameId(state)), 2" -> println
             }
         takeArgument -> integerNodeWidth(context, state) => takeArgumentWidth
         takeArgument.kind != 3 and takeArgumentWidth > 0 and takeArgumentWidth < 64
@@ -3219,14 +3219,14 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
                 takeArgument -> integerNodeSigned(context, state)
                     -> if { "sext " -> print } else { "zext " -> print }
                 takeArgument -> writeIrType(context, state)
-                " %v$(takeArgumentIndex) to i64" -> println
+                " %v$(takeArgumentIndex -> valueNameId(state)) to i64" -> println
             }
         "  %take$(takeIndex)_in_bounds = icmp ult i64 " -> print
         takeArgument.kind == 3 -> if {
             takeArgument -> writeIntegerLiteral(context, state)
         } else {
             takeArgumentWidth > 0 and takeArgumentWidth < 64
-                -> if { "%take$(takeIndex)_index" -> print } else { "%v$(takeArgumentIndex)" -> print }
+                -> if { "%take$(takeIndex)_index" -> print } else { "%v$(takeArgumentIndex -> valueNameId(state))" -> print }
         }
         ", %take$(takeIndex)_length" -> println
         "  br i1 %take$(takeIndex)_in_bounds, label %take$(takeIndex)_ready, label %take$(takeIndex)_missing" -> println
@@ -3240,7 +3240,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
             "" -> println
         } else {
             takeArgumentWidth > 0 and takeArgumentWidth < 64
-                -> if { "%take$(takeIndex)_index" -> println } else { "%v$(takeArgumentIndex)" -> println }
+                -> if { "%take$(takeIndex)_index" -> println } else { "%v$(takeArgumentIndex -> valueNameId(state))" -> println }
         }
         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
         takeSource -> writeArrayElementType(context, state)
@@ -3252,7 +3252,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         ", ptr %take$(takeIndex)_value_ptr, align " -> print
         takeSource -> arrayElementAlign(context, state) -> writeDecimalLine
         takeNode -> boundedArrayValueTypeId(context, state) => takeBoundedElementType
-        "v$(takeIndex)" -> emitStoredBoundedValueHandle(takeBoundedElementType, context, state)
+        "v$(takeIndex -> valueNameId(state))" -> emitStoredBoundedValueHandle(takeBoundedElementType, context, state)
         "  %take$(takeIndex)_new_length = sub i64 %take$(takeIndex)_length, 1" -> println
         "  br label %take$(takeIndex)_shift" -> println
         "take$(takeIndex)_shift:" -> println

@@ -21,7 +21,7 @@ emitReadonlyReferenceConsoleOutput callIndex: Int, argumentIndex: Int, ownerInde
     valueType.kind != 1 or valueType.origin != 1
         or (valueType.symbol != 1 and valueType.symbol != 23 and width <= 0)
         -> if { false -> return }
-    "  %v$(callIndex)_runtime_reference_value = load " -> print
+    "  %v$(callIndex -> valueNameId(state))_runtime_reference_value = load " -> print
     valueTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr " -> print
     ownerIndex -> writeForwardedReferenceValue(argumentIndex, context, state)
@@ -30,17 +30,17 @@ emitReadonlyReferenceConsoleOutput callIndex: Int, argumentIndex: Int, ownerInde
     call.symbol == -116 or call.symbol == -117 => errorOutput
     call.symbol == -102 or call.symbol == -116 => newline
     valueType.symbol == 1 -> if {
-        "  %v$(callIndex)_runtime_ptr = extractvalue %sollang.text %v$(callIndex)_runtime_reference_value, 0" -> println
-        "  %v$(callIndex)_runtime_len = extractvalue %sollang.text %v$(callIndex)_runtime_reference_value, 1" -> println
+        "  %v$(callIndex -> valueNameId(state))_runtime_ptr = extractvalue %sollang.text %v$(callIndex -> valueNameId(state))_runtime_reference_value, 0" -> println
+        "  %v$(callIndex -> valueNameId(state))_runtime_len = extractvalue %sollang.text %v$(callIndex -> valueNameId(state))_runtime_reference_value, 1" -> println
         errorOutput -> if { "  call void @sollang_runtime_eprint" -> print } else { "  call void @sollang_runtime_print" -> print }
-        "(ptr %v$(callIndex)_runtime_ptr, i64 %v$(callIndex)_runtime_len, i1 " -> print
+        "(ptr %v$(callIndex -> valueNameId(state))_runtime_ptr, i64 %v$(callIndex -> valueNameId(state))_runtime_len, i1 " -> print
     } else {
         valueType.symbol != 23 and width < printWidth
             -> if {
-                "  %v$(callIndex)_runtime_integer = " -> print
+                "  %v$(callIndex -> valueNameId(state))_runtime_integer = " -> print
                 valueType.symbol -> integerSigned(context, state)
                     -> if { "sext" -> print } else { "zext" -> print }
-                " i$(width) %v$(callIndex)_runtime_reference_value to i$(printWidth)" -> println
+                " i$(width) %v$(callIndex -> valueNameId(state))_runtime_reference_value to i$(printWidth)" -> println
             }
         errorOutput -> if { "  call void @sollang_runtime_eprint_" -> print } else { "  call void @sollang_runtime_print_" -> print }
         valueType.symbol == 23 -> if { "i1(i1 " -> print } else {
@@ -48,8 +48,8 @@ emitReadonlyReferenceConsoleOutput callIndex: Int, argumentIndex: Int, ownerInde
         }
         valueType.symbol != 23 and width < printWidth
             -> if {
-                "%v$(callIndex)_runtime_integer" -> print
-            } else { "%v$(callIndex)_runtime_reference_value" -> print }
+                "%v$(callIndex -> valueNameId(state))_runtime_integer" -> print
+            } else { "%v$(callIndex -> valueNameId(state))_runtime_reference_value" -> print }
         valueType.symbol != 23 and printWidth == 64 -> if {
             ", i1 " -> print
             valueType.symbol -> integerSigned(context, state)
@@ -115,9 +115,9 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
             readPrompt.kind == 2 -> if {
                 readPrompt -> sourceToken(context, state) => readPromptToken
                 Int(TextLiteralRequest { sourceModule: readPrompt.sourceModule, token: readPromptToken } -> textLiteralLength(context, state)) => readPromptLength
-                "  %v$(expressionIndex) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex), i64 $readPromptLength)" -> println
+                "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex), i64 $readPromptLength)" -> println
             } else {
-                "  %v$(expressionIndex) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+                "  %v$(expressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
             }
         }
     expression -> typedIr.isArenaConstructorCall
@@ -137,14 +137,14 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
             WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: 0 } -> emitTextMaterialize(context, state)
             expression.symbol == -101 or expression.symbol == -102 or expression.symbol == -116 or expression.symbol == -117
                 -> if {
-                    "  %v$(expressionIndex)_console_ptr = extractvalue %sollang.text %v$(expressionIndex), 0" -> println
-                    "  %v$(expressionIndex)_console_len = extractvalue %sollang.text %v$(expressionIndex), 1" -> println
+                    "  %v$(expressionIndex -> valueNameId(state))_console_ptr = extractvalue %sollang.text %v$(expressionIndex -> valueNameId(state)), 0" -> println
+                    "  %v$(expressionIndex -> valueNameId(state))_console_len = extractvalue %sollang.text %v$(expressionIndex -> valueNameId(state)), 1" -> println
                     expression.symbol == -116 or expression.symbol == -117
                         -> if {
-                            "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_console_ptr, i64 %v$(expressionIndex)_console_len, i1 " -> print
+                            "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_console_ptr, i64 %v$(expressionIndex -> valueNameId(state))_console_len, i1 " -> print
                             expression.symbol == -116 -> if { "true)" -> println } else { "false)" -> println }
                         } else {
-                            "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_console_ptr, i64 %v$(expressionIndex)_console_len, i1 " -> print
+                            "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_console_ptr, i64 %v$(expressionIndex -> valueNameId(state))_console_len, i1 " -> print
                             expression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
                         }
                 }
@@ -178,12 +178,12 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                     functionExpressionInterpolation[functionExpressionRootIndex] => functionExpressionRoot
                                     functionExpressionRoot.sourceToken == runtimeArgument.payloadToken and functionExpressionRoot.parent < 0
                                         -> if {
-                                            "  %v$(expressionIndex)_expression_literal$(functionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $(functionExpressionRoot.literalStart)" -> println
+                                            "  %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $(functionExpressionRoot.literalStart)" -> println
                                             expression.symbol == -116 or expression.symbol == -117
                                                 -> if {
-                                                    "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
+                                                    "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
                                                 } else {
-                                                    "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
+                                                    "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
                                                 }
                                             functionExpressionInterpolation -> interpolationEmissionOrder(runtimeArgument.payloadToken, functionExpressionRoot.segment) => functionExpressionOrder
                                             0 => functionExpressionOrderIndex!
@@ -315,12 +315,12 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                                 }
                                                         }
                                                         functionExpressionMemberFieldOrdinal! >= 0 -> if {
-                                                            "  %v$(expressionIndex)_expression$(functionExpressionRootIndex) = extractvalue " -> print
+                                                            "  %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex) = extractvalue " -> print
                                                             functionExpressionMemberBaseValue -> writeIrType(context, state)
                                                             " " -> print
                                                             functionExpressionMemberBaseParameter! -> if {
                                                                 context -> writeParameterReference(functionIndex, functionExpressionMemberBase.symbol) => functionExpressionMemberParameterWritten
-                                                            } else { "%v$(functionExpressionMemberBaseIr!)" -> print }
+                                                            } else { "%v$(functionExpressionMemberBaseIr! -> valueNameId(state))" -> print }
                                                             ", $(functionExpressionMemberFieldOrdinal!)" -> println
                                                             true => functionExpressionRootMember!
                                                         }
@@ -357,23 +357,23 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                 and (functionExpressionRootWidth! < 32
                                                 or (functionExpressionRootWidth! == 32 and not functionExpressionRootSigned))
                                                 and functionExpressionRoot.kind != 0 -> if {
-                                                    "  %v$(expressionIndex)_expression$(functionExpressionRootIndex)_print = " -> print
+                                                    "  %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_print = " -> print
                                                     functionExpressionRootTypeSymbol! -> integerSigned(context, state)
                                                         -> if { "sext" -> print } else { "zext" -> print }
                                                     " i$(functionExpressionRootWidth!) " -> print
                                                     functionExpressionRootReferenceValueTypeId >= 0
                                                         -> if {
-                                                            "%v$(expressionIndex)_expression$(functionExpressionRootIndex)_reference_value" -> print
+                                                            "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_reference_value" -> print
                                                         } else {
                                                             expressionIndex -> writeInterpolationValue(functionExpressionRootIndex, functionExpressionInterpolation, runtimeArgument.sourceModule, functionIndex, expressionIndex, context, state)
                                                         }
                                                     functionExpressionRootWidth! == 32 -> if { " to i64" -> println } else { " to i32" -> println }
                                                 }
                                             functionExpressionRootTypeSymbol! == 1 -> if {
-                                                "  %v$(expressionIndex)_expression$(functionExpressionRootIndex)_text_ptr = extractvalue %sollang.text " -> print
+                                                "  %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_text_ptr = extractvalue %sollang.text " -> print
                                                 functionExpressionRootReferenceValueTypeId >= 0
                                                     -> if {
-                                                        "%v$(expressionIndex)_expression$(functionExpressionRootIndex)_reference_value" -> print
+                                                        "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_reference_value" -> print
                                                     } else {
                                                         functionExpressionRoot.kind == 5
                                                             or functionExpressionRoot.kind == 6
@@ -381,16 +381,16 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                             or functionExpressionRoot.kind == 8
                                                             or functionExpressionRoot.kind == 10
                                                             -> if {
-                                                                "%v$(expressionIndex)_expression$(functionExpressionRootIndex)" -> print
+                                                                "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)" -> print
                                                             } else {
                                                                 expressionIndex -> writeInterpolationValue(functionExpressionRootIndex, functionExpressionInterpolation, runtimeArgument.sourceModule, functionIndex, expressionIndex, context, state)
                                                             }
                                                     }
                                                 ", 0" -> println
-                                                "  %v$(expressionIndex)_expression$(functionExpressionRootIndex)_text_len = extractvalue %sollang.text " -> print
+                                                "  %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_text_len = extractvalue %sollang.text " -> print
                                                 functionExpressionRootReferenceValueTypeId >= 0
                                                     -> if {
-                                                        "%v$(expressionIndex)_expression$(functionExpressionRootIndex)_reference_value" -> print
+                                                        "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_reference_value" -> print
                                                     } else {
                                                         functionExpressionRoot.kind == 5
                                                             or functionExpressionRoot.kind == 6
@@ -398,7 +398,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                             or functionExpressionRoot.kind == 8
                                                             or functionExpressionRoot.kind == 10
                                                             -> if {
-                                                                "%v$(expressionIndex)_expression$(functionExpressionRootIndex)" -> print
+                                                                "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)" -> print
                                                             } else {
                                                                 expressionIndex -> writeInterpolationValue(functionExpressionRootIndex, functionExpressionInterpolation, runtimeArgument.sourceModule, functionIndex, expressionIndex, context, state)
                                                             }
@@ -406,9 +406,9 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                 ", 1" -> println
                                                 expression.symbol == -116 or expression.symbol == -117
                                                     -> if {
-                                                        "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_expression$(functionExpressionRootIndex)_text_ptr, i64 %v$(expressionIndex)_expression$(functionExpressionRootIndex)_text_len, i1 false)" -> println
+                                                        "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_text_ptr, i64 %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_text_len, i1 false)" -> println
                                                     } else {
-                                                        "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_expression$(functionExpressionRootIndex)_text_ptr, i64 %v$(expressionIndex)_expression$(functionExpressionRootIndex)_text_len, i1 false)" -> println
+                                                        "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_text_ptr, i64 %v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_text_len, i1 false)" -> println
                                                     }
                                             } else {
                                                 functionExpressionRootTypeSymbol! == 23 -> if {
@@ -430,7 +430,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                     and (functionExpressionRootWidth! < 32
                                                     or (functionExpressionRootWidth! == 32 and not functionExpressionRootSigned))
                                                     and functionExpressionRoot.kind != 0 -> if {
-                                                        "%v$(expressionIndex)_expression$(functionExpressionRootIndex)_print" -> print
+                                                        "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_print" -> print
                                                     } else {
                                                         functionExpressionRoot.kind == 0 or functionExpressionRoot.kind == 4
                                                             -> if {
@@ -443,11 +443,11 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                                                     and functionExpressionRoot.operand0 >= 0
                                                                     and functionExpressionInterpolation[functionExpressionRoot.operand0].kind == 1
                                                                     -> if {
-                                                                        "%v$(expressionIndex)_expression$(functionExpressionRootIndex)" -> print
+                                                                        "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)" -> print
                                                                     } else {
                                                                         functionExpressionRootReferenceValueTypeId >= 0
                                                                             -> if {
-                                                                                "%v$(expressionIndex)_expression$(functionExpressionRootIndex)_reference_value" -> print
+                                                                                "%v$(expressionIndex -> valueNameId(state))_expression$(functionExpressionRootIndex)_reference_value" -> print
                                                                             } else {
                                                                                 functionExpressionRoot.kind == 1 -> if {
                                                                                     expressionIndex -> writeInterpolationValue(functionExpressionRootIndex, functionExpressionInterpolation, runtimeArgument.sourceModule, functionIndex, expressionIndex, context, state)
@@ -473,10 +473,10 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                     functionExpressionRootSearch! + 1 => functionExpressionRootSearch!
                                 }
                             UIntSize(runtimeArgumentLength) - functionExpressionSuffixStart! => functionExpressionSuffixLength
-                            "  %v$(expressionIndex)_expression_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $(functionExpressionSuffixStart!)" -> println
+                            "  %v$(expressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $(functionExpressionSuffixStart!)" -> println
                             expression.symbol == -116 or expression.symbol == -117
-                                -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print } else {
-                                    "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print
+                                -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print } else {
+                                    "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_expression_suffix, i64 $functionExpressionSuffixLength, i1 " -> print
                                 }
                         } else {
                             runtimeArgumentToken.span.start + 1 => functionInterpolationContentStart
@@ -581,13 +581,13 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                     -> if {
                                         Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationPartOffset
                                         Int(functionInterpolationMatchStart! - functionInterpolationSegmentStart!) => functionInterpolationPartLength
-                                        "  %v$(expressionIndex)_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $functionInterpolationPartOffset" -> println
+                                        "  %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $functionInterpolationPartOffset" -> println
                                         expression.symbol == -116 or expression.symbol == -117
                                             -> if {
-                                                "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
+                                                "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
                                                 "  call void @sollang_runtime_eprint_i32(i32 " -> print
                                             } else {
-                                                "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
+                                                "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
                                                 "  call void @sollang_runtime_print_i32(i32 " -> print
                                             }
                                         functionInterpolationParameter! -> if {
@@ -597,7 +597,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                             context.ir[functionInterpolationBinding.operand0] => functionInterpolationValue
                                             functionInterpolationValue.kind == 3 -> if {
                                                 functionInterpolationValue -> writeIntegerLiteral(context, state)
-                                            } else { "%v$(functionInterpolationBinding.operand0)" -> print }
+                                            } else { "%v$(functionInterpolationBinding.operand0 -> valueNameId(state))" -> print }
                                         }
                                         ", i1 false)" -> println
                                         functionInterpolationNameEnd! => functionInterpolationSegmentStart!
@@ -608,10 +608,10 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                             functionEmittedInterpolation! -> if {
                                 Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationSuffixOffset
                                 Int(functionInterpolationContentEnd - functionInterpolationSegmentStart!) => functionInterpolationSuffixLength
-                                "  %v$(expressionIndex)_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $functionInterpolationSuffixOffset" -> println
+                                "  %v$(expressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(runtimeArgumentIndex), i64 $functionInterpolationSuffixOffset" -> println
                                 expression.symbol == -116 or expression.symbol == -117
-                                    -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print } else {
-                                        "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print
+                                    -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print } else {
+                                        "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print
                                     }
                             } else {
                                 expression.symbol == -116 or expression.symbol == -117
@@ -625,21 +625,21 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                         not referenceConsoleOutput! -> if {
                             runtimeArgument.typeOrigin == 1 and runtimeArgument.typeSymbol == 1
                                 -> if {
-                                    "  %v$(expressionIndex)_runtime_ptr = extractvalue %sollang.text " -> print
-                                    expression.opcode == -203 -> if { "%v$(expressionIndex)" -> print } else {
+                                    "  %v$(expressionIndex -> valueNameId(state))_runtime_ptr = extractvalue %sollang.text " -> print
+                                    expression.opcode == -203 -> if { "%v$(expressionIndex -> valueNameId(state))" -> print } else {
                                         runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol
-                                            -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
+                                            -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex -> valueNameId(state))" -> print }
                                     }
                                     ", 0" -> println
-                                    "  %v$(expressionIndex)_runtime_len = extractvalue %sollang.text " -> print
-                                    expression.opcode == -203 -> if { "%v$(expressionIndex)" -> print } else {
+                                    "  %v$(expressionIndex -> valueNameId(state))_runtime_len = extractvalue %sollang.text " -> print
+                                    expression.opcode == -203 -> if { "%v$(expressionIndex -> valueNameId(state))" -> print } else {
                                         runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol
-                                            -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
+                                            -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex -> valueNameId(state))" -> print }
                                     }
                                     ", 1" -> println
                                     expression.symbol == -116 or expression.symbol == -117
-                                        -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_runtime_ptr, i64 %v$(expressionIndex)_runtime_len, i1 " -> print } else {
-                                            "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_runtime_ptr, i64 %v$(expressionIndex)_runtime_len, i1 " -> print
+                                        -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex -> valueNameId(state))_runtime_ptr, i64 %v$(expressionIndex -> valueNameId(state))_runtime_len, i1 " -> print } else {
+                                            "  call void @sollang_runtime_print(ptr %v$(expressionIndex -> valueNameId(state))_runtime_ptr, i64 %v$(expressionIndex -> valueNameId(state))_runtime_len, i1 " -> print
                                         }
                                 } else {
                                     runtimeArgument -> integerNodeWidth(context, state) => runtimeArgumentWidth!
@@ -655,7 +655,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                     } else {
                                         runtimeArgumentWidth! > 0 and runtimeArgumentWidth! < runtimePrintWidth and runtimeArgument.kind != 3
                                             -> if {
-                                                "  %v$(expressionIndex)_runtime_integer = " -> print
+                                                "  %v$(expressionIndex -> valueNameId(state))_runtime_integer = " -> print
                                                 runtimeArgument -> integerNodeSigned(context, state)
                                                     -> if { "sext" -> print } else { "zext" -> print }
                                                 " i$(runtimeArgumentWidth!) " -> print
@@ -675,7 +675,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                                     } else {
                                         runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth! > 0 and runtimeArgumentWidth! < runtimePrintWidth
                                             -> if {
-                                                "%v$(expressionIndex)_runtime_integer" -> print
+                                                "%v$(expressionIndex -> valueNameId(state))_runtime_integer" -> print
                                             } else {
                                                 runtimeArgumentIndex -> writeValue(functionIndex, context, state)
                                             }

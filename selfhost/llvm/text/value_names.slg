@@ -1,0 +1,27 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+# IR indices remain addresses into the shared tables. Printed SSA values use
+# disjoint source scopes and source-local ordinals, so another source's body
+# growth cannot rename an unchanged value or alias an inlined source value.
+prepareValueNames context: ref emitterContext.EmitContext -> [UInt64; ~] {
+    [UInt64; ~] => counters!
+    0 => source!
+    source! <= (context.sources -> len) -> while {
+        counters! -> push(0)
+        source! + 1 => source!
+    }
+    [UInt64; ~] => names!
+    context.ir -> each node {
+        node.sourceModule + 1 => scope
+        counters![scope] => ordinal
+        names! -> push(UInt64(scope) * 4294967296 + ordinal)
+        ordinal + 1 => counters![scope]
+    }
+    names!
+}
+
+valueNameId nodeIndex: Int, state: ref CoreEmitterState -> UInt64 {
+    state.frozenValueNames[nodeIndex]
+}

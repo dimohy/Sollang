@@ -336,7 +336,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropCandidate.kind == 14 and dropCandidateHasInlineArrayAbi!
                         -> if {
                             true => dropCandidateNeedsInlineArrayReload!
-                            "  %dropfixedreturn$(dropIndex!)_data = extractvalue %sollang.int_slice %v$(dropIndex!), 0" -> println
+                            "  %dropfixedreturn$(dropIndex!)_data = extractvalue %sollang.int_slice %v$(dropIndex! -> valueNameId(state)), 0" -> println
                             "  %dropfixedreturn$(dropIndex!) = load " -> print
                             dropCandidate.typeId -> writeSemanticTypeId(context, state)
                             ", ptr %dropfixedreturn$(dropIndex!)_data, align " -> print
@@ -347,7 +347,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         Arena(0) => prefixStorage!
                         "dropboundedreturn$(dropIndex!)" -> materialize(prefixStorage!) => prefix
                         Arena(0) => valueStorage!
-                        "%v$(dropIndex!)" -> materialize(valueStorage!) => valueName
+                        "%v$(dropIndex! -> valueNameId(state))" -> materialize(valueStorage!) => valueName
                         prefix -> emitBoundedArrayValueFromHandle(valueName, dropCandidate.typeId, context, state)
                     }
                     "  call void @sollang_drop_t$(dropCandidate.typeId)(" -> print
@@ -358,18 +358,18 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     } else { dropCandidateNeedsInlineArrayReload! -> if {
                             "%dropfixedreturn$(dropIndex!)" -> print
                         } else {
-                            "%v$(dropIndex!)" -> print
+                            "%v$(dropIndex! -> valueNameId(state))" -> print
                     } }
                     ")" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
-                    "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %v$(dropIndex!), 0" -> println
+                    "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %v$(dropIndex! -> valueNameId(state)), 0" -> println
                     "  call void @sollang_free(ptr %drop$(dropIndex!))" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 16 and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
-                    "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary %v$(dropIndex!), 0" -> println
+                    "  %drop$(dropIndex!)_keys = extractvalue %sollang.int_dictionary %v$(dropIndex! -> valueNameId(state)), 0" -> println
                     "  call void @sollang_free(ptr %drop$(dropIndex!)_keys)" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
@@ -413,7 +413,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 and not dropCandidateMoved! and not dropCandidateReturned!
                 => dropNamedPathFlagGuard
             dropNamedPathFlagGuard -> if {
-                "  %localreturn$(functionIndex)_b$(dropIndex!)_owned = load i1, ptr %v$(dropIndex!)_owned, align 1" -> println
+                "  %localreturn$(functionIndex)_b$(dropIndex!)_owned = load i1, ptr %v$(dropIndex! -> valueNameId(state))_owned, align 1" -> println
                 "  br i1 %localreturn$(functionIndex)_b$(dropIndex!)_owned, label %localreturn$(functionIndex)_b$(dropIndex!)_drop, label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
                 "localreturn$(functionIndex)_b$(dropIndex!)_drop:" -> println
             }
@@ -434,7 +434,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     "  %dropfixedliteral$(dropIndex!) = extractvalue %sollang.int_slice " -> print
                     fixedBackingAsyncRoot >= 0 -> if {
                         "%dropfixedliteral$(dropIndex!)_restored" -> print
-                    } else { "%v$(dropCandidateDropValueIndex)" -> print }
+                    } else { "%v$(dropCandidateDropValueIndex -> valueNameId(state))" -> print }
                     ", 0" -> println
                     "  call void @sollang_free(ptr %dropfixedliteral$(dropIndex!))" -> println
                 }
@@ -472,7 +472,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             true => dropBindingNeedsInlineArrayReload!
                             "  %dropfixedbinding$(dropIndex!)_data = extractvalue %sollang.int_slice " -> print
                             dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
-                                "%v$(dropCandidateDropValueIndex)" -> print
+                                "%v$(dropCandidateDropValueIndex -> valueNameId(state))" -> print
                             }
                             ", 0" -> println
                             "  %dropfixedbinding$(dropIndex!) = load " -> print
@@ -608,7 +608,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 and not dropCandidateMoved!
                 and dropBackingCall != returnedBackingSource
                 and (returnedOwnedBindingRoot < 0 or returnedOwnedBindingRoot != dropCandidateRoot!)
-                -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex, context) }
+                -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex, context, state) }
             dropNamedPathFlagGuard -> if {
                 "  br label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
                 "localreturn$(functionIndex)_b$(dropIndex!)_done:" -> println
@@ -835,7 +835,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     transparentReferenceTarget! -> writeSemanticTypeId(context, state)
                     ", ptr " -> print
                     returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
-                        -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                        -> if { "%arg" -> print } else { "%v$(returnValueIndex -> valueNameId(state))" -> print }
                     ", align " -> print
                     context.typeAligns[transparentReferenceTarget!] -> writeDecimalLine
                 }
@@ -850,9 +850,9 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 returnOperand -> integerNodeWidth(context, state) => returnSourceWidth
                 (function.typeOrigin == 4 and function.typeSymbol == 4 and returnOperand.typeOrigin == 4 and returnOperand.typeSymbol == 3) => convertsStreamToEvent
                 convertsStreamToEvent -> if {
-                    "  %return_stream_context = extractvalue %sollang.stream %v$(returnValueIndex), 0" -> println
-                    "  %return_stream_next = extractvalue %sollang.stream %v$(returnValueIndex), 1" -> println
-                    "  %return_stream_drop = extractvalue %sollang.stream %v$(returnValueIndex), 2" -> println
+                    "  %return_stream_context = extractvalue %sollang.stream %v$(returnValueIndex -> valueNameId(state)), 0" -> println
+                    "  %return_stream_next = extractvalue %sollang.stream %v$(returnValueIndex -> valueNameId(state)), 1" -> println
+                    "  %return_stream_drop = extractvalue %sollang.stream %v$(returnValueIndex -> valueNameId(state)), 2" -> println
                     "  %return_event0 = insertvalue %sollang.event_stream poison, ptr %return_stream_context, 0" -> println
                     "  %return_event1 = insertvalue %sollang.event_stream %return_event0, ptr %return_stream_next, 1" -> println
                     "  %return_event = insertvalue %sollang.event_stream %return_event1, ptr %return_stream_drop, 2" -> println
@@ -871,7 +871,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         returnOperand -> writeIrType(context, state)
                         " " -> print
                         returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
-                            -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                            -> if { "%arg" -> print } else { "%v$(returnValueIndex -> valueNameId(state))" -> print }
                         " to i$(returnTargetWidth)" -> println
                         true => convertedIntegerReturn!
                     }
@@ -898,7 +898,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         convertsStreamToEvent -> if { "%return_event" -> println } else {
                             transparentReferenceReturn! -> if {
                                 materializedReferenceReturn!
-                                    -> if { "%v$(returnValueIndex)" -> println } else { "%return_ref_value" -> println }
+                                    -> if { "%v$(returnValueIndex -> valueNameId(state))" -> println } else { "%return_ref_value" -> println }
                             } else {
                                 function.typeId >= 0 and context.types[function.typeId].kind == 8
                                     -> if {
@@ -918,8 +918,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                                             } else {
                                                 returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
                                                     -> if { "%arg" -> println } else {
-                                                        "%v" -> print
-                                                        returnValueIndex -> writeDecimalLine
+                                                        "%v$(returnValueIndex -> valueNameId(state))" -> println
                                                     }
                                             }
                                     }
