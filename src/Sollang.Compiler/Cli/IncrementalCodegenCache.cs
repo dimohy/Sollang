@@ -773,55 +773,167 @@ internal sealed class IncrementalCodegenCache
         return hash;
     }
 
+    private static string TypeUniverseRecord(Shared.CodegenKeyRule rule, Func<Shared.CodegenKeyPart, string> value) =>
+        string.Join(':', new[] { rule.Domain }.Concat(rule.Parts.Select(value)));
+
     private static ulong BuildTypeUniverseHash(TypeDefinitionTable types)
     {
-        var fields = new List<string> { "type-universe-1" };
-        foreach (var definition in types.Structs.OrderBy(static value => (int)value.Id))
+        var plan = Shared.CodegenCacheKeyPolicy.TypeUniverseFields();
+        var fields = new List<string> { plan.Domain };
+        foreach (var category in plan.Parts)
         {
-            fields.Add($"struct:{(int)definition.Id}:{definition.Name}:{definition.ModuleName}");
-            foreach (var field in definition.Fields.OrderBy(static value => value.Index))
+            switch (category)
             {
-                fields.Add($"field:{field.Index}:{field.Name}:{(int)field.Type}");
+                case Shared.CodegenKeyPart.TypeStructs:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.StructLayoutFields();
+                    var memberRule = Shared.CodegenCacheKeyPolicy.StructFieldLayoutFields();
+                    foreach (var d in types.Structs.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeName => d.Name,
+                            Shared.CodegenKeyPart.TypeModule => d.ModuleName,
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                        foreach (var field in d.Fields.OrderBy(static value => value.Index))
+                            fields.Add(TypeUniverseRecord(memberRule, part => part switch
+                            {
+                                Shared.CodegenKeyPart.TypeFieldIndex => $"{field.Index}",
+                                Shared.CodegenKeyPart.MemberName => field.Name,
+                                Shared.CodegenKeyPart.MemberType => $"{(int)field.Type}",
+                                _ => throw UnexpectedKeyPart(part)
+                            }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeEnums:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.EnumLayoutFields();
+                    var memberRule = Shared.CodegenCacheKeyPolicy.EnumVariantLayoutFields();
+                    foreach (var d in types.Enums.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeName => d.Name,
+                            Shared.CodegenKeyPart.TypeModule => d.ModuleName,
+                            Shared.CodegenKeyPart.TypePayloadWords => $"{d.PayloadWords}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                        foreach (var variant in d.Variants.OrderBy(static value => value.Tag))
+                            fields.Add(TypeUniverseRecord(memberRule, part => part switch
+                            {
+                                Shared.CodegenKeyPart.TypeVariantTag => $"{variant.Tag}",
+                                Shared.CodegenKeyPart.MemberName => variant.Name,
+                                Shared.CodegenKeyPart.MemberType => $"{(int?)variant.PayloadType ?? -1}",
+                                _ => throw UnexpectedKeyPart(part)
+                            }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeBoxes:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.BoxLayoutFields();
+                    foreach (var d in types.Boxes.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeElement => $"{(int)d.ElementType}",
+                            Shared.CodegenKeyPart.TypeSize => $"{d.Size}",
+                            Shared.CodegenKeyPart.TypeAlignment => $"{d.Alignment}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeReferences:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.ReferenceLayoutFields();
+                    foreach (var d in types.References.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeElement => $"{(int)d.ElementType}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeDynTraits:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.DynTraitLayoutFields();
+                    foreach (var d in types.DynTraits.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeName => d.TraitName,
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeStaticArrays:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.StaticArrayLayoutFields();
+                    foreach (var d in types.StaticArrays.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeElement => $"{(int)d.ElementType}",
+                            Shared.CodegenKeyPart.TypeSize => $"{d.ElementSize}",
+                            Shared.CodegenKeyPart.TypeAlignment => $"{d.ElementAlignment}",
+                            Shared.CodegenKeyPart.TypeLength => $"{d.FixedLength}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeDynamicArrays:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.DynamicArrayLayoutFields();
+                    foreach (var d in types.DynamicArrays.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeElement => $"{(int)d.ElementType}",
+                            Shared.CodegenKeyPart.TypeSize => $"{d.ElementSize}",
+                            Shared.CodegenKeyPart.TypeAlignment => $"{d.ElementAlignment}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeDictionaries:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.DictionaryLayoutFields();
+                    foreach (var d in types.Dictionaries.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeKey => $"{(int)d.KeyType}",
+                            Shared.CodegenKeyPart.TypeValue => $"{(int)d.ValueType}",
+                            Shared.CodegenKeyPart.TypeKeySize => $"{d.KeySize}",
+                            Shared.CodegenKeyPart.TypeKeyAlignment => $"{d.KeyAlignment}",
+                            Shared.CodegenKeyPart.TypeValueOffset => $"{d.ValueOffset}",
+                            Shared.CodegenKeyPart.TypeValueSize => $"{d.ValueSize}",
+                            Shared.CodegenKeyPart.TypeValueAlignment => $"{d.ValueAlignment}",
+                            Shared.CodegenKeyPart.TypeEntryStride => $"{d.EntryStride}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                default:
+                    throw UnexpectedKeyPart(category);
             }
-        }
-        foreach (var definition in types.Enums.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add($"enum:{(int)definition.Id}:{definition.Name}:{definition.ModuleName}:{definition.PayloadWords}");
-            foreach (var variant in definition.Variants.OrderBy(static value => value.Tag))
-            {
-                fields.Add($"variant:{variant.Tag}:{variant.Name}:{(int?)variant.PayloadType ?? -1}");
-            }
-        }
-        foreach (var definition in types.Boxes.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add($"box:{(int)definition.Id}:{(int)definition.ElementType}:{definition.Size}:{definition.Alignment}");
-        }
-        foreach (var definition in types.References.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add($"reference:{(int)definition.Id}:{(int)definition.ElementType}");
-        }
-        foreach (var definition in types.DynTraits.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add($"dyn:{(int)definition.Id}:{definition.TraitName}");
-        }
-        foreach (var definition in types.StaticArrays.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add(
-                $"static-array:{(int)definition.Id}:{(int)definition.ElementType}:"
-                + $"{definition.ElementSize}:{definition.ElementAlignment}:{definition.FixedLength}");
-        }
-        foreach (var definition in types.DynamicArrays.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add(
-                $"dynamic-array:{(int)definition.Id}:{(int)definition.ElementType}:"
-                + $"{definition.ElementSize}:{definition.ElementAlignment}");
-        }
-        foreach (var definition in types.Dictionaries.OrderBy(static value => (int)value.Id))
-        {
-            fields.Add(
-                $"dictionary:{(int)definition.Id}:{(int)definition.KeyType}:{(int)definition.ValueType}:"
-                + $"{definition.KeySize}:{definition.KeyAlignment}:{definition.ValueOffset}:"
-                + $"{definition.ValueSize}:{definition.ValueAlignment}:{definition.EntryStride}");
         }
         return HashFields(fields);
     }

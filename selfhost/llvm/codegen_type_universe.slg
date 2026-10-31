@@ -1,0 +1,183 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+
+# Coordinates select records; owned field bytes preserve complete names and
+# literal delimiters. Member ordinal -1 identifies a type's definition record.
+public struct TypeUniverseRecords {
+    public categories: [plans.KeyPart; ~]
+    public typeIds: [Int; ~]
+    public memberOrdinals: [Int; ~]
+    public fields: [Field; ~]
+}
+
+public enum TypeUniverseError {
+    Category, Record, DuplicateRecord, MissingDefinition, Cardinality, Binding(KeyError)
+}
+
+typeUniverseRecordRule category: plans.KeyPart, memberOrdinal: Int -> Result<plans.KeyRule, TypeUniverseError> {
+    memberOrdinal < -1 -> if { Result<plans.KeyRule, TypeUniverseError>.Err(TypeUniverseError.Record) -> return }
+    category -> plans.partIndex => selected
+    selected == (plans.KeyPart.TypeStructs -> plans.partIndex)
+        -> if {
+            memberOrdinal < 0 -> if {
+                plans.structLayoutFields() => rule
+                Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+            }
+            plans.structFieldLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    selected == (plans.KeyPart.TypeEnums -> plans.partIndex)
+        -> if {
+            memberOrdinal < 0 -> if {
+                plans.enumLayoutFields() => rule
+                Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+            }
+            plans.enumVariantLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    memberOrdinal >= 0 -> if { Result<plans.KeyRule, TypeUniverseError>.Err(TypeUniverseError.Record) -> return }
+    selected == (plans.KeyPart.TypeBoxes -> plans.partIndex)
+        -> if {
+            plans.boxLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    selected == (plans.KeyPart.TypeReferences -> plans.partIndex)
+        -> if {
+            plans.referenceLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    selected == (plans.KeyPart.TypeDynTraits -> plans.partIndex)
+        -> if {
+            plans.dynTraitLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    selected == (plans.KeyPart.TypeStaticArrays -> plans.partIndex)
+        -> if {
+            plans.staticArrayLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    selected == (plans.KeyPart.TypeDynamicArrays -> plans.partIndex)
+        -> if {
+            plans.dynamicArrayLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    selected == (plans.KeyPart.TypeDictionaries -> plans.partIndex)
+        -> if {
+            plans.dictionaryLayoutFields() => rule
+            Result<plans.KeyRule, TypeUniverseError>.Ok(rule) -> return
+        }
+    Result<plans.KeyRule, TypeUniverseError>.Err(TypeUniverseError.Category)
+}
+
+appendLayoutScalar destination: mut Field, source: ref Field -> Unit {
+    destination.bytes -> push(58)
+    source.bytes -> each byte { destination.bytes -> push(byte) }
+}
+
+# Match TypeUniverseRecord: rule domain, then one colon and one complete scalar
+# per ordered part. A record is subsequently hashed as one field.
+public typeUniverseRecordField rule: ref plans.KeyRule, bindings: ref [Binding; ~] -> Result<Field, TypeUniverseError> {
+    rule.domain -> textField => field!
+    rule.parts -> each part {
+        -1 => selected!
+        0 => index!
+        index! < (bindings -> len) -> while {
+            (bindings[index!].part -> plans.partIndex) == (part -> plans.partIndex)
+                -> if {
+                    selected! >= 0 -> if {
+                        Result<Field, TypeUniverseError>.Err(TypeUniverseError.Binding(KeyError.DuplicatePart)) -> return
+                    }
+                    index! => selected!
+                }
+            index! + 1 => index!
+        }
+        selected! < 0 -> if {
+            Result<Field, TypeUniverseError>.Err(TypeUniverseError.Binding(KeyError.MissingPart)) -> return
+        }
+        (bindings[selected!].fields -> len) != 1
+            -> if { Result<Field, TypeUniverseError>.Err(TypeUniverseError.Cardinality) -> return }
+        field! -> appendLayoutScalar(bindings[selected!].fields[0])
+    }
+    Result<Field, TypeUniverseError>.Ok(field!)
+}
+
+public appendTypeUniverseRecord records: mut TypeUniverseRecords, category: plans.KeyPart, typeId: Int, memberOrdinal: Int, bindings: ref [Binding; ~] -> Result<Unit, TypeUniverseError> {
+    typeId < 0 -> if { Result<Unit, TypeUniverseError>.Err(TypeUniverseError.Record) -> return }
+    category -> typeUniverseRecordRule(memberOrdinal) -> when {
+        Err(error) { Result<Unit, TypeUniverseError>.Err(error) }
+        Ok(rule) {
+            rule -> typeUniverseRecordField(bindings) -> when {
+                Err(error) { Result<Unit, TypeUniverseError>.Err(error) }
+                Ok(field) {
+                    records.categories -> push(category)
+                    records.typeIds -> push(typeId)
+                    records.memberOrdinals -> push(memberOrdinal)
+                    records.fields -> push(field)
+                    Result<Unit, TypeUniverseError>.Ok
+                }
+            }
+        }
+    }
+}
+
+public typeUniverseFields records: ref TypeUniverseRecords -> Result<[Field; ~], TypeUniverseError> {
+    records.fields -> len => count
+    count != (records.categories -> len) or count != (records.typeIds -> len) or count != (records.memberOrdinals -> len)
+        -> if { Result<[Field; ~], TypeUniverseError>.Err(TypeUniverseError.Record) -> return }
+    plans.typeUniverseFields() => plan
+    [Field; ~] => fields!
+    fields! -> push(plan.domain -> textField)
+    0 => captured!
+    plan.parts -> each category {
+        [Int; ~] => order!
+        0 => record!
+        record! < count -> while {
+            (records.categories[record!] -> plans.partIndex) == (category -> plans.partIndex)
+                -> if {
+                    order! -> len => position!
+                    order! -> push(record!)
+                    position! > 0 -> while {
+                        order![position! - 1] => previous
+                        records.typeIds[previous] < records.typeIds[record!]
+                            -> if { break }
+                        records.typeIds[previous] == records.typeIds[record!]
+                            and records.memberOrdinals[previous] <= records.memberOrdinals[record!]
+                            -> if { break }
+                        previous => order![position!]
+                        position! - 1 => position!
+                    }
+                    record! => order![position!]
+                }
+            record! + 1 => record!
+        }
+        -1 => owner!
+        -2 => member!
+        order! -> each ordinal {
+            records.typeIds[ordinal] != owner! -> if { -2 => member! }
+            records.memberOrdinals[ordinal] >= 0 and member! == -2
+                -> if { Result<[Field; ~], TypeUniverseError>.Err(TypeUniverseError.MissingDefinition) -> return }
+            records.typeIds[ordinal] == owner! and records.memberOrdinals[ordinal] == member!
+                -> if { Result<[Field; ~], TypeUniverseError>.Err(TypeUniverseError.DuplicateRecord) -> return }
+            records.typeIds[ordinal] => owner!
+            records.memberOrdinals[ordinal] => member!
+            records.fields[ordinal] -> copyIdentityField => field
+            fields! -> push(field)
+            captured! + 1 => captured!
+        }
+    }
+    captured! != count -> if { Result<[Field; ~], TypeUniverseError>.Err(TypeUniverseError.Category) -> return }
+    Result<[Field; ~], TypeUniverseError>.Ok(fields!)
+}
+
+public typeUniverseHash records: ref TypeUniverseRecords -> Result<UInt64, TypeUniverseError> {
+    records -> typeUniverseFields -> when {
+        Err(error) { Result<UInt64, TypeUniverseError>.Err(error) }
+        Ok(fields) {
+            arithmetic.envelopeChecksumSeed() => hash!
+            fields -> each field { hash! -> hashBytes(field.bytes) => hash! }
+            Result<UInt64, TypeUniverseError>.Ok(hash!)
+        }
+    }
+}

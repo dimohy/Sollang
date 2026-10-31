@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,72 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "type-universe-vectors")
+{
+    var tableType = assembly.GetType("Sollang.Compiler.Semantics.TypeDefinitionTable", true)!;
+    var typeIdType = assembly.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+    object ConvertFact(Type type, JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null) return null!;
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        if (type.IsEnum) return Enum.ToObject(type, value.GetInt32());
+        if (type == typeof(string)) return value.GetString()!;
+        if (type == typeof(int)) return value.GetInt32();
+        if (type == typeof(bool)) return value.GetBoolean();
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IReadOnlyList<>))
+        {
+            var element = type.GetGenericArguments()[0];
+            var array = Array.CreateInstance(element, value.GetArrayLength());
+            var index = 0;
+            foreach (var item in value.EnumerateArray()) array.SetValue(ConvertFact(element, item), index++);
+            return array;
+        }
+        var constructor = type.GetConstructors().Single();
+        return constructor.Invoke(constructor.GetParameters().Select(parameter =>
+            value.TryGetProperty(parameter.Name!, out var item) ? ConvertFact(parameter.ParameterType, item)
+            : parameter.HasDefaultValue ? parameter.DefaultValue
+            : throw new InvalidOperationException($"missing {type.Name}.{parameter.Name}")).ToArray());
+    }
+    object Dictionary(string category, JsonElement facts)
+    {
+        var recordType = tableType.GetProperty(category)!.PropertyType.GetGenericArguments()[0];
+        var dictionary = Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeIdType, recordType))!;
+        foreach (var fact in facts.GetProperty(category).EnumerateArray())
+            dictionary.GetType().GetMethod("Add")!.Invoke(dictionary,
+                [Enum.ToObject(typeIdType, fact.GetProperty("Id").GetInt32()), ConvertFact(recordType, fact)]);
+        return dictionary;
+    }
+    var build = cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.Static | BindingFlags.NonPublic)!;
+    var hash = cacheType.GetMethod("HashFields", BindingFlags.Static | BindingFlags.NonPublic)!;
+    using var vectors = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "vectors.json")));
+    ulong? baseline = null;
+    foreach (var vector in vectors.RootElement.EnumerateArray())
+    {
+        var facts = vector.GetProperty("facts");
+        var names = Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(string), typeIdType))!;
+        var table = tableType.GetConstructors().Single().Invoke([names,
+            Dictionary("Structs", facts), Dictionary("Enums", facts), Dictionary("Boxes", facts),
+            Dictionary("References", facts), 8, null, null, null]);
+        foreach (var (category, member) in new[] { ("DynTraits", "_dynTraits"), ("StaticArrays", "_staticArrays"),
+                     ("DynamicArrays", "_dynamicArrays"), ("Dictionaries", "_dictionaries") })
+        {
+            var target = tableType.GetField(member, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(table)!;
+            var records = (System.Collections.IEnumerable)Dictionary(category, facts);
+            foreach (var record in records)
+                target.GetType().GetMethod("Add")!.Invoke(target,
+                    [record.GetType().GetProperty("Key")!.GetValue(record), record.GetType().GetProperty("Value")!.GetValue(record)]);
+        }
+        var fields = vector.GetProperty("fields").EnumerateArray().Select(field => field.GetString()!).ToArray();
+        var actual = (ulong)build.Invoke(null, [table])!;
+        if (actual != (ulong)hash.Invoke(null, [fields])!)
+            throw new InvalidOperationException("type universe field stream changed: " + vector.GetProperty("id").GetString());
+        if (baseline is null) baseline = actual;
+        else if (baseline == actual) throw new InvalidOperationException("type universe mutation was ignored");
+        Console.WriteLine(JsonSerializer.Serialize(new { id = vector.GetProperty("id").GetString(), fields, hash = actual }));
+    }
+    return;
+}
 
 if (args.Length == 3 && args[2] == "function-tuple-rule-vectors")
 {
