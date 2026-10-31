@@ -380,7 +380,7 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
         and context.ir[indexedPlace.operand0].kind == 5) => referenceRootIsValueBinding
     indexedBaseProjectionDepth! == 0 and (referenceRootIsValueParameter or referenceRootIsSliceParameter or referenceRootIsMutableContainer or referenceRootIsValueBinding)
         -> unless {
-            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_array = load %sollang.array.i32, ptr " -> print
+            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_array = load %sollang.array.i32, ptr " -> print
             indexedBaseProjectionDepth! > 0
                 -> if {
                     "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_place$(indexedBaseProjectionDepth! - 1)" -> print
@@ -395,23 +395,23 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
         }
     indexedBaseProjectionDepth! == 0 and referenceRootIsMutableContainer
         -> if {
-            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_data = load ptr, ptr " -> print
+            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_data = load ptr, ptr " -> print
             referenceMutableParameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(referenceMutableParameterOrdinal)_mut_ptr_addr" -> print }
             ", align 8" -> println
-            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_length = load i64, ptr " -> print
+            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_length = load i64, ptr " -> print
             referenceMutableParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(referenceMutableParameterOrdinal)_mut_len_addr" -> print }
             ", align 8" -> println
         } else {
             referenceRootIsSliceParameter and indexedBaseProjectionDepth! == 0
                 -> if {
-                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_data = extractvalue %sollang.int_slice " -> print
+                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_data = extractvalue %sollang.int_slice " -> print
                     rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
                     ", 0" -> println
-                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_length = extractvalue %sollang.int_slice " -> print
+                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_length = extractvalue %sollang.int_slice " -> print
                     rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
                     ", 1" -> println
                 } else {
-                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_data = extractvalue %sollang.array.i32 " -> print
+                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_data = extractvalue %sollang.array.i32 " -> print
                     indexedBaseProjectionDepth! == 0 and referenceRootIsValueParameter
                         -> if {
                             rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
@@ -421,11 +421,11 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
                                     rootBinding -> referenceRootValueIndex(context, state) => referenceRootValue
                                     referenceRootValue -> writeValue(referenceOwnerIndex, context, state)
                                 } else {
-                                    "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_array" -> print
+                                    "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_array" -> print
                                 }
                         }
                     ", 0" -> println
-                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_length = extractvalue %sollang.array.i32 " -> print
+                    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_length = extractvalue %sollang.array.i32 " -> print
                     indexedBaseProjectionDepth! == 0 and referenceRootIsValueParameter
                         -> if {
                             rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
@@ -435,7 +435,7 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
                                     rootBinding -> referenceRootValueIndex(context, state) => referenceRootValue
                                     referenceRootValue -> writeValue(referenceOwnerIndex, context, state)
                                 } else {
-                                    "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_array" -> print
+                                    "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_array" -> print
                                 }
                         }
                     ", 1" -> println
@@ -444,7 +444,7 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
     referenceIndex -> integerReadNodeWidth(context, state) => referenceIndexWidth
     referenceIndex.kind != 3 and referenceIndexWidth > 0 and referenceIndexWidth < 64
         -> if {
-            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index = " -> print
+            "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index = " -> print
             referenceIndex -> integerNodeSigned(context, state)
                 -> if { "sext " -> print } else { "zext " -> print }
             "i$(referenceIndexWidth) " -> print
@@ -455,12 +455,12 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
             }
             " to i64" -> println
         }
-    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_in_bounds = icmp ult i64 " -> print
+    "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_in_bounds = icmp ult i64 " -> print
     referenceIndex.kind == 3 -> if {
         referenceIndex -> writeIntegerLiteral(context, state)
     } else {
         referenceIndexWidth > 0 and referenceIndexWidth < 64
-            -> if { "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index" -> print } else {
+            -> if { "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index" -> print } else {
                 whileIndex >= 0 -> if {
                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: referenceOwnerIndex, nodeIndex: indexedPlace.operand1 } -> writeWhileValue(context, state)
                 } else {
@@ -468,21 +468,21 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
                 }
             }
     }
-    ", %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_length" -> println
-    "  br i1 %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_in_bounds, label %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index_ok, label %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index_fail" -> println
-    "callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index_fail:" -> println
+    ", %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_length" -> println
+    "  br i1 %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_in_bounds, label %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index_ok, label %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index_fail" -> println
+    "callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index_fail:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
-    "callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index_ok:" -> println
+    "callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index_ok:" -> println
     "  %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_place$(indexedBaseProjectionDepth!) = getelementptr " -> print
     indexedPlace -> writeIrType(context, state)
-    ", ptr %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_data, i64 " -> print
+    ", ptr %callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_data, i64 " -> print
     referenceIndex.kind == 3 -> if {
         referenceIndex -> writeIntegerLiteral(context, state)
         "" -> println
     } else {
         referenceIndexWidth > 0 and referenceIndexWidth < 64
-            -> if { "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_index" -> println } else {
+            -> if { "%callref$(referenceCallIndex -> valueNameId(state))_arg$(referenceArgumentOrdinal)_step$(indexedBaseProjectionDepth!)_index" -> println } else {
                 whileIndex >= 0 -> if {
                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: referenceOwnerIndex, nodeIndex: indexedPlace.operand1 } -> writeWhileValue(context, state)
                     "" -> println

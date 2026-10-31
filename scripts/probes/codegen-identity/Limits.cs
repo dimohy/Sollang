@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -14,6 +14,49 @@ var outputType = assembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenOutput", 
 var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache", true)!;
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+if (args.Length == 3 && args[2] == "key-rule-vectors")
+{
+    var policies = assembly.GetType("Sollang.Compiler.Shared.CodegenCacheKeyPolicy", true)!;
+    var ruleType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
+    var partType = assembly.GetType("Sollang.Compiler.Shared.CodegenKeyPart", true)!;
+    var apply = cacheType.GetMethod("HashRule", BindingFlags.NonPublic | BindingFlags.Static)!;
+    var invoke = typeof(KeyRuleSmoke).GetMethod(nameof(KeyRuleSmoke.Apply))!.MakeGenericMethod(partType);
+    var render = assembly.GetType("Sollang.Compiler.Cli.SelfHostPolicyCompiler", true)!
+        .GetMethod("RenderKeyRule", BindingFlags.NonPublic | BindingFlags.Static)!;
+    string Hex(ulong value) => value.ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
+    var fields = new Dictionary<int, string[]>
+    {
+        [0] = ["cache.한글.𐀀"], [1] = [Hex(1)], [2] = [Hex(ulong.MaxValue)],
+        [3] = [Hex(1UL << 63)], [4] = [Hex(0)],
+        [5] = ["alpha", Hex(2), "beta", Hex(3)], [6] = ["cache.한글.𐀀", Hex(4)],
+        [7] = ["cache.한글.𐀀", Hex(5), Hex(6)], [8] = [Hex(7)], [9] = [Hex(8)]
+    };
+    void Output(string name, object rule, Dictionary<int, string[]> input) => Console.WriteLine(
+        JsonSerializer.Serialize(new { name, hash = (ulong)invoke.Invoke(null, [apply, rule, input])! }));
+    foreach (var name in new[] { "ModuleImplementation", "SyntheticInterface", "SyntheticImplementation",
+        "WholeInterface", "WholeImplementation", "PrefixInterface", "PrefixImplementation", "SuffixInterface", "SuffixImplementation" })
+        Output(name, policies.GetMethod(name)!.Invoke(null, null)!, fields);
+    object Rule(string domain, params int[] parts)
+    {
+        var values = Array.CreateInstance(partType, parts.Length);
+        for (var index = 0; index < parts.Length; index++) values.SetValue(Enum.ToObject(partType, parts[index]), index);
+        return Activator.CreateInstance(ruleType, [domain, values])!;
+    }
+    var generated = "namespace sollang.compiler.llvm.codegen_cache_key_policy\n";
+    foreach (var (name, rule) in new[]
+    {
+        ("ChangedOrder", Rule("module-implementation", 5, 4, 3, 2, 1, 0)),
+        ("ChangedDomain", Rule("changed-domain", 0, 1, 2, 3, 4, 5)),
+        ("DomainOnly", Rule("domain-only")), ("Repeated", Rule("repeated", 0, 0))
+    })
+    {
+        generated += "\n" + (string)render.Invoke(null, [name, rule])!;
+        Output(name, rule, fields);
+    }
+    File.WriteAllText(Path.Combine(directory, "key-rule-smoke.slg"), generated);
+    return;
+}
 
 if (args.Length == 3 && args[2] == "hash-vectors")
 {
@@ -163,4 +206,13 @@ internal static class ArithmeticSmoke
 {
     public static ulong Subtract(ulong hash, ulong value) => unchecked(hash - value);
     public static ulong Changed(ulong hash, ulong value) => unchecked(hash * 3 + value);
+}
+
+internal static class KeyRuleSmoke
+{
+    public static ulong Apply<T>(MethodInfo apply, object rule, Dictionary<int, string[]> fields) where T : struct, Enum
+    {
+        IEnumerable<string> Resolve(T part) => fields[Convert.ToInt32(part)];
+        return (ulong)apply.Invoke(null, [rule, (Func<T, IEnumerable<string>>)Resolve])!;
+    }
 }

@@ -5,6 +5,9 @@ namespace Sollang.Compiler.Shared;
     "src/Sollang.Compiler/Shared/Policies/CodegenCachePolicy.cs")]
 internal static class CodegenCachePolicy
 {
+    public static ulong EnvelopeChecksumSeed() => 7809847782465536322UL;
+    public static ulong FragmentChecksumSeed() => 16320118547808316911UL;
+
     public static ulong ChecksumMix(ulong hash, ulong value) => unchecked(
         (hash + 11400714819323198485UL) * (hash + 13787848793156543929UL)
         + (value + 10723151780598845931UL) * (value + 7146057691288625177UL)

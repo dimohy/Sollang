@@ -11,8 +11,8 @@ internal sealed class IncrementalCodegenCache
 {
     private const ulong Magic = 6002245291164258119;
     private const ulong Schema = 1;
-    private const ulong EnvelopeChecksumSeed = 7809847782465536322;
-    private const ulong FragmentChecksumSeed = 16320118547808316911;
+    private static readonly ulong EnvelopeChecksumSeed = Shared.CodegenCachePolicy.EnvelopeChecksumSeed();
+    private static readonly ulong FragmentChecksumSeed = Shared.CodegenCachePolicy.FragmentChecksumSeed();
     private const int HeaderWords = 8;
     private const int RecordHeaderWords = 8;
     private const int MaximumUnitCount = 1_000_000;
@@ -69,15 +69,16 @@ internal sealed class IncrementalCodegenCache
         foreach (var module in modules)
         {
             var dependencyInterfaces = CollectDependencyInterfaces(module, modulesByName);
-            var implementationKey = HashFields([
-                "module-implementation",
-                module.Identity,
-                Hex(module.ImplementationHash),
-                Hex(ambientStandardLibrary),
-                Hex(typeUniverseHash),
-                Hex(emissionHashes.GetValueOrDefault(module.Identity, HashFields([]))),
-                .. dependencyInterfaces
-            ]);
+            var implementationKey = HashRule(Shared.CodegenCacheKeyPolicy.ModuleImplementation(), part => part switch
+            {
+                Shared.CodegenKeyPart.Identity => [module.Identity],
+                Shared.CodegenKeyPart.SourceImplementation => [Hex(module.ImplementationHash)],
+                Shared.CodegenKeyPart.AmbientStandardLibrary => [Hex(ambientStandardLibrary)],
+                Shared.CodegenKeyPart.TypeUniverse => [Hex(typeUniverseHash)],
+                Shared.CodegenKeyPart.Emissions => [Hex(emissionHashes.GetValueOrDefault(module.Identity, HashFields([])))],
+                Shared.CodegenKeyPart.DependencyInterfaces => dependencyInterfaces,
+                _ => throw UnexpectedKeyPart(part)
+            });
             moduleKeys[module.Identity] = new LlvmCodegenKey(module.InterfaceHash, implementationKey);
         }
         foreach (var emission in emissionHashes.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
@@ -85,41 +86,49 @@ internal sealed class IncrementalCodegenCache
             moduleKeys.TryAdd(
                 emission.Key,
                 new LlvmCodegenKey(
-                    HashFields(["synthetic-interface", emission.Key]),
-                    HashFields([
-                        "synthetic-implementation",
-                        emission.Key,
-                        Hex(ambientStandardLibrary),
-                        Hex(typeUniverseHash),
-                        Hex(emission.Value)
-                    ])));
+                    HashRule(Shared.CodegenCacheKeyPolicy.SyntheticInterface(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.Identity => [emission.Key],
+                        _ => throw UnexpectedKeyPart(part)
+                    }),
+                    HashRule(Shared.CodegenCacheKeyPolicy.SyntheticImplementation(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.Identity => [emission.Key],
+                        Shared.CodegenKeyPart.AmbientStandardLibrary => [Hex(ambientStandardLibrary)],
+                        Shared.CodegenKeyPart.TypeUniverse => [Hex(typeUniverseHash)],
+                        Shared.CodegenKeyPart.Emissions => [Hex(emission.Value)],
+                        _ => throw UnexpectedKeyPart(part)
+                    })));
         }
 
-        var wholeInterfaceHash = HashFields([
-            "whole-interface",
-            .. modules.SelectMany(static module => new[]
-            {
-                module.Identity,
-                Hex(module.InterfaceHash)
-            })
-        ]);
-        var wholeImplementationHash = HashFields([
-            "whole-implementation",
-            .. moduleKeys.OrderBy(static pair => LlvmCodegenUnit.StableIdentity(pair.Key))
+        var wholeInterfaceHash = HashRule(Shared.CodegenCacheKeyPolicy.WholeInterface(), part => part switch
+        {
+            Shared.CodegenKeyPart.ModuleInterfaces => modules.SelectMany(static module => new[]
+                { module.Identity, Hex(module.InterfaceHash) }),
+            _ => throw UnexpectedKeyPart(part)
+        });
+        var wholeImplementationHash = HashRule(Shared.CodegenCacheKeyPolicy.WholeImplementation(), part => part switch
+        {
+            Shared.CodegenKeyPart.ModuleImplementations => moduleKeys.OrderBy(static pair => LlvmCodegenUnit.StableIdentity(pair.Key))
                 .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
                 .SelectMany(static pair => new[]
                 {
                     pair.Key,
                     Hex(pair.Value.InterfaceHash),
                     Hex(pair.Value.ImplementationHash)
-                })
-        ]);
+                }),
+            _ => throw UnexpectedKeyPart(part)
+        });
         var prefixKey = new LlvmCodegenKey(
-            HashFields(["prefix-interface", Hex(wholeInterfaceHash)]),
-            HashFields(["prefix-implementation", Hex(wholeImplementationHash)]));
+            HashRule(Shared.CodegenCacheKeyPolicy.PrefixInterface(), part => part == Shared.CodegenKeyPart.WholeInterface
+                ? [Hex(wholeInterfaceHash)] : throw UnexpectedKeyPart(part)),
+            HashRule(Shared.CodegenCacheKeyPolicy.PrefixImplementation(), part => part == Shared.CodegenKeyPart.WholeImplementation
+                ? [Hex(wholeImplementationHash)] : throw UnexpectedKeyPart(part)));
         var suffixKey = new LlvmCodegenKey(
-            HashFields(["suffix-interface", Hex(wholeInterfaceHash)]),
-            HashFields(["suffix-implementation", Hex(wholeImplementationHash)]));
+            HashRule(Shared.CodegenCacheKeyPolicy.SuffixInterface(), part => part == Shared.CodegenKeyPart.WholeInterface
+                ? [Hex(wholeInterfaceHash)] : throw UnexpectedKeyPart(part)),
+            HashRule(Shared.CodegenCacheKeyPolicy.SuffixImplementation(), part => part == Shared.CodegenKeyPart.WholeImplementation
+                ? [Hex(wholeImplementationHash)] : throw UnexpectedKeyPart(part)));
 
         IReadOnlyDictionary<(LlvmCodegenUnitKind Kind, string Identity, LlvmCodegenKey CacheKey), string> fragments;
         string loadStatus;
@@ -695,6 +704,20 @@ internal sealed class IncrementalCodegenCache
             hash = FingerprintMix(hash, byte.MaxValue);
         }
         return hash;
+    }
+
+    private static InvalidOperationException UnexpectedKeyPart(Shared.CodegenKeyPart part) =>
+        new("codegen key rule requests an unavailable input: " + part);
+
+    private static ulong HashRule(Shared.CodegenKeyRule rule, Func<Shared.CodegenKeyPart, IEnumerable<string>> resolve)
+    {
+        IEnumerable<string> Fields()
+        {
+            yield return rule.Domain;
+            foreach (var part in rule.Parts)
+                foreach (var field in resolve(part)) yield return field;
+        }
+        return HashFields(Fields());
     }
 
     private static ulong HashBinaryFields(IEnumerable<byte[]> fields)

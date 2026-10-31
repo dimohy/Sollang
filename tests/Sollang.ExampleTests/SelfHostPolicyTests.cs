@@ -68,6 +68,44 @@ internal static class SelfHostPolicyTests
             Check("u64-subtraction-lowered", Emit(typeof(SelfHostPolicyTests).GetMethod(nameof(SubtractArithmetic),
                 BindingFlags.NonPublic | BindingFlags.Static)!).Contains("hash - value", StringComparison.Ordinal));
 
+            var keyPolicies = compiler.GetType("Sollang.Compiler.Shared.CodegenCacheKeyPolicy", true)!;
+            var keyRule = compiler.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
+            var keyPart = compiler.GetType("Sollang.Compiler.Shared.CodegenKeyPart", true)!;
+            var renderRule = exporter.GetMethod("RenderKeyRule", BindingFlags.NonPublic | BindingFlags.Static)!;
+            string Rule(string name, string domain, params int[] parts)
+            {
+                var values = Array.CreateInstance(keyPart, parts.Length);
+                for (var index = 0; index < parts.Length; index++) values.SetValue(Enum.ToObject(keyPart, parts[index]), index);
+                var value = Activator.CreateInstance(keyRule, [domain, values])!;
+                return (string)renderRule.Invoke(null, [name, value])!;
+            }
+            bool RuleRejected(string name, string domain, params int[] parts)
+            {
+                try { Rule(name, domain, parts); }
+                catch (TargetInvocationException error)
+                { return error.InnerException!.Message.Contains("SELFHOST_POLICY_KEY_RULE_INVALID", StringComparison.Ordinal); }
+                return false;
+            }
+            var moduleRule = Emit(keyPolicies.GetMethod("ModuleImplementation")!);
+            Check("rule-components-match-current-csharp-shape", moduleRule == Rule("ModuleImplementation",
+                "module-implementation", 0, 1, 2, 3, 4, 5));
+            Check("rule-order-change-propagates", moduleRule != Rule("ModuleImplementation",
+                "module-implementation", 5, 4, 3, 2, 1, 0));
+            Check("rule-domain-change-propagates", moduleRule != Rule("ModuleImplementation", "changed-domain", 0, 1, 2, 3, 4, 5));
+            Check("rule-empty-parts-typed", Rule("Empty", "empty").Contains("[KeyPart; ~]", StringComparison.Ordinal));
+            Check("rule-unknown-part-rejected", RuleRejected("Unknown", "unknown", 100));
+            Check("rule-unsafe-domain-rejected", RuleRejected("Unsafe", "bad\"domain", 0));
+            Check("rule-empty-domain-rejected", RuleRejected("Empty", "", 0));
+            Check("rule-oversize-parts-rejected", RuleRejected("Large", "large", new int[33]));
+            Check("rule-invalid-name-rejected", RuleRejected("0bad", "valid", 0));
+            Check("rule-repeated-part-retained", Regex.Matches(Rule("Repeated", "repeat", 0, 0), "KeyPart.Identity").Count == 2);
+            var ruleTypes = (string)exporter.GetMethod("RenderKeyRuleTypes", BindingFlags.NonPublic | BindingFlags.Static)!
+                .Invoke(null, null)!;
+            Check("rule-enum-and-struct-schema-exported", Enum.GetNames(keyPart).All(name => ruleTypes.Contains(name, StringComparison.Ordinal))
+                && ruleTypes.Contains("public parts: [KeyPart; ~]", StringComparison.Ordinal));
+            var rules = keyPolicies.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
+            Check("all-nine-key-rules-exported", rules.Length == 9 && rules.All(method => Emit(method).Contains("KeyRule {", StringComparison.Ordinal)));
+
             var root = FindRoot();
             var mirror = Path.Combine(directory, "policy-input");
             Directory.CreateDirectory(mirror);
@@ -108,7 +146,7 @@ internal static class SelfHostPolicyTests
         catch (Exception error) { failure = error.ToString(); }
         finally { context.Unload(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new { status = failure is null ? "passed" : "failed",
-            completed = cases.Count, total = 32, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
+            completed = cases.Count, total = 44, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;
     }
 

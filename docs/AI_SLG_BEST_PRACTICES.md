@@ -1827,6 +1827,21 @@ Before compiling self-host sources, run `selfhost-sync --root <repository>
 that compiler; a generated-source change requires regeneration. Both checks
 precede semantic or native compilation, including cached builds.
 
+Cache key layouts use compiled `CodegenKeyRule` values: the domain tag and
+ordered `CodegenKeyPart` sequence are generated together with the enum schema
+and its ordinal mapping. Representation adapters supply the requested fields;
+the key hasher preserves their order and rejects missing or duplicate bindings.
+Keep invariant lowercase `x16` formatting for numeric fields. Generate typed
+enum arrays with explicit `push` operations: a singleton qualified enum name in
+`[name; ~]` is type-shaped syntax, not an unambiguous one-element value array.
+An empty generated plan uses an immutable binding. Do not hand-copy key rules,
+enum ordinals, checksum seeds, or hash equations into SLG.
+
+An indexed reference place may contain several array projections within one
+call argument. Give each projection's descriptor, data, length, widened index,
+bounds predicate and trap labels a distinct identity. Preserve the recursive
+place-address chain and check every index before forming its element address.
+
 Persistent codegen units retain complete UTF-8 module identities. Validate the
 encoding and the C# byte-length limit before comparing identities; retain the
 global module's valid empty identity. A stable hash orders buckets; ties use

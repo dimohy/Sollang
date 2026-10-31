@@ -1,0 +1,82 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+# Inputs own their UTF-8 bytes. No view into a temporary formatted hash or
+# source descriptor escapes an adapter. Each binding preserves field order.
+public struct Field {
+    public bytes: [UInt8; ~]
+}
+
+public struct Binding {
+    public part: plans.KeyPart
+    public fields: [Field; ~]
+}
+
+public enum KeyError { MissingPart, DuplicatePart }
+
+public textField source: Text -> Field {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        bytes! -> push(UInt8(source -> byte(index!)))
+        index! + 1 => index!
+    }
+    Field { bytes: bytes! }
+}
+
+# Matches the managed adapter's invariant x16 representation, including zero.
+public hexField value: UInt64 -> Field {
+    [UInt8; ~] => bytes!
+    UInt64(1152921504606846976) => factor!
+    0..<16 -> each index {
+        Int(value / factor! % 16) => digit
+        digit < 10 -> if { 48 + digit } else { 87 + digit } => byte
+        bytes! -> push(UInt8(byte))
+        index < 15 -> if { factor! / 16 => factor! }
+    }
+    Field { bytes: bytes! }
+}
+
+hashText hash: UInt64, source: Text -> UInt64 {
+    hash -> arithmetic.fingerprintMix(UInt64(source -> len)) => result!
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        result! -> arithmetic.fingerprintMix(UInt64(source -> byte(index!))) => result!
+        index! + 1 => index!
+    }
+    result! -> arithmetic.fingerprintMix(255)
+}
+
+hashBytes hash: UInt64, bytes: ref [UInt8; ~] -> UInt64 {
+    hash -> arithmetic.fingerprintMix(UInt64(bytes -> len)) => result!
+    bytes -> each byte {
+        result! -> arithmetic.fingerprintMix(UInt64(byte)) => result!
+    }
+    result! -> arithmetic.fingerprintMix(255)
+}
+
+public hashRule rule: ref plans.KeyRule, bindings: ref [Binding; ~] -> Result<UInt64, KeyError> {
+    arithmetic.envelopeChecksumSeed() -> hashText(rule.domain) => hash!
+    rule.parts -> each part {
+        -1 => selected!
+        0 => bindingIndex!
+        bindingIndex! < (bindings -> len) -> while {
+            (bindings[bindingIndex!].part -> plans.partIndex) == (part -> plans.partIndex)
+                -> if {
+                    selected! >= 0 -> if { Result<UInt64, KeyError>.Err(KeyError.DuplicatePart) -> return }
+                    bindingIndex! => selected!
+                }
+            bindingIndex! + 1 => bindingIndex!
+        }
+        selected! < 0 -> if { Result<UInt64, KeyError>.Err(KeyError.MissingPart) -> return }
+        0 => fieldIndex!
+        fieldIndex! < (bindings[selected!].fields -> len)
+            -> while {
+                hash! -> hashBytes(bindings[selected!].fields[fieldIndex!].bytes) => hash!
+                fieldIndex! + 1 => fieldIndex!
+            }
+    }
+    Result<UInt64, KeyError>.Ok(hash!)
+}

@@ -67,6 +67,8 @@ internal static class SelfHostPolicyCompiler
             var methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly)
                 .OrderBy(method => method.Name, StringComparer.Ordinal).ToArray();
             if (methods.Length == 0) throw new SollangException("SELFHOST_POLICY_EMPTY");
+            if (methods.Any(method => method.ReturnType == typeof(CodegenKeyRule)))
+                text.Append(RenderKeyRuleTypes());
             foreach (var method in methods) text.Append('\n').Append(RenderDecision(method));
             var content = SourceFormatter.Format(text.ToString()).ReplaceLineEndings("\n");
             var same = File.Exists(output) && File.ReadAllText(output).ReplaceLineEndings("\n") == content;
@@ -92,6 +94,7 @@ internal static class SelfHostPolicyCompiler
 
     internal static string RenderDecision(MethodInfo method)
     {
+        if (method.ReturnType == typeof(CodegenKeyRule)) return RenderKeyRuleDecision(method);
         if (method.ReturnType == typeof(ulong)) return RenderArithmetic(method);
         var parameters = method.GetParameters();
         if (!method.IsStatic || method.IsGenericMethod || method.ReturnType != typeof(bool)
@@ -191,6 +194,49 @@ internal static class SelfHostPolicyCompiler
             else throw Invalid();
         }
         throw Invalid();
+    }
+
+    private static string RenderKeyRuleTypes()
+    {
+        var parts = Enum.GetValues<CodegenKeyPart>();
+        if (parts.Where((part, index) => (int)part != index).Any()
+            || Enum.GetNames<CodegenKeyPart>().Any(name => !Identifier(name)))
+            throw new SollangException("SELFHOST_POLICY_KEY_PART_ENUM_INVALID");
+        return "\npublic enum KeyPart { " + string.Join(", ", parts) + " }\n"
+            + "\npublic struct KeyRule {\n    public domain: Text\n    public parts: [KeyPart; ~]\n}\n"
+            + "\npublic partIndex part: KeyPart -> Int {\n    part -> when {\n"
+            + string.Concat(parts.Select(part => "        " + part + " { "
+                + ((int)part).ToString(CultureInfo.InvariantCulture) + " }\n"))
+            + "    }\n}\n";
+    }
+
+    private static string RenderKeyRuleDecision(MethodInfo method)
+    {
+        if (!method.IsStatic || method.IsGenericMethod || method.GetParameters().Length != 0)
+            throw new SollangException("SELFHOST_POLICY_KEY_RULE_SIGNATURE_REQUIRED: " + method.Name);
+        var rule = (CodegenKeyRule)method.Invoke(null, null)!;
+        var repeated = (CodegenKeyRule)method.Invoke(null, null)!;
+        if (rule.Domain != repeated.Domain || rule.Parts is null || repeated.Parts is null
+            || !rule.Parts.SequenceEqual(repeated.Parts))
+            throw new SollangException("SELFHOST_POLICY_NONDETERMINISTIC: " + method.Name);
+        return RenderKeyRule(method.Name, rule);
+    }
+
+    internal static string RenderKeyRule(string name, CodegenKeyRule rule)
+    {
+        if (!Identifier(name) || string.IsNullOrEmpty(rule.Domain) || rule.Domain.Length > 128
+            || !char.IsAsciiLetter(rule.Domain[0])
+            || rule.Domain.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-')
+            || rule.Parts is null || rule.Parts.Count > 32 || rule.Parts.Any(part => !Enum.IsDefined(part)))
+            throw new SollangException("SELFHOST_POLICY_KEY_RULE_INVALID: " + name);
+        var output = char.ToLowerInvariant(name[0]) + name[1..];
+        // A singleton qualified enum name in [name; ~] is parsed as an empty
+        // typed array. Build typed enum values explicitly, including that case.
+        var binding = rule.Parts.Count == 0 ? "parts" : "parts!";
+        return "public " + output + ": -> KeyRule {\n    [KeyPart; ~] => " + binding + "\n"
+            + string.Concat(rule.Parts.Select(part => "    parts! -> push(KeyPart." + part + ")\n"))
+            + "    KeyRule {\n        domain: \"" + rule.Domain
+            + "\"\n        parts: " + binding + "\n    }\n}\n";
     }
 
     private static bool Identifier(string value) => value.Length > 0 && char.IsAsciiLetter(value[0])

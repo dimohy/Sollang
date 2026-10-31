@@ -6181,6 +6181,15 @@ Current backend:
   padding validation, including scalars split across packed-word boundaries.
   Empty fragments remain valid; malformed text is rejected before decoding or
   merging a generation.
+- shared codegen key rules: domain tags and ordered input-part sequences come
+  from compiled C# `CodegenKeyRule` values. Generated SLG retains the typed part
+  schema and ordinal mapping. Hashing preserves each supplied field sequence,
+  UTF-8 byte length and bytes, field delimiter, shared seed and fingerprint
+  equation. Numeric fields use invariant lowercase hexadecimal with exactly
+  sixteen digits. A requested input must be present exactly once; an empty
+  sequence is distinct from a missing input. Layout generation does not replace
+  discovery of current source, interface, dependency, type-universe and emission
+  facts or prove production cache consumption.
 - process-backed self-host LLVM output preserves these same unit boundaries in
   comments. A checked native emission with a cache request starts with
   `; sollang.codegen.unit 0:`, writes each module after

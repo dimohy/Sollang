@@ -1,0 +1,58 @@
+# The runner adds key-rule-smoke.slg generated from compiled C# rule values.
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.codegen_cache_keys as keys
+
+bindings: -> [keys.Binding; ~] {
+    [
+    keys.Binding { part: plans.KeyPart.Identity, fields: ["cache.한글.𐀀" -> keys.textField; ~] },
+    keys.Binding { part: plans.KeyPart.SourceImplementation, fields: [UInt64(1) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.AmbientStandardLibrary, fields: [UInt64(18446744073709551615) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.TypeUniverse, fields: [UInt64(9223372036854775808) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.Emissions, fields: [UInt64(0) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.DependencyInterfaces, fields: ["alpha" -> keys.textField, UInt64(2) -> keys.hexField, "beta" -> keys.textField, UInt64(3) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.ModuleInterfaces, fields: ["cache.한글.𐀀" -> keys.textField, UInt64(4) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.ModuleImplementations, fields: ["cache.한글.𐀀" -> keys.textField, UInt64(5) -> keys.hexField, UInt64(6) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.WholeInterface, fields: [UInt64(7) -> keys.hexField; ~] },
+    keys.Binding { part: plans.KeyPart.WholeImplementation, fields: [UInt64(8) -> keys.hexField; ~] }; ~]
+}
+
+emit rule: move plans.KeyRule, name: Text -> Unit uses Console {
+    bindings() => inputs
+    rule -> keys.hashRule(inputs) -> when {
+        Ok(value) { "$name=$value" -> println }
+        Err(_) { "$name=unexpected-error" -> println }
+    }
+}
+
+main {
+    plans.moduleImplementation() -> emit("ModuleImplementation")
+    plans.syntheticInterface() -> emit("SyntheticInterface")
+    plans.syntheticImplementation() -> emit("SyntheticImplementation")
+    plans.wholeInterface() -> emit("WholeInterface")
+    plans.wholeImplementation() -> emit("WholeImplementation")
+    plans.prefixInterface() -> emit("PrefixInterface")
+    plans.prefixImplementation() -> emit("PrefixImplementation")
+    plans.suffixInterface() -> emit("SuffixInterface")
+    plans.suffixImplementation() -> emit("SuffixImplementation")
+    plans.changedOrder() -> emit("ChangedOrder")
+    plans.changedDomain() -> emit("ChangedDomain")
+    plans.domainOnly() -> emit("DomainOnly")
+    plans.repeated() -> emit("Repeated")
+    [keys.Binding; ~] => empty
+    plans.moduleImplementation() => rule
+    rule -> keys.hashRule(empty) -> when {
+        Err(error) {
+            error -> when { MissingPart { "missing=ok" -> println } else { "missing=bad" -> println } }
+        }
+        else { "missing=bad" -> println }
+    }
+    [
+    keys.Binding { part: plans.KeyPart.Identity, fields: ["a" -> keys.textField; ~] },
+    keys.Binding { part: plans.KeyPart.Identity, fields: ["b" -> keys.textField; ~] }; ~] => duplicate
+    rule -> keys.hashRule(duplicate) -> when {
+        Err(error) {
+            error -> when { DuplicatePart { "duplicate=ok" -> println } else { "duplicate=bad" -> println } }
+        }
+        else { "duplicate=bad" -> println }
+    }
+}
