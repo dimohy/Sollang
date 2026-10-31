@@ -1471,7 +1471,8 @@ inputs in declaration order.
 Each input independently accepts the existing readonly, `mut`, or `move`
 ownership mode. Visibility, async and native/intrinsic declaration metadata do
 not change that mode. A compiler-materialized readonly input alias borrows its
-argument; it is not a source binding that copies an owned value. Ownership
+argument; it is not a source binding that copies an owned value. Creating
+that alias does not transfer the argument's cleanup obligation. Ownership
 checks retain the alias's declaration provenance and validate actual source
 bindings independently. Compile-time generic parameters remain in angle brackets and
 are not counted as runtime inputs. Additional runtime arguments are statically

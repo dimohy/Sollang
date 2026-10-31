@@ -1,0 +1,82 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.process as process
+
+observeNames: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    [file.SourceText; ~] => owners!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        arguments[index!] -> file.mapText => owner
+        owners! -> push(owner)
+        index! + 1 => index!
+    }
+    [Text; ~] => sources!
+    owners! -> each owner {
+        owner -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+    }
+    sources! -> analysis.analyzeCheckedTextSources -> when {
+        Err(code) { "parse=$code" -> println
+            process.exit(1)
+            return }
+        Ok(value) { value }
+    } => package
+    (package.ranges -> len) - 1 => userSource
+    package.ranges[userSource] => range
+    "counts=$(range.astCount),$(range.symbolCount),$(range.nameCount)" -> println
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + symbolIndex!] => symbol
+        symbol.nameToken >= 0 -> if {
+            package.tokens[range.tokenStart + symbol.nameToken] => token
+            sources![userSource] -> slice(token.span.start, token.span.length) => name
+            "symbol=$(symbolIndex!),$(symbol.kind),$(symbol.parent),$(symbol.astNode),$(symbol.flags),$name" -> println
+        }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    0 => nameIndex!
+    nameIndex! < range.nameCount -> while {
+        package.names[range.nameStart + nameIndex!] => name
+        "resolved=$(name.astNode),$(name.symbol)" -> println
+        nameIndex! + 1 => nameIndex!
+    }
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        package.nodes[range.astStart + astIndex!] => node
+        "ast=$(astIndex!),$(node.kind),$(node.parent),$(node.flags),$(node.start),$(node.length),$(node.firstToken),$(node.tokenCount)" -> println
+        node.payloadToken >= 0 -> if {
+            package.tokens[range.tokenStart + node.payloadToken] => token
+            sources![userSource] -> slice(token.span.start, token.span.length) => value
+            "payload=$(astIndex!),$value" -> println
+        }
+        astIndex! + 1 => astIndex!
+    }
+    package -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSource) => prepared
+    prepared -> expressionTypes.resolveCallContext => resolved
+    resolved.prepared => checked
+    resolved.types => facts
+    checked.package.ranges[userSource] => checkedRange
+    0 => binding!
+    binding! < checkedRange.symbolCount -> while {
+        facts.lexicalBindingTypeBySymbol[checkedRange.symbolStart + binding!] => typeId
+        "binding-type=$(binding!),$typeId" -> println
+        typeId >= 0 -> if {
+            facts.types[typeId] => valueType
+            "type=$typeId,$(valueType.kind),$(valueType.status),$(valueType.first),$(valueType.containsParameter)" -> println
+        }
+        binding! + 1 => binding!
+    }
+    facts.expressions -> each expression {
+        expression.sourceModule == userSource -> if {
+            "expression=$(expression.astNode),$(expression.typeId),$(expression.status)" -> println
+        }
+    }
+    owners! -> len => ownerCount
+    "owners=$ownerCount" -> println
+}
+
+main { observeNames() }

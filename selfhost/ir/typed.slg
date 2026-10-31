@@ -1752,6 +1752,28 @@ public moveBindingDeclaration event: MoveEvent, ir: [TypedIrNode] -> Int {
     -1
 }
 
+public isBorrowedBlockInputBinding valueIr: Int, typed: ref [TypedIrNode; ~], sourceRanges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~] -> Bool {
+    valueIr < 0 or valueIr >= (typed -> len) -> if { false -> return }
+    typed[valueIr] => binding
+    binding.kind != 17 or not (binding.flags -> ast.readonlyInputFlags) or binding.symbol < 0
+        or binding.parent < 0 or binding.parent >= (typed -> len)
+        or binding.operand0 < 0 or binding.operand0 >= (typed -> len)
+        -> if { false -> return }
+    typed[binding.parent] => scope
+    scope.opcode != -227 or (scope.kind != 9 and scope.kind != 5 and scope.kind != 19)
+        -> if { false -> return }
+    # A materialized input argument is beside its alias in the same scope.
+    # A real local binding owns its value child and cannot match this shape.
+    typed[binding.operand0].parent != binding.parent
+        -> if { false -> return }
+    binding.sourceModule < 0 or binding.sourceModule >= (sourceRanges -> len)
+        -> if { false -> return }
+    sourceRanges[binding.sourceModule] => sourceRange
+    binding.symbol >= sourceRange.symbolCount -> if { false -> return }
+    declarations[sourceRange.symbolStart + binding.symbol] => role
+    role.kind == 35 and role.astNode == binding.astNode
+}
+
 public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [MoveEvent; ~] {
     ir -> functionDeclarationIrs => functionIrs
     [MoveEvent; ~] => events!
@@ -1941,7 +1963,8 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
             }
         # Binding an owned name transfers its cleanup obligation to the new
         # local. Fixed-storage copies retain the original owner's obligation.
-        site.kind == 17 and site.operand0 >= 0
+        site.kind == 17 and not (siteIndex! -> isBorrowedBlockInputBinding(ir, prepared.package.ranges, prepared.package.symbols))
+            and site.operand0 >= 0
             and ir[site.operand0].kind == 5
             and (ir[site.operand0] -> ownedMoveArgument(ir, prepared, types))
             and not (prepared -> semanticContext.typeRequiresFixedStorageCopy(types, site.typeId))
@@ -1950,6 +1973,7 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
         # binding becomes a partial move when the field owns heap storage or a
         # unique resource handle and therefore carries a drop obligation.
         site.kind == 17
+            and not (siteIndex! -> isBorrowedBlockInputBinding(ir, prepared.package.ranges, prepared.package.symbols))
             and site.operand0 >= 0
             and ir[site.operand0].kind == 13
             and ((ir[site.operand0].typeFlags / 2) % 2 == 1

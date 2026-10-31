@@ -1,0 +1,120 @@
+diff --git a/docs/SPEC.md b/docs/SPEC.md
+index 17a4e29ce..c2b57316e 100644
+--- a/docs/SPEC.md
++++ b/docs/SPEC.md
+@@ -1471,7 +1471,8 @@ inputs in declaration order.
+ Each input independently accepts the existing readonly, `mut`, or `move`
+ ownership mode. Visibility, async and native/intrinsic declaration metadata do
+ not change that mode. A compiler-materialized readonly input alias borrows its
+-argument; it is not a source binding that copies an owned value. Ownership
++argument; it is not a source binding that copies an owned value. Creating
++that alias does not transfer the argument's cleanup obligation. Ownership
+ checks retain the alias's declaration provenance and validate actual source
+ bindings independently. Compile-time generic parameters remain in angle brackets and
+ are not counted as runtime inputs. Additional runtime arguments are statically
+diff --git a/selfhost/ir/typed.slg b/selfhost/ir/typed.slg
+index b897d4085..18d543c83 100644
+--- a/selfhost/ir/typed.slg
++++ b/selfhost/ir/typed.slg
+@@ -1752,6 +1752,28 @@ public moveBindingDeclaration event: MoveEvent, ir: [TypedIrNode] -> Int {
+     -1
+ }
+ 
++public isBorrowedBlockInputBinding valueIr: Int, typed: ref [TypedIrNode; ~], sourceRanges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~] -> Bool {
++    valueIr < 0 or valueIr >= (typed -> len) -> if { false -> return }
++    typed[valueIr] => binding
++    binding.kind != 17 or not (binding.flags -> ast.readonlyInputFlags) or binding.symbol < 0
++        or binding.parent < 0 or binding.parent >= (typed -> len)
++        or binding.operand0 < 0 or binding.operand0 >= (typed -> len)
++        -> if { false -> return }
++    typed[binding.parent] => scope
++    scope.opcode != -227 or (scope.kind != 9 and scope.kind != 5 and scope.kind != 19)
++        -> if { false -> return }
++    # A materialized input argument is beside its alias in the same scope.
++    # A real local binding owns its value child and cannot match this shape.
++    typed[binding.operand0].parent != binding.parent
++        -> if { false -> return }
++    binding.sourceModule < 0 or binding.sourceModule >= (sourceRanges -> len)
++        -> if { false -> return }
++    sourceRanges[binding.sourceModule] => sourceRange
++    binding.symbol >= sourceRange.symbolCount -> if { false -> return }
++    declarations[sourceRange.symbolStart + binding.symbol] => role
++    role.kind == 35 and role.astNode == binding.astNode
++}
++
+ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [MoveEvent; ~] {
+     ir -> functionDeclarationIrs => functionIrs
+     [MoveEvent; ~] => events!
+@@ -1941,7 +1963,8 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
+             }
+         # Binding an owned name transfers its cleanup obligation to the new
+         # local. Fixed-storage copies retain the original owner's obligation.
+-        site.kind == 17 and site.operand0 >= 0
++        site.kind == 17 and not (siteIndex! -> isBorrowedBlockInputBinding(ir, prepared.package.ranges, prepared.package.symbols))
++            and site.operand0 >= 0
+             and ir[site.operand0].kind == 5
+             and (ir[site.operand0] -> ownedMoveArgument(ir, prepared, types))
+             and not (prepared -> semanticContext.typeRequiresFixedStorageCopy(types, site.typeId))
+@@ -1950,6 +1973,7 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
+         # binding becomes a partial move when the field owns heap storage or a
+         # unique resource handle and therefore carries a drop obligation.
+         site.kind == 17
++            and not (siteIndex! -> isBorrowedBlockInputBinding(ir, prepared.package.ranges, prepared.package.symbols))
+             and site.operand0 >= 0
+             and ir[site.operand0].kind == 13
+             and ((ir[site.operand0].typeFlags / 2) % 2 == 1
+diff --git a/selfhost/llvm/text/function_scheduling.slg b/selfhost/llvm/text/function_scheduling.slg
+index a73e7938f..40ac3386a 100644
+--- a/selfhost/llvm/text/function_scheduling.slg
++++ b/selfhost/llvm/text/function_scheduling.slg
+@@ -36,18 +36,7 @@ functionNeedsStructuredBody functionIndex: Int, end: Int, context: ref emitterCo
+ }
+ 
+ isUserBlockBorrowedRoleBinding index: Int, context: ref emitterContext.EmitContext -> Bool {
+-    context.ir[index] => binding
+-    binding.kind != 17 or binding.flags != 0 or binding.symbol < 0
+-        or binding.parent < 0 or binding.operand0 < 0
+-        -> if { false -> return }
+-    context.ir[binding.parent] => scope
+-    not (scope -> isUserBlockScope) or scope.symbol != -1
+-        -> if { false -> return }
+-    context.ir[binding.operand0].parent != binding.parent
+-        -> if { false -> return }
+-    context.ranges[binding.sourceModule] => range
+-    context.symbols[range.symbolStart + binding.symbol] => role
+-    role.kind == 35 and role.astNode == binding.astNode
++    index -> typedIr.isBorrowedBlockInputBinding(context.ir, context.ranges, context.symbols)
+ }
+ 
+ # Original callback children retain provenance beneath a deferred region.
+diff --git a/selfhost/semantic/ownership_check.slg b/selfhost/semantic/ownership_check.slg
+index 2341ab8a4..06e4ae3a1 100644
+--- a/selfhost/semantic/ownership_check.slg
++++ b/selfhost/semantic/ownership_check.slg
+@@ -4372,25 +4372,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
+         ancestor!
+     }
+     materializedBlockInputIsBorrowed valueIr: Int -> Bool {
+-        valueIr < 0 or valueIr >= (typed -> len) -> if { false -> return }
+-        typed[valueIr] => binding
+-        binding.kind != 17 or not (binding.flags -> ast.readonlyInputFlags) or binding.symbol < 0
+-            or binding.parent < 0 or binding.parent >= (typed -> len)
+-            or binding.operand0 < 0 or binding.operand0 >= (typed -> len)
+-            -> if { false -> return }
+-        typed[binding.parent] => yielded
+-        yielded.opcode != -227 or (yielded.kind != 9 and yielded.kind != 5 and yielded.kind != 19)
+-            -> if { false -> return }
+-        # The yielded value is beside the alias under the yield. A real local
+-        # binding owns its value child and cannot satisfy this relationship.
+-        typed[binding.operand0].parent != binding.parent
+-            -> if { false -> return }
+-        binding.sourceModule < 0 or binding.sourceModule >= (prepared.package.ranges -> len)
+-            -> if { false -> return }
+-        prepared.package.ranges[binding.sourceModule] => sourceRange
+-        binding.symbol >= sourceRange.symbolCount -> if { false -> return }
+-        prepared.package.symbols[sourceRange.symbolStart + binding.symbol] => role
+-        role.kind == 35 and role.astNode == binding.astNode
++        valueIr -> typedIr.isBorrowedBlockInputBinding(typed, prepared.package.ranges, prepared.package.symbols)
+     }
+     borrowedMoveSourceBinding valueIr: Int, parametersBySymbol: ref [Int; ~] -> Int {
+         typed -> placeProjectionRoot(valueIr) => rootIr
