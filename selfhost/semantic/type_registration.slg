@@ -126,16 +126,17 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
     Result<RegisteredBoxes, BoxRegistrationError>.Ok(result)
 }
 
-public enum TypeRegistryError { Storage(storage.StorageRegistrationError), Boxes(BoxRegistrationError), DeclarationIdentity }
+public enum TypeRegistryError { Storage(storage.StorageRegistrationError), Boxes(BoxRegistrationError), DeclarationIdentity, TypeUse(Int) }
 public struct RegisteredDeclaration { public typeId: Int, public identity: typeIds.SemanticType }
 public struct RegisteredTypeSeeds {
     public declarations: [RegisteredDeclaration; ~]
     public storage: [Int; ~]
     public boxes: [Int; ~]
+    public used: [Int; ~]
 }
 
 public emptyRegisteredTypeSeeds: -> RegisteredTypeSeeds {
-    RegisteredTypeSeeds { declarations: [RegisteredDeclaration; ~], storage: [Int; ~], boxes: [Int; ~] }
+    RegisteredTypeSeeds { declarations: [RegisteredDeclaration; ~], storage: [Int; ~], boxes: [Int; ~], used: [Int; ~] }
 }
 
 # Expression resolution preserves arena indices while canonicalizing some
@@ -183,6 +184,6 @@ public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, decla
         Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.Boxes(error)) -> return }
         Ok(value) { value }
     } => boxes
-    RegisteredTypeSeeds { declarations: declarations!, storage: storageTypes.ids, boxes: boxes.ids } => seeds
+    RegisteredTypeSeeds { declarations: declarations!, storage: storageTypes.ids, boxes: boxes.ids, used: [Int; ~] } => seeds
     Result<RegisteredTypeSeeds, TypeRegistryError>.Ok(seeds)
 }

@@ -1099,6 +1099,13 @@ descriptors at the same arena indices. Type metadata uses the retained source
 module and declaration coordinates with final field types; builtin runtime
 canonicalization does not erase a source definition from the registry. Nominal
 field ownership must match those retained coordinates.
+Concrete registry membership is selected from final type annotations,
+expression and lexical-binding facts, Typed IR and instantiated generic call
+arguments/results, together with the required declaration, box and storage
+seeds. Selection follows child-type and selected-owner field dependencies.
+Uninstantiated template facts do not create concrete definitions; unrelated
+closed entries in a scratch arena do not establish registry membership.
+Invalid selected type coordinates or dependencies fail preparation with S080.
 
 S059 is a blocking compiler-integrity diagnostic when a binding has a binary
 initializer AST but no corresponding binary Typed IR producer. Consecutive

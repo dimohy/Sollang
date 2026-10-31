@@ -1,0 +1,51 @@
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_fact_concreteness as concrete
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+inspectRoots: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) => root
+    root -> sourceRoot.discoverDirect => paths
+    [file.SourceText; ~] => owners!
+    paths -> each current { current -> pathText -> file.mapText => owner
+        owners! -> push(owner) }
+    arguments[2] -> file.mapText => fixture
+    owners! -> push(fixture)
+    owners! -> analysis.analyzeSources => package
+    package -> typeIds.resolveAnalyzed => semantic
+    concrete.classify(semantic.types, semantic.fields) => states
+    "initial-types:$(semantic.types -> len)" -> println
+    0 => identity!
+    semantic.types -> each type {
+        type.status != 0 -> if {
+            "open:$(identity!):$(type.kind):$(type.origin):$(type.module):$(type.symbol):$(type.status)" -> println
+        }
+        identity! + 1 => identity!
+    }
+    semantic.fields -> each field {
+        field.fieldType >= 0 and field.fieldType < (states -> len) and states[field.fieldType] != 0 and field.fieldSymbol >= 0
+            -> if {
+                package.ranges[field.sourceModule] => range
+                package.symbols[range.symbolStart + field.ownerSymbol] => owner
+                package.symbols[range.symbolStart + field.fieldSymbol] => member
+                package.tokens[range.tokenStart + owner.nameToken] => ownerToken
+                package.tokens[range.tokenStart + member.nameToken] => memberToken
+                package.sources[field.sourceModule] -> slice(ownerToken.span.start, ownerToken.span.length) => ownerName
+                package.sources[field.sourceModule] -> slice(memberToken.span.start, memberToken.span.length) => memberName
+                "open-field:$(field.ownerType):$(field.sourceModule):$ownerName:$memberName:$(field.fieldType):$(field.status)" -> println
+            }
+    }
+    0 => parent!
+    semantic.types -> each type {
+        (type.first >= 0 and type.first < (states -> len) and states[type.first] != 0) or (type.second >= 0 and type.second < (states -> len) and states[type.second] != 0)
+            -> if {
+                "open-parent:$(parent!):$(type.kind):$(type.first):$(type.second):$(type.status)" -> println
+            }
+        parent! + 1 => parent!
+    }
+}
+main { inspectRoots() }

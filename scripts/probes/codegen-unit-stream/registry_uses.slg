@@ -1,0 +1,101 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_registration as registration
+import sollang.compiler.semantic.analysis as analysis
+import sys.file as file
+
+inspectRegisteredTypeUses context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis, seeds: ref registration.RegisteredTypeSeeds -> Int uses Console {
+    (seeds.used -> len) < (seeds.declarations -> len)
+        -> if { 12 -> return }
+    [typeIds.SemanticType; ~] => types!
+    context.types -> each type { types! -> push(type) }
+    (types! -> len) => scratch
+    typeIds.builtinSymbolByName("UInt64") => integerSymbol
+    context.types -> typeIds.builtinTypeId(integerSymbol) => integer
+    types! -> push(typeIds.SemanticType { kind: 4, origin: -1, module: -1, symbol: -1, first: integer, second: -1, length: 65537, lengthHash: 0, containsParameter: false, status: 0 })
+    registration.selectClosedTypeUses(types!, context.fields, seeds.declarations, seeds.used) -> when {
+        Err(_) { 13 -> return }
+        Ok(used) {
+            (used -> len) != (seeds.used -> len) -> if { 14 -> return }
+            0 => index!
+            used -> each identity {
+                identity != seeds.used[index!] -> if { 15 -> return }
+                index! + 1 => index!
+            }
+        }
+    }
+    [Int; ~] => roots!
+    seeds.used -> each identity { roots! -> push(identity) }
+    roots! -> push(scratch)
+    registration.selectClosedTypeUses(types!, context.fields, seeds.declarations, roots!) -> when {
+        Err(_) { 16 -> return }
+        Ok(used) {
+            (used -> len) != (seeds.used -> len) + 1 or used[Int(used -> len) - 1] != scratch
+                -> if { 17 -> return }
+        }
+    }
+    [scratch + 1,; ~] => invalid
+    registration.selectClosedTypeUses(types!, context.fields, seeds.declarations, invalid) -> when {
+        Err(_) { }
+        Ok(_) { 18 -> return }
+    }
+    -1 => unresolved!
+    0 => candidate!
+    context.types -> each type {
+        type.status != 0 and unresolved! < 0 -> if { candidate! => unresolved! }
+        candidate! + 1 => candidate!
+    }
+    unresolved! < 0 -> if { 22 -> return }
+    [unresolved!,; ~] => selectedOpen
+    registration.selectClosedTypeUses(types!, context.fields, seeds.declarations, selectedOpen) -> when {
+        Err(_) { }
+        Ok(_) { 23 -> return }
+    }
+    0 => instantiatedCount!
+    0 => ordinaryCount!
+    seeds.used -> each identity {
+        context.types[identity].kind == 10 -> if {
+            false => body!
+            -1 => source!
+            context.fields -> each field {
+                field.ownerType == identity and field.labelToken >= 0
+                    -> if {
+                        package.ranges[field.sourceModule] => range
+                        package.tokens[range.tokenStart + field.labelToken] => token
+                        package.sources[field.sourceModule] -> slice(token.span.start, token.span.length) => label
+                        label == "cacheBodyValue" -> if { true => body!
+                            field.sourceModule => source! }
+                        label == "templateOnlyValue" -> if { 20 -> return }
+                        label == "ordinaryBodyValue" -> if { ordinaryCount! + 1 => ordinaryCount! }
+                    }
+            }
+            body! -> if {
+                instantiatedCount! + 1 => instantiatedCount!
+                context -> preparedRegistrySemantic => semantic
+                context -> preparedRegistryNames(source!) => names!
+                keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+                records! -> keys.appendSyntheticTypeUniverseRecord(names!, package, semantic, identity, context.typeSizes, context.typeLayoutStatuses) -> when {
+                    Err(_) { 19 -> return }
+                    Ok {}
+                }
+                ["UInt8", "Int"] -> each name {
+                    name -> typeIds.builtinSymbolByName => symbol
+                    context.types -> typeIds.builtinTypeId(symbol) => type
+                    "builtin:$name:$type" -> println
+                }
+                records!.fields -> each field {
+                    field.bytes -> file.borrowBytes => bytes
+                    bytes -> slice(0, bytes -> len) -> println
+                }
+                "end-definition" -> println
+            }
+        }
+    }
+    instantiatedCount! > 0 and ordinaryCount! != 1
+        -> if { 21 -> return }
+    0
+}

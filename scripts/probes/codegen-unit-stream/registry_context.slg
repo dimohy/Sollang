@@ -9,19 +9,27 @@ import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import sys.file as file
 
-inspectCanonicalDeclaration context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis, identity: typeIds.SemanticType, typeId: Int -> Int uses Console {
+preparedRegistrySemantic context: ref emitterContext.EmitContext -> typeIds.SemanticTypeSet {
     [typeIds.SemanticType; ~] => types!
     context.types -> each type { types! -> push(type) }
     [typeIds.TypeReference; ~] => references!
     context.typeReferences -> each reference { references! -> push(reference) }
     [typeIds.NominalField; ~] => fields!
     context.fields -> each field { fields! -> push(field) }
-    typeIds.SemanticTypeSet { types: types!, references: references!, fields: fields! } => semantic
+    typeIds.SemanticTypeSet { types: types!, references: references!, fields: fields! }
+}
+
+preparedRegistryNames context: ref emitterContext.EmitContext, sourceModule: Int -> keys.TypeFieldContext {
     [modules.ModuleIdentity; ~] => identities!
     context.modules -> each module { identities! -> push(module) }
     [modules.ImportEdge; ~] => imports!
     context.imports -> each edge { imports! -> push(edge) }
-    keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: identity.module, ownerSymbol: -1 } => names
+    keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: sourceModule, ownerSymbol: -1 }
+}
+
+inspectCanonicalDeclaration context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis, identity: typeIds.SemanticType, typeId: Int -> Int uses Console {
+    context -> preparedRegistrySemantic => semantic
+    context -> preparedRegistryNames(identity.module) => names
     keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
     records! -> keys.appendDeclaredTypeUniverseRecordWithIdentity(names, package, semantic, typeId, identity, -1) -> when {
         Err(_) { 8 -> return }
@@ -56,7 +64,40 @@ inspectCanonicalDeclaration context: ref emitterContext.EmitContext, package: re
 
 inspectPreparedRegistryContext context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis, standardCount: Int -> Int uses Console {
     context -> preparationIntegrityDiagnosticCount => failures
-    failures > 0 -> if { 1 -> return }
+    failures > 0 -> if {
+        context.typeRegistration -> when {
+            Err(error) {
+                error -> when {
+                    TypeUse(identity) {
+                        identity >= 0 and identity < (context.types -> len)
+                            -> if {
+                                context.types[identity] => type
+                                "rejected-type:$identity:$(type.kind):$(type.origin):$(type.module):$(type.symbol):$(type.first):$(type.second):$(type.status):$(type.containsParameter)" -> println
+                                context.fields -> each field {
+                                    field.ownerType == identity or field.fieldType == identity
+                                        -> if {
+                                            "rejected-field:$(field.ownerType):$(field.sourceModule):$(field.ownerSymbol):$(field.fieldSymbol):$(field.fieldType):$(field.status)" -> println
+                                        }
+                                }
+                            }
+                        0 => parent!
+                        context.types -> each candidate {
+                            candidate.first == identity or candidate.second == identity
+                                -> if {
+                                    "rejected-parent:$(parent!):$(candidate.kind):$(candidate.origin):$(candidate.module):$(candidate.symbol):$(candidate.status):$(candidate.containsParameter)" -> println
+                                }
+                            parent! + 1 => parent!
+                        }
+                    }
+                    Storage(_) { }
+                    Boxes(_) { }
+                    DeclarationIdentity { }
+                }
+            }
+            Ok(_) { }
+        }
+        1 -> return
+    }
     (context.types -> len) => count
     (context.typeSizes -> len) != count or (context.typeAligns -> len) != count or (context.typeLayoutStatuses -> len) != count
         -> if { 2 -> return }
@@ -86,6 +127,11 @@ inspectPreparedRegistryContext context: ref emitterContext.EmitContext, package:
                     }
             }
             standardCount > 0 and canonical! != 1 -> if { 9 -> return }
+            "used:$(seeds.used -> len)" -> println
+            standardCount > 0 -> if {
+                context -> inspectRegisteredTypeUses(package, seeds) => useFailure
+                useFailure > 0 -> if { useFailure -> return }
+            }
         }
     }
     0

@@ -1,0 +1,22 @@
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_fact_concreteness as concrete
+
+shape kind: Int, first: Int, second: Int, status: Int -> typeIds.SemanticType {
+    typeIds.SemanticType { kind: kind, origin: -1, module: -1, symbol: -1, first: first, second: second, length: -1, lengthHash: 0, containsParameter: false, status: status }
+}
+
+main {
+    [shape(1, -1, -1, 2), shape(8, 0, -1, 0), shape(7, 0, 3, 0), shape(1, -1, -1, 0), shape(8, 3, -1, 0), shape(10, -1, -1, 0), shape(4, 99, -1, 0), shape(8, 6, -1, 0); ~] => types
+    [typeIds.NominalField { ownerType: 5, sourceModule: 0, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 0, fieldType: 0, status: 0 },; ~] => fields
+    concrete.classify(types, fields) => states
+    states -> each state { state -> println }
+    [Int; ~] => roots!
+    0 => identity!
+    states -> each state {
+        concrete.appendConcreteFact(states, roots!, identity!) => admitted
+        (admitted and state == 2) or (not admitted and state != 2)
+            -> if { "bad-admission" -> println }
+        identity! + 1 => identity!
+    }
+    "admitted:$(roots! -> len):$(roots![0]):$(roots![1])" -> println
+}

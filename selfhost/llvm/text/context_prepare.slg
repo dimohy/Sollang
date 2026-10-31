@@ -627,13 +627,23 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     prepared.package -> semanticDiagnostics.firstDeclarationRootDiagnosticWithOwnedBinding(bindingDeclarationDiagnostic, numericCallLiteralDiagnostic!, numericCallArgumentDiagnostic, nominalFieldMismatch, callOwnershipDiagnostic, dictionaryKeyDiagnostic, ownedIndexReadDiagnostic, callArityDiagnostic, ownedBindingSource!, ownedBindingAst!, ownedBindingCode!, expressionOperandDiagnostic.sourceModule, expressionOperandDiagnostic.astNode, expressionOperandDiagnostic.code, contextualOwnerAst) => checkedDeclarationRoot!
     firstOwnedBindingDiagnostic == -2 -> if { 10 => checkedDeclarationRoot! }
     prepared -> storagePackage.buildWithInlineFrames(recursiveTypes!, ir!) => storagePlacement
+    typeRegistry -> when {
+        Err(error) { Result<typeRegistration.RegisteredTypeSeeds, typeRegistration.TypeRegistryError>.Err(error) }
+        Ok(seeds) {
+            prepared.standardLibrarySourceCount > 0 -> if {
+                typeRegistration.registerCompilationTypeUses(seeds, prepared.package, recursiveTypes!, semanticTypes!, semanticFields!, ir!, activeOwnershipBodies, genericCallPlans)
+            } else {
+                Result<typeRegistration.RegisteredTypeSeeds, typeRegistration.TypeRegistryError>.Ok(seeds)
+            }
+        }
+    } => completeTypeRegistry
     prepared.package -> scopedDeclarations.prepare(prepared.modules) => symbolNames
     prepared -> scopedDeclarations.prepareGenericSpecializations(semanticTypes!, signatureTypeReferences!, semanticFields!, ir!, genericCallPlans, genericBodies) => genericNames
     emitterContext.EmitContext {
         symbolNames: symbolNames
         genericNames: genericNames
         storagePlacement: storagePlacement
-        typeRegistration: typeRegistry
+        typeRegistration: completeTypeRegistry
         globalFunctionAliasDiagnostic: calls.noGlobalFunctionAliasDiagnostic()
         initializerDiagnostics: [emitterContext.InitializerDiagnostic; ~]
         missingEnumVariants: missingEnumVariants

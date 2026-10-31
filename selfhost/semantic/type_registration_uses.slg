@@ -1,0 +1,172 @@
+namespace sollang.compiler.semantic.type_registration
+
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_fact_concreteness as concreteness
+import sollang.compiler.semantic.storage_registration as storage
+import sollang.compiler.ir.typed as typedIr
+
+public selectClosedTypeUses types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], declarations: ref [RegisteredDeclaration; ~], roots: ref [Int; ~] -> Result<[Int; ~], TypeRegistryError> {
+    [Bool; ~] => selected!
+    [Bool; ~] => declared!
+    types -> each _ { selected! -> push(false)
+        declared! -> push(false) }
+    declarations -> each declaration {
+        declaration.typeId < 0 or declaration.typeId >= (types -> len)
+            -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(declaration.typeId)) -> return }
+        true => declared![declaration.typeId]
+    }
+    [Int; ~] => work!
+    roots -> each root { work! -> push(root) }
+    0 => cursor!
+    cursor! < (work! -> len) -> while {
+        work![cursor!] => identity
+        identity < 0 or identity >= (types -> len)
+            -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity)) -> return }
+        not selected![identity] -> if {
+            types[identity] => type
+            type.status != 0 or type.containsParameter or type.kind < 1 or type.kind > 14 or type.first < -1 or type.second < -1
+                -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity)) -> return }
+            true => selected![identity]
+            type.first >= 0 -> if { work! -> push(type.first) }
+            type.second >= 0 -> if { work! -> push(type.second) }
+            fields -> each field {
+                field.ownerType == identity -> if {
+                    field.status != 0 -> if { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity)) -> return }
+                    work! -> push(field.fieldType)
+                }
+            }
+        }
+        cursor! + 1 => cursor!
+    }
+    [Int; ~] => ids!
+    0 => identity!
+    types -> each type {
+        selected![identity!] -> if {
+            declared![identity!] or type.kind == 9 or type.kind == 10 or type.kind == 8
+                or (type.kind == 1 and (type.origin == 0 or type.origin == 2 or type.origin == 16 or (type.origin == 1 and type.symbol == 25)))
+                or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1)) => metadata!
+            type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6
+                -> if {
+                    types -> storage.sourceStorageRequiresMetadata(identity!) -> when {
+                        Err(_) { Result<[Int; ~], TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity!)) -> return }
+                        Ok(required) { required => metadata! }
+                    }
+                }
+            metadata! -> if { ids! -> push(identity!) }
+        }
+        identity! + 1 => identity!
+    }
+    Result<[Int; ~], TypeRegistryError>.Ok(ids!)
+}
+
+# Generic source bodies are templates even when a local value has no type
+# parameters. Their concrete instances are represented separately in Typed IR.
+concreteSourceFactActivity package: ref analysis.PackageAnalysis, activity: ref [Bool; ~] -> [Bool; ~] {
+    [Bool; ~] => generic!
+    package.nodes -> each _ { generic! -> push(false) }
+    package.ranges -> each range {
+        0 => index!
+        index! < range.astCount -> while {
+            package.nodes[range.astStart + index!] => node
+            node.kind == 32 and node.parent >= 0 -> if { true => generic![range.astStart + node.parent] }
+            index! + 1 => index!
+        }
+    }
+    [Bool; ~] => concrete!
+    package.ranges -> each range {
+        0 => index!
+        index! < range.astCount -> while {
+            activity[range.astStart + index!] => active!
+            index! => ancestor!
+            active! and ancestor! >= 0 -> while {
+                generic![range.astStart + ancestor!] -> if { false => active! }
+                package.nodes[range.astStart + ancestor!].parent => ancestor!
+            }
+            concrete! -> push(active!)
+            index! + 1 => index!
+        }
+    }
+    concrete!
+}
+
+public registerCompilationTypeUses seeds: move RegisteredTypeSeeds, package: ref analysis.PackageAnalysis, semantic: ref expressions.ExpressionTypeIdSet, types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], ir: ref [typedIr.TypedIrNode; ~], activeIr: ref [Bool; ~], plans: ref [typedIr.GenericCallPlan; ~] -> Result<RegisteredTypeSeeds, TypeRegistryError> {
+    (activeIr -> len) != (ir -> len) or (semantic.activeDeclarationBodyByAst -> len) != (package.nodes -> len)
+        -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(-1)) -> return }
+    package -> concreteSourceFactActivity(semantic.activeDeclarationBodyByAst) => sourceActivity
+    concreteness.classify(types, fields) => concreteStates
+    [Int; ~] => roots!
+    seeds.declarations -> each declaration { roots! -> push(declaration.typeId) }
+    seeds.storage -> each identity { roots! -> push(identity) }
+    seeds.boxes -> each identity { roots! -> push(identity) }
+    types -> typeIds.builtinTypeId(25) => builtinRange
+    roots! -> push(builtinRange)
+    semantic.references -> each reference {
+        reference.status == 0 and not concreteness.appendConcreteFact(concreteStates, roots!, reference.typeId)
+            -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(reference.typeId)) -> return }
+    }
+    semantic.expressions -> each value {
+        value.status == 0 -> if {
+            value.sourceModule < 0 or value.sourceModule >= (package.ranges -> len)
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+            package.ranges[value.sourceModule] => range
+            value.astNode < 0 or value.astNode >= range.astCount
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+            sourceActivity[range.astStart + value.astNode] and not concreteness.appendConcreteFact(concreteStates, roots!, value.typeId)
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(value.typeId)) -> return }
+        }
+    }
+    package.ranges -> each range {
+        0 => symbol!
+        symbol! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbol!].astNode => node
+            semantic.lexicalBindingTypeBySymbol[range.symbolStart + symbol!] => identity
+            node >= 0 and node < range.astCount and sourceActivity[range.astStart + node] and not concreteness.appendConcreteFact(concreteStates, roots!, identity)
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity)) -> return }
+            symbol! + 1 => symbol!
+        }
+    }
+    semantic.callArguments -> each argument {
+        argument.sourceModule >= 0 and argument.sourceModule < (package.ranges -> len)
+            -> if {
+                package.ranges[argument.sourceModule] => range
+                argument.callAst >= 0 and argument.callAst < range.astCount and sourceActivity[range.astStart + argument.callAst]
+                    -> if {
+                        [argument.expectedTypeId, argument.actualTypeId, argument.genericActualTypeId] -> each identity {
+                            not concreteness.appendConcreteFact(concreteStates, roots!, identity)
+                                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity)) -> return }
+                        }
+                    }
+            }
+    }
+    0 => irIndex!
+    ir -> each node {
+        activeIr[irIndex!] and not concreteness.appendConcreteFact(concreteStates, roots!, node.typeId)
+            -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(node.typeId)) -> return }
+        irIndex! + 1 => irIndex!
+    }
+    plans -> each plan {
+        plan.callNode >= 0 and plan.callNode < (ir -> len)
+            -> if { activeIr[plan.callNode] } else {
+                plan.ownerFunction >= 0 and plan.ownerFunction < (ir -> len)
+                    -> if { activeIr[plan.ownerFunction] } else { false }
+            } => active
+        plan.status == 0 and active -> if {
+            plan.actualInputs -> each identity {
+                not concreteness.appendConcreteFact(concreteStates, roots!, identity)
+                    -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(identity)) -> return }
+            }
+            not concreteness.appendConcreteFact(concreteStates, roots!, plan.resultType)
+                -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.TypeUse(plan.resultType)) -> return }
+        }
+    }
+    selectClosedTypeUses(types, fields, seeds.declarations, roots!) -> when {
+        Err(error) { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(error) }
+        Ok(used) {
+            seeds => result!
+            used => result!.used
+            Result<RegisteredTypeSeeds, TypeRegistryError>.Ok(result!)
+        }
+    }
+}

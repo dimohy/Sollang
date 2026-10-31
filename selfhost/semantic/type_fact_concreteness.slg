@@ -1,0 +1,54 @@
+namespace sollang.compiler.semantic.type_fact_concreteness
+
+import sollang.compiler.semantic.type_ids as typeIds
+
+public appendConcreteFact states: ref [Int; ~], roots: mut [Int; ~], identity: Int -> Bool {
+    identity == -1 -> if { true -> return }
+    identity < 0 or identity >= (states -> len) -> if { false -> return }
+    states[identity] == 2 -> if { false -> return }
+    states[identity] == 0 -> if { roots -> push(identity) }
+    true
+}
+
+# 0 concrete, 1 unresolved/template, 2 invalid coordinates. A shallow resolved
+# wrapper does not make an unresolved child a concrete registered definition.
+public classify types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => states!
+    types -> each type {
+        0 => state!
+        type.status != 0 or type.containsParameter -> if { 1 => state! }
+        type.kind < 1 or type.kind > 14 or type.first < -1 or type.second < -1
+            or type.first >= (types -> len) or type.second >= (types -> len)
+            -> if { 2 => state! }
+        states! -> push(state!)
+    }
+    true => changed!
+    changed! -> while {
+        false => changed!
+        0 => identity!
+        types -> each type {
+            states![identity!] => state!
+            [type.first, type.second] -> each child {
+                child >= 0 and child < (types -> len) and states![child] > state!
+                    -> if { states![child] => state! }
+            }
+            state! != states![identity!] -> if { state! => states![identity!]
+                true => changed! }
+            identity! + 1 => identity!
+        }
+        fields -> each field {
+            field.ownerType >= 0 and field.ownerType < (types -> len) and types[field.ownerType].kind == 10
+                -> if {
+                    states![field.ownerType] => state!
+                    field.status != 0 and state! < 1 -> if { 1 => state! }
+                    field.fieldType < 0 or field.fieldType >= (types -> len)
+                        -> if { 2 => state! } else {
+                            states![field.fieldType] > state! -> if { states![field.fieldType] => state! }
+                        }
+                    state! != states![field.ownerType] -> if { state! => states![field.ownerType]
+                        true => changed! }
+                }
+        }
+    }
+    states!
+}

@@ -41,7 +41,7 @@ def main():
     for source in [manifest, *sources]:
         assert semantic['inputHashes'][str(source.resolve())] == sha(source)
     wrapper = ROOT / 'scripts/probes/codegen-unit-stream/emitter.slg'
-    support = [wrapper.with_name('registry_context.slg'), wrapper.with_name('registry_root.slg')]
+    support = [wrapper.with_name('registry_context.slg'), wrapper.with_name('registry_root.slg'), wrapper.with_name('registry_uses.slg')]
     llvm = ROOT / '.tools/llvm-22.1.8'
     assert (llvm / 'bin/clang.exe').is_file() and (llvm / 'bin/llvm-as.exe').is_file()
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.semantic_result,
