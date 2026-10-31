@@ -6227,6 +6227,15 @@ Current backend:
   labels are diagnostic metadata: only outer interface records serialize a
   domain field. Changes to inner plan order flow through policy generation and
   both fact providers; unavailable requested facts fail explicitly.
+  Function source facts distinguish input and declared result annotations,
+  no-input declarations, low-bit input ownership, async state and stream element
+  metadata. Stream declarations contribute Unit as their interface return type.
+  Effects are read from the signature clause and sorted ordinal UTF-16 without
+  examining body text. Synthetic input aliases do not become additional
+  parameters. Legacy generic slots retain the first three source generic names.
+  An unfinished source projection must reject cache admission until its actual
+  managed facts are available; that rejection does not remove supported language
+  forms from the compiler parity and final verification requirements.
 - module source key inputs group every file by its complete parsed namespace.
   Files use ordinal UTF-16 path order, matching exact-source semantic generations;
   case-distinct paths do not retain an input-order tie. The implementation hash

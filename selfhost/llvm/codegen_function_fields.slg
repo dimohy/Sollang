@@ -1,0 +1,157 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sollang.compiler.llvm.codegen_units as units
+import syntax.generated.slg as grammar
+
+nextFunctionToken context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, start: Int -> Int {
+    package.ranges[context.sourceModule] => range
+    start => index!
+    index! < range.tokenCount -> while {
+        package.tokens[range.tokenStart + index!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment() and kind != grammar.tokenIdNewLine()
+            -> if { index! -> return }
+        index! + 1 => index!
+    }
+    index!
+}
+
+optionalFunctionType context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, node: Int -> Result<Field, DeclarationFieldError> {
+    node < 0 -> if { Result<Field, DeclarationFieldError>.Ok(textField("")) -> return }
+    context -> typeAnnotationField(package, node) -> when {
+        Ok(field) { Result<Field, DeclarationFieldError>.Ok(field) }
+        Err(_) { Result<Field, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) }
+    }
+}
+
+functionDeclarationBindings context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<[Binding; ~], DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol] => declaration
+    declaration.parent >= 0 or declaration.flags / 32 % 2 == 1 or declaration.flags / 128 % 2 == 1
+        or symbols.hasQualifiedFunctionName(declaration, package.tokens, range.tokenStart, range.tokenCount)
+        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
+    declaration.secondaryTypeNode >= 0 -> if { declaration.secondaryTypeNode } else { declaration.typeNode } => resultNode
+    resultNode < 0 -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+    package.nodes[range.astStart + resultNode] => resultType
+    context -> nextFunctionToken(package, resultType.firstToken + resultType.tokenCount) => following!
+    [Int; ~] => effectTokens!
+    following! < range.tokenCount and (context -> typeTokenText(package, context.sourceModule, following!)) == "uses"
+        -> if {
+            context -> nextFunctionToken(package, following! + 1) => following!
+            true => more!
+            more! -> while {
+                following! >= range.tokenCount -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+                package.tokens[range.tokenStart + following!].kind != grammar.tokenIdIdentifier()
+                    -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+                effectTokens! -> push(following!)
+                context -> nextFunctionToken(package, following! + 1) => following!
+                following! < range.tokenCount and package.tokens[range.tokenStart + following!].kind == grammar.tokenIdComma()
+                    -> if { context -> nextFunctionToken(package, following! + 1) => following! } else { false => more! }
+            }
+        }
+    following! < range.tokenCount and (context -> typeTokenText(package, context.sourceModule, following!)) == "where"
+        -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
+    1 => effectIndex!
+    effectIndex! < (effectTokens! -> len) -> while {
+        effectTokens![effectIndex!] => selected
+        effectIndex! => position!
+        position! > 0 -> while {
+            context -> typeTokenText(package, context.sourceModule, effectTokens![position! - 1]) => previous
+            context -> typeTokenText(package, context.sourceModule, selected) => current
+            units.compareIdentityText(previous, current) <= 0
+                -> if { break }
+            effectTokens![position! - 1] => effectTokens![position!]
+            position! - 1 => position!
+        }
+        selected => effectTokens![position!]
+        effectIndex! + 1 => effectIndex!
+    }
+    [Binding; ~] => bindings!
+    [Field; ~] => identity!
+    identity! -> push(context -> declarationNameField(package, context.ownerSymbol))
+    bindings! -> push(Binding { part: plans.KeyPart.Identity, fields: identity! })
+    [Field; ~] => input!
+    plans.ownedTypeFields() => inputRule
+    inputRule.parts -> each part {
+        part -> plans.partIndex => selected
+        selected == (plans.KeyPart.MemberType -> plans.partIndex) and declaration.secondaryTypeNode < 0
+            -> if { input! -> push(textField("")) } else {
+                selected != (plans.KeyPart.MemberType -> plans.partIndex) and selected != (plans.KeyPart.MemberOwnership -> plans.partIndex)
+                    -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart) -> return }
+                context -> sourceMemberField(package, context.ownerSymbol, part) -> when {
+                    Ok(field) { input! -> push(field) }
+                    Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+                }
+            }
+    }
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionInput, fields: input! })
+    [Field; ~] => result!
+    declaration.flags / 64 % 2 == 1 -> if { result! -> push(textField("Unit")) } else {
+        context -> optionalFunctionType(package, resultNode) -> when {
+            Ok(field) { result! -> push(field) }
+            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+        }
+    }
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionReturn, fields: result! })
+    [Field; ~] => block!
+    [declaration.blockTypeNode, declaration.blockResultTypeNode] -> each node {
+        context -> optionalFunctionType(package, node) -> when {
+            Ok(field) { block! -> push(field) }
+            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+        }
+    }
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionBlock, fields: block! })
+    [Field; ~] => stream!
+    declaration.flags / 64 % 2 == 1 -> if { resultNode } else { -1 } => streamNode
+    context -> optionalFunctionType(package, streamNode) -> when {
+        Ok(field) { stream! -> push(field) }
+        Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+    }
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionStream, fields: stream! })
+    [Field; ~] => asyncFields!
+    declaration.flags / 8 % 2 == 1 -> if { "async" } else { "sync" } -> textField => asyncField
+    asyncFields! -> push(asyncField)
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionAsync, fields: asyncFields! })
+    [Field; ~] => generics!
+    [Field; ~] => parameters!
+    plans.namedOwnedTypeFields() => parameterRule
+    0 => genericCount!
+    0 => index!
+    index! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + index!] => member
+        member.parent == context.ownerSymbol -> if {
+            member.kind == 32 and genericCount! < 3 -> if {
+                context -> typeTokenText(package, context.sourceModule, member.nameToken) -> textField => name
+                generics! -> push(name)
+                genericCount! + 1 => genericCount!
+            }
+            member.kind == 33 or member.kind == 34 -> if {
+                Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return
+            }
+            member.kind == 35 and member.astNode != declaration.astNode
+                -> if {
+                    parameterRule.parts -> each part {
+                        context -> sourceMemberField(package, index!, part) -> when {
+                            Ok(field) { parameters! -> push(field) }
+                            Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) -> return }
+                        }
+                    }
+                }
+        }
+        index! + 1 => index!
+    }
+    genericCount! < 6 -> while { generics! -> push(textField(""))
+        genericCount! + 1 => genericCount! }
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionGenerics, fields: generics! })
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionParameters, fields: parameters! })
+    [Field; ~] => effects!
+    effectTokens! -> each token {
+        context -> typeTokenText(package, context.sourceModule, token) -> textField => name
+        effects! -> push(name)
+    }
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionEffects, fields: effects! })
+    bindings! -> push(Binding { part: plans.KeyPart.FunctionAssociatedTypes, fields: [Field; ~] })
+    Result<[Binding; ~], DeclarationFieldError>.Ok(bindings!)
+}
