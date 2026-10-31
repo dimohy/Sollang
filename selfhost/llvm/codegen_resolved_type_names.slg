@@ -34,7 +34,7 @@ appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, Typ
 
 appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
     semantic.types[typeId] => type
-    type.kind == 1 -> if {
+    type.kind == 1 or type.kind == 9 -> if {
         type.origin == 1 -> if { type.symbol -> appendResolvedBuiltinName(bytes) -> return }
         type.module < 0 or type.module >= (package.ranges -> len) or type.module >= (context.identities -> len)
             -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
@@ -42,7 +42,12 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
             -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         context.sourceModule => previous
         type.module => context.sourceModule
-        context -> declarationNameField(package, type.symbol) => name
+        context -> declarationTypeNameField(package, type.symbol) => capturedName
+        previous => context.sourceModule
+        capturedName -> when {
+            Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
+            Ok(field) { field }
+        } => name
         type.origin == 16 -> if {
             "dyn " -> appendTypeText(bytes)
             [UInt8; ~] => module!
@@ -52,7 +57,6 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
                 bytes -> push('.')
             }
         }
-        previous => context.sourceModule
         name.bytes -> each byte { bytes -> push(byte) }
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
     }

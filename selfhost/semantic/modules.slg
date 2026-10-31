@@ -22,6 +22,10 @@ public appendDeclarationNameBytes source: Text, identity: ModuleIdentity, range:
     [UInt64; ~] => words!
     appendLogicalNameWords(source, identity, range, tokens, words!)
     words! -> each word { bytes -> push(UInt8(word)) }
+    appendDeclarationPathBytes(source, range, tokens, declarations, declaration, bytes)
+}
+
+appendDeclarationPathBytes source: Text, range: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~], declarations: ref [symbols.Symbol; ~], declaration: Int, bytes: mut [UInt8; ~] -> Unit {
     [Int; ~] => owners!
     declaration => owner!
     owner! >= 0 -> while {
@@ -40,6 +44,36 @@ public appendDeclarationNameBytes source: Text, identity: ModuleIdentity, range:
         }
         index! - 1 => index!
     }
+}
+
+# Affine declarations are nested in native/com AST blocks, while their symbol
+# parent is the surrounding lexical scope. The block owns the import alias.
+public appendAffineDeclarationNameBytes package: ref analysis.PackageAnalysis, sourceModule: Int, declaration: Int, bytes: mut [UInt8; ~] -> Bool {
+    package.ranges[sourceModule] => range
+    package.symbols[range.symbolStart + declaration] => symbol
+    symbol.astNode => node!
+    0 => depth!
+    node! >= 0 and node! < range.astCount and depth! < range.astCount
+        -> while {
+            package.nodes[range.astStart + node!] => current
+            (current.kind == 65 or current.kind == 66) and current.payloadToken >= 0 and current.payloadToken < range.tokenCount
+                -> if {
+                    package.sources[sourceModule] -> slice(0, package.sources[sourceModule] -> len) => source
+                    package.tokens[range.tokenStart + current.payloadToken].span => alias
+                    UIntSize(0) => index!
+                    index! < alias.length -> while { bytes -> push(source -> byte(alias.start + index!))
+                        index! + 1 => index! }
+                    bytes -> push('.')
+                    package.tokens[range.tokenStart + symbol.nameToken].span => name
+                    UIntSize(0) => nameIndex!
+                    nameIndex! < name.length -> while { bytes -> push(source -> byte(name.start + nameIndex!))
+                        nameIndex! + 1 => nameIndex! }
+                    true -> return
+                }
+            current.parent => node!
+            depth! + 1 => depth!
+        }
+    false
 }
 
 public struct ImportEdge {

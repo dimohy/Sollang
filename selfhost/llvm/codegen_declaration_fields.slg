@@ -16,6 +16,24 @@ declarationNameField context: ref TypeFieldContext, package: ref analysis.Packag
     Field { bytes: bytes! }
 }
 
+# Affine native/COM declarations retain the alias-qualified name written by
+# the managed parser; ModuleName is a separate metadata field.
+declarationTypeNameField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, declaration: Int -> Result<Field, TypeUniverseCaptureError> {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + declaration] => symbol
+    symbol.flags / 512 % 2 == 1 or symbol.flags / 65536 % 2 == 1
+        -> if {
+            [UInt8; ~] => bytes!
+            not modules.appendAffineDeclarationNameBytes(package, context.sourceModule, declaration, bytes!)
+                -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            Field { bytes: bytes! } => field
+            Result<Field, TypeUniverseCaptureError>.Ok(field)
+        } else {
+            context -> declarationNameField(package, declaration) => field
+            Result<Field, TypeUniverseCaptureError>.Ok(field)
+        }
+}
+
 # Numeric metadata uses the managed invariant decimal spelling and owns bytes.
 unsignedDeclarationField value: UInt64 -> Field {
     [UInt8; ~] => reversed!

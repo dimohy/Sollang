@@ -19,50 +19,25 @@ def sha(path):
 
 
 def verify_nominal(lines, records, builtin_ids):
-    prefix = 'cache.nominal.'
-    native_ids = {}
-    blocks = {}
-    current = None
+    definitions = [r for group in ('Structs', 'Enums') for r in records[group]
+                   if r['ModuleName'] == 'cache.nominal']
+    definitions += [r for r in records['DynTraits']
+                    if r['TraitName'].startswith('cache.nominal.')]
+    raw = [line for line in lines if not line.startswith(('definition:', 'resolved:'))]
+    verify_resolved_definitions(raw, definitions, builtin_ids)
+    affine = {r['Name']: r for r in definitions if r.get('NativeHandle') or r.get('ComInterface')}
+    expected = {}
+    resolved = {}
     for line in lines:
-        if line.startswith('builtin:'):
-            _, name, identity = line.split(':')
-            native_ids[int(identity)] = builtin_ids[name]
-        elif line.startswith('definition:'):
-            _, name, identity = line.split(':')
-            assert name not in blocks
-            if name == 'Value':
-                rows = [r for r in records['DynTraits'] if r['TraitName'].endswith(prefix + name)]
-            else:
-                rows = [r for r in records['Structs' if name == 'Pair' else 'Enums']
-                        if r['Name'] == prefix + name]
-            assert len(rows) == 1
-            native_ids[int(identity)] = rows[0]['Id']
-            blocks[name] = dict(reference=rows[0], observed=[])
-            current = blocks[name]['observed']
-        elif line == 'end-definition':
-            assert current is not None
-            current = None
-        else:
-            assert current is not None
-            current.append(line.split(':'))
-    assert set(blocks) == {'Pair', 'Choice', 'Value'} and current is None
-    native_ids[-1] = -1
-    for name, block in blocks.items():
-        reference, observed = block['reference'], block['observed']
-        for row in observed:
-            coordinate = 1 if row[0] in ('struct', 'enum', 'dyn') else 3
-            row[coordinate] = str(native_ids[int(row[coordinate])])
-        if name == 'Pair':
-            expected = [['struct', reference['Id'], reference['Name'], reference['ModuleName']]]
-            expected += [['field', f['Index'], f['Name'], f['Type']]
-                         for f in sorted(reference['Fields'], key=lambda f: f['Index'])]
-        elif name == 'Choice':
-            expected = [['enum', reference['Id'], reference['Name'], reference['ModuleName'], reference['PayloadWords']]]
-            expected += [['variant', v['Tag'], v['Name'], v['PayloadType'] if v['PayloadType'] is not None else -1]
-                         for v in sorted(reference['Variants'], key=lambda v: v['Tag'])]
-        else:
-            expected = [['dyn', reference['Id'], reference['TraitName']]]
-        assert observed == [[str(part) for part in row] for row in expected], (name, observed, expected)
+        if line.startswith('struct:'):
+            _, identity, name, _ = line.split(':')
+            if name in affine:
+                expected[int(identity)] = name
+        elif line.startswith('resolved:'):
+            _, identity, name = line.split(':')
+            assert int(identity) not in resolved
+            resolved[int(identity)] = name
+    assert len(expected) == len(affine) and resolved == expected
 
 
 def verify_synthetic(lines, records, builtin, pair):

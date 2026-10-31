@@ -22,6 +22,9 @@ internal static class TypeNamePolicy
     public static string OptionVariantNames() => "None|Some";
     public static string ResultVariantNames() => "Ok|Err";
 
+    public static string AffineStorageFieldName() => "handle";
+    public static string AffineStorageFieldType() => "UInt64";
+
     public static string PrimitiveBoxNames() => "Text|Int|Int32|Bool";
     public static string BoxExcludedStructNames() =>
         "sys.file.File|sys.file.FileWriter|sys.file.SourceText|sys.process.Command|sys.file.AtomicReplaceRequest";

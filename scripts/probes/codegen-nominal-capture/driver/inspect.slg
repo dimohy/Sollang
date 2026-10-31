@@ -20,7 +20,7 @@ main {
     package -> typeIds.resolveAnalyzed => semantic
     package -> modules.identitiesAnalyzed => identities
     package -> modules.importsAnalyzed => imports
-    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context
+    keys.TypeFieldContext { identities: identities, imports: imports, sourceModule: 0, ownerSymbol: -1 } => context!
     [typeIds.SemanticType; ~] => layoutTypes!
     semantic.types -> each type { layoutTypes! -> push(type) }
     [typeIds.NominalField; ~] => layoutFields!
@@ -29,11 +29,14 @@ main {
     "builtin:Bool:$(typeIds.builtinTypeId(semantic.types, 23))" -> println
     "builtin:Int64:$(typeIds.builtinTypeId(semantic.types, 6))" -> println
     "builtin:Int:$(typeIds.builtinTypeId(semantic.types, 2))" -> println
+    "builtin:UInt64:$(typeIds.builtinTypeId(semantic.types, 11))" -> println
+    0 => affineCount!
+    semantic.types -> each type { type.kind == 9 and type.module == 0 -> if { affineCount! + 1 => affineCount! } }
     0 => captured!
     0 => typeIndex!
     typeIndex! < (semantic.types -> len) -> while {
         semantic.types[typeIndex!] => type
-        type.kind == 1 and type.module == 0 and type.symbol >= 0 and type.status == 0
+        (type.kind == 1 or type.kind == 9) and type.module == 0 and type.symbol >= 0 and type.status == 0
             -> if {
                 package.symbols[package.ranges[0].symbolStart + type.symbol] => declaration
                 declaration.kind == 3 or declaration.kind == 4 or declaration.kind == 5
@@ -67,7 +70,7 @@ main {
                             (payloadBytes! + 7) / 8 => words!
                         }
                         keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
-                        records! -> keys.appendDeclaredTypeUniverseRecord(context, package, semantic, typeIndex!, words!) -> when {
+                        records! -> keys.appendDeclaredTypeUniverseRecord(context!, package, semantic, typeIndex!, words!) -> when {
                             Err(_) { process.exit(3) }
                             Ok {}
                         }
@@ -77,10 +80,20 @@ main {
                             bytes -> slice(0, bytes -> len) -> println
                         }
                         "end-definition" -> println
+                        type.kind == 9 -> if {
+                            context! -> keys.resolvedTypeNameField(package, semantic, typeIndex!) -> when {
+                                Err(_) { process.exit(5) }
+                                Ok(field) {
+                                    field.bytes -> file.borrowBytes => buffer
+                                    buffer -> slice(0, buffer -> len) => text
+                                    "resolved:$(typeIndex!):$text" -> println
+                                }
+                            }
+                        }
                         captured! + 1 => captured!
                     }
             }
         typeIndex! + 1 => typeIndex!
     }
-    captured! != 3 -> if { process.exit(4) }
+    captured! != 3 + affineCount! -> if { process.exit(4) }
 }

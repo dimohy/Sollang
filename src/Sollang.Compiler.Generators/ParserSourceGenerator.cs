@@ -670,7 +670,7 @@ internal static class ParserEmitter
         builder.AppendLine("                alias.Text, classId, interfaceId, server, apartment);");
         builder.AppendLine("            structs.Add(new StructDeclaration(");
         builder.AppendLine("                interfaceType,");
-        builder.AppendLine("                [new StructFieldDeclaration(\"handle\", \"UInt64\", interfaceName.Line, interfaceName.Column)],");
+        builder.AppendLine("                [new StructFieldDeclaration(global::Sollang.Compiler.Shared.TypeNamePolicy.AffineStorageFieldName(), global::Sollang.Compiler.Shared.TypeNamePolicy.AffineStorageFieldType(), interfaceName.Line, interfaceName.Column)],");
         builder.AppendLine("                interfaceName.Line,");
         builder.AppendLine("                interfaceName.Column,");
         builder.AppendLine("                string.Join('.', _namespacePath),");
@@ -828,7 +828,7 @@ internal static class ParserEmitter
         builder.AppendLine("                var qualifiedName = alias.Text + \".\" + handleName.Text;");
         builder.AppendLine("                structs.Add(new StructDeclaration(");
         builder.AppendLine("                    qualifiedName,");
-        builder.AppendLine("                    [new StructFieldDeclaration(\"handle\", \"UInt64\", handleName.Line, handleName.Column)],");
+        builder.AppendLine("                    [new StructFieldDeclaration(global::Sollang.Compiler.Shared.TypeNamePolicy.AffineStorageFieldName(), global::Sollang.Compiler.Shared.TypeNamePolicy.AffineStorageFieldType(), handleName.Line, handleName.Column)],");
         builder.AppendLine("                    handleName.Line, handleName.Column,");
         builder.AppendLine("                    string.Join('.', _namespacePath),");
         builder.AppendLine("                    IsPublic: false,");
