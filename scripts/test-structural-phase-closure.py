@@ -843,6 +843,34 @@ class PhaseClosureTests(unittest.TestCase):
 
 
 class OwnershipSourceScopeTests(unittest.TestCase):
+    def test_codegen_cache_authority_and_production_consumer_are_in_scope(self):
+        root = Path(__file__).resolve().parent.parent
+        row = next(item for item in MODULE.read("scripts/contracts/structural-parity-detail.json")["phaseProgress"]
+                   if item["phase"] == "llvm-generation")
+        self.assertEqual(row["decisionInventory"]["sourceScopes"], MODULE.PHASE_SCOPES["llvm-generation"])
+        decision = next(item for item in row["decisionInventory"]["decisions"]
+                        if item["id"] == "llvm-generation.codegen-unit-identity-and-publication")
+        self.assertEqual(decision["status"], "pending")
+        for side, required in {
+            "managed": ["src/Sollang.Compiler/Shared/Policies/CodegenCachePolicy.cs",
+                        "src/Sollang.Compiler/Cli/IncrementalCodegenCache.cs",
+                        "src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs",
+                        "src/Sollang.Compiler/Cli/CompilerApp.cs"],
+            "selfhost": ["selfhost/llvm/generated/codegen_cache_policy.slg",
+                         "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg"],
+        }.items():
+            sources = AUDIT.phase_source_files(root, "llvm-generation", row["decisionInventory"], side,
+                                               ".cs" if side == "managed" else ".slg")
+            self.assertTrue(set(required).issubset(sources))
+            self.assertTrue(set(required).issubset(decision[side + "Sources"]))
+
+    def test_production_driver_scope_exception_is_exact(self):
+        driver = "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg"
+        self.assertTrue(MODULE.source_scope_belongs_to_compiler(driver, "llvm-generation", "selfhost"))
+        self.assertFalse(MODULE.source_scope_belongs_to_compiler(driver, "ownership", "selfhost"))
+        self.assertFalse(MODULE.source_scope_belongs_to_compiler(driver, "llvm-generation", "managed"))
+        self.assertFalse(MODULE.source_scope_belongs_to_compiler(driver.replace("sollangc", "stage2"), "llvm-generation", "selfhost"))
+
     def test_shared_policy_and_exporter_are_in_every_semantic_scope(self):
         required = {"src/Sollang.Compiler/Shared/Policies/BorrowedTextReturnPolicy.cs",
                     "src/Sollang.Compiler/Shared/SelfHostPolicyAttribute.cs",

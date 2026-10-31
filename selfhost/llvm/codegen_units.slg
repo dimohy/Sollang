@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.codegen_units
 
+import sollang.compiler.llvm.codegen_cache_policy as cachePolicy
+
 # LLVM fragments are retained as packed little-endian bytes: one UInt64 stores
 # up to eight output bytes. Module identity words retain the complete canonical
 # namespace bytes so hash ties are ordered by complete identities, never reused
@@ -377,7 +379,7 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
     wordLength >= 8 -> if {
         words[0] == 6002245291164258119 -> unless { 2 => status! }
         status! == 0 and words[1] != 1 -> if { 3 => status! }
-        status! == 0 and (words[2] != compilerHash or words[3] != targetHash or words[4] != configurationHash)
+        status! == 0 and not (cachePolicy.matchesContext(words[2] == compilerHash, words[3] == targetHash, words[4] == configurationHash))
             -> if { 4 => status! }
         status! == 0 and words[6] != UInt64(wordLength)
             -> if { 5 => status! }

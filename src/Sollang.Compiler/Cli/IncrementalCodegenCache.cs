@@ -337,7 +337,8 @@ internal sealed class IncrementalCodegenCache
         {
             throw new InvalidDataException("artifact schema mismatch");
         }
-        if (words[2] != compilerHash || words[3] != targetHash || words[4] != configurationHash)
+        if (!Shared.CodegenCachePolicy.MatchesContext(
+                words[2] == compilerHash, words[3] == targetHash, words[4] == configurationHash))
         {
             throw new InvalidDataException("artifact context mismatch");
         }

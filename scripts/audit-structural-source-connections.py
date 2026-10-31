@@ -20,11 +20,11 @@ def phase_source_files(root, phase, inventory, side, extension):
             "phase source scope cannot be narrowed")
     root = root.resolve()
     sources = set()
-    prefixes = ("src/Sollang.Compiler/", "src/Sollang.Compiler.Generators/") if side == "managed" else ("selfhost/",)
     for scope in inventory["sourceScopes"][side]:
         path = (root / scope).resolve()
         require(path.is_relative_to(root) and path.exists(), "invalid source scope")
-        require(path.relative_to(root).as_posix().startswith(prefixes),
+        relative = path.relative_to(root).as_posix()
+        require(DETAIL.source_scope_belongs_to_compiler(relative, phase, side),
                 "source scope belongs to the wrong compiler")
         candidates = [path] if path.is_file() else path.rglob("*" + extension)
         sources.update(p.relative_to(root).as_posix() for p in candidates

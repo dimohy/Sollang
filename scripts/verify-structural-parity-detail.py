@@ -41,7 +41,13 @@ PHASE_SCOPES = {
                                   "selfhost/llvm/text/control_regions.slg", "selfhost/llvm/text/function_expressions.slg"]},
     "ownership": {"managed": ["src/Sollang.Compiler/Semantics", "src/Sollang.Compiler/CodeGen", *SEMANTIC_POLICY_SOURCES],
                   "selfhost": ["selfhost/semantic", "selfhost/ir/typed", "selfhost/llvm/text/ownership.slg"]},
-    "llvm-generation": {"managed": ["src/Sollang.Compiler/CodeGen"], "selfhost": ["selfhost/llvm"]},
+    "llvm-generation": {
+        "managed": ["src/Sollang.Compiler/CodeGen", *SEMANTIC_POLICY_SOURCES,
+                    "src/Sollang.Compiler/Cli/IncrementalCodegenCache.cs",
+                    "src/Sollang.Compiler/Cli/CompilerApp.cs"],
+        "selfhost": ["selfhost/llvm",
+                     "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg"],
+    },
 }
 PARSING_PRODUCERS = [
     "src/Sollang.Compiler.Generators/ParserSourceGenerator.cs",
@@ -86,6 +92,13 @@ def known_implementation_unit_counts(progress):
 def require(condition, message):
     if not condition:
         raise PhaseClosureError(message)
+
+
+def source_scope_belongs_to_compiler(relative, phase, side):
+    prefixes = ("src/Sollang.Compiler/", "src/Sollang.Compiler.Generators/") if side == "managed" else ("selfhost/",)
+    return relative.startswith(prefixes) or (
+        phase == "llvm-generation" and side == "selfhost"
+        and relative == "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg")
 
 
 def expected_stage_outcome(expected_stages, stage, side):
@@ -301,8 +314,7 @@ def validate_phase_closure(detail, phases, root):
             for scope in scopes:
                 path = (root / scope).resolve()
                 require(path.is_relative_to(root.resolve()) and path.exists(), "invalid source scope")
-                prefixes = ("src/Sollang.Compiler/", "src/Sollang.Compiler.Generators/") if side == "managed" else ("selfhost/",)
-                require(path.relative_to(root.resolve()).as_posix().startswith(prefixes),
+                require(source_scope_belongs_to_compiler(path.relative_to(root.resolve()).as_posix(), phase, side),
                         "source scope belongs to the wrong compiler")
                 candidates = [path] if path.is_file() else path.rglob("*" + extension)
                 sources.update(p.relative_to(root.resolve()).as_posix() for p in candidates

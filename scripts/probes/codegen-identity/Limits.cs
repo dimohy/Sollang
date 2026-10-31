@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records"))
+    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional declared-lengths/declared-records mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -54,6 +54,30 @@ if (args.Length == 3)
         units.SetValue(Activator.CreateInstance(unitType,
             [Enum.ToObject(kindType, index * 2), "", Activator.CreateInstance(keyType, [101UL, 202UL])!, "", false]), index);
     var output = Activator.CreateInstance(outputType, [units])!;
+    if (args[2] == "context-records")
+    {
+        var words = (IReadOnlyList<ulong>)encode.Invoke(null, [output, 101UL, 202UL, 303UL])!;
+        var path = Path.Combine(directory, "context.cgu");
+        using (var stream = File.Create(path))
+        using (var writer = new BinaryWriter(stream))
+            foreach (var word in words) writer.Write(word);
+        for (var row = 0; row < 8; row++)
+        {
+            var accepted = true;
+            string? diagnostic = null;
+            var compiler = (row & 1) != 0 ? 101UL : 102UL;
+            var target = (row & 2) != 0 ? 202UL : 203UL;
+            var configuration = (row & 4) != 0 ? 303UL : 304UL;
+            try { read.Invoke(null, [path, compiler, target, configuration]); }
+            catch (TargetInvocationException error) when (error.InnerException is InvalidDataException)
+            {
+                accepted = false;
+                diagnostic = error.InnerException.Message;
+            }
+            Console.WriteLine(JsonSerializer.Serialize(new { row, compiler, target, configuration, accepted, diagnostic }));
+        }
+        return;
+    }
     var checksum = cacheType.GetMethod("Checksum", BindingFlags.NonPublic | BindingFlags.Static)!;
     void Observe(ulong kind, ulong declaredFragmentBytes, string label)
     {
