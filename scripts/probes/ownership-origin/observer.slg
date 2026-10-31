@@ -1,0 +1,90 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.ast as ast
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+# Observe production ownership diagnostics and their user IR/AST coordinates.
+# The optional root uses the same source discovery and ordering as the CLI.
+public observeOwnership: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    (arguments -> len) > 2 -> if {
+        arguments[2] -> path.fromText(path.nativeStyle()) => root
+        root -> sourceRoot.discoverDirect
+    } else {
+        [path.Path; ~]
+    } => stdlibPaths
+    [Text; ~] => paths!
+    0 => stdlibIndex!
+    stdlibIndex! < (stdlibPaths -> len) -> while {
+        stdlibPaths[stdlibIndex!] -> pathText => sourceText
+        paths! -> push(sourceText)
+        stdlibIndex! + 1 => stdlibIndex!
+    }
+    paths! -> push(arguments[1])
+    [file.SourceText; ~] => owners!
+    paths! -> each sourcePath {
+        sourcePath -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: stdlibPaths -> len, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareLibraryFiles(paths!, "windows-x64", path.nativeStyle()) => context
+    "root=$(context.firstDeclarationRootDiagnostic),binding=$(context.firstOwnedBindingDiagnostic)" -> println
+    context.ownershipDiagnostics -> each diagnostic {
+        diagnostic.actualSymbol >= 0 and diagnostic.actualSymbol < (context.ir -> len)
+            -> if {
+                context.ir[diagnostic.actualSymbol] => origin
+                "diagnostic-origin=$(diagnostic.actualSymbol),$(origin.kind),$(origin.sourceModule),$(origin.astNode),$(origin.parent),$(origin.symbol),$(origin.operand0),$(origin.operand1),$(origin.typeId),$(origin.flags),$(origin.opcode)" -> println
+                origin.sourceModule >= 0 and origin.sourceModule < (context.ranges -> len)
+                    -> if {
+                        context.ranges[origin.sourceModule] => originRange
+                        origin.symbol >= 0 and origin.symbol < originRange.symbolCount
+                            -> if {
+                                context.symbols[originRange.symbolStart + origin.symbol] => role
+                                "origin-symbol=$(role.kind),$(role.astNode),$(role.parent)" -> println
+                            }
+                    }
+            }
+        "diagnostic=$(diagnostic.code),$(diagnostic.sourceModule),$(diagnostic.functionSymbol),$(diagnostic.expectedOrigin),$(diagnostic.expectedModule),$(diagnostic.expectedSymbol),$(diagnostic.actualOrigin),$(diagnostic.actualModule),$(diagnostic.actualSymbol),$(diagnostic.actualBuiltin),$(diagnostic.span.start),$(diagnostic.span.length)" -> println
+    }
+    stdlibPaths -> len => userSource
+    context.ranges[userSource] => userRange
+    "range=$userSource,$(userRange.astStart),$(userRange.astCount),$(userRange.symbolStart),$(userRange.symbolCount)" -> println
+    0 => index!
+    index! < (context.ir -> len) -> while {
+        context.ir[index!] => node
+        node.sourceModule == userSource -> if {
+            "ir=$(index!),$(node.kind),$(node.sourceModule),$(node.astNode),$(node.parent),$(node.symbol),$(node.operand0),$(node.operand1),$(node.typeId),$(node.flags)" -> println
+        }
+        index! + 1 => index!
+    }
+    0 => astIndex!
+    astIndex! < userRange.astCount -> while {
+        context.nodes[userRange.astStart + astIndex!] => node
+        "ast=$(astIndex!),$(node.kind),$(node.parent),$(node.start),$(node.length)" -> println
+        astIndex! + 1 => astIndex!
+    }
+    owners! -> len => ownerCount
+    "owners=$ownerCount" -> println
+}
+
+public observeReadonlyFlags: -> Unit uses Console {
+    0 => flags!
+    flags! < 136 -> while {
+        flags! -> ast.readonlyInputFlags => readonly
+        "flags=$(flags!),$readonly" -> println
+        flags! + 1 => flags!
+    }
+}

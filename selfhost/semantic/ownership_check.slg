@@ -743,7 +743,7 @@ deferredTextUserBlockStorage prepared: ref semanticContext.SemanticSnapshot, nod
                     prepared.package.symbols[bindingRange.symbolStart + candidate!] => declaration
                     (declaration.kind == 7 or declaration.kind == 31)
                         and declaration.astNode == lexical!
-                        and declaration.blockTypeNode >= 0 and declaration.flags / 64 % 2 == 0
+                        and (declaration -> symbols.isUserBlockFunction)
                         -> if { candidate! => producerSymbol! }
                     candidate! + 1 => candidate!
                 }
@@ -766,7 +766,7 @@ deferredTextUserBlockStorage prepared: ref semanticContext.SemanticSnapshot, nod
             scope.targetModule < 0 or scope.symbol < 0 -> if { false -> return }
             prepared.package.ranges[scope.targetModule] => range
             prepared.package.symbols[range.symbolStart + scope.symbol] => declaration
-            declaration.blockTypeNode >= 0 and declaration.flags / 64 % 2 == 0 -> return
+            (declaration -> symbols.isUserBlockFunction) -> return
         }
         scope.parent => owner!
     }
@@ -855,7 +855,7 @@ borrowedTextParameterCarriesOrigin parameter: typedIr.TypedIrNode, prepared: ref
     parameter.kind != 10 -> if { false -> return }
     parameter.typeOrigin == 1 and parameter.typeSymbol == 24
         -> if {
-            parameter.flags == 0 -> return
+            (parameter.flags -> ast.readonlyInputFlags) -> return
         }
     parameter.typeOrigin == 1 and parameter.typeSymbol == 15
         -> if { true -> return }
@@ -4028,7 +4028,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             and count! < (typed -> len) -> while {
                 argument! == readIr -> if {
                     typed[formal!] => parameter
-                    parameter.kind != 10 or parameter.parent != selected or parameter.flags != 0
+                    parameter.kind != 10 or parameter.parent != selected or not (parameter.flags -> ast.readonlyInputFlags)
                         or parameter.typeId < 0 or parameter.typeId >= (types -> len)
                         -> if { false -> return }
                     types[parameter.typeId] => formalType
@@ -4374,7 +4374,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     materializedBlockInputIsBorrowed valueIr: Int -> Bool {
         valueIr < 0 or valueIr >= (typed -> len) -> if { false -> return }
         typed[valueIr] => binding
-        binding.kind != 17 or binding.flags != 0 or binding.symbol < 0
+        binding.kind != 17 or not (binding.flags -> ast.readonlyInputFlags) or binding.symbol < 0
             or binding.parent < 0 or binding.parent >= (typed -> len)
             or binding.operand0 < 0 or binding.operand0 >= (typed -> len)
             -> if { false -> return }
