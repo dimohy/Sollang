@@ -1655,7 +1655,8 @@ internal sealed partial class TypeDefinitionTable
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
             _ when IsTask(type) => 16,
             _ when IsStream(type) || IsEventStream(type) => checked(_pointerSize * 3),
-            TypeId.GenericParameter or TypeId.SecondaryGenericParameter or TypeId.TertiaryGenericParameter => 8,
+            TypeId.GenericParameter or TypeId.SecondaryGenericParameter or TypeId.TertiaryGenericParameter =>
+                checked((int)Shared.FunctionTypeBindingPolicy.GenericParameterInlineSize()),
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }

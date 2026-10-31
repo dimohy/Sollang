@@ -20,6 +20,13 @@ appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, Typ
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
     }
     spellings[canonical] => spelling
+    spelling -> appendResolvedDisplayOverride(bytes)
+        -> if { Result<Unit, TypeUniverseCaptureError>.Ok -> return }
+    spelling -> appendTypeText(bytes)
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}
+
+appendResolvedDisplayOverride spelling: Text, bytes: mut [UInt8; ~] -> Bool {
     names.builtinDisplayOverrides() => table
     UIntSize(0) => start!
     UIntSize(0) => cursor!
@@ -32,18 +39,27 @@ appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, Typ
                 equal! < cursor! and (table -> slice(start!, equal! - start!)) == spelling
                     -> if {
                         table -> slice(equal! + 1, cursor! - equal! - 1) -> appendTypeText(bytes)
-                        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+                        true -> return
                     }
                 cursor! + 1 => start!
             }
         cursor! + 1 => cursor!
     }
-    spelling -> appendTypeText(bytes)
-    Result<Unit, TypeUniverseCaptureError>.Ok
+    false
 }
 
-appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~], signatureIds: ref [Int; ~] -> Result<Unit, TypeUniverseCaptureError> {
     semantic.types[typeId] => type
+    type.kind == 1 and type.origin == 3 -> if {
+        (signatureIds -> len) != (semantic.types -> len)
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        signatureIds[typeId] - 512 => role
+        role < 0 or role > 2 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        ["GenericParameter", "SecondaryGenericParameter", "TertiaryGenericParameter"] => roles
+        not (roles[role] -> appendResolvedDisplayOverride(bytes))
+            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart) -> return }
+        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+    }
     type.kind == 1 or type.kind == 9 -> if {
         type.origin == 1 -> if { type.symbol -> appendResolvedBuiltinName(bytes) -> return }
         type.module < 0 or type.module >= (package.ranges -> len) or type.module >= (context.identities -> len)
@@ -102,7 +118,7 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
                 context -> typeTokenText(package, source!, label!) -> appendTypeText(bytes)
                 ": " -> appendTypeText(bytes)
             }
-            context -> appendResolvedTypeName(package, semantic, fieldType!, visiting, bytes) -> when {
+            context -> appendResolvedTypeName(package, semantic, fieldType!, visiting, bytes, signatureIds) -> when {
                 Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                 Ok {}
             }
@@ -123,13 +139,13 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
         type.origin != 4 or type.symbol < 0 or type.symbol >= (prefixes -> len)
             -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         prefixes[type.symbol] -> appendTypeText(bytes)
-        context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes) -> when {
+        context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes, signatureIds) -> when {
             Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
             Ok {}
         }
         type.symbol == 1 -> if {
             ", " -> appendTypeText(bytes)
-            context -> appendResolvedTypeName(package, semantic, type.second, visiting, bytes) -> when {
+            context -> appendResolvedTypeName(package, semantic, type.second, visiting, bytes, signatureIds) -> when {
                 Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                 Ok {}
             }
@@ -139,19 +155,19 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
     }
     type.kind == 6 or type.kind == 8 -> if {
         type.kind == 6 -> if { "box " } else { "ref " } -> appendTypeText(bytes)
-        context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes) -> return
+        context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes, signatureIds) -> return
     }
     type.kind == 2 or type.kind == 3 or type.kind == 4 or type.kind == 12 or type.kind == 5 or type.kind == 13
         -> if {
             type.kind == 5 or type.kind == 13 => dictionary
             dictionary -> if { "{" } else { "[" } -> appendTypeText(bytes)
-            context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes) -> when {
+            context -> appendResolvedTypeName(package, semantic, type.first, visiting, bytes, signatureIds) -> when {
                 Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                 Ok {}
             }
             dictionary -> if {
                 ": " -> appendTypeText(bytes)
-                context -> appendResolvedTypeName(package, semantic, type.second, visiting, bytes) -> when {
+                context -> appendResolvedTypeName(package, semantic, type.second, visiting, bytes, signatureIds) -> when {
                     Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                     Ok {}
                 }
@@ -169,22 +185,29 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
     Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType)
 }
 
-appendResolvedTypeName context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+appendResolvedTypeName context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~], signatureIds: ref [Int; ~] -> Result<Unit, TypeUniverseCaptureError> {
     typeId < 0 or typeId >= (semantic.types -> len)
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    visiting[typeId] or semantic.types[typeId].status != 0 or semantic.types[typeId].containsParameter
+    visiting[typeId] or semantic.types[typeId].status != 0
+        or (semantic.types[typeId].containsParameter and ((signatureIds -> len) != (semantic.types -> len) or signatureIds[typeId] < 0))
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     true => visiting[typeId]
-    context -> appendResolvedTypeNameCore(package, semantic, typeId, visiting, bytes) => result
+    context -> appendResolvedTypeNameCore(package, semantic, typeId, visiting, bytes, signatureIds) => result
     false => visiting[typeId]
     result
 }
 
 public resolvedTypeNameField context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int -> Result<Field, TypeUniverseCaptureError> {
+    [Int; ~] => signatureIds
+    context -> resolvedMetadataSignatureNameField(package, semantic, typeId, signatureIds)
+}
+
+# A nonempty signature map grants abstract-name projection only to selected identities.
+public resolvedMetadataSignatureNameField context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
     [Bool; ~] => visiting!
     semantic.types -> each _ { visiting! -> push(false) }
     [UInt8; ~] => bytes!
-    context -> appendResolvedTypeName(package, semantic, typeId, visiting!, bytes!) -> when {
+    context -> appendResolvedTypeName(package, semantic, typeId, visiting!, bytes!, signatureIds) -> when {
         Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
         Ok {}
     }

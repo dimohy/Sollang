@@ -7,15 +7,23 @@ import sollang.compiler.semantic.type_ids as typeIds
 # Registration owns selection; this adapter reads one registered storage shape.
 # Its identities are the same canonical arena coordinates used by emitted ABI.
 public appendStorageTypeUniverseRecord records: mut keys.TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], layouts: ref TypeLayouts, typeId: Int -> Result<Unit, keys.TypeUniverseCaptureError> {
+    [Int; ~] => signatureIds
+    records -> appendMetadataSignatureStorageRecord(types, layouts, typeId, signatureIds)
+}
+
+public appendMetadataSignatureStorageRecord records: mut keys.TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], layouts: ref TypeLayouts, typeId: Int, signatureIds: ref [Int; ~] -> Result<Unit, keys.TypeUniverseCaptureError> {
     typeId < 0 or typeId >= (types -> len)
         -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     (layouts.sizes -> len) != (types -> len) or (layouts.aligns -> len) != (types -> len) or (layouts.statuses -> len) != (types -> len)
         -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     types[typeId] => type
-    type.status != 0 or type.containsParameter or type.first < 0 or type.first >= (types -> len)
+    type.status != 0 or (type.containsParameter and (signatureIds -> len) != (types -> len)) or type.first < 0 or type.first >= (types -> len)
         -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     layouts.statuses[type.first] != 0
         -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    types -> keys.metadataSignatureIdentity(signatureIds, typeId) => recordIdentity
+    types -> keys.metadataSignatureIdentity(signatureIds, type.first) => elementIdentity
+    recordIdentity < 0 or elementIdentity < 0 -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     plans.KeyPart.TypeBoxes => category!
     type.kind != 6 -> if {
         type.kind == 4 -> if { plans.KeyPart.TypeStaticArrays => category! } else {
@@ -44,9 +52,9 @@ public appendStorageTypeUniverseRecord records: mut keys.TypeUniverseRecords, ty
                 part -> plans.partIndex => index
                 -1 => number!
                 index == (plans.KeyPart.TypeId -> plans.partIndex)
-                    -> if { typeId => number! }
+                    -> if { recordIdentity => number! }
                 index == (plans.KeyPart.TypeElement -> plans.partIndex)
-                    -> if { type.first => number! }
+                    -> if { elementIdentity => number! }
                 index == (plans.KeyPart.TypeSize -> plans.partIndex)
                     -> if { element.size => number! }
                 index == (plans.KeyPart.TypeAlignment -> plans.partIndex)
@@ -54,9 +62,9 @@ public appendStorageTypeUniverseRecord records: mut keys.TypeUniverseRecords, ty
                 index == (plans.KeyPart.TypeLength -> plans.partIndex) and type.kind == 4
                     -> if { type.length => number! }
                 index == (plans.KeyPart.TypeKey -> plans.partIndex)
-                    -> if { type.first => number! }
+                    -> if { elementIdentity => number! }
                 index == (plans.KeyPart.TypeValue -> plans.partIndex)
-                    -> if { type.second => number! }
+                    -> if { types -> keys.metadataSignatureIdentity(signatureIds, type.second) => number! }
                 index == (plans.KeyPart.TypeKeySize -> plans.partIndex)
                     -> if { element.size => number! }
                 index == (plans.KeyPart.TypeKeyAlignment -> plans.partIndex)
@@ -73,7 +81,7 @@ public appendStorageTypeUniverseRecord records: mut keys.TypeUniverseRecords, ty
                 number! -> keys.integerLayoutField => field
                 bindings! -> push(keys.Binding { part: part, fields: [field,; ~] })
             }
-            records -> keys.appendTypeUniverseRecord(category!, typeId, -1, bindings!) -> when {
+            records -> keys.appendTypeUniverseRecord(category!, recordIdentity, -1, bindings!) -> when {
                 Err(error) { Result<Unit, keys.TypeUniverseCaptureError>.Err(error -> keys.captureRecordError) -> return }
                 Ok {}
             }

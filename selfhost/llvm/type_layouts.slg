@@ -2,6 +2,7 @@ namespace sollang.compiler.llvm.text
 
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.llvm.emitter.layout_arithmetic as layoutArithmetic
+import sollang.compiler.semantic.function_type_binding_policy as signaturePolicy
 
 public struct TypeLayoutRequest {
     public types: [typeIds.SemanticType; ~]
@@ -91,7 +92,12 @@ public boundedArrayStorageLayout elementSize: Int, elementAlign: Int, capacity: 
 # Computes target-aware storage facts from canonical recursive identity. Nominal
 # layouts are a fixed point over owner-to-field edges, so declaration order does
 # not affect nested structs and box indirection terminates recursive layouts.
-public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
+public layoutsFor request: TypeLayoutRequest -> TypeLayouts => request -> layoutsForScope(false)
+
+# Abstract signature facts are metadata, never concrete runtime admission.
+public metadataSignatureLayoutsFor request: TypeLayoutRequest -> TypeLayouts => request -> layoutsForScope(true)
+
+layoutsForScope request: TypeLayoutRequest, metadataSignatures: Bool -> TypeLayouts {
     request.pointerBitWidth / 8 => pointerSize
     [Int; ~] => sizes!
     [Int; ~] => aligns!
@@ -107,6 +113,11 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                 -> if { 1 => status! } else { 2 => status! }
         } else {
             current.kind == 1 -> if {
+                metadataSignatures and current.origin == 3 -> if {
+                    Int(signaturePolicy.genericParameterInlineSize()) => size!
+                    size! < 8 -> if { size! } else { 8 } => align!
+                    0 => status!
+                }
                 current.origin == 16 -> if {
                     2 * pointerSize => size!
                     pointerSize => align!

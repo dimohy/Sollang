@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.scoped_declarations as scopedDeclarations
+import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
 
 import sollang.compiler.semantic.storage_placement_package as storagePackage
 import sollang.compiler.semantic.type_registration as typeRegistration
@@ -637,6 +638,14 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
             }
         }
     } => completeTypeRegistry
+    prepared -> signatureIds.registerMetadataSignatures -> when {
+        Err(error) { Result<[Int; ~], signatureIds.Error>.Err(error) }
+        Ok(registered) {
+            registered.ids => ids!
+            (ids! -> len) < (semanticTypes! -> len) -> while { ids! -> push(-1) }
+            Result<[Int; ~], signatureIds.Error>.Ok(ids!)
+        }
+    } => metadataSignatureIds
     prepared.package -> scopedDeclarations.prepare(prepared.modules) => symbolNames
     prepared -> scopedDeclarations.prepareGenericSpecializations(semanticTypes!, signatureTypeReferences!, semanticFields!, ir!, genericCallPlans, genericBodies) => genericNames
     emitterContext.EmitContext {
@@ -644,6 +653,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
         genericNames: genericNames
         storagePlacement: storagePlacement
         typeRegistration: completeTypeRegistry
+        metadataSignatureIds: metadataSignatureIds
         globalFunctionAliasDiagnostic: calls.noGlobalFunctionAliasDiagnostic()
         initializerDiagnostics: [emitterContext.InitializerDiagnostic; ~]
         missingEnumVariants: missingEnumVariants

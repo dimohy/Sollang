@@ -1,0 +1,183 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.reference_prepared_type_ids as reference
+import sollang.compiler.semantic.function_type_binding_policy as policy
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.semantic.type_ids as semanticTypes
+import sollang.compiler.semantic.modules as moduleNames
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+reportDependency typeId: Int, prepared: ref semanticContext.SemanticSnapshot, names: mut keys.TypeFieldContext -> Unit uses Console, File, Process {
+    typeId >= 0 and not prepared.semantic.types[typeId].containsParameter
+        -> if {
+            names -> keys.resolvedTypeNameField(prepared.package, prepared.semantic, typeId) -> when {
+                Err(_) { process.exit(14) }
+                Ok(field) {
+                    field.bytes -> file.borrowBytes => bytes
+                    bytes -> slice(0, bytes -> len) => name
+                    "dependency:$typeId:$name" -> println
+                }
+            }
+        }
+}
+
+verifyBindingDecision actual: Bool, expected: Bool, code: Int -> Unit uses Process {
+    actual and not expected or not actual and expected
+        -> if { process.exit(code) }
+}
+
+inspect: -> Unit uses Console, File, Process {
+    0 => decisions!
+    [false, true] -> each first {
+        [false, true] -> each second {
+            [false, true] -> each third {
+                policy.bindReturnTypeEagerly(first, second, third) -> verifyBindingDecision(not first or second and not third, 1)
+                policy.bindOwnershipTypeEagerly(first, second, third) -> verifyBindingDecision(first and not second and third, 2)
+                decisions! + 2 => decisions!
+            }
+        }
+        policy.bindCallbackResultEagerly(first) -> verifyBindingDecision(first, 3)
+        decisions! + 1 => decisions!
+    }
+    "decisions:$(decisions!)" -> println
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
+    [file.SourceText; ~] => owners!
+    paths -> each current { current -> pathText -> file.mapText => owner
+        owners! -> push(owner) }
+    arguments[2] -> file.mapText => fixture
+    owners! -> push(fixture)
+    [Text; ~] => sources!
+    owners! -> each owner { owner -> slice(0, owner -> len) => source
+        sources! -> push(source) }
+    sources! -> semanticContext.prepare => prepared
+    prepared -> reference.registerMetadataSignatures -> when {
+        Err(error) {
+            error -> when {
+                Nominal(_) { "error:nominal" -> println }
+                Synthetic(value) {
+                    value -> when {
+                        InvalidType { "error:invalid-type" -> println }
+                        InvalidShape { "error:invalid-shape" -> println }
+                        Cycle { "error:cycle" -> println }
+                        TypeIdOverflow { "error:overflow" -> println }
+                    }
+                }
+                InvalidSource { "error:source" -> println }
+            }
+            process.exit(4) -> return
+        }
+        Ok(value) { value }
+    } => identities
+    [semanticTypes.SemanticType; ~] => layoutTypes!
+    prepared.semantic.types -> each type { layoutTypes! -> push(type) }
+    [semanticTypes.NominalField; ~] => layoutFields!
+    prepared.semantic.fields -> each field { layoutFields! -> push(field) }
+    llvm.TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: 64 } -> llvm.metadataSignatureLayoutsFor => layouts!
+    [Int; ~] => referenceByAst!
+    prepared.package.nodes -> each _ { referenceByAst! -> push(-1) }
+    prepared.semantic.references -> each typeReference {
+        typeReference.typeAst >= 0 -> if {
+            typeReference.typeId => referenceByAst![prepared.package.ranges[typeReference.sourceModule].astStart + typeReference.typeAst]
+        }
+    }
+    [Int; ~] => traits!
+    prepared.semantic.types -> each _ { traits! -> push(0) }
+    prepared.semantic.types -> llvm.refineDeclaredTypeLayouts(prepared.semantic.fields, prepared.semantic.references, prepared.package.ranges, prepared.package.symbols, prepared.package.nodes, referenceByAst!, layouts!.sizes, layouts!.aligns, layouts!.statuses, traits!)
+    [moduleNames.ModuleIdentity; ~] => modules!
+    prepared.modules -> each module { modules! -> push(module) }
+    [moduleNames.ImportEdge; ~] => imports!
+    prepared.imports -> each edge { imports! -> push(edge) }
+    keys.TypeFieldContext { identities: modules!, imports: imports!, sourceModule: 0, ownerSymbol: -1 } => names!
+    keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
+    [Int; ~] => seen!
+    0 => typeId!
+    prepared.semantic.types -> each type {
+        identities.ids[typeId!] => identity
+        type.containsParameter and identity >= 0
+            and (type.kind == 3 or type.kind == 10 or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1)))
+            -> if {
+                false => duplicate!
+                seen! -> each previous { previous == identity -> if { true => duplicate! } }
+                not duplicate! -> if {
+                    seen! -> push(identity)
+                    type.kind == 10 -> if {
+                        prepared.semantic.fields -> each field {
+                            field.ownerType == typeId! -> if { field.fieldType -> reportDependency(prepared, names!) }
+                        }
+                    } else {
+                        type.first -> reportDependency(prepared, names!)
+                        type.second -> reportDependency(prepared, names!)
+                    }
+                    layouts!.statuses[typeId!] != 0 -> if { process.exit(8) -> return }
+                    type.kind == 3 -> if {
+                        records! -> llvm.appendMetadataSignatureStorageRecord(prepared.semantic.types, layouts!, typeId!, identities.ids) -> when {
+                            Err(_) { process.exit(12) -> return }
+                            Ok {}
+                        }
+                    } else {
+                        records! -> keys.appendMetadataSignatureTypeUniverseRecord(names!, prepared.package, prepared.semantic, typeId!, layouts!.sizes, layouts!.statuses, identities.ids) -> when {
+                            Err(_) { process.exit(13) -> return }
+                            Ok {}
+                        }
+                    }
+                    names! -> keys.resolvedTypeNameField(prepared.package, prepared.semantic, typeId!) -> when {
+                        Err(_) {}
+                        Ok(_) { process.exit(11) -> return }
+                    }
+                    names! -> keys.resolvedMetadataSignatureNameField(prepared.package, prepared.semantic, typeId!, identities.ids) -> when {
+                        Err(_) { process.exit(9) -> return }
+                        Ok(field) {
+                            field.bytes -> file.borrowBytes => bytes
+                            bytes -> slice(0, bytes -> len) => name
+                            type.kind == 3 -> if { layouts!.sizes[type.first] } else { layouts!.sizes[typeId!] } => size
+                            type.kind == 3 -> if { layouts!.aligns[type.first] } else { layouts!.aligns[typeId!] } => align
+                            "metadata:$(type.kind):$size:$align:$name" -> println
+                        }
+                    }
+                    type.first >= 0 -> if { identities.ids[type.first] } else { -1 } => first
+                    type.second >= 0 -> if { identities.ids[type.second] } else { -1 } => second
+                    "abstract:$identity:$(type.kind):$(type.symbol):$first:$second:$(type.length)" -> println
+                }
+            }
+        typeId! + 1 => typeId!
+    }
+    "abstract-count:$(seen! -> len)" -> println
+    0 => diagnosticType!
+    prepared.semantic.types -> each type {
+        type.status == 0 and not type.containsParameter
+            -> if {
+                names! -> keys.resolvedTypeNameField(prepared.package, prepared.semantic, diagnosticType!) -> when {
+                    Ok(_) {}
+                    Err(_) {
+                        "unprojected:$(diagnosticType!):$(type.kind):$(type.origin):$(type.first):$(type.second):$(type.length)" -> println
+                    }
+                }
+            }
+        diagnosticType! + 1 => diagnosticType!
+    }
+    records!.fields -> each field {
+        field.bytes -> file.borrowBytes => bytes
+        bytes -> slice(0, bytes -> len) => text
+        "record:$text" -> println
+    }
+    0 => sourceType!
+    [false, false, false] => reportedRoles!
+    prepared.semantic.types -> each type {
+        type.kind == 1 and type.origin == 3 and identities.ids[sourceType!] >= 512 and identities.ids[sourceType!] <= 514
+            -> if {
+                identities.ids[sourceType!] - 512 => role
+                not reportedRoles![role] -> if {
+                    true => reportedRoles![role]
+                    prepared.semantic.types -> keys.metadataSignatureIdentity(identities.ids, sourceType!) => alias
+                    "generic:$(identities.ids[sourceType!]):$alias" -> println
+                }
+            }
+        sourceType! + 1 => sourceType!
+    }
+}
+main { inspect() }

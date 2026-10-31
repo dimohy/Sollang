@@ -5,8 +5,45 @@ import sollang.compiler.llvm.codegen_cache_keys as keys
 import sollang.compiler.llvm.codegen_cache_key_policy as plans
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_registration as typeRegistration
 import sollang.compiler.semantic.type_fact_concreteness as concreteness
 import sys.file as file
+
+capturePreparedRegistryRecords context: ref emitterContext.EmitContext, names: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, seeds: ref typeRegistration.RegisteredTypeSeeds -> Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError> {
+    context.metadataSignatureIds -> when {
+        Err(_) { Result<keys.TypeUniverseRecords, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) }
+        Ok(signatureIds) { names -> captureCompilationTypeUniverseWithSignatures(package, semantic, layouts, seeds, signatureIds) }
+    }
+}
+
+reportSignatureRoleNames context: ref emitterContext.EmitContext, names: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet -> Unit uses Console {
+    context.metadataSignatureIds -> when {
+        Err(_) {}
+        Ok(signatureIds) {
+            [false, false, false] => seen!
+            0 => source!
+            semantic.types -> each type {
+                type.kind == 1 and type.origin == 3 and signatureIds[source!] >= 512 and signatureIds[source!] <= 514
+                    -> if {
+                        signatureIds[source!] - 512 => role
+                        not seen![role] -> if {
+                            true => seen![role]
+                            names -> keys.resolvedMetadataSignatureNameField(package, semantic, source!, signatureIds) -> when {
+                                Err(_) { "name-error:$(source!)" -> println }
+                                Ok(field) {
+                                    field.bytes -> file.borrowBytes => bytes
+                                    bytes -> slice(0, bytes -> len) => text
+                                    semantic.types -> keys.metadataSignatureIdentity(signatureIds, source!) => identity
+                                    "name:$identity:$text" -> println
+                                }
+                            }
+                        }
+                    }
+                source! + 1 => source!
+            }
+        }
+    }
+}
 
 inspectPreparedUniverseContext context: ref emitterContext.EmitContext, package: ref analysis.PackageAnalysis -> Int uses Console {
     context -> preparationIntegrityDiagnosticCount > 0
@@ -23,7 +60,7 @@ inspectPreparedUniverseContext context: ref emitterContext.EmitContext, package:
     context.typeRegistration -> when {
         Err(_) { 2 -> return }
         Ok(seeds) {
-            names! -> captureCompilationTypeUniverse(package, semantic, layouts, seeds) -> when {
+            context -> capturePreparedRegistryRecords(names!, package, semantic, layouts, seeds) -> when {
                 Err(_) {
                     seeds.used -> each identity {
                         semantic.types[identity] => descriptor!
@@ -41,7 +78,10 @@ inspectPreparedUniverseContext context: ref emitterContext.EmitContext, package:
                     3 -> return
                 }
                 Ok(records) {
-                    "universe:$(seeds.used -> len)" -> println
+                    0 => definitionCount!
+                    records.memberOrdinals -> each ordinal { ordinal < 0 -> if { definitionCount! + 1 => definitionCount! } }
+                    "universe:$(definitionCount!)" -> println
+                    context -> reportSignatureRoleNames(names!, package, semantic)
                     seeds.declarations -> each declaration {
                         semantic.types[declaration.typeId] => runtime
                         runtime.kind == 1 and runtime.origin == 1 -> if {

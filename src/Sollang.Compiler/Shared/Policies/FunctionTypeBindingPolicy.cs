@@ -7,6 +7,8 @@ namespace Sollang.Compiler.Shared;
 #endif
 internal static class FunctionTypeBindingPolicy
 {
+    public static ulong GenericParameterInlineSize() => 8UL;
+
     public static string ParallelRoleNames() =>
         "sys.runtime.parallel|sys.runtime.tryParallel";
 

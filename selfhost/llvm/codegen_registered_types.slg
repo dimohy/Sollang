@@ -16,16 +16,42 @@ public captureRecordError error: TypeUniverseError -> TypeUniverseCaptureError =
 # Read the committed semantic arena. Coordinates remain the current compiler's
 # ABI identities; source-local ordinals and compatibility diagnostic IDs cannot
 # replace either the reference identity or its registered element identity.
+# Signature records use an identity space beyond concrete arena coordinates.
+# Generic role aliases are shared across declarations; concrete identities stay intact.
+public metadataSignatureIdentity types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], typeId: Int -> Int {
+    typeId < 0 -> if { -1 -> return }
+    typeId >= (types -> len) -> if { -2 -> return }
+    not types[typeId].containsParameter -> if { typeId -> return }
+    (signatureIds -> len) != (types -> len) or signatureIds[typeId] < 0
+        -> if { -2 -> return }
+    signatureIds[typeId] => signature
+    types[typeId].kind == 1 and types[typeId].origin == 3
+        -> if {
+            signature < 512 or signature > 514 -> if { -2 -> return }
+            (types -> len) + signature - 512 -> return
+        }
+    signature < 1024 -> if { -2 -> return }
+    (types -> len) + 3 + signature
+}
+
 public appendReferenceTypeUniverseRecord records: mut TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], typeId: Int -> Result<Unit, TypeUniverseCaptureError> {
+    [Int; ~] => signatureIds
+    records -> appendMetadataSignatureReferenceRecord(types, typeId, signatureIds)
+}
+
+public appendMetadataSignatureReferenceRecord records: mut TypeUniverseRecords, types: ref [typeIds.SemanticType; ~], typeId: Int, signatureIds: ref [Int; ~] -> Result<Unit, TypeUniverseCaptureError> {
     typeId < 0 or typeId >= (types -> len) -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     types[typeId] => type
-    type.kind != 8 or type.status != 0 or type.containsParameter or type.first < 0 or type.first >= (types -> len)
+    type.kind != 8 or type.status != 0 or (type.containsParameter and (signatureIds -> len) != (types -> len)) or type.first < 0 or type.first >= (types -> len)
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     types[type.first].status != 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    typeId -> integerLayoutField => identity
-    type.first -> integerLayoutField => element
+    types -> metadataSignatureIdentity(signatureIds, typeId) => recordIdentity
+    types -> metadataSignatureIdentity(signatureIds, type.first) => elementIdentity
+    recordIdentity < 0 or elementIdentity < 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    recordIdentity -> integerLayoutField => identity
+    elementIdentity -> integerLayoutField => element
     [Binding { part: plans.KeyPart.TypeId, fields: [identity,; ~] }, Binding { part: plans.KeyPart.TypeElement, fields: [element,; ~] }; ~] => bindings
-    records -> appendTypeUniverseRecord(plans.KeyPart.TypeReferences, typeId, -1, bindings) -> when {
+    records -> appendTypeUniverseRecord(plans.KeyPart.TypeReferences, recordIdentity, -1, bindings) -> when {
         Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.Record(error)) -> return }
         Ok {}
     }

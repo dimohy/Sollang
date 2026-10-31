@@ -6250,6 +6250,12 @@ Current backend:
   names. Generated SLG consumes those decisions. Abstract metadata signature
   identities retain generic parameter roles separately from concrete runtime
   types; selecting such identities does not supply metadata names or layouts.
+  The metadata provider projects selected abstract signatures through the same
+  display-name rules and aggregate layout refinement as concrete declarations.
+  Generic role sizes come from the compiled binding policy. Abstract descriptors
+  and shared role aliases occupy a separate identity space beyond the runtime
+  arena; their field and payload identities remain linked to the actual types.
+  They contribute metadata without making an open type a concrete runtime value.
   Parser builtin type-name classification uses one compiled C# catalog shared
   with parser source generation and the generated SLG policy. This classification
   preserves parser spelling and qualification decisions; it is distinct from
