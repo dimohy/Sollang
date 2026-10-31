@@ -2345,7 +2345,8 @@ internal sealed partial class SemanticCompiler
         {
             var root = SplitBorrowPlace(origin)[0];
             if (returnOuterBindings.TryGetValue(root, out var outerType)
-                && !(_currentMoveInputNames.Contains(root) && _types.ContainsOwnedStorage(outerType)))
+                && (!(_currentMoveInputNames.Contains(root) && _types.ContainsOwnedStorage(outerType))
+                    || TextPayloadSurvivesMovedOwner(origin, outerType)))
             {
                 continue;
             }
@@ -2354,6 +2355,77 @@ internal sealed partial class SemanticCompiler
                 value.Column,
                 $"borrowed origin '{origin}' cannot escape function '{_currentFunctionName}' through its return value");
         }
+    }
+
+    private bool TextPayloadSurvivesMovedOwner(string origin, BoundType ownerType)
+    {
+        var type = ownerType;
+        foreach (var projection in SplitBorrowPlace(origin).Skip(1))
+        {
+            if (_types.IsReference(type))
+                type = _types.GetReference(type).ElementType;
+            if (projection.StartsWith('.') && _types.IsStruct(type))
+            {
+                var field = _types.GetStruct(type).Fields.FirstOrDefault(field =>
+                    StringComparer.Ordinal.Equals(field.Name, projection[1..]));
+                if (field is null) return false;
+                type = field.Type;
+            }
+            else if (projection.StartsWith('[') && TryGetContextualArrayElementType(type, out var element))
+                type = element;
+            else if (projection.StartsWith('[') && _types.IsDictionary(type))
+                type = _types.IsBoundedDictionary(type)
+                    ? _types.GetBoundedDictionary(type).ValueType
+                    : _types.GetDictionary(type).ValueType;
+            else if (projection.StartsWith('[') && _types.IsEnum(type))
+            {
+                var variant = _types.GetEnum(type).Variants.FirstOrDefault(variant =>
+                    StringComparer.Ordinal.Equals(variant.Name, projection[1..^1]));
+                if (variant?.PayloadType is not { } payload) return false;
+                type = payload;
+            }
+            else
+                return false;
+        }
+        // Text elements store spans, not their backing bytes. Moving/dropping
+        // their carrier must retain the caller's upstream payload loan instead
+        // of turning the carrier's descriptor allocation into the byte owner.
+        return TypeContains(type, BoundType.Text)
+            && HasOnlyExternalTextPayloads(type, []);
+    }
+
+    private bool HasOnlyExternalTextPayloads(BoundType type, HashSet<BoundType> visiting)
+    {
+        if (type == BoundType.Text || _types.IsReference(type)) return true;
+        if (type is BoundType.SourceText or BoundType.Arena or BoundType.MappedBytes or BoundType.MutableMappedBytes)
+            return false;
+        if (!visiting.Add(type)) return true;
+        try
+        {
+            if (TryGetContextualArrayElementType(type, out var element))
+                return element != BoundType.UInt8 && HasOnlyExternalTextPayloads(element, visiting);
+            if (_types.IsDictionary(type))
+            {
+                var (key, value) = _types.IsBoundedDictionary(type)
+                    ? (_types.GetBoundedDictionary(type).KeyType, _types.GetBoundedDictionary(type).ValueType)
+                    : (_types.GetDictionary(type).KeyType, _types.GetDictionary(type).ValueType);
+                return HasOnlyExternalTextPayloads(key, visiting)
+                    && HasOnlyExternalTextPayloads(value, visiting);
+            }
+            if (_types.IsBox(type))
+                return HasOnlyExternalTextPayloads(_types.GetBox(type).ElementType, visiting);
+            if (_types.IsStruct(type))
+            {
+                var structure = _types.GetStruct(type);
+                return structure.NativeHandle is null && structure.ComInterface is null
+                    && structure.Fields.All(field => HasOnlyExternalTextPayloads(field.Type, visiting));
+            }
+            if (_types.IsEnum(type))
+                return _types.GetEnum(type).Variants.All(variant =>
+                    variant.PayloadType is not { } payload || HasOnlyExternalTextPayloads(payload, visiting));
+            return !_types.ContainsOwnedStorage(type);
+        }
+        finally { visiting.Remove(type); }
     }
 
     private static List<BoundType> FunctionParameterTypes(BoundFunction function)

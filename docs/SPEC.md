@@ -4171,6 +4171,12 @@ Container rules:
   through a `Text`-containing function parameter transfers its existing origin
   union without treating an aggregate made only from static or owned `Text` as
   borrowed. Field and index projections inherit the aggregate's origins.
+  An owned carrier of `Text` spans owns its descriptors, not the referenced
+  UTF-8 bytes. Returning an externally backed `Text` payload may outlive a
+  moved carrier's descriptor storage; the caller retains the payload's upstream
+  loans. This does not permit a view of a consumed byte buffer, `SourceText`,
+  mapped storage or `Arena` to escape. Return checking resolves the selected
+  field/index place rather than treating every owned sibling as the byte owner.
   Moving, replacing, or mutating any origin while a derived value is live is a
   compile-time error. A call checks the exact consumed argument place for each
   `move` parameter, including additional parameters; moving an unrelated
