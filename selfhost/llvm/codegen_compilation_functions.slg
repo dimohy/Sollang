@@ -1,0 +1,112 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.codegen_ir_specializations as specializations
+import sollang.compiler.llvm.codegen_type_registration as typeRegistration
+
+public struct CompilationFunction {
+    public sourceModule: Int
+    public ownerSymbol: Int
+    public name: Field
+    public identity: Field
+    public isSpecialization: Bool
+}
+
+public struct FunctionCaptureFailure {
+    public sourceModule: Int
+    public ownerSymbol: Int
+    public stage: Int
+}
+
+public struct CompilationFunctions {
+    public functions: [CompilationFunction; ~]
+    public failures: [FunctionCaptureFailure; ~]
+}
+
+userFunction prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, symbol: Int -> Bool {
+    prepared.package.symbols[prepared.package.ranges[sourceModule].symbolStart + symbol] => function
+    (function.kind == 7 or function.kind == 31) and function.flags / 128 % 2 == 0
+        and function.blockTypeNode < 0 and function.blockResultTypeNode < 0
+}
+
+appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding, functions: mut [CompilationFunction; ~], failures: mut [FunctionCaptureFailure; ~] -> Unit {
+    binding.active -> if { context -> captureBoundFunctionIdentity(prepared, semantic, signatureIds, binding) } else {
+        context -> captureExplicitFunctionIdentity(prepared, signatureIds)
+    } -> when {
+        Err(_) { failures -> push(FunctionCaptureFailure { sourceModule: context.sourceModule, ownerSymbol: context.ownerSymbol, stage: 1 }) }
+        Ok(identity) {
+            context -> functionBindingName(prepared, binding) -> when {
+                Err(_) { failures -> push(FunctionCaptureFailure { sourceModule: context.sourceModule, ownerSymbol: context.ownerSymbol, stage: 2 }) }
+                Ok(name) {
+                    false => duplicate!
+                    functions -> each prior {
+                        prior.sourceModule == context.sourceModule and prior.ownerSymbol == context.ownerSymbol
+                            and (prior.identity -> compareFieldText(identity)) == 0
+                            -> if { true => duplicate! }
+                    }
+                    not duplicate! -> if {
+                        functions -> push(CompilationFunction { sourceModule: context.sourceModule, ownerSymbol: context.ownerSymbol, name: name, identity: identity, isSpecialization: (binding.arguments -> len) > 0 or binding.valueArgument >= 0 })
+                    }
+                }
+            }
+        }
+    }
+}
+
+# The C# emission inventory enumerates source functions and local descendants,
+# then selects BoundFunctionKind.User. Native ABI and block declarations do not
+# contribute emissions. Capture failures must reject request construction.
+public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: mut typeIds.SemanticTypeSet, ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], registeredIds: ref [Int; ~], signatureIds: ref [Int; ~] -> CompilationFunctions {
+    [Int; ~] => functionNodes!
+    prepared.package.symbols -> each symbol { functionNodes! -> push(-1) }
+    0..<(ir -> len) -> each index {
+        ir[index] => node
+        node.kind == 0 and node.sourceModule >= 0 and node.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[node.sourceModule] => range
+                node.symbol >= 0 and node.symbol < range.symbolCount
+                    -> if { index => functionNodes![range.symbolStart + node.symbol] }
+            }
+    }
+    prepared -> typeRegistration.genericBodyMask => genericByAst
+    [CompilationFunction; ~] => functions!
+    [FunctionCaptureFailure; ~] => failures!
+    0..<(prepared.package.ranges -> len) -> each sourceModule {
+        prepared.package.ranges[sourceModule] => range
+        sourceModule => context.sourceModule
+        0..<range.symbolCount -> each symbol {
+            prepared -> userFunction(sourceModule, symbol)
+                -> if {
+                    symbol => context.ownerSymbol
+                    prepared.package.symbols[range.symbolStart + symbol] => function
+                    genericByAst[range.astStart + function.astNode]
+                        -> if {
+                            Result<FunctionBinding, TypeUniverseCaptureError>.Ok(unboundFunction())
+                        } else { ir -> specializations.captureFunctionBinding(semantic.types, functionNodes![range.symbolStart + symbol]) } -> when {
+                            Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: sourceModule, ownerSymbol: symbol, stage: 0 }) }
+                            Ok(binding) { context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, functions!, failures!) }
+                        }
+                }
+        }
+    }
+    plans -> each plan {
+        plan.templateNode >= 0 and plan.templateNode < (ir -> len) and plan.callNode >= 0 and plan.callNode < (ir -> len)
+            -> if {
+                ir[plan.templateNode] => function
+                ir[plan.callNode] => call
+                function.sourceModule >= 0 and function.symbol >= 0 and (prepared -> userFunction(function.sourceModule, function.symbol))
+                    and not (prepared -> typeRegistration.inGenericBody(genericByAst, call.sourceModule, call.astNode))
+                    -> if {
+                        function.sourceModule => context.sourceModule
+                        function.symbol => context.ownerSymbol
+                        prepared -> specializations.capture(ir, semantic.types, plan, registeredIds) -> when {
+                            Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 3 }) }
+                            Ok(binding) { context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, functions!, failures!) }
+                        }
+                    }
+            }
+    }
+    CompilationFunctions { functions: functions!, failures: failures! }
+}

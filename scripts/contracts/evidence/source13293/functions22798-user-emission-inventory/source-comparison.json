@@ -1,0 +1,45 @@
+{
+  "csharp": {
+    "source": "src/Sollang.Compiler/Cli/IncrementalCodegenCache.cs:BuildEmissionHashes",
+    "decisions": [
+      "Enumerate bound function dictionary values and local descendants, select BoundFunctionKind.User, group by ModuleName, sort by Name using StringComparer.Ordinal, hash full stable identities with the canonical field hash.",
+      "Global aliases refer to the same function object. Stable identity indexing deduplicates objects, whereas emission hashing preserves dictionary entry multiplicity.",
+      "SemanticStableIdentity encodes stream Unit return, stream element type and generic stream template separately.",
+      "Implementation method identities append associated names in ordinal order and resolved stable type identities."
+    ]
+  },
+  "slg": {
+    "sources": [
+      "selfhost/llvm/codegen_compilation_functions.slg",
+      "selfhost/llvm/codegen_function_emissions.slg",
+      "selfhost/llvm/codegen_stable_functions.slg",
+      "selfhost/llvm/codegen_function_context.slg",
+      "selfhost/semantic/calls.slg"
+    ],
+    "decisions": [
+      "Build one IR node index and collect User function signatures through the shared binding and stable identity encoder.",
+      "Reuse the generic-body mask so uninstantiated generic body calls are excluded.",
+      "Retain the concrete name separately for ordinal emission ordering, and share the implementation-associated symbol ordering with declaration capture.",
+      "Group logical module fields, including multiple source indices, and hash full identity bytes with existing fingerprint arithmetic.",
+      "Reuse canonicalAliasMarker from call resolution for global alias dictionary entries; specialization records do not gain a template alias entry.",
+      "Any capture failure rejects module emission construction; partial identity inventories are diagnostics only."
+    ]
+  },
+  "observedAliasDifference": {
+    "previousMismatchingModules": [
+      "sys.file",
+      "sys.io",
+      "sys.random"
+    ],
+    "rootCause": "Canonical function identities were correct, but global dictionary alias entries were not yet included in the emission field stream.",
+    "after": {
+      "completed": 100,
+      "total": 100
+    }
+  },
+  "remainingSourceForms": [
+    "Local function parent identities",
+    "Generic implementation owners and other required source shapes not covered by this fixture"
+  ],
+  "claimsProductionCacheIntegration": false
+}

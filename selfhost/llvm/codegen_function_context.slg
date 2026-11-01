@@ -23,6 +23,32 @@ struct ImplementationContextFields {
     associated: [Field; ~]
 }
 
+implementationAssociatedSymbols context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, implementationSymbol: Int -> [Int; ~] {
+    package.ranges[context.sourceModule] => range
+    [Int; ~] => members!
+    0 => index!
+    index! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + index!] => member
+        member.kind == 30 and member.parent == implementationSymbol
+            -> if {
+                members! -> len => position!
+                members! -> push(index!)
+                position! > 0 -> while {
+                    package.symbols[range.symbolStart + members![position! - 1]] => previous
+                    context -> typeTokenText(package, context.sourceModule, previous.nameToken) => previousName
+                    context -> typeTokenText(package, context.sourceModule, member.nameToken) => name
+                    units.compareIdentityText(previousName, name) <= 0
+                        -> if { break }
+                    members![position! - 1] => members![position!]
+                    position! - 1 => position!
+                }
+                index! => members![position!]
+            }
+        index! + 1 => index!
+    }
+    members!
+}
+
 implementationContextFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, implementationSymbol: Int -> Result<ImplementationContextFields, DeclarationFieldError> {
     package.ranges[context.sourceModule] => range
     package.symbols[range.symbolStart + implementationSymbol] => implementation
@@ -55,30 +81,10 @@ implementationContextFields context: ref TypeFieldContext, package: ref analysis
     trait! -> if { context -> typeTokenField(package, second!) } else { context -> typeTokenField(package, first!) } -> when {
         Err(_) { Result<ImplementationContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
         Ok(owner) {
-            [Int; ~] => members!
-            0 => index!
-            index! < range.symbolCount -> while {
-                package.symbols[range.symbolStart + index!] => member
-                member.kind == 30 and member.parent == implementationSymbol
-                    -> if {
-                        members! -> len => position!
-                        members! -> push(index!)
-                        position! > 0 -> while {
-                            package.symbols[range.symbolStart + members![position! - 1]] => previous
-                            context -> typeTokenText(package, context.sourceModule, previous.nameToken) => previousName
-                            context -> typeTokenText(package, context.sourceModule, member.nameToken) => name
-                            units.compareIdentityText(previousName, name) <= 0
-                                -> if { break }
-                            members![position! - 1] => members![position!]
-                            position! - 1 => position!
-                        }
-                        index! => members![position!]
-                    }
-                index! + 1 => index!
-            }
+            context -> implementationAssociatedSymbols(package, implementationSymbol) => members
             [Field; ~] => associated!
             plans.namedTypeFields() => rule
-            members! -> each index {
+            members -> each index {
                 rule.parts -> each part {
                     context -> sourceMemberField(package, index, part) -> when {
                         Ok(field) { associated! -> push(field) }

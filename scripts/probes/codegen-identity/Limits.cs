@@ -128,6 +128,7 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
             typeUniverseHash = (ulong)cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [types])!,
             nextAllocatedTypeId = nextAllocated,
             declarationNextTypeId,
+            emissionHashes = cacheType.GetMethod("BuildEmissionHashes", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [bound]),
             declarationFingerprint = Convert.ToHexString((byte[])Property(bound, "StableDeclarationFingerprint")!),
             implementations = Property(program, "Implementations"),
             candidateValidation = validation,

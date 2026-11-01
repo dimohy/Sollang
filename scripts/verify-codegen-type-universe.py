@@ -36,6 +36,8 @@ def main():
     parser.add_argument('--stable-registration-output', type=Path)
     parser.add_argument('--stable-body-registration-output', type=Path)
     parser.add_argument('--stable-function-module')
+    parser.add_argument('--stable-user-functions', action='store_true')
+    parser.add_argument('--stable-emission-output', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     assert not args.include_type_names or args.registered_sources, "type names require registered sources"
@@ -45,7 +47,10 @@ def main():
     assert not args.include_stable_identities or args.registered_sources, "stable identities require registered sources"
     assert not (args.include_stable_identities and (args.include_codegen_request or args.include_type_names)), "select one observation mode"
     assert not args.stable_candidate_file or args.include_stable_identities, "candidate validation requires stable identity mode"
-    assert not args.stable_function_output or (args.include_stable_identities and args.stable_function_module), 'function comparison requires stable identity mode and module'
+    assert not args.stable_function_output or (args.include_stable_identities and (args.stable_function_module or args.stable_user_functions)), 'function comparison requires stable identity mode and function scope'
+    assert not args.stable_user_functions or (args.stable_function_output and not args.stable_function_module), 'select one function comparison scope'
+    assert not (args.stable_function_output or args.stable_call_input_output) or not args.declaration_type_uses, 'function comparison requires whole-program observation'
+    assert not args.stable_emission_output or (args.include_stable_identities and not args.declaration_type_uses), 'emission comparison requires whole-program stable identities'
     assert not args.stable_function_module or (args.stable_function_output or args.stable_call_input_output), 'function module requires native output'
     assert not args.stable_call_input_output or (args.include_stable_identities and args.stable_function_module), 'call input comparison requires stable identity mode and module'
     assert not args.declaration_type_uses or (args.include_stable_identities and args.stable_candidate_file), 'declaration uses require stable identities and ordered type candidates'
@@ -81,6 +86,8 @@ def main():
         inputs.append(args.stable_registration_output)
     if args.stable_body_registration_output:
         inputs.append(args.stable_body_registration_output)
+    if args.stable_emission_output:
+        inputs.append(args.stable_emission_output)
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -166,6 +173,13 @@ def main():
                                 scope='Declaration registry followed by explicit ordered concrete type uses; whole-compilation body traversal is separate.')
                     elif args.include_stable_identities:
                         assert row['types'] and row['functions'] and all(r['identity'] for r in row['functions'])
+                        if args.stable_emission_output:
+                            lines = args.stable_emission_output.read_text(encoding='utf-8-sig').splitlines()
+                            assert not any(line.startswith(('function-capture-error:', 'function-emission-error')) for line in lines), 'NATIVE_EMISSION_CAPTURE_ERROR'
+                            entries = [line.split(':', 2) for line in lines if line.startswith('emission:')]
+                            actual = {entry[2]: int(entry[1]) for entry in entries}
+                            assert len(actual) == len(entries) and actual == row['emissionHashes'], 'MODULE_EMISSION_HASH_MISMATCH'
+                            result['emissionComparison'] = dict(completed=len(actual), total=len(row['emissionHashes']), exact=True)
                         if args.stable_body_registration_output:
                             lines = args.stable_body_registration_output.read_text(encoding='utf-8-sig').splitlines()
                             assert all(line == 'utf16:4' or line.startswith(('registered-body:', 'declaration-next:', 'unresolved-plans:', 'value-calls:', 'use:')) for line in lines), 'NATIVE_BODY_REGISTRATION_CAPTURE_ERROR'
@@ -179,11 +193,11 @@ def main():
                                 scope='All newly allocated body type identities and numeric IDs for the fixture and its loaded standard library.')
                         if args.stable_function_output:
                             native_lines = args.stable_function_output.read_text(encoding='utf-8').splitlines()
-                            assert not any(value.startswith(('function-error:', 'error:', 'specialization-error:', 'specialization-field-error:')) for value in native_lines), 'NATIVE_FUNCTION_CAPTURE_ERROR'
+                            assert not any(value.startswith(('function-error:', 'function-capture-error:', 'error:', 'specialization-error:', 'specialization-field-error:')) for value in native_lines), 'NATIVE_FUNCTION_CAPTURE_ERROR'
                             actual = [value[len('function:'):] for value in native_lines if value.startswith('function:')]
-                            expected = [entry['identity'] for entry in row['functions'] if entry['facts']['ModuleName'] == args.stable_function_module]
+                            expected = [entry['identity'] for entry in row['functions'] if (entry['facts']['Kind'] == 0 if args.stable_user_functions else entry['facts']['ModuleName'] == args.stable_function_module)]
                             assert expected and sorted(actual) == sorted(expected), 'STABLE_FUNCTION_IDENTITY_MISMATCH'
-                            result['functionComparison'] = dict(module=args.stable_function_module, completed=len(actual), total=len(expected), exact=True)
+                            result['functionComparison'] = dict(module=args.stable_function_module, scope='all-user-functions' if args.stable_user_functions else 'module', completed=len(actual), total=len(expected), exact=True)
                         if args.stable_call_input_output:
                             native_lines = args.stable_call_input_output.read_text(encoding='utf-8-sig').splitlines()
                             assert all(line == 'utf16:4' or line.startswith('argument:') for line in native_lines), 'NATIVE_CALL_INPUT_CAPTURE_ERROR'

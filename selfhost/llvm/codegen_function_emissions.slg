@@ -1,0 +1,75 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.llvm.codegen_cache_policy as arithmetic
+import sys.file as file
+
+public enum FunctionEmissionError { FunctionCapture, SourceModule }
+
+appendFunctionEmissionHash function: ref CompilationFunction, hash: UInt64, prepared: ref semanticContext.SemanticSnapshot, source: Text, moduleName: Text -> UInt64 {
+    hash -> hashBytes(function.identity.bytes) => result!
+    prepared.package.ranges[function.sourceModule] => range
+    prepared.package.symbols[range.symbolStart + function.ownerSymbol] => declaration
+    # BoundProgram.Functions retains its canonical entry and global alias.
+    # Stable identity indexing deduplicates; BuildEmissionHashes enumerates both.
+    not function.isSpecialization and declaration.kind == 7 and declaration.parent < 0
+        -> if {
+            source -> calls.canonicalAliasMarker(prepared.package.tokens[range.tokenStart + declaration.nameToken], moduleName) != -1
+                -> if {
+                    result! -> hashBytes(function.identity.bytes) => result!
+                }
+        }
+    result!
+}
+
+# The C# emission key hashes complete User identities ordered by function name.
+# Several source files may contribute to the same logical module.
+public captureFunctionEmissions context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, captured: ref CompilationFunctions -> Result<[ModuleEmission; ~], FunctionEmissionError> {
+    (captured.failures -> len) != 0 -> if { Result<[ModuleEmission; ~], FunctionEmissionError>.Err(FunctionEmissionError.FunctionCapture) -> return }
+    [Int; ~] => moduleBySource!
+    [Text; ~] => sourceViews!
+    prepared.package.sources -> each source { source -> slice(0, source -> len) => view
+        sourceViews! -> push(view) }
+    prepared.package.ranges -> each range { moduleBySource! -> push(-1) }
+    [Field; ~] => names!
+    captured.functions -> each function {
+        function.sourceModule < 0 or function.sourceModule >= (moduleBySource! -> len)
+            -> if { Result<[ModuleEmission; ~], FunctionEmissionError>.Err(FunctionEmissionError.SourceModule) -> return }
+        moduleBySource![function.sourceModule] < 0 -> if {
+            prepared.package.ranges[function.sourceModule] => range
+            sourceViews![function.sourceModule] -> logicalIdentityField(context.identities[function.sourceModule], range, prepared.package.tokens) => identity
+            -1 => selected!
+            0..<(names! -> len) -> each index { (names![index] -> compareFieldText(identity)) == 0
+                    -> if { index => selected! } }
+            selected! < 0 -> if { names! -> len => selected!
+                names! -> push(identity -> copyFunctionField) }
+            selected! => moduleBySource![function.sourceModule]
+        }
+    }
+    [ModuleEmission; ~] => emissions!
+    0..<(names! -> len) -> each module {
+        [Int; ~] => order!
+        0..<(captured.functions -> len) -> each index {
+            moduleBySource![captured.functions[index].sourceModule] == module
+                -> if {
+                    order! -> len => position!
+                    order! -> push(index)
+                    position! > 0 and (captured.functions[order![position! - 1]].name -> compareFieldText(captured.functions[index].name)) > 0
+                        -> while {
+                            order![position! - 1] => order![position!]
+                            position! - 1 => position!
+                        }
+                    index => order![position!]
+                }
+        }
+        arithmetic.envelopeChecksumSeed() => hash!
+        names![module].bytes -> file.borrowBytes => moduleBytes
+        moduleBytes -> slice(0, moduleBytes -> len) => moduleName
+        order! -> each index {
+            captured.functions[index] -> appendFunctionEmissionHash(hash!, prepared, sourceViews![captured.functions[index].sourceModule], moduleName) => hash!
+        }
+        emissions! -> push(ModuleEmission { identity: names![module] -> copyFunctionField, hash: hash! })
+    }
+    Result<[ModuleEmission; ~], FunctionEmissionError>.Ok(emissions!)
+}

@@ -6326,6 +6326,13 @@ Current backend:
   the shared specialized-value field. Missing secondary or tertiary type slots
   remain absent. Compiler-only constant parameters do not become additional
   runtime parameters; concretized additional parameters have no deferred template.
+  User stream signatures retain Unit as the return type and separately encode
+  their element type and generic stream template. Implementation method identities
+  include associated names in ordinal order and their resolved stable types.
+  Module emission fingerprints select User functions from the bound function
+  dictionary and order their identities by function name with ordinal comparison.
+  Global alias entries retain dictionary multiplicity in this field stream even
+  though stable function identity indexing records the target function once.
   Concrete type uses extend the declaration registry in semantic binding order.
   Standard library sources use ordinal UTF-16 relative-path order before binding.
   Array receiver lookup records its readonly slice owner after the receiver and
