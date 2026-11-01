@@ -14,7 +14,7 @@ public struct FunctionSpecializationRequest {
     public status: Int
 }
 
-public struct FunctionSpecialization {
+public struct FunctionBinding {
     public active: Bool
     public sourceModule: Int
     public ownerSymbol: Int
@@ -25,8 +25,8 @@ public struct FunctionSpecialization {
     public additionalTypes: [Int; ~]
 }
 
-public unspecializedFunction: -> FunctionSpecialization {
-    FunctionSpecialization { active: false, sourceModule: -1, ownerSymbol: -1, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: -1, returnType: -1, additionalTypes: [Int; ~] }
+public unboundFunction: -> FunctionBinding {
+    FunctionBinding { active: false, sourceModule: -1, ownerSymbol: -1, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: -1, returnType: -1, additionalTypes: [Int; ~] }
 }
 
 specializeIdentityType types: mut [typeIds.SemanticType; ~], plan: ref FunctionSpecializationRequest, template: Int -> Result<Int, TypeUniverseCaptureError> {
@@ -37,9 +37,9 @@ specializeIdentityType types: mut [typeIds.SemanticType; ~], plan: ref FunctionS
     Result<Int, TypeUniverseCaptureError>.Ok(resolved.root)
 }
 
-public captureFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], plan: ref FunctionSpecializationRequest, declaredIds: ref [Int; ~] -> Result<FunctionSpecialization, TypeUniverseCaptureError> {
+public captureFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], plan: ref FunctionSpecializationRequest, declaredIds: ref [Int; ~] -> Result<FunctionBinding, TypeUniverseCaptureError> {
     plan.status != 0 or plan.sourceModule < 0 or plan.sourceModule >= (prepared.package.ranges -> len) or plan.ownerSymbol < 0
-        -> if { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     prepared.package.ranges[plan.sourceModule] => range
     [Int; ~] => arguments!
     [Int; ~] => argumentIdentities!
@@ -53,12 +53,12 @@ public captureFunctionSpecialization prepared: ref semanticContext.SemanticSnaps
                     type.kind == 1 and type.origin == 3 and type.module == plan.sourceModule and type.symbol == symbol
                         -> if { typeId => parameter! }
                 }
-                parameter! < 0 -> if { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                parameter! < 0 -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
                 types -> specializeIdentityType(plan, parameter!) -> when {
-                    Err(error) { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(error) -> return }
+                    Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
                     Ok(actual) {
                         actual >= (declaredIds -> len) or declaredIds[actual] < 0
-                            -> if { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                            -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
                         arguments! -> push(actual)
                         argumentIdentities! -> push(declaredIds[actual])
                     }
@@ -66,19 +66,19 @@ public captureFunctionSpecialization prepared: ref semanticContext.SemanticSnaps
             }
     }
     (arguments! -> len) == 0 or (arguments! -> len) > 3
-        -> if { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     types -> specializeIdentityType(plan, plan.inputTemplate) -> when {
-        Err(error) { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(error) -> return }
+        Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
         Ok(value) { value }
     } => input
     [Int; ~] => additional!
     plan.additionalTemplates -> each parameter {
         types -> specializeIdentityType(plan, parameter) -> when {
-            Err(error) { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(error) -> return }
+            Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
             Ok(actual) { additional! -> push(actual) }
         }
     }
     plan.resultType < 0 or plan.resultType >= (types -> len) or types[plan.resultType].containsParameter
-        -> if { Result<FunctionSpecialization, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    Result<FunctionSpecialization, TypeUniverseCaptureError>.Ok(FunctionSpecialization { active: true, sourceModule: plan.sourceModule, ownerSymbol: plan.ownerSymbol, arguments: arguments!, argumentIdentities: argumentIdentities!, inputType: input, returnType: plan.resultType, additionalTypes: additional! })
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    Result<FunctionBinding, TypeUniverseCaptureError>.Ok(FunctionBinding { active: true, sourceModule: plan.sourceModule, ownerSymbol: plan.ownerSymbol, arguments: arguments!, argumentIdentities: argumentIdentities!, inputType: input, returnType: plan.resultType, additionalTypes: additional! })
 }

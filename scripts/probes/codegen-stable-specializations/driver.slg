@@ -27,7 +27,9 @@ inspect: -> Unit uses Console, File, Process {
     [Text; ~] => sources!
     owners! -> each owner { owner -> slice(0, owner -> len) => source
         sources! -> push(source) }
-    sources! -> semanticContext.prepare => prepared
+    sources! -> semanticContext.prepare -> expressionIds.resolveCallContext => callContext
+    callContext.prepared => prepared
+    callContext.types => resolved
     prepared -> referenceIds.registerMetadataSignatures -> when {
         Err(_) { process.exit(1) -> return }
         Ok(value) { value }
@@ -45,12 +47,32 @@ inspect: -> Unit uses Console, File, Process {
     (prepared.package.ranges -> len) - 1 => fixtureModule
     fixtureModule => context!.sourceModule
     prepared.package.ranges[fixtureModule] => fixtureRange
+    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    [typeIds.SemanticType; ~] => types!
+    resolved.types -> each type { types! -> push(type) }
+    ir -> typedIr.planGenericCalls(prepared, types!) => plans
     0..<fixtureRange.symbolCount -> each index {
         prepared.package.symbols[fixtureRange.symbolStart + index] => function
         function.kind == 7 or function.kind == 31 -> if {
             index => context!.ownerSymbol
-            context! -> keys.captureExplicitFunctionIdentity(prepared, identities.ids) -> when {
-                Err(_) { "function-error:$index" -> println }
+            false => generic!
+            0..<fixtureRange.symbolCount -> each child {
+                prepared.package.symbols[fixtureRange.symbolStart + child] => member
+                member.kind == 32 and member.parent == index -> if { true => generic! }
+            }
+            generic! -> if { context! -> keys.captureExplicitFunctionIdentity(prepared, identities.ids) } else {
+                -1 => functionNode!
+                0..<(ir -> len) -> each node {
+                    ir[node].kind == 0 and ir[node].sourceModule == fixtureModule and ir[node].symbol == index
+                        -> if { node => functionNode! }
+                }
+                ir -> specializationCapture.captureFunctionBinding(types!, functionNode!) -> when {
+                    Err(error) { Result<keys.Field, keys.TypeUniverseCaptureError>.Err(error) }
+                    Ok(binding) { context! -> keys.captureBoundFunctionIdentity(prepared, types!, identities.ids, binding) }
+                }
+            } -> when {
+                Err(_) { "function-error:$index" -> println
+                    process.exit(6) -> return }
                 Ok(field) {
                     field.bytes -> file.borrowBytes => bytes
                     bytes -> slice(0, bytes -> len) => identity
@@ -59,22 +81,19 @@ inspect: -> Unit uses Console, File, Process {
             }
         }
     }
-    prepared -> expressionIds.resolveContext => resolved
-    prepared -> typedIr.lowerResolvedContext(resolved) => ir
-    [typeIds.SemanticType; ~] => types!
-    resolved.types -> each type { types! -> push(type) }
-    ir -> typedIr.planGenericCalls(prepared, types!) => plans
     [keys.Field; ~] => captured!
     plans -> each plan {
         plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
             -> if {
                 prepared -> specializationCapture.capture(ir, types!, plan, declaredIdentities.ids) -> when {
-                    Err(_) { "specialization-error:$(plan.templateNode):$(plan.status)" -> println }
+                    Err(_) { "specialization-error:$(plan.templateNode):$(plan.status)" -> println
+                        process.exit(6) -> return }
                     Ok(facts) {
                         facts.sourceModule => context!.sourceModule
                         facts.ownerSymbol => context!.ownerSymbol
-                        context! -> keys.captureSpecializedFunctionIdentity(prepared, types!, identities.ids, facts) -> when {
-                            Err(_) { "specialization-field-error:$(plan.templateNode)" -> println }
+                        context! -> keys.captureBoundFunctionIdentity(prepared, types!, identities.ids, facts) -> when {
+                            Err(_) { "specialization-field-error:$(plan.templateNode)" -> println
+                                process.exit(6) -> return }
                             Ok(field) {
                                 false => duplicate!
                                 captured! -> each old {

@@ -6301,6 +6301,11 @@ Current backend:
   no hash-domain prefix. Ordinary explicit declarations and concrete impl methods
   derive their name, owner, resolved types, ownership and effects from current
   preparation, rather than accepting an externally supplied C# function string.
+  Resolved ordinary functions, including omitted input or return annotations,
+  consume their concrete parameter and result types from the same typed function
+  facts used by emission. Source inference markers do not replace bound types
+  in the identity. Ordinary and specialized bindings use one signature model;
+  only a specialization adds its ordered argument identities to the name.
   Concrete function specializations derive their ordered argument environment
   from the actual typed call plan. Their identity retains the template's generic
   names and type syntax while replacing bound input, return and additional

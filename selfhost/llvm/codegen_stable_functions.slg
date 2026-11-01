@@ -168,10 +168,10 @@ explicitFunctionPart context: mut TypeFieldContext, prepared: ref semanticContex
     Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType)
 }
 
-boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], inputAst: Int, specialization: ref FunctionSpecialization, part: plans.KeyPart -> Result<Field, TypeUniverseCaptureError> {
-    not specialization.active -> if { context -> explicitFunctionPart(prepared, signatureIds, inputAst, part) -> return }
+boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], inputAst: Int, binding: ref FunctionBinding, part: plans.KeyPart -> Result<Field, TypeUniverseCaptureError> {
+    not binding.active -> if { context -> explicitFunctionPart(prepared, signatureIds, inputAst, part) -> return }
     part -> plans.partIndex => selected
-    selected == (plans.KeyPart.StableName -> plans.partIndex)
+    (binding.arguments -> len) > 0 and selected == (plans.KeyPart.StableName -> plans.partIndex)
         -> if {
             context -> functionContextFields(prepared.package) -> when {
                 Err(_) { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
@@ -179,9 +179,9 @@ boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.S
                     [UInt8; ~] => bytes!
                     fields.name.bytes -> each byte { bytes! -> push(byte) }
                     bytes! -> push('$')
-                    0..<(specialization.argumentIdentities -> len) -> each index {
+                    0..<(binding.argumentIdentities -> len) -> each index {
                         index > 0 -> if { bytes! -> push('_') }
-                        "$(specialization.argumentIdentities[index])" -> appendTypeText(bytes!)
+                        "$(binding.argumentIdentities[index])" -> appendTypeText(bytes!)
                     }
                     Result<Field, TypeUniverseCaptureError>.Ok(Field { bytes: bytes! }) -> return
                 }
@@ -189,9 +189,9 @@ boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.S
         }
     -2 => type!
     selected == (plans.KeyPart.StableInput -> plans.partIndex)
-        -> if { specialization.inputType => type! }
+        -> if { binding.inputType => type! }
     selected == (plans.KeyPart.StableReturn -> plans.partIndex)
-        -> if { specialization.returnType => type! }
+        -> if { binding.returnType => type! }
     -1 => ordinal!
     selected == (plans.KeyPart.StableSpecializedPrimary -> plans.partIndex)
         -> if { 0 => ordinal! }
@@ -200,20 +200,20 @@ boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.S
     selected == (plans.KeyPart.StableSpecializedTertiary -> plans.partIndex)
         -> if { 2 => ordinal! }
     ordinal! >= 0 -> if {
-        ordinal! < (specialization.arguments -> len) -> if { specialization.arguments[ordinal!] } else { -1 } => type!
+        ordinal! < (binding.arguments -> len) -> if { binding.arguments[ordinal!] } else { -1 } => type!
     }
     type! == -1 -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("-")) -> return }
     type! >= 0 -> if { context -> resolvedStableTypeIdentityFieldWithTypes(prepared.package, prepared.semantic, types, type!, signatureIds) -> return }
     context -> explicitFunctionPart(prepared, signatureIds, inputAst, part)
 }
 
-# This collector handles explicit ordinary and generic declaration signatures. Inferred,
-# local, block and native collectors still need their bound facts.
+# Declaration signatures and resolved ordinary/specialized signatures share
+# the compiled C# field plan. Local, block and native facts have separate paths.
 # Callers must select a collector; this function never substitutes an identity.
-captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], specialization: ref FunctionSpecialization -> Result<Field, TypeUniverseCaptureError> {
+captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], binding: ref FunctionBinding -> Result<Field, TypeUniverseCaptureError> {
     prepared.package.ranges[context.sourceModule] => range
     prepared.package.symbols[range.symbolStart + context.ownerSymbol] => function
-    (function.kind != 7 and function.kind != 31) or function.flags / 32 % 2 == 1 or function.flags / 64 % 2 == 1
+    (function.kind != 7 and function.kind != 31) or (function.flags / 32 % 2 == 1 and not binding.active) or function.flags / 64 % 2 == 1
         or function.flags / 128 % 2 == 1 or function.blockTypeNode >= 0 or function.blockResultTypeNode >= 0
         -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     function.parent => parent!
@@ -261,7 +261,7 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
     [UInt8; ~] => bytes!
     plans.stableFunctionIdentity() => header
     header.parts -> each part {
-        context -> boundFunctionPart(prepared, types, signatureIds, inputAst!, specialization, part) -> when {
+        context -> boundFunctionPart(prepared, types, signatureIds, inputAst!, binding, part) -> when {
             Ok(field) { field -> appendStableFunctionField(bytes!) }
             Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
         }
@@ -282,10 +282,10 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
                         -> if {
                             context -> typeTokenText(prepared.package, context.sourceModule, member.nameToken) -> textField => name
                             name -> appendStableFunctionField(bytes!)
-                            specialization.active -> if {
-                                parameterOrdinal! >= (specialization.additionalTypes -> len)
+                            binding.active -> if {
+                                parameterOrdinal! >= (binding.additionalTypes -> len)
                                     -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-                                context -> resolvedStableTypeIdentityFieldWithTypes(prepared.package, prepared.semantic, types, specialization.additionalTypes[parameterOrdinal!], signatureIds)
+                                context -> resolvedStableTypeIdentityFieldWithTypes(prepared.package, prepared.semantic, types, binding.additionalTypes[parameterOrdinal!], signatureIds)
                             } else { context -> functionBoundType(prepared, member.typeNode, false, signatureIds) } -> when {
                                 Ok(field) { field -> appendStableFunctionField(bytes!) }
                                 Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
@@ -302,10 +302,10 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
             } else {
                 selected == (plans.KeyPart.StableEffects -> plans.partIndex)
                     -> if {
-                        sourceFields -> each binding {
-                            (binding.part -> plans.partIndex) == (plans.KeyPart.FunctionEffects -> plans.partIndex)
+                        sourceFields -> each sourceBinding {
+                            (sourceBinding.part -> plans.partIndex) == (plans.KeyPart.FunctionEffects -> plans.partIndex)
                                 -> if {
-                                    binding.fields -> each field { field -> appendStableFunctionField(bytes!) }
+                                    sourceBinding.fields -> each field { field -> appendStableFunctionField(bytes!) }
                                 }
                         }
                     } else {
@@ -316,18 +316,18 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
                     }
             }
     }
-    specialization.active and parameterOrdinal! != (specialization.additionalTypes -> len)
+    binding.active and parameterOrdinal! != (binding.additionalTypes -> len)
         -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     Result<Field, TypeUniverseCaptureError>.Ok(Field { bytes: bytes! })
 }
 
 public captureExplicitFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
-    unspecializedFunction() => specialization
-    context -> captureFunctionIdentity(prepared, prepared.semantic.types, signatureIds, specialization)
+    unboundFunction() => binding
+    context -> captureFunctionIdentity(prepared, prepared.semantic.types, signatureIds, binding)
 }
 
-public captureSpecializedFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], specialization: ref FunctionSpecialization -> Result<Field, TypeUniverseCaptureError> {
-    not specialization.active or context.sourceModule != specialization.sourceModule or context.ownerSymbol != specialization.ownerSymbol
+public captureBoundFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], binding: ref FunctionBinding -> Result<Field, TypeUniverseCaptureError> {
+    not binding.active or context.sourceModule != binding.sourceModule or context.ownerSymbol != binding.ownerSymbol
         -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    context -> captureFunctionIdentity(prepared, types, signatureIds, specialization)
+    context -> captureFunctionIdentity(prepared, types, signatureIds, binding)
 }

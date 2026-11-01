@@ -5,15 +5,15 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 
-public capture prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError> {
+public capture prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<keys.FunctionBinding, keys.TypeUniverseCaptureError> {
     plan.status != 0 or plan.templateNode < 0 or plan.templateNode >= (ir -> len)
-        -> if { Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     ir[plan.templateNode] => function
-    function.kind != 0 -> if { Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    function.kind != 0 -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     [Int; ~] => additional!
     function.nextOperand => parameter!
     parameter! >= 0 -> while {
-        parameter! >= (ir -> len) -> if { Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        parameter! >= (ir -> len) -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
         additional! -> push(ir[parameter!].typeId)
         ir[parameter!].nextOperand => parameter!
     }
@@ -24,4 +24,36 @@ public capture prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.
     function.operand1 >= 0 -> if { ir[function.operand1].typeId } else { -1 } => input
     keys.FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: plan.resultType, status: plan.status } => request
     prepared -> keys.captureFunctionSpecialization(types, request, declaredIds)
+}
+
+# Ordinary function signatures consume the same lowered parameter/result facts
+# as code generation, including signatures inferred from their unique caller.
+public captureFunctionBinding ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], functionNode: Int -> Result<keys.FunctionBinding, keys.TypeUniverseCaptureError> {
+    functionNode < 0 or functionNode >= (ir -> len)
+        -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    ir[functionNode] => function
+    function.kind != 0 or function.typeId < 0 or function.typeId >= (types -> len) or types[function.typeId].containsParameter
+        -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    -1 => input!
+    function.operand1 >= 0 -> if {
+        function.operand1 >= (ir -> len)
+            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        ir[function.operand1].typeId => input!
+        input! < 0 or input! >= (types -> len) or types[input!].containsParameter
+            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    }
+    [Int; ~] => additional!
+    function.nextOperand => parameter!
+    0 => count!
+    parameter! >= 0 -> while {
+        parameter! >= (ir -> len) or count! >= (ir -> len)
+            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        ir[parameter!].typeId => type
+        type < 0 or type >= (types -> len) or types[type].containsParameter
+            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        additional! -> push(type)
+        ir[parameter!].nextOperand => parameter!
+        count! + 1 => count!
+    }
+    Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Ok(keys.FunctionBinding { active: true, sourceModule: function.sourceModule, ownerSymbol: function.symbol, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: input!, returnType: function.typeId, additionalTypes: additional! })
 }
