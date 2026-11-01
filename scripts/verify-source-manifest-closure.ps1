@@ -2,6 +2,7 @@
 param(
     [string[]]$Manifest = @(),
     [string[]]$SourcePath = @(),
+    [string]$CanonicalManifest = "",
     [string]$RepositoryRoot = ""
 )
 
@@ -64,6 +65,19 @@ foreach ($moduleSourcePath in $sourcePaths) {
         if (-not $moduleNames.Contains($moduleName)) {
             $relative = [IO.Path]::GetRelativePath($repoRoot, $moduleSourcePath).Replace('\', '/')
             $missing.Add("$moduleName imported by $relative") | Out-Null
+        }
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($CanonicalManifest)) {
+    $canonicalPath = if ([IO.Path]::IsPathRooted($CanonicalManifest)) { $CanonicalManifest } else { Join-Path $repoRoot $CanonicalManifest }
+    foreach ($entry in [IO.File]::ReadAllLines($canonicalPath)) {
+        if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+        $partPath = (Resolve-Path -LiteralPath (Join-Path $repoRoot $entry.Trim())).Path
+        $partHeader = Get-SollangModuleHeader -Source ([IO.File]::ReadAllText($partPath))
+        if ($partHeader.Namespace.Length -gt 0 -and $moduleNames.Contains($partHeader.Namespace) -and -not $seenPaths.Contains($partPath)) {
+            $relative = [IO.Path]::GetRelativePath($repoRoot, $partPath).Replace('\', '/')
+            $missing.Add("$($partHeader.Namespace) requires canonical module part $relative") | Out-Null
         }
     }
 }

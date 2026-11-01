@@ -25,9 +25,10 @@ function Assert-NativeExactCompilerSourceClosure {
     }
     $runtimeManifest = Join-Path $RepositoryRoot 'tests/Sollang.ExampleTests/Fixtures/selfhost-compiler-runtime.sources.txt'
     $verifier = Join-Path $PSScriptRoot 'verify-source-manifest-closure.ps1'
+    $canonicalManifest = Join-Path $RepositoryRoot 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'
     if ($SourcePath.Count -gt 0) {
-        & $verifier -SourcePath $SourcePath -Manifest @($manifest, $runtimeManifest) -RepositoryRoot $RepositoryRoot
+        & $verifier -SourcePath $SourcePath -Manifest @($manifest, $runtimeManifest) -RepositoryRoot $RepositoryRoot -CanonicalManifest $canonicalManifest
     } else {
-        & $verifier -Manifest @($manifest, $runtimeManifest) -RepositoryRoot $RepositoryRoot
+        & $verifier -Manifest @($manifest, $runtimeManifest) -RepositoryRoot $RepositoryRoot -CanonicalManifest $canonicalManifest
     }
 }

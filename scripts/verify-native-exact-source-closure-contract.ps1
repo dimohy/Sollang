@@ -22,6 +22,7 @@ try {
     Write-ContractFile 'llvm/bin/clang.exe' 'never execute'
     [IO.Directory]::CreateDirectory((Join-Path $root 'stdlib')) | Out-Null
     Write-ContractFile 'tests/Sollang.ExampleTests/Fixtures/selfhost-compiler-runtime.sources.txt' ''
+    Write-ContractFile 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt' ''
     foreach ($name in @('closure-one', 'closure-two')) {
         Write-ContractFile "examples/regression/$name.slg" "import sollang.compiler.required as required`nmain { 1 -> println }`n"
         Write-ContractFile "examples/regression/expected/$name.sources.txt" "examples/regression/$name.slg`n"
@@ -61,6 +62,27 @@ try {
         (Join-Path $root 'examples/regression/closure-one.slg'), (Join-Path $root 'required.slg'))
     Write-ContractFile 'examples/regression/expected/closure-one.sources.txt' "examples/regression/closure-one.slg`nrequired.slg`n"
     Assert-NativeExactCompilerSourceClosure -RepositoryRoot $root -Fixture 'closure-one'
+    Write-ContractFile 'required-part.slg' "namespace sollang.compiler.required`n"
+    Write-ContractFile 'unrelated.slg' "namespace sollang.compiler.unrelated`n"
+    Write-ContractFile 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt' "required.slg`nrequired-part.slg`nunrelated.slg`n"
+    $partialFailure = $null
+    try { & (Join-Path $PSScriptRoot 'verify-native-exact-fixture.ps1') @arguments -Fixture 'closure-one' }
+    catch { $partialFailure = $_.Exception.Message }
+    if ($partialFailure -notmatch 'requires canonical module part required-part.slg' -or
+        (Test-Path -LiteralPath $arguments.OutputDirectory)) {
+        throw "incomplete partial module was not rejected before compiler launch: $partialFailure"
+    }
+    $partialBatchFailure = $null
+    try { & (Join-Path $PSScriptRoot 'verify-native-exact-fixture-batch.ps1') @arguments -Fixture @('closure-one') -ValidateInputsOnly }
+    catch { $partialBatchFailure = $_.Exception.Message }
+    if ($partialBatchFailure -notmatch 'requires canonical module part required-part.slg' -or
+        (Test-Path -LiteralPath $arguments.OutputDirectory)) {
+        throw "partial module batch passed preflight: $partialBatchFailure"
+    }
+    Write-ContractFile 'examples/regression/expected/closure-one.sources.txt' "examples/regression/closure-one.slg`nrequired.slg`nrequired-part.slg`n"
+    Assert-NativeExactCompilerSourceClosure -RepositoryRoot $root -Fixture 'closure-one'
+    Write-ContractFile 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt' ''
+    Write-ContractFile 'examples/regression/expected/closure-one.sources.txt' "examples/regression/closure-one.slg`nrequired.slg`n"
     $embeddedSource = @'
 # Imports inside stored source text are not dependencies of this file.
 import sollang.compiler.required as required
@@ -110,7 +132,7 @@ main {}
         $header.Imports[0] -cne 'actual.dependency') {
         throw 'library text or trailing comments corrupted module header extraction'
     }
-    Write-Host '[native exact source closure] PASS pre-launch rejection, aggregated failures, complete manifests, duplicate rejection, embedded import/namespace isolation, library text, comments, and ordinary fixture boundary.'
+    Write-Host '[native exact source closure] PASS pre-launch rejection, partial module rejection before compiler launch, unrelated canonical module exclusion, aggregated failures, complete manifests, duplicate rejection, embedded import/namespace isolation, library text, comments, and ordinary fixture boundary.'
 } finally {
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }

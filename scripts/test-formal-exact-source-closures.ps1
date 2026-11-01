@@ -57,9 +57,20 @@ if (-not $actual.StartsWith($prefix, [StringComparison]::Ordinal) -or $actual -c
 & $verifier -RepositoryRoot $fixtureRoot
 if (-not $?) { throw 'Refreshed closure failed readonly verification' }
 $completed++
+# A present namespace must include every canonical part, even without a new import.
+Write-ControlSource 'selfhost/test_provider_part.slg' "namespace sollang.compiler.test_provider`n"
+Write-ControlSource 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt' "$provider`nselfhost/test_provider_part.slg`n$leaf`n"
+Expect-Failure { & $verifier -RepositoryRoot $fixtureRoot } 'requires canonical module part'
+& $verifier -RepositoryRoot $fixtureRoot -RefreshManifestClosure
+if (-not $?) { throw 'Partial module refresh failed' }
+$actual = [IO.File]::ReadAllText((Join-Path $fixtureRoot $manifest))
+if ($actual -cne ($prefix + "$leaf`nselfhost/test_provider_part.slg`n")) { throw 'Partial module refresh changed the retained source order' }
+& $verifier -RepositoryRoot $fixtureRoot
+if (-not $?) { throw 'Complete partial module failed readonly verification' }
+$completed++
 Write-ControlSource $manifest "$provider`n$main`n$leaf`n"
 Expect-Failure { & $verifier -RepositoryRoot $fixtureRoot } 'must start with'
 $completed++
-$result = @{ schemaVersion = 1; status = 'passed'; completed = $completed; total = 4; fixtureRoot = $fixtureRoot; expectedRejections = @($failures) }
+$result = @{ schemaVersion = 1; status = 'passed'; completed = $completed; total = 5; fixtureRoot = $fixtureRoot; expectedRejections = @($failures) }
 $result | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'result.json') -Encoding utf8NoBOM
 $result | ConvertTo-Json -Depth 4

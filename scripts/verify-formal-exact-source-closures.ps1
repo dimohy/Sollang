@@ -14,14 +14,19 @@ $stage3VerifierPath = Join-Path $PSScriptRoot "verify-selfhost-stage3.ps1"
 $closureVerifierPath = Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1"
 . (Join-Path $PSScriptRoot 'selfhost-stage-inputs.ps1')
 $standardLibrarySources = @(Get-SelfhostStandardLibrarySources -RepositoryRoot $RepositoryRoot)
+$compilerManifestPath = Join-Path $RepositoryRoot 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'
 if ($AdditionalManifest.Count -gt 0 -and -not $RefreshManifestClosure) {
     throw 'FORMAL_CLOSURE_ADDITIONAL_REQUIRES_REFRESH: additional manifests are write-mode inputs'
 }
 
 if ($RefreshManifestClosure) {
     . (Join-Path $PSScriptRoot 'source-module-header.ps1')
-    $compilerManifestPath = Join-Path $RepositoryRoot 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'
     $catalog = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    $compilerParts = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $compilerSources = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in [IO.File]::ReadAllLines($compilerManifestPath)) {
+        if (-not [string]::IsNullOrWhiteSpace($entry)) { $compilerSources.Add($entry.Trim().Replace('\', '/')) | Out-Null }
+    }
     $ambiguous = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $catalogSources = @([IO.File]::ReadAllLines($compilerManifestPath)) +
         @($standardLibrarySources | ForEach-Object { [IO.Path]::GetRelativePath($RepositoryRoot, $_) })
@@ -30,6 +35,10 @@ if ($RefreshManifestClosure) {
         $relative = $entry.Trim().Replace('\', '/')
         $header = Get-SollangModuleHeader -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot $relative)))
         if ([string]::IsNullOrEmpty($header.Namespace)) { continue }
+        if ($compilerSources.Contains($relative)) {
+            if (-not $compilerParts.ContainsKey($header.Namespace)) { $compilerParts[$header.Namespace] = [Collections.Generic.List[string]]::new() }
+            $compilerParts[$header.Namespace].Add($relative)
+        }
         if ($catalog.ContainsKey($header.Namespace) -and $catalog[$header.Namespace] -cne $relative) {
             $ambiguous.Add($header.Namespace) | Out-Null
         } else {
@@ -59,6 +68,15 @@ function Refresh-ExactClosure([string]$ManifestPath) {
             $headers.Add($header)
             if (-not [string]::IsNullOrEmpty($header.Namespace)) { $modules.Add($header.Namespace) | Out-Null }
         }
+        $partsAdded = $false
+        foreach ($header in $headers) {
+            if ($compilerParts.ContainsKey($header.Namespace)) {
+                foreach ($part in $compilerParts[$header.Namespace]) {
+                    if ($existing.Add($part)) { $sources.Add($part); $added.Add($part); $partsAdded = $true }
+                }
+            }
+        }
+        if ($partsAdded) { continue }
         $missing = [Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
         foreach ($header in $headers) {
             foreach ($import in $header.Imports) {
@@ -67,6 +85,12 @@ function Refresh-ExactClosure([string]$ManifestPath) {
         }
         if ($missing.Count -eq 0) { break }
         foreach ($import in $missing) {
+            if ($compilerParts.ContainsKey($import)) {
+                foreach ($part in $compilerParts[$import]) {
+                    if ($existing.Add($part)) { $sources.Add($part); $added.Add($part) }
+                }
+                continue
+            }
             if ($ambiguous.Contains($import) -or -not $catalog.ContainsKey($import)) {
                 throw "FORMAL_CLOSURE_IMPORT_UNRESOLVED: $ManifestPath imports $import"
             }
@@ -130,6 +154,7 @@ foreach ($fixtureName in $fixtureNames) {
         & $closureVerifierPath `
             -Manifest @($manifestPath) `
             -SourcePath $standardLibrarySources `
+            -CanonicalManifest $compilerManifestPath `
             -RepositoryRoot $RepositoryRoot | Out-Null
         if (-not $?) { throw 'source closure verifier returned failure' }
     } catch {
@@ -147,7 +172,7 @@ foreach ($entry in $AdditionalManifest) {
         throw "FORMAL_CLOSURE_ADDITIONAL_INVALID: $entry"
     }
     Refresh-ExactClosure $manifestPath
-    & $closureVerifierPath -Manifest @($manifestPath) -SourcePath $standardLibrarySources -RepositoryRoot $RepositoryRoot | Out-Null
+    & $closureVerifierPath -Manifest @($manifestPath) -SourcePath $standardLibrarySources -RepositoryRoot $RepositoryRoot -CanonicalManifest $compilerManifestPath | Out-Null
 }
 
 Write-Host "[formal exact source closure] PASS $verifiedCount compiler fixtures before expensive contracts."
