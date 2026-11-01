@@ -95,17 +95,21 @@ prepareStringNames context: ref emitterContext.EmitContext -> StringNames {
         widths! -> push((context.tokens -> len) + 1)
         firstByToken! -> push(-1)
     }
+    # Lowered entry declarations retain both explicit main and implicit file
+    # statements. Use that shared ownership decision before named scopes.
+    context.ir -> each entry {
+        entry.kind == 11 and entry.parent == -1
+            and entry.sourceModule >= 0 and entry.sourceModule < (context.ranges -> len)
+            -> if {
+                entry.astNode >= 0 and entry.astNode < context.ranges[entry.sourceModule].astCount
+                    -> if {
+                        entry.sourceModule -> recordStringScope(entry.astNode, -2, scopes!, widths!, context)
+                    }
+            }
+    }
     0 => source!
     source! < (context.ranges -> len) -> while {
         context.ranges[source!] => range
-        0 => astIndex!
-        astIndex! < range.astCount -> while {
-            context.nodes[range.astStart + astIndex!].kind == 8
-                -> if {
-                    source! -> recordStringScope(astIndex!, -2, scopes!, widths!, context)
-                }
-            astIndex! + 1 => astIndex!
-        }
         0 => symbol!
         symbol! < range.symbolCount -> while {
             range.symbolStart + symbol! => slot

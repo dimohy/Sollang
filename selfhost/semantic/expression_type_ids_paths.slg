@@ -285,6 +285,10 @@ public continuationFlags package: ref analysis.PackageAnalysis -> [Bool; ~] {
         }
         sourceIndex! + 1 => sourceIndex!
     }
+    (pending! -> len) == 0 -> if { reaches! -> return }
+    # C# visits owned statements and arms directly. The work queue changes
+    # continuation facts, while these source-ordered AST edges stay immutable.
+    package -> indexContextualRecords => children
     0 => nextPending!
     nextPending! < (pending! -> len) -> while {
         pending![nextPending!] => childGlobalAst
@@ -299,41 +303,40 @@ public continuationFlags package: ref analysis.PackageAnalysis -> [Bool; ~] {
                 parent.kind == 42 -> if {
                     false => parentMayReach!
                     0 => branchCount!
-                    0 => branchAst!
-                    branchAst! < range.astCount -> while {
-                        package.nodes[range.astStart + branchAst!] => branch
-                        branch.kind == 43 and branch.parent == parentAst
+                    children.firstChild[parentGlobalAst] => branchGlobal!
+                    branchGlobal! >= 0 -> while {
+                        package.nodes[branchGlobal!] => branch
+                        branch.kind == 43
                             -> if {
                                 branchCount! + 1 => branchCount!
-                                reaches![range.astStart + branchAst!] -> if { true => parentMayReach! }
+                                reaches![branchGlobal!] -> if { true => parentMayReach! }
                             }
-                        branchAst! + 1 => branchAst!
+                        children.nextChild[branchGlobal!] => branchGlobal!
                     }
                     branchCount! < 2 -> if { true => parentMayReach! }
                 }
                 parent.kind == 56 or parent.kind == 57 -> if {
                     false => parentMayReach!
                     0 => armCount!
-                    0 => armAst!
-                    armAst! < range.astCount -> while {
-                        package.nodes[range.astStart + armAst!] => arm
-                        (arm.kind == 58 or arm.kind == 43) and arm.parent == parentAst
+                    children.firstChild[parentGlobalAst] => armGlobal!
+                    armGlobal! >= 0 -> while {
+                        package.nodes[armGlobal!] => arm
+                        arm.kind == 58 or arm.kind == 43
                             -> if {
                                 armCount! + 1 => armCount!
-                                reaches![range.astStart + armAst!] -> if { true => parentMayReach! }
+                                reaches![armGlobal!] -> if { true => parentMayReach! }
                             }
-                        armAst! + 1 => armAst!
+                        children.nextChild[armGlobal!] => armGlobal!
                     }
                     armCount! == 0 -> if { true => parentMayReach! }
                 }
                 parent.kind == 43 or parent.kind == 10 or parent.kind == 9 or parent.kind == 58
                     -> if {
-                        0 => siblingAst!
-                        siblingAst! < range.astCount -> while {
-                            package.nodes[range.astStart + siblingAst!] => sibling
-                            sibling.parent == parentAst and not reaches![range.astStart + siblingAst!]
+                        children.firstChild[parentGlobalAst] => siblingGlobal!
+                        siblingGlobal! >= 0 -> while {
+                            not reaches![siblingGlobal!]
                                 -> if { false => parentMayReach! }
-                            siblingAst! + 1 => siblingAst!
+                            children.nextChild[siblingGlobal!] => siblingGlobal!
                         }
                     }
                 not parentMayReach! -> if {
