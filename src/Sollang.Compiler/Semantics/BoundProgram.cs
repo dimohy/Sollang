@@ -163,6 +163,14 @@ internal sealed record BoundFunctionParameter(
     int Column,
     string? TypeTemplate = null);
 
+internal sealed record BoundTraitImplementation(
+    string TraitName,
+    TypeId ReceiverType,
+    IReadOnlyDictionary<string, TypeId> ImplAssociatedTypes,
+    string ModuleName,
+    int Line,
+    int Column);
+
 internal sealed record BoundTraitMethod(
     string Name,
     BoundFunctionInputOwnership SelfOwnership,

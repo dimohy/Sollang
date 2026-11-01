@@ -485,6 +485,9 @@ internal static class CompilerApp
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Functions))
                 .ToArray(),
             sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray(),
+            Implementations: standardLibrary.SelectMany(static source => source.Program.Implementations ?? [])
+                .Concat(sourcePrograms.SelectMany(static source => source.Program.Implementations ?? []))
+                .ToArray(),
             StyleNotes: standardLibrary.SelectMany(static source => source.Program.StyleNotes ?? [])
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.StyleNotes ?? []))
                 .ToArray());

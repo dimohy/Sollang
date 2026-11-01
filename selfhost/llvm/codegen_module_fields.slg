@@ -21,6 +21,7 @@ compareFieldText left: ref Field, right: ref Field -> Int {
 public declarationRule kind: Int -> Result<plans.KeyRule, DeclarationFieldError> {
     kind == 3 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.structInterface()) -> return }
     kind == 4 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.enumInterface()) -> return }
+    kind == 6 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.implementationInterface()) -> return }
     kind == 5 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.traitInterface()) -> return }
     kind == 7 or kind == 31 -> if { Result<plans.KeyRule, DeclarationFieldError>.Ok(plans.functionInterface()) -> return }
     Result<plans.KeyRule, DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration)
@@ -36,11 +37,25 @@ declarationCategory part: plans.KeyPart -> Result<Int, DeclarationFieldError> {
         -> if { Result<Int, DeclarationFieldError>.Ok(5) -> return }
     selected == (plans.KeyPart.InterfaceFunctions -> plans.partIndex)
         -> if { Result<Int, DeclarationFieldError>.Ok(7) -> return }
+    selected == (plans.KeyPart.InterfaceImplementations -> plans.partIndex)
+        -> if { Result<Int, DeclarationFieldError>.Ok(6) -> return }
     Result<Int, DeclarationFieldError>.Err(DeclarationFieldError.UnavailablePart)
 }
 
 declarationIdentityField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<Field, DeclarationFieldError> {
     package.symbols[package.ranges[context.sourceModule].symbolStart + context.ownerSymbol] => symbol
+    symbol.kind == 6 -> if {
+        context -> implementationContextFields(package, context.ownerSymbol) -> when {
+            Err(error) { Result<Field, DeclarationFieldError>.Err(error) -> return }
+            Ok(fields) {
+                [UInt8; ~] => bytes!
+                fields.traitName.bytes -> each byte { bytes! -> push(byte) }
+                bytes! -> push(0)
+                fields.owner.bytes -> each byte { bytes! -> push(byte) }
+                Result<Field, DeclarationFieldError>.Ok(Field { bytes: bytes! }) -> return
+            }
+        }
+    }
     symbol.kind == 7 or symbol.kind == 31 -> if {
         context -> functionContextFields(package) -> when {
             Ok(fields) { Result<Field, DeclarationFieldError>.Ok(fields.name) -> return }
@@ -90,27 +105,34 @@ public orderedModuleDeclarations context: mut TypeFieldContext, package: ref ana
                     0 => symbolIndex!
                     symbolIndex! < range.symbolCount -> while {
                         package.symbols[range.symbolStart + symbolIndex!] => symbol
-                        (symbol.kind == kind or (kind == 7 and symbol.kind == 31)) and symbol.flags / 4 % 2 == 1
-                            -> if {
-                                symbolIndex! => context.ownerSymbol
-                                context -> declarationIdentityField(package) -> when {
-                                    Err(error) { Result<[ModuleDeclaration; ~], DeclarationFieldError>.Err(error) -> return }
-                                    Ok(name) {
-                                        names! -> push(name)
-                                        symbols! -> push(symbolIndex!)
-                                    }
-                                }
-                                order! -> len => ordinal
-                                ordinal => position!
-                                order! -> push(ordinal)
-                                position! > 0 -> while {
-                                    compareFieldText(names![order![position! - 1]], names![ordinal]) <= 0
-                                        -> if { break }
-                                    order![position! - 1] => order![position!]
-                                    position! - 1 => position!
-                                }
-                                ordinal => order![position!]
+                        false => include!
+                        kind == 6 and symbol.kind == 6 -> if {
+                            symbolIndex! => context.ownerSymbol
+                            context -> implementationContextFields(package, symbolIndex!) -> when {
+                                Err(error) { Result<[ModuleDeclaration; ~], DeclarationFieldError>.Err(error) -> return }
+                                Ok(fields) { (fields.traitName.bytes -> len) > 0 => include! }
                             }
+                        } else { (symbol.kind == kind or (kind == 7 and symbol.kind == 31)) and symbol.flags / 4 % 2 == 1 => include! }
+                        include! -> if {
+                            symbolIndex! => context.ownerSymbol
+                            context -> declarationIdentityField(package) -> when {
+                                Err(error) { Result<[ModuleDeclaration; ~], DeclarationFieldError>.Err(error) -> return }
+                                Ok(name) {
+                                    names! -> push(name)
+                                    symbols! -> push(symbolIndex!)
+                                }
+                            }
+                            order! -> len => ordinal
+                            ordinal => position!
+                            order! -> push(ordinal)
+                            position! > 0 -> while {
+                                compareFieldText(names![order![position! - 1]], names![ordinal]) <= 0
+                                    -> if { break }
+                                order![position! - 1] => order![position!]
+                                position! - 1 => position!
+                            }
+                            ordinal => order![position!]
+                        }
                         symbolIndex! + 1 => symbolIndex!
                     }
                     order! -> each ordinal {

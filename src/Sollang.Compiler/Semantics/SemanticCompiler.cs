@@ -11,6 +11,7 @@ internal sealed partial class SemanticCompiler
     private static readonly HashSet<string> ParallelRoleFunctionNames =
         FunctionTypeBindingPolicy.ParallelRoleNames().Split('|').ToHashSet(StringComparer.Ordinal);
     private SollangProgram _program;
+    private readonly Dictionary<(string Trait, TypeId Type), BoundTraitImplementation> _traitImplementations = [];
     private readonly TypeDefinitionTable _types;
     private readonly List<(TypeId KeyType, int Line, int Column, string ModuleName)> _declaredDictionaryKeyChecks = [];
     private readonly IReadOnlyDictionary<string, BoundTraitDefinition> _traits;
@@ -207,7 +208,8 @@ internal sealed partial class SemanticCompiler
         var declarationFingerprint = SemanticStableIdentity.DeclarationFingerprint(
             _types,
             _traits.Values,
-            functions.Values);
+            functions.Values,
+            _traitImplementations.Values);
         var activeReuse = reusePlan is not null
             && reusePlan.DeclarationFingerprint.AsSpan().SequenceEqual(declarationFingerprint)
                 ? reusePlan
@@ -439,7 +441,8 @@ internal sealed partial class SemanticCompiler
 
     private void ValidateTraitImplementations(IReadOnlyDictionary<string, BoundFunction> functions)
     {
-        var implementations = new Dictionary<(string Trait, BoundType Type), HashSet<string>>();
+        var implementations = _traitImplementations.Keys.ToDictionary(
+            static key => key, static _ => new HashSet<string>(StringComparer.Ordinal));
         foreach (var function in functions.Values)
         {
             _currentModuleName = function.ModuleName;
@@ -528,6 +531,7 @@ internal sealed partial class SemanticCompiler
 
     private IReadOnlyDictionary<string, BoundFunction> DeclareFunctions()
     {
+        DeclareTraitImplementations();
         var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
         _boundFunctions = functions;
         foreach (var declaration in _program.Functions)
@@ -1143,16 +1147,16 @@ internal sealed partial class SemanticCompiler
                 function.Line,
                 function.Column,
                 genericParameterNames);
-        IReadOnlyDictionary<string, TypeId>? implAssociatedTypes = function.ImplAssociatedTypes is null
-            ? null
-            : function.ImplAssociatedTypes.ToDictionary(
-                static pair => pair.Key,
-                pair => (TypeId)ParseType(pair.Value, function.Line, function.Column),
-                StringComparer.Ordinal);
-        if (function.TraitName is null && implAssociatedTypes is { Count: > 0 })
+        IReadOnlyDictionary<string, TypeId>? implAssociatedTypes = null;
+        if (function.TraitName is { } implementationTrait)
         {
-            throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
+            if (inputType is not { } receiver
+                || !_traitImplementations.TryGetValue((implementationTrait, receiver), out var implementation))
+                throw Error(function.Line, function.Column, "trait methods require a user type self receiver");
+            implAssociatedTypes = implementation.ImplAssociatedTypes;
         }
+        else if (function.ImplAssociatedTypes is { Count: > 0 })
+            throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
         var inputOwnershipType = FunctionTypeBindingPolicy.BindOwnershipTypeEagerly(
             inputTypeTemplate is not null, function.HasValueGenericFixedArrayInput,
             function.InputOwnership != FunctionInputOwnership.Default)
@@ -13714,9 +13718,9 @@ internal sealed partial class SemanticCompiler
                 $"generic function '{template.Name}' does not yet support {FormatType(actualType)} specialization");
         }
 
-        BoundFunction? traitImplementation = null;
+        BoundTraitImplementation? traitImplementation = null;
         if (template.GenericTraitBound is { } traitBound
-            && !TryFindTraitImplementation(functions, traitBound, actualType, out traitImplementation))
+            && !TryFindTraitImplementation(traitBound, actualType, out traitImplementation))
         {
             throw new SollangException(
                 $"type {FormatType(actualType)} does not implement trait '{traitBound}' required by '{template.Name}'");
@@ -13727,14 +13731,14 @@ internal sealed partial class SemanticCompiler
             {
                 continue;
             }
-            BoundFunction? parameterTraitImplementation = null;
+            BoundTraitImplementation? parameterTraitImplementation = null;
             string? parameterTraitName = null;
             foreach (var constraint in parameter.Constraints)
             {
                 if (constraint.TraitName is { } requiredTrait && requiredTrait != "Int")
                 {
                     parameterTraitName = requiredTrait;
-                    if (!TryFindTraitImplementation(functions, requiredTrait, parameterType, out parameterTraitImplementation))
+                    if (!TryFindTraitImplementation(requiredTrait, parameterType, out parameterTraitImplementation))
                     {
                         throw new SollangException(
                             $"type {FormatType(parameterType)} does not implement trait '{requiredTrait}' required by '{template.Name}'");
@@ -14749,19 +14753,11 @@ internal sealed partial class SemanticCompiler
         return [exact];
     }
 
-    private static bool TryFindTraitImplementation(
-        IReadOnlyDictionary<string, BoundFunction> functions,
+    private bool TryFindTraitImplementation(
         string traitName,
         BoundType receiverType,
-        out BoundFunction? implementation)
-    {
-        implementation = functions.Values
-            .Where(candidate => candidate.TraitName == traitName
-                && candidate.InputType == receiverType)
-            .Distinct()
-            .FirstOrDefault();
-        return implementation is not null;
-    }
+        out BoundTraitImplementation? implementation) =>
+        _traitImplementations.TryGetValue((traitName, receiverType), out implementation);
 
     private BoundType InferUserCallExpression(
         CallExpression expression,

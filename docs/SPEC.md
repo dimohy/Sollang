@@ -1999,6 +1999,18 @@ fail-closed: an unknown or cyclic provenance path is never treated as borrowed.
 
 ## Static Trait Method Contracts
 
+An `impl` is a declaration independently of its methods. An empty marker-trait
+implementation and an implementation containing only associated-type bindings
+remain available to generic trait and associated-type equality constraints.
+Unknown traits, unknown or missing associated bindings, incompatible bindings
+and missing required methods are checked even when an impl has no methods.
+Method bindings read the same resolved implementation catalog; no synthetic
+method is introduced to represent an empty implementation.
+Concrete associated types are registered after trait definitions and before
+function signatures. Source interfaces and semantic declaration fingerprints
+include trait/owner/associated-type implementation facts, so changing a binding
+invalidates affected cached work even when no function or type layout changes.
+
 A trait method declares `self`, optionally preceded by `mut` or `move`, then
 zero or more comma-separated named inputs before its result type:
 

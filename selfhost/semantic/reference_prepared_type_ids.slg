@@ -211,6 +211,24 @@ compositeTemplate prepared: ref semanticContext.SemanticSnapshot, typeId: Int ->
     type.containsParameter and type.kind != 1
 }
 
+appendImplementationRoots prepared: ref semanticContext.SemanticSnapshot, references: ref [Int; ~], roots: mut [Int; ~] -> Unit {
+    prepared.package.ranges -> each range {
+        0..<range.symbolCount -> each index {
+            prepared.package.symbols[range.symbolStart + index] => implementation
+            implementation.kind == 6 -> if {
+                typeIds.implTypePaths(prepared.package.nodes, range.astStart, range.astCount, implementation.astNode) => paths
+                paths.traitAst >= 0 -> if {
+                    0..<range.symbolCount -> each memberIndex {
+                        prepared.package.symbols[range.symbolStart + memberIndex] => member
+                        member.kind == 30 and member.parent == index and member.typeNode >= 0
+                            -> if { prepared -> appendSignatureRoot(references[range.astStart + member.typeNode], 1, roots) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: ref [Int; ~], roots: mut [Int; ~] -> Unit {
     prepared.package.ranges -> each range {
         0 => functionIndex!
@@ -450,6 +468,7 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarati
         }
     }
     prepared -> appendTraitRoots(roots!)
+    prepared -> appendImplementationRoots(references!, roots!)
     includeDeclarations -> if { prepared -> appendFunctionRoots(references!, roots!) }
     metadataOnly -> if {
         prepared -> metadataSignatureRoots(roots!) -> when {

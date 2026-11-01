@@ -610,6 +610,19 @@ internal sealed class IncrementalCodegenCache
                         _ => throw UnexpectedKeyPart(part)
                     })) yield return field;
                 yield break;
+            case Shared.CodegenKeyPart.InterfaceImplementations:
+                foreach (var implementation in (program.Implementations ?? []).Where(static value => value.TraitName is not null)
+                             .OrderBy(static value => value.TraitName, StringComparer.Ordinal)
+                             .ThenBy(static value => value.OwnerType, StringComparer.Ordinal))
+                    foreach (var field in RuleFields(Shared.CodegenCacheKeyPolicy.ImplementationInterface(), part => part switch
+                    {
+                        Shared.CodegenKeyPart.MemberName => [implementation.TraitName!],
+                        Shared.CodegenKeyPart.MemberType => [implementation.OwnerType],
+                        Shared.CodegenKeyPart.FunctionAssociatedTypes => implementation.AssociatedTypes.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+                            .SelectMany(static pair => MemberFields(Shared.CodegenCacheKeyPolicy.NamedTypeFields(), pair.Key, pair.Value, null)),
+                        _ => throw UnexpectedKeyPart(part)
+                    })) yield return field;
+                yield break;
             default:
                 throw UnexpectedKeyPart(part);
         }

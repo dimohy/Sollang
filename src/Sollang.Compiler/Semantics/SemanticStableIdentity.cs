@@ -11,7 +11,8 @@ internal static class SemanticStableIdentity
     public static byte[] DeclarationFingerprint(
         TypeDefinitionTable types,
         IEnumerable<BoundTraitDefinition> traits,
-        IEnumerable<BoundFunction> functions)
+        IEnumerable<BoundFunction> functions,
+        IEnumerable<BoundTraitImplementation> implementations)
     {
         var fields = new List<string>();
         foreach (var structure in types.Structs.Where(static value => value.IsPublic)
@@ -81,6 +82,18 @@ internal static class SemanticStableIdentity
                     fields.Add(parameter.Type is { } parameterType ? Type(types, parameterType) : "-");
                     fields.Add(parameter.AssociatedTypeSyntax ?? "");
                 }
+            }
+        }
+        foreach (var implementation in implementations.OrderBy(static value => value.TraitName, StringComparer.Ordinal)
+                     .ThenBy(value => Type(types, value.ReceiverType), StringComparer.Ordinal))
+        {
+            fields.Add("impl");
+            fields.Add(implementation.TraitName);
+            fields.Add(Type(types, implementation.ReceiverType));
+            foreach (var associated in implementation.ImplAssociatedTypes.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+            {
+                fields.Add(associated.Key);
+                fields.Add(Type(types, associated.Value));
             }
         }
         var seen = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);

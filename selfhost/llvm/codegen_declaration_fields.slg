@@ -142,6 +142,24 @@ traitDeclarationFields context: ref TypeFieldContext, package: ref analysis.Pack
 # Supply real declaration facts; the generated rule selects their order. A
 # future rule requesting another fact fails through the existing MissingPart
 # contract rather than silently omitting it from an interface fingerprint.
+implementationDeclarationBindings context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<[Binding; ~], DeclarationFieldError> {
+    context -> implementationContextFields(package, context.ownerSymbol) -> when {
+        Err(error) { Result<[Binding; ~], DeclarationFieldError>.Err(error) }
+        Ok(fields) {
+            (fields.traitName.bytes -> len) == 0 -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+            [Binding; ~] => bindings!
+            [Field; ~] => traitName!
+            traitName! -> push(fields.traitName)
+            bindings! -> push(Binding { part: plans.KeyPart.MemberName, fields: traitName! })
+            [Field; ~] => owner!
+            owner! -> push(fields.owner)
+            bindings! -> push(Binding { part: plans.KeyPart.MemberType, fields: owner! })
+            bindings! -> push(Binding { part: plans.KeyPart.FunctionAssociatedTypes, fields: fields.associated })
+            Result<[Binding; ~], DeclarationFieldError>.Ok(bindings!)
+        }
+    }
+}
+
 public declarationBindings context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<[Binding; ~], DeclarationFieldError> {
     context.sourceModule < 0 or context.sourceModule >= (package.ranges -> len)
         -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
@@ -149,6 +167,7 @@ public declarationBindings context: ref TypeFieldContext, package: ref analysis.
     context.ownerSymbol < 0 or context.ownerSymbol >= range.symbolCount
         -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
     package.symbols[range.symbolStart + context.ownerSymbol] => declaration
+    declaration.kind == 6 -> if { context -> implementationDeclarationBindings(package) -> return }
     declaration.kind != 3 and declaration.kind != 4 and declaration.kind != 5 and declaration.kind != 7 and declaration.kind != 31
         -> if { Result<[Binding; ~], DeclarationFieldError>.Err(DeclarationFieldError.UnsupportedDeclaration) -> return }
     declaration.flags / 4 % 2 == 0 or declaration.nameToken < 0

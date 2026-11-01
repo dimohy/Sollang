@@ -17,18 +17,16 @@ copyFunctionField field: ref Field -> Field {
     Field { bytes: bytes! }
 }
 
-functionContextFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<FunctionContextFields, DeclarationFieldError> {
+struct ImplementationContextFields {
+    traitName: Field
+    owner: Field
+    associated: [Field; ~]
+}
+
+implementationContextFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis, implementationSymbol: Int -> Result<ImplementationContextFields, DeclarationFieldError> {
     package.ranges[context.sourceModule] => range
-    package.symbols[range.symbolStart + context.ownerSymbol] => function
-    function.kind != 31 -> if {
-        context -> functionNameField(package) -> when {
-            Ok(field) { Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: textField(""), name: field, associated: [Field; ~] }) -> return }
-            Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) -> return }
-        }
-    }
-    function.parent < 0 -> if { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
-    package.symbols[range.symbolStart + function.parent] => implementation
-    implementation.kind != 6 -> if { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    package.symbols[range.symbolStart + implementationSymbol] => implementation
+    implementation.kind != 6 -> if { Result<ImplementationContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
     package.nodes[range.astStart + implementation.astNode] => node
     [Int; ~] => first!
     [Int; ~] => second!
@@ -50,32 +48,18 @@ functionContextFields context: ref TypeFieldContext, package: ref analysis.Packa
     [UInt8; ~] => traitBytes!
     trait! -> if {
         context -> typeTokenField(package, first!) -> when {
-            Ok(field) { field.bytes -> each byte { traitBytes! -> push(byte) }
-                traitBytes! -> push('.') }
-            Err(_) { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
+            Ok(field) { field.bytes -> each byte { traitBytes! -> push(byte) } }
+            Err(_) { Result<ImplementationContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
         }
     }
     trait! -> if { context -> typeTokenField(package, second!) } else { context -> typeTokenField(package, first!) } -> when {
-        Err(_) { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) }
+        Err(_) { Result<ImplementationContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidType) -> return }
         Ok(owner) {
-            false => dotted!
-            owner.bytes -> each byte { byte == '.' -> if { true => dotted! } }
-            [UInt8; ~] => nameBytes!
-            traitBytes! -> each byte { nameBytes! -> push(byte) }
-            ((owner.bytes -> len) > 0 and owner.bytes[0] == '[') or not dotted!
-                -> if {
-                    nameBytes! -> len => before
-                    context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], nameBytes!)
-                    (nameBytes! -> len) > before -> if { nameBytes! -> push('.') }
-                }
-            owner.bytes -> each byte { nameBytes! -> push(byte) }
-            nameBytes! -> push('.')
-            context -> typeTokenText(package, context.sourceModule, function.nameToken) -> appendTypeText(nameBytes!)
             [Int; ~] => members!
             0 => index!
             index! < range.symbolCount -> while {
                 package.symbols[range.symbolStart + index!] => member
-                member.kind == 30 and member.parent == function.parent
+                member.kind == 30 and member.parent == implementationSymbol
                     -> if {
                         members! -> len => position!
                         members! -> push(index!)
@@ -98,11 +82,45 @@ functionContextFields context: ref TypeFieldContext, package: ref analysis.Packa
                 rule.parts -> each part {
                     context -> sourceMemberField(package, index, part) -> when {
                         Ok(field) { associated! -> push(field) }
-                        Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) -> return }
+                        Err(error) { Result<ImplementationContextFields, DeclarationFieldError>.Err(error) -> return }
                     }
                 }
             }
-            Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: owner, name: Field { bytes: nameBytes! }, associated: associated! })
+            Result<ImplementationContextFields, DeclarationFieldError>.Ok(ImplementationContextFields { traitName: Field { bytes: traitBytes! }, owner: owner, associated: associated! })
+        }
+    }
+}
+
+functionContextFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<FunctionContextFields, DeclarationFieldError> {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol] => function
+    function.kind != 31 -> if {
+        context -> functionNameField(package) -> when {
+            Ok(field) { Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: textField(""), name: field, associated: [Field; ~] }) -> return }
+            Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) -> return }
+        }
+    }
+    function.parent < 0 -> if { Result<FunctionContextFields, DeclarationFieldError>.Err(DeclarationFieldError.InvalidInput) -> return }
+    context -> implementationContextFields(package, function.parent) -> when {
+        Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) }
+        Ok(fields) {
+            [UInt8; ~] => nameBytes!
+            (fields.traitName.bytes -> len) > 0 -> if {
+                fields.traitName.bytes -> each byte { nameBytes! -> push(byte) }
+                nameBytes! -> push('.')
+            }
+            false => dotted!
+            fields.owner.bytes -> each byte { byte == '.' -> if { true => dotted! } }
+            ((fields.owner.bytes -> len) > 0 and fields.owner.bytes[0] == '[') or not dotted!
+                -> if {
+                    nameBytes! -> len => before
+                    context -> appendTypeNamespace(package, context.sourceModule, context.identities[context.sourceModule], nameBytes!)
+                    (nameBytes! -> len) > before -> if { nameBytes! -> push('.') }
+                }
+            fields.owner.bytes -> each byte { nameBytes! -> push(byte) }
+            nameBytes! -> push('.')
+            context -> typeTokenText(package, context.sourceModule, function.nameToken) -> appendTypeText(nameBytes!)
+            Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: fields.owner, name: Field { bytes: nameBytes! }, associated: fields.associated })
         }
     }
 }

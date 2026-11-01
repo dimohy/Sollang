@@ -192,7 +192,7 @@ internal static class NativeTestRunner
                     ? function with { IsPublic = true }
                     : function)
                 .ToArray(),
-            harness.Statements);
+            harness.Statements, Implementations: program.Implementations);
     }
 
     private static string TestOutputPath(CliOptions options)

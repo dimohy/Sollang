@@ -9,7 +9,16 @@ internal sealed record SollangProgram(
     IReadOnlyList<FunctionDeclaration> Functions,
     IReadOnlyList<Statement> Statements,
     IReadOnlyList<NativeLibraryImport>? NativeLibraries = null,
-    IReadOnlyList<SourceStyleNote>? StyleNotes = null);
+    IReadOnlyList<SourceStyleNote>? StyleNotes = null,
+    IReadOnlyList<ImplementationDeclaration>? Implementations = null);
+
+internal sealed record ImplementationDeclaration(
+    string? TraitName,
+    string OwnerType,
+    IReadOnlyDictionary<string, string> AssociatedTypes,
+    int Line,
+    int Column,
+    string ModuleName);
 
 internal sealed record SourceStyleNote(
     string Code,

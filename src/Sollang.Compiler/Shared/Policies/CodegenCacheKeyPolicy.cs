@@ -105,7 +105,8 @@ internal enum CodegenKeyPart
     StableParameters,
     StableBlockParameters,
     StableAssociated,
-    StableEffects
+    StableEffects,
+    InterfaceImplementations
 }
 
 internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<CodegenKeyPart> Parts);
@@ -191,7 +192,7 @@ internal static class CodegenCacheKeyPolicy
     // This plan contributes no domain field to the module's interface stream.
     public static CodegenKeyRule InterfaceDeclarations() => new("interface-declarations",
         [CodegenKeyPart.InterfaceStructs, CodegenKeyPart.InterfaceEnums,
-            CodegenKeyPart.InterfaceTraits, CodegenKeyPart.InterfaceFunctions]);
+            CodegenKeyPart.InterfaceTraits, CodegenKeyPart.InterfaceFunctions, CodegenKeyPart.InterfaceImplementations]);
 
     // Nested record layouts contribute only their parts, without a domain field.
     public static CodegenKeyRule NamedTypeFields() => new("named-type-fields",
@@ -206,6 +207,9 @@ internal static class CodegenCacheKeyPolicy
     public static CodegenKeyRule TraitMethodFields() => new("trait-method-fields",
         [CodegenKeyPart.MemberName, CodegenKeyPart.MemberOwnership, CodegenKeyPart.MemberType,
             CodegenKeyPart.MethodParameterCount, CodegenKeyPart.MethodParameters]);
+
+    public static CodegenKeyRule ImplementationInterface() => new("impl",
+        [CodegenKeyPart.MemberName, CodegenKeyPart.MemberType, CodegenKeyPart.FunctionAssociatedTypes]);
 
     public static CodegenKeyRule FunctionBlockFields() => new("function-block-fields",
         [CodegenKeyPart.BlockInput, CodegenKeyPart.BlockResult]);

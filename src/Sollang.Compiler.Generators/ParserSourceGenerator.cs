@@ -307,6 +307,7 @@ internal static class ParserEmitter
         builder.AppendLine("    private readonly HashSet<string> _activeAssociatedTypeNames = new(StringComparer.Ordinal);");
         builder.AppendLine("    private readonly HashSet<string> _activeGenericParameterNames = new(StringComparer.Ordinal);");
         builder.AppendLine("    private readonly List<StructDeclaration> _nestedStructs = [];");
+        builder.AppendLine("    private readonly List<ImplementationDeclaration> _implementationDeclarations = [];");
         builder.AppendLine("    private readonly HashSet<string> _knownNestedTypeNames = new(StringComparer.Ordinal);");
         builder.AppendLine("    private readonly Stack<string> _activeTypeScopes = new();");
         builder.AppendLine();
@@ -381,7 +382,7 @@ internal static class ParserEmitter
         builder.AppendLine("        SkipNewLines();");
         builder.AppendLine("        Expect(TokenKind.End);");
         builder.AppendLine("        var imports = _imports.Select(static pair => new ImportDeclaration(pair.Value, pair.Key)).ToArray();");
-        builder.AppendLine("        return new SollangProgram(_namespacePath, imports, structs, enums, traits, functions, statements, nativeLibraries, SourceStyleAnalyzer.Analyze(tokens, string.Join('.', _namespacePath)));");
+        builder.AppendLine("        return new SollangProgram(_namespacePath, imports, structs, enums, traits, functions, statements, nativeLibraries, SourceStyleAnalyzer.Analyze(tokens, string.Join('.', _namespacePath)), _implementationDeclarations.ToArray());");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public Expression ParseExpressionFragment()");
@@ -577,7 +578,7 @@ internal static class ParserEmitter
         builder.AppendLine("    private IReadOnlyList<FunctionDeclaration> ParseImplDeclaration()");
         builder.AppendLine("    {");
         builder.AppendLine("        // ImplDeclaration permits a nominal/builtin Path or a concrete array storage type as its owner.");
-        builder.AppendLine("        ExpectIdentifier(\"impl\");");
+        builder.AppendLine("        var keyword = ExpectIdentifier(\"impl\");");
         builder.AppendLine("        var firstType = ParseImplOwnerType();");
         builder.AppendLine("        string? traitName = null;");
         builder.AppendLine("        var ownerType = firstType;");
@@ -616,6 +617,7 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine("        Expect(TokenKind.RightBrace);");
         builder.AppendLine("        _activeTypeScopes.Pop();");
+        builder.AppendLine("        _implementationDeclarations.Add(new ImplementationDeclaration(traitName, ownerType, implAssociatedTypes, keyword.Line, keyword.Column, string.Join('.', _namespacePath)));");
         builder.AppendLine("        return methods;");
         builder.AppendLine("    }");
         builder.AppendLine();

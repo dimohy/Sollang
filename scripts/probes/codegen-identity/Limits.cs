@@ -86,6 +86,9 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
         }).ToArray();
         Console.WriteLine(JsonSerializer.Serialize(new
         {
+            typeUniverseHash = (ulong)cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [types])!,
+            declarationFingerprint = Convert.ToHexString((byte[])Property(bound, "StableDeclarationFingerprint")!),
+            implementations = Property(program, "Implementations"),
             candidateValidation = validation,
             types = ids.Order().Select(id => new { id,
                 name = (string)format.Invoke(semantic, [Enum.ToObject(typeEnum, id)])!,
