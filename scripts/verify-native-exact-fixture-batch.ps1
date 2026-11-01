@@ -431,6 +431,35 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "native-exact-fixture-receipt.ps1")
 . (Join-Path $PSScriptRoot "native-exact-batch-allocation.ps1")
 . (Join-Path $PSScriptRoot "verification-process.ps1")
+function Assert-NativeExactBatchLlvmOracleInputs {
+    param([string]$ExpectedRoot, [string]$Fixture, [string]$Side)
+    $prefix = if ($Side -ceq 'managed') { 'llvm' } else { 'selfhost.llvm' }
+    $countsPath = Join-Path $ExpectedRoot "$Fixture.$prefix.regex-counts.txt"
+    foreach ($path in @($countsPath, (Join-Path $ExpectedRoot "$Fixture.$prefix.ordered-regex.txt"))) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $lines = @([IO.File]::ReadAllLines($path) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($lines.Count -eq 0) { throw "EXACT_LLVM_EMPTY_ORACLE: $path" }
+        foreach ($line in $lines) {
+            $pattern = $line
+            if ($path -ceq $countsPath) {
+                $fields = $line.Split("`t", 2)
+                $count = 0
+                if ($fields.Length -ne 2 -or -not [int]::TryParse($fields[0], [ref]$count) -or $count -lt 0) {
+                    throw "EXACT_LLVM_INVALID_REGEX_COUNT: $path"
+                }
+                $pattern = $fields[1]
+            }
+            if ([string]::IsNullOrWhiteSpace($pattern)) { throw "EXACT_LLVM_INVALID_REGEX: ${Fixture}: $path" }
+            # Source declarations own complete keys. Include captures and backreferences,
+            # not just the character-class spelling of the obsolete physical coordinates.
+            if ($Side -ceq 'selfhost' -and $pattern -match '@sollang_m(?![A-Za-z_])|%sollang\\\.struct\\\.m(?![A-Za-z_])') {
+                throw "EXACT_LLVM_STALE_SOURCE_COORDINATE: ${Fixture}: $path"
+            }
+            try { [void][regex]::new($pattern) }
+            catch { throw "EXACT_LLVM_INVALID_REGEX: ${Fixture}: $path" }
+        }
+    }
+}
 function Assert-NativeExactBatchGenerationInventory {
     param([string]$RepositoryRoot, $Contract)
     if ($Contract.phase -cne 'parsing') { return }
@@ -485,6 +514,12 @@ foreach ($fixtureName in $Fixture) {
     $fixtureExpected = Join-Path $RepositoryRoot "examples/regression/expected/$fixtureName.stdout.txt"
     if (-not (Test-Path -LiteralPath $fixtureExpected -PathType Leaf)) {
         throw "native exact batch fixture expectation is missing: $fixtureExpected"
+    }
+    $oracleSides = if (-not [string]::IsNullOrWhiteSpace($PhaseExecutionContract)) {
+        @('managed', 'selfhost')
+    } elseif ([IO.Path]::GetExtension($Compiler) -ieq '.dll') { @('managed') } else { @('selfhost') }
+    foreach ($oracleSide in $oracleSides) {
+        Assert-NativeExactBatchLlvmOracleInputs -ExpectedRoot (Split-Path -Parent $fixtureExpected) -Fixture $fixtureName -Side $oracleSide
     }
 }
 . (Join-Path $PSScriptRoot "native-exact-source-closure.ps1")
