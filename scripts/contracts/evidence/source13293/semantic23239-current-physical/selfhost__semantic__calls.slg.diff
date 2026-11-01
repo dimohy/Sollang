@@ -1,0 +1,104 @@
+diff --git a/selfhost/semantic/calls.slg b/selfhost/semantic/calls.slg
+index a37878ddf..cd2eecb20 100644
+--- a/selfhost/semantic/calls.slg
++++ b/selfhost/semantic/calls.slg
+@@ -367,5 +367,5 @@ globalAliasNamespace marker: Int -> Text {
+ globalFunctionAlias marker: Int -> Bool => (marker -> globalAliasNamespace -> len) > 0
+ 
+-canonicalAliasMarker source: Text, token: syntax.SyntaxToken, moduleName: Text -> Int {
++public canonicalAliasMarker source: Text, token: syntax.SyntaxToken, moduleName: Text -> Int {
+     moduleName == "sys.random" -> if {
+         TokenNameRequest { source: source, token: token, expected: "seed" } -> tokenNameIs
+@@ -817,4 +817,5 @@ declaredPackageCallableKind package: ref analysis.PackageAnalysis, sourceIndex:
+ # module functions. Both single-source and package calls share this authority.
+ struct LexicalFunctionIndex {
++    tokenCount: Int
+     functionSymbolByAst: [Int; ~]
+     firstFunctionByScope: [Int; ~]
+@@ -852,5 +853,8 @@ indexLexicalFunctions tokens: ref [syntax.SyntaxToken; ~], table: ref [symbols.S
+         (declaration.kind == 7 or declaration.kind == 31)
+             and declaration.parent >= -1 and declaration.parent < symbolCount
+-            and not (declaration -> symbols.hasQualifiedFunctionName(tokens, tokenStart, tokenCount))
++            and (not (declaration -> symbols.hasQualifiedFunctionName(tokens, tokenStart, tokenCount))
++            or (declaration.parent >= 0
++            and (table[symbolStart + declaration.parent].kind == 7
++            or table[symbolStart + declaration.parent].kind == 31)))
+             -> if {
+                 declaration.parent + 1 => scope
+@@ -860,5 +864,54 @@ indexLexicalFunctions tokens: ref [syntax.SyntaxToken; ~], table: ref [symbols.S
+         symbol! - 1 => symbol!
+     }
+-    LexicalFunctionIndex { functionSymbolByAst: functionSymbolByAst!, firstFunctionByScope: firstFunctionByScope!, nextFunctionBySymbol: nextFunctionBySymbol! }
++    LexicalFunctionIndex { tokenCount: tokenCount, functionSymbolByAst: functionSymbolByAst!, firstFunctionByScope: firstFunctionByScope!, nextFunctionBySymbol: nextFunctionBySymbol! }
++}
++
++lexicalNameToken tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int, start: Int, direction: Int -> Int {
++    start => index!
++    index! >= 0 and index! < tokenCount
++        and (tokens[tokenStart + index!].kind == grammar.triviaIdWhitespace()
++        or tokens[tokenStart + index!].kind == grammar.triviaIdComment())
++        -> while { index! + direction => index! }
++    index!
++}
++
++# Flow indexing records the final name segment; direct calls record the first.
++# Normalize both to the whole path before applying lexical shadowing.
++lexicalFunctionNameMatches source: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int, nameToken: Int, declarationToken: Int -> Bool {
++    nameToken => left!
++    left! > 0 -> while {
++        tokens -> lexicalNameToken(tokenStart, tokenCount, left! - 1, -1) => dot
++        dot < 0 or tokens[tokenStart + dot].kind != grammar.tokenIdDot()
++            -> if { break }
++        tokens -> lexicalNameToken(tokenStart, tokenCount, dot - 1, -1) => previous
++        previous < 0 or tokens[tokenStart + previous].kind != grammar.tokenIdIdentifier()
++            -> if { false -> return }
++        previous => left!
++    }
++    declarationToken => right!
++    left! >= 0 and left! < tokenCount and right! >= 0 and right! < tokenCount
++        -> while {
++            tokens[tokenStart + left!] => leftToken
++            tokens[tokenStart + right!] => rightToken
++            leftToken.kind != grammar.tokenIdIdentifier() or rightToken.kind != grammar.tokenIdIdentifier()
++                or leftToken.span.length != rightToken.span.length
++                -> if { false -> return }
++            UIntSize(0) => byteIndex!
++            byteIndex! < leftToken.span.length -> while {
++                (source -> byte(leftToken.span.start + byteIndex!)) != (source -> byte(rightToken.span.start + byteIndex!))
++                    -> if { false -> return }
++                byteIndex! + 1 => byteIndex!
++            }
++            tokens -> lexicalNameToken(tokenStart, tokenCount, left! + 1, 1) => leftDot
++            tokens -> lexicalNameToken(tokenStart, tokenCount, right! + 1, 1) => rightDot
++            leftDot < tokenCount and tokens[tokenStart + leftDot].kind == grammar.tokenIdDot() => leftContinues
++            rightDot < tokenCount and tokens[tokenStart + rightDot].kind == grammar.tokenIdDot() => rightContinues
++            (leftContinues and not rightContinues) or (rightContinues and not leftContinues)
++                -> if { false -> return }
++            not leftContinues -> if { true -> return }
++            tokens -> lexicalNameToken(tokenStart, tokenCount, leftDot + 1, 1) => left!
++            tokens -> lexicalNameToken(tokenStart, tokenCount, rightDot + 1, 1) => right!
++        }
++    false
+ }
+ 
+@@ -872,18 +925,10 @@ resolveLexicalFunction source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [s
+     }
+     index.functionSymbolByAst[callerFunctionAst! + 1] => scope!
+-    tokens[tokenStart + nameToken] => callName
+     scope! >= -1 -> while {
+         index.firstFunctionByScope[scope! + 1] => symbolIndex!
+         symbolIndex! >= 0 -> while {
+             table[symbolStart + symbolIndex!] => candidate
+-            tokens[tokenStart + candidate.nameToken] => functionName
+-            callName.span.length == functionName.span.length => equal!
+-            UIntSize(0) => nameByte!
+-            equal! and nameByte! < callName.span.length -> while {
+-                (source -> byte(callName.span.start + nameByte!)) != (source -> byte(functionName.span.start + nameByte!))
+-                    -> if { false => equal! }
+-                nameByte! + 1 => nameByte!
+-            }
+-            equal! and (callKind == 10 or callKind == 11 or callKind == 48 or callKind == 77 or candidate.secondaryTypeNode < 0)
++            source -> lexicalFunctionNameMatches(tokens, tokenStart, index.tokenCount, nameToken, candidate.nameToken) => equal
++            equal and (callKind == 10 or callKind == 11 or callKind == 48 or callKind == 77 or candidate.secondaryTypeNode < 0)
+                 -> if { symbolIndex! -> return }
+             index.nextFunctionBySymbol[symbolIndex!] => symbolIndex!

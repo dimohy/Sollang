@@ -1,0 +1,109 @@
+diff --git a/selfhost/semantic/type_ids.slg b/selfhost/semantic/type_ids.slg
+index 0fc6fed8f..6e37554df 100644
+--- a/selfhost/semantic/type_ids.slg
++++ b/selfhost/semantic/type_ids.slg
+@@ -11,4 +11,31 @@ import sollang.compiler.syntax as syntax
+ import syntax.generated.slg as grammar
+ 
++# A nested declaration inherits outer type parameters; its own parameter names
++# shadow them. Source coordinates select symbols, never type identities.
++lexicalTypeParameter package: ref analysis.PackageAnalysis, sourceModule: Int, owner: Int, name: syntax.SyntaxToken -> Int {
++    package.ranges[sourceModule] => range
++    package.sources[sourceModule] -> slice(0, package.sources[sourceModule] -> len) => source
++    owner => scope!
++    scope! >= 0 -> while {
++        0..<range.symbolCount -> each index {
++            package.symbols[range.symbolStart + index] => candidate
++            candidate.kind == 32 and candidate.parent == scope!
++                -> if {
++                    package.tokens[range.tokenStart + candidate.nameToken] => token
++                    name.span.length == token.span.length => equal!
++                    UIntSize(0) => offset!
++                    equal! and offset! < name.span.length -> while {
++                        (source -> byte(name.span.start + offset!)) != (source -> byte(token.span.start + offset!))
++                            -> if { false => equal! }
++                        offset! + 1 => offset!
++                    }
++                    equal! -> if { index -> return }
++                }
++        }
++        package.symbols[range.symbolStart + scope!].parent => scope!
++    }
++    -1
++}
++
+ # Only the literal's own storage suffix contributes to its collection shape.
+ # Nested arrays, records and calls retain independent storage contracts.
+@@ -1589,4 +1616,42 @@ public classifyWithResources sourceTypes: ref [SemanticType; ~], sourceFields: r
+ 
+ # Resolves and globally interns recursive annotation types across source files.
++# Register declaration identities before resolving uses, including unused empty
++# structs and payload-free enums. Keep supplied and affine identities intact.
++seedDeclaredNominalTypes package: ref analysis.PackageAnalysis, types: mut [SemanticType; ~] -> Unit {
++    [Bool; ~] => registered!
++    package.symbols -> each _ { registered! -> push(false) }
++    types -> each known {
++        ((known.kind == 1 and (known.origin == 0 or known.origin == 2)) or known.kind == 9)
++            and known.module >= 0 and known.module < (package.ranges -> len) and known.status == 0
++            -> if {
++                package.ranges[known.module] => range
++                known.symbol >= 0 and known.symbol < range.symbolCount
++                    -> if {
++                        true => registered![range.symbolStart + known.symbol]
++                    }
++            }
++    }
++    [3, 4] -> each kind {
++        0 => source!
++        source! < (package.ranges -> len) -> while {
++            package.ranges[source!] => range
++            0 => symbol!
++            symbol! < range.symbolCount -> while {
++                package.symbols[range.symbolStart + symbol!].kind == kind and not registered![range.symbolStart + symbol!]
++                    -> if {
++                        types -> push(SemanticType {
++                            kind: 1, origin: 0, module: source!, symbol: symbol!,
++                            first: -1, second: -1, length: -1, lengthHash: 0,
++                            containsParameter: false, status: 0
++                        })
++                        true => registered![range.symbolStart + symbol!]
++                    }
++                symbol! + 1 => symbol!
++            }
++            source! + 1 => source!
++        }
++    }
++}
++
+ # Nominal equality uses declaration identity, not source spelling.
+ public resolve sources: [Text; ~] -> SemanticTypeSet {
+@@ -1683,4 +1748,6 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
+         }
+ 
++    package -> seedDeclaredNominalTypes(semanticTypes!)
++
+     # A trait object has its own canonical identity and two-pointer storage.
+     # Seed declarations before parsing uses so conversions and signatures share it.
+@@ -1844,5 +1911,5 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
+                                                 ownerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
+                                             }
+-                                            -1 => localSymbol!
++                                            package -> lexicalTypeParameter(sourceIndex!, ownerFunction!, name) => localSymbol!
+                                             0 => symbolIndex!
+                                             symbolIndex! < sourceRange.symbolCount and localSymbol! < 0
+@@ -2652,6 +2719,6 @@ public specializeManyWithIntegerValueInto types: mut [SemanticType; ~], inputTem
+                                         }
+                                     existing! < 0 -> if {
+-                                        types -> len => existing!
+-                                        types -> push(SemanticType {
++                                        types -> allocateSemanticTypeSlot => existing!
++                                        SemanticType {
+                                             kind: current.kind
+                                             origin: current.origin
+@@ -2664,5 +2731,5 @@ public specializeManyWithIntegerValueInto types: mut [SemanticType; ~], inputTem
+                                             containsParameter: containsParameter!
+                                             status: current.status
+-                                        })
++                                        } => types[existing!]
+                                     }
+                                     existing! => replacementType!

@@ -1,0 +1,524 @@
+diff --git a/selfhost/semantic/expression_type_ids_resolution_phases.slg b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+index 20724a8b9..16228c934 100644
+--- a/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -117,6 +117,13 @@ primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mu
+     reference.status != 0 or reference.typeId < 0 or reference.typeId >= (types -> len)
+         -> if { -1 -> return }
+-    not types[reference.typeId].containsParameter
+-        -> if { reference.typeId -> return }
++    specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, roleCallAst, reference.typeId, -1, -1)
++}
++
++specializeBlockContractTypeId prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, callAst: Int, declaredTypeId: Int, resultTemplate: Int, resultActual: Int -> Int {
++    declaredTypeId < 0 or declaredTypeId >= (types -> len)
++        -> if { -1 -> return }
++    not types[declaredTypeId].containsParameter
++        -> if { declaredTypeId -> return }
++    prepared.package.ranges[sourceIndex] => range
+     [Int; ~] => templates!
+     [Int; ~] => actuals!
+@@ -124,5 +131,5 @@ primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mu
+     false => unresolved!
+     argumentBindings -> each binding {
+-        binding.sourceModule == sourceIndex and binding.callAst == roleCallAst
++        binding.sourceModule == sourceIndex and binding.callAst == callAst
+             -> if {
+                 not seeded! -> if {
+@@ -143,6 +150,10 @@ primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mu
+             }
+     }
++    resultTemplate >= 0 and resultActual >= 0 -> if {
++        templates! -> push(resultTemplate)
++        actuals! -> push(resultActual)
++    }
+     unresolved! or (templates! -> len) == 0 -> if { -1 -> return }
+-    types -> typeIds.specializeManyInto(templates!, actuals!, reference.typeId) => specialized
++    types -> typeIds.specializeManyInto(templates!, actuals!, declaredTypeId) => specialized
+     specialized.status == 0 and specialized.root >= 0
+         -> if {
+@@ -153,4 +164,89 @@ primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mu
+ }
+ 
++resolveUserBlockContracts prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~] -> [ResolvedUserBlockContract; ~] {
++    [ResolvedUserBlockContract; ~] => contracts!
++    prepared.package -> indexUserBlockResultRoots => roots
++    prepared.calls -> each call {
++        call.status == 0 and call.targetSourceModule >= 0
++            -> if {
++                prepared.package.ranges[call.sourceModule] => caller
++                prepared.package.ranges[call.targetSourceModule] => target
++                prepared.package.symbols[target.symbolStart + call.functionSymbol] => function
++                prepared.package.nodes[caller.astStart + call.callAst].kind == 48 and function.blockTypeNode >= 0
++                    -> if {
++                        -1 => inputType!
++                        referenceIndexByTypeAst[target.astStart + function.blockTypeNode] => inputReference
++                        inputReference >= 0 and references[inputReference].status == 0
++                            -> if {
++                                specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, references[inputReference].typeId, -1, -1) => inputType!
++                            }
++                        types -> typeIds.builtinTypeId(0) => expected!
++                        roots[caller.astStart + call.callAst] => root
++                        -1 => actual!
++                        root >= 0 -> if {
++                            expressionIndexByAst[root] => expressionIndex
++                            expressionIndex >= 0 and expressions[expressionIndex].status == 0
++                                -> if { expressions[expressionIndex].typeId => actual! }
++                        }
++                        function.blockResultTypeNode >= 0 -> if {
++                            -1 => expected!
++                            referenceIndexByTypeAst[target.astStart + function.blockResultTypeNode] => referenceIndex
++                            referenceIndex >= 0 and references[referenceIndex].status == 0
++                                -> if {
++                                    references[referenceIndex].typeId => template
++                                    specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, template, -1, -1) => expected!
++                                    expected! < 0 and actual! >= 0 -> if {
++                                        specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, template, template, actual!) => expected!
++                                    }
++                                }
++                        }
++                        contracts! -> push(ResolvedUserBlockContract { sourceModule: call.sourceModule, callAst: call.callAst, targetSourceModule: call.targetSourceModule, functionSymbol: call.functionSymbol, resultAst: root >= 0
++                                -> if { root - caller.astStart } else { -1 }, expectedInputTypeId: inputType!, expectedResultTypeId: expected!, actualResultTypeId: actual! })
++                    }
++            }
++    }
++    contracts!
++}
++
++publishPrimaryBlockRoleRead prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, role: symbols.Symbol, readAst: Int -> Bool {
++    prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role) => roleTypeId
++    roleTypeId < 0 -> if { false -> return }
++    prepared.package.ranges[sourceIndex].astStart + readAst => globalAst
++    expressionIndexByAst[globalAst] => existing
++    existing >= 0 -> if {
++        expressions[existing].typeId == roleTypeId and expressions[existing].status == 0
++            -> if { false -> return }
++    }
++    ExpressionTypeId { sourceModule: sourceIndex, astNode: readAst, typeId: roleTypeId, status: 0 } => exactType
++    existing >= 0 -> if {
++        exactType => expressions[existing]
++    } else {
++        expressions -> len => expressionIndex
++        expressions -> push(exactType)
++        expressionIndex => expressionIndexByAst[globalAst]
++    }
++    true
++}
++
++resolveDeclaredBlockRoleReads prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~] -> Bool {
++    # Additional arguments can become concrete after initial expression typing.
++    # Publish the specialized declaration before dependent member paths resolve.
++    false => changed!
++    0..<(prepared.package.ranges -> len) -> each sourceIndex {
++        prepared.package.ranges[sourceIndex] => range
++        0..<range.nameCount -> each nameIndex {
++            prepared.package.names[range.nameStart + nameIndex] => name
++            name.symbol >= 0 -> if {
++                prepared.package.symbols[range.symbolStart + name.symbol] => role
++                role.kind == 35 -> if {
++                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role, name.astNode)
++                        -> if { true => changed! }
++                }
++            }
++        }
++    }
++    changed!
++}
++
+ # Arithmetic returns the resolved left operand type. The canonical result
+ # belongs to the operator AST, before bindings and conversion arguments read it.
+@@ -290,8 +386,8 @@ resolveMissingUnaryExpressionTypes prepared: ref semanticContext.SemanticSnapsho
+ }
+ 
+-# Match BindingStatement's InferContextualValue: a rebind literal receives the
+-# visible original owner's numeric type. Non-literal values retain their own
+-# type so a mismatched rebind remains diagnosable before lowering.
+-resolveMutableRebindLiteralTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], owners: ref [Int; ~], bindingValues: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~] -> Bool {
++# BindingStatement supplies the original owner's numeric context to its value.
++# Reuse the field-value walk for terminal control arms and arithmetic; named
++# values, conditions and earlier branch statements retain independent types.
++resolveMutableRebindNumericTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], owners: ref [Int; ~], bindingValues: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedContextByAst: mut [Int; ~] -> Bool {
+     false => changed!
+     prepared.package.ranges -> each range {
+@@ -302,30 +398,16 @@ resolveMutableRebindLiteralTypes prepared: ref semanticContext.SemanticSnapshot,
+             owner != globalSymbol and bindingValues[owner] >= 0 and bindingValues[globalSymbol] >= 0
+                 -> if {
+-                    bindingValues[globalSymbol] => valueGlobal
+-                    prepared.package.nodes[valueGlobal] => value
+-                    value.kind == 14 -> if {
+-                        expressionIndexByAst[bindingValues[owner]] => ownerExpression
+-                        expressionIndexByAst[valueGlobal] => valueExpression
+-                        ownerExpression >= 0 and valueExpression >= 0
++                    expressionIndexByAst[bindingValues[owner]] => ownerExpression
++                    ownerExpression >= 0 -> if {
++                        expressions[ownerExpression].typeId => ownerTypeId
++                        ownerTypeId >= 0 and ownerTypeId < (types -> len)
+                             -> if {
+-                                expressions[ownerExpression].typeId => ownerTypeId
+-                                ownerTypeId >= 0 and ownerTypeId < (types -> len)
++                                types[ownerTypeId] => ownerType
++                                ownerType.kind == 1 and ownerType.origin == 1
++                                    and ((ownerType.symbol >= 2 and ownerType.symbol <= 13)
++                                    or (ownerType.symbol >= 19 and ownerType.symbol <= 22))
+                                     -> if {
+-                                        types[ownerTypeId] => ownerType
+-                                        ownerType.kind == 1 and ownerType.origin == 1
+-                                            and ((ownerType.symbol >= 2 and ownerType.symbol <= 13)
+-                                            or (ownerType.symbol >= 19 and ownerType.symbol <= 22))
+-                                            -> if {
+-                                                prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => source
+-                                                source -> numericLiteralRange.literalUsesFloatingSyntax(value.start, value.start + value.length) => floatingSyntax
+-                                                (not floatingSyntax or ownerType.symbol >= 19)
+-                                                    and expressions[valueExpression].typeId != ownerTypeId
+-                                                    -> if {
+-                                                        expressions[valueExpression] => contextual!
+-                                                        ownerTypeId => contextual!.typeId
+-                                                        contextual! => expressions[valueExpression]
+-                                                        true => changed!
+-                                                    }
+-                                            }
++                                        prepared.package -> resolveContextualRecordFieldValue(types, expressions, expressionIndexByAst, index, range.sourceModule, bindingValues[globalSymbol], ownerTypeId, expectedContextByAst)
++                                            -> if { true => changed! }
+                                     }
+                             }
+@@ -394,5 +476,5 @@ public declaredNumericReturnContextByAst package: ref analysis.PackageAnalysis,
+                                     (resultType.kind == 1 and resultType.origin == 1
+                                         and resultType.symbol >= 2 and resultType.symbol <= 13) => numericReturn!
+-                                    (resultType.kind == 3 or resultType.kind == 4 or resultType.kind == 12)
++                                    (resultType.kind == 2 or resultType.kind == 3 or resultType.kind == 4 or resultType.kind == 12)
+                                         and resultType.first >= 0 and resultType.first < (types -> len)
+                                         -> if {
+@@ -469,5 +551,5 @@ public declaredNumericReturnContextByAst package: ref analysis.PackageAnalysis,
+             -> if {
+                 types[expected![globalAst]] => expectedArray
+-                expectedArray.kind == 3 or expectedArray.kind == 4 or expectedArray.kind == 12
++                expectedArray.kind == 2 or expectedArray.kind == 3 or expectedArray.kind == 4 or expectedArray.kind == 12
+                     -> if {
+                         firstChild![globalAst] => element!
+@@ -1182,6 +1264,6 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                             }
+                             typedArrayType! < 0 -> if {
+-                                types -> len => typedArrayType!
+-                                types -> push(typeIds.SemanticType {
++                                types -> typeIds.allocateSemanticTypeSlot => typedArrayType!
++                                typeIds.SemanticType {
+                                     kind: typedArrayKind!
+                                     origin: -1
+@@ -1194,5 +1276,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                     containsParameter: types[typedArrayElementType!].containsParameter
+                                     status: 0
+-                                })
++                                } => types[typedArrayType!]
+                             }
+                             typedArrayType! => builtinTypeId!
+@@ -1259,6 +1341,6 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                 }
+                             typedDictionaryType! < 0 -> if {
+-                                types -> len => typedDictionaryType!
+-                                types -> push(typeIds.SemanticType {
++                                types -> typeIds.allocateSemanticTypeSlot => typedDictionaryType!
++                                typeIds.SemanticType {
+                                     kind: typedDictionaryKind!
+                                     origin: -1
+@@ -1271,5 +1353,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                     containsParameter: types[typedDictionaryKeyType!].containsParameter or types[typedDictionaryValueType!].containsParameter
+                                     status: 0
+-                                })
++                                } => types[typedDictionaryType!]
+                             }
+                             typedDictionaryType! => builtinTypeId!
+@@ -1409,6 +1491,6 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                     }
+                                 standardFlowEnumTypeId! < 0 -> if {
+-                                    types -> len => standardFlowEnumTypeId!
+-                                    types -> push(typeIds.SemanticType {
++                                    types -> typeIds.allocateSemanticTypeSlot => standardFlowEnumTypeId!
++                                    typeIds.SemanticType {
+                                         kind: 7
+                                         origin: 4
+@@ -1422,5 +1504,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                             -> if { types[standardFlowSecondType!].containsParameter } else { false })
+                                         status: 0
+-                                    })
++                                    } => types[standardFlowEnumTypeId!]
+                                 }
+                                 standardFlowEnumTypeId! => builtinTypeId!
+@@ -1471,6 +1553,6 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                     }
+                                 collectionTypeId! < 0 -> if {
+-                                    types -> len => collectionTypeId!
+-                                    types -> push(typeIds.SemanticType {
++                                    types -> typeIds.allocateSemanticTypeSlot => collectionTypeId!
++                                    typeIds.SemanticType {
+                                         kind: 7
+                                         origin: 4
+@@ -1483,5 +1565,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                         containsParameter: types[collectionElementType!].containsParameter
+                                         status: 0
+-                                    })
++                                    } => types[collectionTypeId!]
+                                 }
+                                 collectionTypeId! => builtinTypeId!
+@@ -1520,6 +1602,6 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                 }
+                             bitSetTypeId! < 0 -> if {
+-                                types -> len => bitSetTypeId!
+-                                types -> push(typeIds.SemanticType {
++                                types -> typeIds.allocateSemanticTypeSlot => bitSetTypeId!
++                                typeIds.SemanticType {
+                                     kind: 14
+                                     origin: 4
+@@ -1532,5 +1614,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                     containsParameter: false
+                                     status: 0
+-                                })
++                                } => types[bitSetTypeId!]
+                             }
+                             bitSetTypeId! => builtinTypeId!
+@@ -1725,8 +1807,8 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                             }
+                         nominalTypeId! < 0 -> if {
+-                            types -> len => nominalTypeId!
++                            types -> typeIds.allocateSemanticTypeSlot => nominalTypeId!
+                             2 => literalOrigin!
+                             literalTargetModule! == sourceIndex! -> if { 0 => literalOrigin! }
+-                            types -> push(typeIds.SemanticType {
++                            typeIds.SemanticType {
+                                 kind: 1
+                                 origin: literalOrigin!
+@@ -1739,5 +1821,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                 containsParameter: false
+                                 status: 0
+-                            })
++                            } => types[nominalTypeId!]
+                         }
+                         nominalTypeId! => builtinTypeId!
+@@ -1783,16 +1865,5 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                             }
+                         }
+-                    prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex!, valueSymbol) => roleTypeId
+-                    roleTypeId >= 0 -> if {
+-                        expressionIndexByAst[sourceRange.astStart + resolvedName.astNode] => roleExpressionIndex!
+-                        ExpressionTypeId { sourceModule: sourceIndex!, astNode: resolvedName.astNode, typeId: roleTypeId, status: 0 } => roleExactType
+-                        roleExpressionIndex! >= 0 -> if {
+-                            roleExactType => expressions[roleExpressionIndex!]
+-                        } else {
+-                            expressions -> len => roleExpressionIndex!
+-                            expressions -> push(roleExactType)
+-                            roleExpressionIndex! => expressionIndexByAst[sourceRange.astStart + resolvedName.astNode]
+-                        }
+-                    }
++                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex!, valueSymbol, resolvedName.astNode) => initialRoleReadChanged
+                     valueSymbol.typeNode >= 0 -> if {
+                         referenceIndexByTypeAst[sourceRange.astStart + valueSymbol.typeNode] => referenceIndex
+@@ -2544,14 +2615,57 @@ public internArrayLiteralType types: mut [typeIds.SemanticType; ~], kind: Int, e
+     }
+     found! < 0 -> if {
+-        types -> len => found!
+-        types -> push(typeIds.SemanticType {
++        types -> typeIds.allocateSemanticTypeSlot => found!
++        typeIds.SemanticType {
+             kind: kind, origin: -1, module: -1, symbol: -1, first: elementTypeId,
+             second: -1, length: length, lengthHash: 0,
+             containsParameter: types[elementTypeId].containsParameter, status: 0
+-        })
++        } => types[found!]
+     }
+     found!
+ }
+ 
++# A contextual literal can produce a growable value after registering fixed
++# backing storage. Preserve the same allocation decision as C# inference.
++registerArrayBackingFacts prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~] -> [ExpressionTypeId; ~] {
++    prepared.package -> indexContextualRecords => index
++    [ExpressionTypeId; ~] => facts!
++    prepared.package.ranges -> each range {
++        0 => astNode!
++        astNode! < range.astCount -> while {
++            range.astStart + astNode! => global
++            prepared.package.nodes[global].kind == 37 -> if {
++                -1 => context!
++                expressionIndexByAst[global] >= 0
++                    -> if { expressions[expressionIndexByAst[global]].typeId => context! }
++                context! >= 0 and context! < (types -> len)
++                    -> if {
++                        types[context!] => container
++                        (container.kind == 2 or container.kind == 3 or container.kind == 4 or container.kind == 12)
++                            and container.first >= 0 and container.first < (types -> len)
++                            -> if {
++                                prepared.package -> typeIds.arrayStorageSyntax(range.sourceModule, astNode!) => storage
++                                not storage.dynamic and not storage.bounded -> if {
++                                    0 => length!
++                                    index.firstChild[global] => child!
++                                    child! >= 0 -> while {
++                                        prepared.package.nodes[child!].kind != 12 and prepared.package.nodes[child!].kind != 16
++                                            -> if { length! + 1 => length! }
++                                        index.nextChild[child!] => child!
++                                    }
++                                    storage.isRepeat -> if { storage.length => length! }
++                                    length! >= 0 -> if {
++                                        types -> internArrayLiteralType(4, container.first, length!) => backing
++                                        facts! -> push(ExpressionTypeId { sourceModule: range.sourceModule, astNode: astNode!, typeId: backing, status: 0 })
++                                    }
++                                }
++                            }
++                    }
++            }
++            astNode! + 1 => astNode!
++        }
++    }
++    facts!
++}
++
+ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Unit {
+     # Build recursive IDs for composite literals bottom-up. This makes literal
+@@ -2762,10 +2876,10 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                                         }
+                                     existingType! < 0 -> if {
+-                                        types -> len => existingType!
++                                        types -> typeIds.allocateSemanticTypeSlot => existingType!
+                                         false => containsParameter!
+                                         firstChildType! >= 0 -> if { types[firstChildType!].containsParameter => containsParameter! }
+                                         false => secondContainsParameter!
+                                         secondChildType >= 0 -> if { types[secondChildType].containsParameter => secondContainsParameter! }
+-                                        types -> push(typeIds.SemanticType {
++                                        typeIds.SemanticType {
+                                             kind: compositeKind!
+                                             origin: -1
+@@ -2778,5 +2892,5 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                                             containsParameter: containsParameter! or secondContainsParameter!
+                                             status: 0
+-                                        })
++                                        } => types[existingType!]
+                                     }
+                                     expressions -> len => compositeExpressionIndex
+@@ -2904,6 +3018,6 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                                                     }
+                                                 directDictionaryType! < 0 -> if {
+-                                                    types -> len => directDictionaryType!
+-                                                    types -> push(typeIds.SemanticType {
++                                                    types -> typeIds.allocateSemanticTypeSlot => directDictionaryType!
++                                                    typeIds.SemanticType {
+                                                         kind: directDictionaryKind
+                                                         origin: -1
+@@ -2916,5 +3030,5 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                                                         containsParameter: types[directDictionaryFirstType!].containsParameter or types[directDictionarySecondType!].containsParameter
+                                                         status: 0
+-                                                    })
++                                                    } => types[directDictionaryType!]
+                                                 }
+                                                 expressions -> len => directDictionaryExpressionIndex
+@@ -2993,5 +3107,14 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                             productExpressionAncestor! == nextProductElement!
+                                                 -> if { true => productExpressionBelongs! } else {
+-                                                    prepared.package.nodes[productRange.astStart + productExpressionAncestor!].parent => productExpressionAncestor!
++                                                    # Product/member expressions own their result type;
++                                                    # a receiver or operand cannot replace that result
++                                                    # while member inference is still pending.
++                                                    prepared.package.nodes[productRange.astStart + productExpressionAncestor!].kind => productAncestorKind
++                                                    productAncestorKind == 71 or productAncestorKind == 36
++                                                        -> if {
++                                                            -1 => productExpressionAncestor!
++                                                        } else {
++                                                            prepared.package.nodes[productRange.astStart + productExpressionAncestor!].parent => productExpressionAncestor!
++                                                        }
+                                                     productExpressionDistance! + 1 => productExpressionDistance!
+                                                 }
+@@ -3069,5 +3192,5 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                         }
+                     productType! < 0 -> if {
+-                        types -> len => productType!
++                        types -> typeIds.allocateSemanticTypeSlot => productType!
+                         false => productContainsParameter!
+                         0 => productParameterField!
+@@ -3078,5 +3201,5 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                 productParameterField! + 1 => productParameterField!
+                             }
+-                        types -> push(typeIds.SemanticType {
++                        typeIds.SemanticType {
+                             kind: 10
+                             origin: -1
+@@ -3089,5 +3212,5 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                             containsParameter: productContainsParameter!
+                             status: 0
+-                        })
++                        } => types[productType!]
+                         0 => productNewFieldOrdinal!
+                         productNewFieldOrdinal! < Int(productFieldTypes! -> len)
+@@ -3165,8 +3288,8 @@ resolveNominalEnumOwnerType types: mut [typeIds.SemanticType; ~], targetSource:
+         }
+     enumTypeId! < 0 -> if {
+-        types -> len => enumTypeId!
++        types -> typeIds.allocateSemanticTypeSlot => enumTypeId!
+         2 => origin!
+         targetSource == sourceModule -> if { 0 => origin! }
+-        types -> push(typeIds.SemanticType {
++        typeIds.SemanticType {
+             kind: 1
+             origin: origin!
+@@ -3179,5 +3302,5 @@ resolveNominalEnumOwnerType types: mut [typeIds.SemanticType; ~], targetSource:
+             containsParameter: false
+             status: 0
+-        })
++        } => types[enumTypeId!]
+     }
+     enumTypeId!
+@@ -3644,6 +3767,6 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
+                                     }
+                                     fileMemberResultType! < 0 -> if {
+-                                        types -> len => fileMemberResultType!
+-                                        types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: 0, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
++                                        types -> typeIds.allocateSemanticTypeSlot => fileMemberResultType!
++                                        typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: 0, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 } => types[fileMemberResultType!]
+                                     }
+                                 }
+@@ -3667,6 +3790,6 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
+                                         }
+                                         fileMemberOptionType! < 0 -> if {
+-                                            types -> len => fileMemberOptionType!
+-                                            types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 0, first: fileMemberScalarType!, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
++                                            types -> typeIds.allocateSemanticTypeSlot => fileMemberOptionType!
++                                            typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 0, first: fileMemberScalarType!, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 } => types[fileMemberOptionType!]
+                                         }
+                                         0 => fileReadResultSearch!
+@@ -3678,6 +3801,6 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
+                                         }
+                                         fileMemberResultType! < 0 -> if {
+-                                            types -> len => fileMemberResultType!
+-                                            types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: fileMemberOptionType!, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
++                                            types -> typeIds.allocateSemanticTypeSlot => fileMemberResultType!
++                                            typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: fileMemberOptionType!, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 } => types[fileMemberResultType!]
+                                         }
+                                     }
+@@ -3796,6 +3919,6 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                                     parallelElementType! >= 0 and parallelArrayType! < 0
+                                         -> if {
+-                                            types -> len => parallelArrayType!
+-                                            types -> push(typeIds.SemanticType {
++                                            types -> typeIds.allocateSemanticTypeSlot => parallelArrayType!
++                                            typeIds.SemanticType {
+                                                 kind: 3
+                                                 origin: -1
+@@ -3808,5 +3931,5 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                                                 containsParameter: false
+                                                 status: 0
+-                                            })
++                                            } => types[parallelArrayType!]
+                                         }
+                                     parallelArrayType! => parallelResultType!
+@@ -3823,6 +3946,6 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                                             }
+                                             parallelWrappedResult! < 0 -> if {
+-                                                types -> len => parallelWrappedResult!
+-                                                types -> push(typeIds.SemanticType {
++                                                types -> typeIds.allocateSemanticTypeSlot => parallelWrappedResult!
++                                                typeIds.SemanticType {
+                                                     kind: 7
+                                                     origin: parallelCallbackResult.origin
+@@ -3835,5 +3958,5 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                                                     containsParameter: false
+                                                     status: 0
+-                                                })
++                                                } => types[parallelWrappedResult!]
+                                             }
+                                             parallelWrappedResult! => parallelResultType!

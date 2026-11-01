@@ -1,0 +1,254 @@
+diff --git a/selfhost/semantic/diagnostics.slg b/selfhost/semantic/diagnostics.slg
+index 6756f7eb3..6374c9881 100644
+--- a/selfhost/semantic/diagnostics.slg
++++ b/selfhost/semantic/diagnostics.slg
+@@ -10,4 +10,5 @@ import sollang.compiler.semantic.constant_collection_lowering as constantLowerin
+ import sollang.compiler.semantic.effects as effects
+ import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
++import sollang.compiler.semantic.block_value_contract_policy as blockValueContract
+ import sollang.compiler.semantic.context as semanticContext
+ import sollang.compiler.semantic.modules as modules
+@@ -20,4 +21,5 @@ import sollang.compiler.syntax as syntax
+ import sollang.compiler.diagnostics as syntaxDiagnostics
+ import syntax.generated.slg as grammar
++import sys.text as textApi
+ 
+ # One fact per missing declaration, in source and variant declaration order.
+@@ -174,6 +176,31 @@ public struct NominalFieldMismatchDiagnostic {
+ }
+ 
++traitImplementationHeader package: ref analysis.PackageAnalysis, sourceModule: Int, implementation: Int -> Bool {
++    package.ranges[sourceModule] => range
++    package.symbols[range.symbolStart + implementation] => owner
++    owner.astNode < 0 -> if { false -> return }
++    package.nodes[range.astStart + owner.astNode] => node
++    0 => depth!
++    node.firstToken + 1 => token!
++    token! < node.firstToken + node.tokenCount -> while {
++        package.tokens[range.tokenStart + token!] => part
++        depth! == 0 and part.kind == grammar.tokenIdLeftBrace()
++            -> if { false -> return }
++        part.kind == grammar.tokenIdLess() or part.kind == grammar.tokenIdLeftBracket()
++            -> if { depth! + 1 => depth! }
++        part.kind == grammar.tokenIdGreater() or part.kind == grammar.tokenIdRightBracket()
++            -> if { depth! - 1 => depth! }
++        depth! == 0 and part.span.length == 3
++            and (package.sources[sourceModule] -> byte(part.span.start)) == 'f'
++            and (package.sources[sourceModule] -> byte(part.span.start + 1)) == 'o'
++            and (package.sources[sourceModule] -> byte(part.span.start + 2)) == 'r'
++            -> if { true -> return }
++        token! + 1 => token!
++    }
++    false
++}
++
+ public struct SignatureTypeDiagnostic {
+-    # 15 rejects generic move inputs; 16 rejects generic local declarations.
++    # 15 rejects generic move inputs; 16 rejects generic trait impl declarations.
+     public code: Int
+     public sourceModule: Int
+@@ -1230,6 +1257,6 @@ firstGenericInputUsageDiagnostic package: ref analysis.PackageAnalysis -> Signat
+                 genericTokenByAst![range.astStart + function.astNode] => genericToken
+                 genericToken >= 0 -> if {
+-                    function.kind == 7 and function.parent >= 0 and function.parent < range.symbolCount
+-                        and package.symbols[range.symbolStart + function.parent].kind == 7
++                    function.kind == 31 and function.parent >= 0 and function.parent < range.symbolCount
++                        and (package -> traitImplementationHeader(sourceModule!, function.parent))
+                         -> if {
+                             SignatureTypeDiagnostic { code: 16, sourceModule: sourceModule!, functionSymbol: functionIndex!, typeAst: function.typeNode, nameToken: function.nameToken, genericToken: genericToken } -> return
+@@ -2644,4 +2671,7 @@ public struct ExpressionOperandDiagnostic {
+     public locationOffset: UIntSize
+     # Code 32 carries the missing closed-capability bit in this payload.
++    # Codes 74/75 carry expected/actual canonical IDs in operandTypeId/firstTypeId.
++    # Code 74 uses operatorKind for the target module and operandTypeSymbol for
++    # the function. Code 75 locates the producer's actual yielded value.
+     public operandTypeSymbol: Int
+     public operandTypeId: Int
+@@ -3547,4 +3577,44 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
+         }
+     }
++    # A mutable rebind supplies its original owner's context before the value
++    # is inferred. Validate the same terminal value edges used by inference;
++    # a fixed-width value must not become a truncating LLVM constant.
++    prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
++    prepared.package.ranges -> each range {
++        0 => symbolIndex!
++        symbolIndex! < range.symbolCount -> while {
++            range.symbolStart + symbolIndex! => globalSymbol
++            resolved.mutableBindingOwners[globalSymbol] => owner
++            owner >= 0 and owner != globalSymbol and bindingValues[globalSymbol] >= 0
++                -> if {
++                    resolved.lexicalBindingTypeBySymbol[owner] => expectedTypeId
++                    expectedTypeId >= 0 and expectedTypeId < (resolved.types -> len)
++                        -> if {
++                            resolved.types[expectedTypeId] => expected
++                            expected.symbol -> typeIds.canonicalBuiltinSymbol => symbol
++                            expected.kind == 1 and expected.origin == 1 and symbol >= 2 and symbol <= 14
++                                and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, bindingValues[globalSymbol] - range.astStart))
++                                -> if {
++                                    prepared.package -> expressionTypeIds.contextualNumericValueAsts(firstChild!, nextChild!, bindingValues[globalSymbol], true) => values
++                                    values -> each global {
++                                        prepared.package.nodes[global] => value
++                                        false => negativeLeaf!
++                                        value.kind == 14 and value.parent >= 0 -> if {
++                                            prepared.package.nodes[range.astStart + value.parent] => parent
++                                            parent.kind == 22 and parent.operatorKind == grammar.tokenIdMinus() => negativeLeaf!
++                                        }
++                                        not negativeLeaf! -> if {
++                                            prepared -> numericCallLiteralAt(range.sourceModule, global - range.astStart, symbol, pointerBitWidth) => candidate
++                                            candidate.code > 0 and candidate.code != 3
++                                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
++                                                -> if { candidate => selected! }
++                                        }
++                                    }
++                                }
++                        }
++                }
++            symbolIndex! + 1 => symbolIndex!
++        }
++    }
+     # A failed operand cannot erase the expected type of another source literal.
+     resolved.callArguments -> each binding {
+@@ -5170,6 +5240,5 @@ contextualRecordDiagnostic package: ref analysis.PackageAnalysis, prepared: ref
+ 
+ reservedSysPath path: Text -> Bool {
+-    (path -> len) >= 4 -> if { (path -> slice(UIntSize(0), UIntSize(4))) == "sys." -> return }
+-    false
++    path -> textApi.startsWith("sys.")
+ }
+ 
+@@ -5484,4 +5553,63 @@ contextualArithmeticArgumentDiagnostic package: ref analysis.PackageAnalysis, pr
+ }
+ 
++firstQualifiedBlockReceiverDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~] -> ExpressionOperandDiagnostic {
++    prepared.calls -> each call {
++        call.status == 7 and call.sourceModule >= 0 -> if {
++            prepared.package.ranges[call.sourceModule] => caller
++            prepared.package.nodes[caller.astStart + call.callAst] => invocation
++            invocation.kind == 48 -> if {
++                prepared.qualified -> each qualified {
++                    qualified.sourceModule == call.sourceModule and qualified.status == 0 and qualified.targetModule >= 0
++                        -> if {
++                            prepared.package.nodes[caller.astStart + qualified.pathAst] => path
++                            path.firstToken <= invocation.payloadToken and invocation.payloadToken < path.firstToken + path.tokenCount
++                                and (prepared.package -> semanticContext.declarationAncestor(call.sourceModule, call.callAst, qualified.pathAst))
++                                -> if {
++                                    prepared.modules[qualified.targetModule].sourceIndex => targetSource
++                                    prepared.package.ranges[targetSource] => target
++                                    prepared.package.symbols[target.symbolStart + qualified.targetSymbol] => method
++                                    method.kind == 31 and method.parent >= 0 and method.blockTypeNode >= 0
++                                        -> if {
++                                            prepared.package.nodes[target.astStart + method.astNode] => declaration
++                                            declaration.secondaryToken >= 0 -> if {
++                                                prepared.package.tokens[target.tokenStart + declaration.secondaryToken] => inputName
++                                                prepared.package.sources[targetSource] -> slice(inputName.span.start, inputName.span.length) => inputText
++                                                inputText == "self" -> if {
++                                                    prepared.package.symbols[target.symbolStart + method.parent] => implementation
++                                                    prepared.package -> typeIds.implOwnerTypeAst(targetSource, implementation.astNode) => ownerAst
++                                                    ownerAst >= 0 -> if {
++                                                        resolved.referenceIndexByTypeAst[target.astStart + ownerAst] => ownerReference
++                                                        ownerReference >= 0 and resolved.references[ownerReference].status == 0
++                                                            -> if {
++                                                                resolved.references[ownerReference].typeId => ownerType
++                                                                ownerType >= 0 and not resolved.types[ownerType].containsParameter
++                                                                    -> if {
++                                                                        ir -> each node {
++                                                                            node.kind == 6 and node.sourceModule == call.sourceModule and node.astNode == call.callAst
++                                                                                and node.operand0 >= 0 and node.operand0 < (ir -> len)
++                                                                                -> if {
++                                                                                    resolved.types -> typeIds.materializedReadTypeId(ir[node.operand0].typeId) => receiver
++                                                                                    receiver >= 0 and receiver < (resolved.types -> len) and not resolved.types[receiver].containsParameter
++                                                                                        and not (resolved.types -> calls.typedMethodOwnerMatches(receiver, ownerType, false))
++                                                                                        -> if {
++                                                                                            ExpressionOperandDiagnostic { code: 76, sourceModule: call.sourceModule, astNode: call.callAst, operandAst: qualified.pathAst, operatorKind: targetSource, locationOffset: invocation.start, operandTypeSymbol: qualified.targetSymbol, operandTypeId: receiver, firstTypeId: ownerType } -> return
++                                                                                        }
++                                                                                }
++                                                                        }
++                                                                    }
++                                                            }
++                                                    }
++                                                }
++                                            }
++                                        }
++                                }
++                        }
++                }
++            }
++        }
++    }
++    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 }
++}
++
+ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], mutableNames: ref [UnresolvedMutableNameDiagnostic; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
+     # C# binds every declaration (including local declarations) before bodies.
+@@ -5516,4 +5644,29 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+         } -> return
+     }
++    firstQualifiedBlockReceiverDiagnostic(prepared, resolved, ir) => receiverDiagnostic
++    receiverDiagnostic.code > 0 -> if { receiverDiagnostic -> return }
++    # A producer's declared yield input is checked before its caller callback.
++    # Instantiated source facts are captured before callback role remapping.
++    resolved.userBlockYieldInputs -> each input {
++        input.expectedTypeId >= 0 and input.expectedTypeId < (resolved.types -> len)
++            and input.actualTypeId >= 0 and input.actualTypeId < (resolved.types -> len)
++            and input.sourceModule >= 0 and input.sourceModule < (package.ranges -> len)
++            and input.valueAst >= 0
++            and (prepared -> declarationBodyIsActive(resolved, input.callerSourceModule, input.callerCallAst))
++            -> if {
++                resolved.types[input.expectedTypeId] => expected
++                resolved.types[input.actualTypeId] => actual
++                not expected.containsParameter and not actual.containsParameter
++                    -> if {
++                        expected.kind == 8 => referenceInput
++                        referenceInput and input.actualTypeId == expected.first => elementType
++                        not blockValueContract.acceptsValue(input.actualTypeId == input.expectedTypeId, referenceInput, elementType)
++                            -> if {
++                                package.ranges[input.sourceModule] => range
++                                ExpressionOperandDiagnostic { code: 75, sourceModule: input.sourceModule, astNode: input.valueAst, operandAst: input.valueAst, operatorKind: -1, locationOffset: package.nodes[range.astStart + input.valueAst].start, operandTypeSymbol: -1, operandTypeId: input.expectedTypeId, firstTypeId: input.actualTypeId } -> return
++                            }
++                    }
++            }
++    }
+     package -> modules.identitiesAnalyzed => identities
+     package -> expressionTypeIds.continuationFlags => continuationByAst
+@@ -6778,6 +6931,9 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                                 lastChildByAst![elseGlobal] => elseValue
+                                 thenValue >= 0 and elseValue >= 0 -> if {
+-                                    typeIdByAst![thenValue] => thenTypeId
+-                                    typeIdByAst![elseValue] => elseTypeId
++                                    resolved.types -> typeIds.builtinTypeId(0) => unitType
++                                    package.nodes[thenValue].kind == 9 or package.nodes[thenValue].kind == 61
++                                        -> if { unitType } else { typeIdByAst![thenValue] } => thenTypeId
++                                    package.nodes[elseValue].kind == 9 or package.nodes[elseValue].kind == 61
++                                        -> if { unitType } else { typeIdByAst![elseValue] } => elseTypeId
+                                     thenTypeId >= 0 and elseTypeId >= 0 and thenTypeId != elseTypeId
+                                         -> if {
+@@ -6987,4 +7143,28 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+     }
+ 
++    # Callback results use the same declared type decision as the C# binder.
++    # Unit callbacks bind statements without requiring a terminal value.
++    resolved.userBlockContracts -> each contract {
++        (prepared -> declarationBodyIsActive(resolved, contract.sourceModule, contract.callAst))
++            and contract.expectedResultTypeId >= 0 and contract.expectedResultTypeId < (resolved.types -> len)
++            -> if {
++                resolved.types[contract.expectedResultTypeId] => expected
++                not expected.containsParameter and not (expected.kind == 1 and expected.origin == 1 and expected.symbol == 0)
++                    -> if {
++                        (contract.actualResultTypeId >= 0 and not resolved.types[contract.actualResultTypeId].containsParameter) or contract.resultAst < 0
++                            -> if {
++                                not blockValueContract.acceptsValue(contract.actualResultTypeId == contract.expectedResultTypeId, false, false)
++                                    -> if {
++                                        package.ranges[contract.sourceModule] => range
++                                        contract.resultAst >= 0 -> if { contract.resultAst } else { contract.callAst } => locationAst
++                                        ExpressionOperandDiagnostic { code: 74, sourceModule: contract.sourceModule, astNode: contract.callAst, operandAst: contract.resultAst, operatorKind: contract.targetSourceModule, locationOffset: package.nodes[range.astStart + locationAst].start, operandTypeSymbol: contract.functionSymbol, operandTypeId: contract.expectedResultTypeId, firstTypeId: contract.actualResultTypeId } => candidate
++                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                            -> if { candidate => selected! }
++                                    }
++                            }
++                    }
++            }
++    }
++
+     # Check the committed callee against all seven closed caller capabilities.
+     0 => effectCallIndex!

@@ -1,0 +1,116 @@
+diff --git a/src/Sollang.Compiler/Semantics/BoundProgram.cs b/src/Sollang.Compiler/Semantics/BoundProgram.cs
+index fda374c45..bb2ef3d8e 100644
+--- a/src/Sollang.Compiler/Semantics/BoundProgram.cs
++++ b/src/Sollang.Compiler/Semantics/BoundProgram.cs
+@@ -153,4 +153,6 @@ internal sealed record BoundFunction(
+     string? DeclarationName = null)
+ {
++    public BoundFunction? LexicalParent { get; set; }
++
+     public bool IsVisibleFrom(string moduleName) => IsLocal || IsPublic || ModuleName == moduleName;
+ }
+@@ -164,4 +166,12 @@ internal sealed record BoundFunctionParameter(
+     string? TypeTemplate = null);
+ 
++internal sealed record BoundTraitImplementation(
++    string TraitName,
++    TypeId ReceiverType,
++    IReadOnlyDictionary<string, TypeId> ImplAssociatedTypes,
++    string ModuleName,
++    int Line,
++    int Column);
++
+ internal sealed record BoundTraitMethod(
+     string Name,
+@@ -994,7 +1004,6 @@ internal sealed partial class TypeDefinitionTable
+             var elementSize = InlineSizeOf(shape.ElementType);
+             var elementAlignment = AlignmentOf(shape.ElementType);
+-            var dataOffset = AlignUp(8, elementAlignment);
+-            var alignment = Math.Max(8, elementAlignment);
+-            var size = AlignUp(checked(dataOffset + checked(elementSize * shape.Capacity)), alignment);
++            var (dataOffset, size, alignment) = BoundedArrayStorageLayout(
++                elementSize, elementAlignment, shape.Capacity);
+             _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
+                 id, shape.ElementType, shape.Capacity, elementSize, elementAlignment,
+@@ -1051,7 +1060,6 @@ internal sealed partial class TypeDefinitionTable
+         var elementSize = InlineSizeOf(elementType);
+         var elementAlignment = AlignmentOf(elementType);
+-        var dataOffset = AlignUp(8, elementAlignment);
+-        var alignment = Math.Max(8, elementAlignment);
+-        var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
++        var (dataOffset, size, alignment) = BoundedArrayStorageLayout(
++            elementSize, elementAlignment, capacity);
+         var id = AllocateParametricTypeId();
+         _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
+@@ -1063,4 +1071,24 @@ internal sealed partial class TypeDefinitionTable
+     }
+ 
++    private static (int DataOffset, int Size, int Alignment) BoundedArrayStorageLayout(
++        int elementSize, int elementAlignment, int capacity)
++    {
++        if (capacity <= 0)
++        {
++            throw new ArgumentOutOfRangeException(nameof(capacity), "bounded array capacity must be positive");
++        }
++        try
++        {
++            var dataOffset = AlignUp(8, elementAlignment);
++            var alignment = Math.Max(8, elementAlignment);
++            var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
++            return (dataOffset, size, alignment);
++        }
++        catch (OverflowException)
++        {
++            throw new SollangException("bounded array storage layout exceeds the Int32 size limit");
++        }
++    }
++
+     public BoundBoundedArrayDefinition GetBoundedArray(TypeId type) =>
+         _boundedArrays.TryGetValue(type, out var definition)
+@@ -1258,6 +1286,8 @@ internal sealed partial class TypeDefinitionTable
+         _names.FirstOrDefault(item => item.Value == type).Key ?? ((int)type).ToString();
+ 
+-    internal static bool IsRuntimeResultAlias(string name) =>
+-        name is "sys.directory.RawResult" or "sys.directory.ReadResult";
++    private static readonly HashSet<string> RuntimeResultAliasNames = new(
++        Shared.TypeNamePolicy.RuntimeResultAliasNames().Split('|'), StringComparer.Ordinal);
++
++    internal static bool IsRuntimeResultAlias(string name) => RuntimeResultAliasNames.Contains(name);
+ 
+     public TypeId GetOrAddOption(TypeId valueType, string displayName)
+@@ -1276,9 +1306,11 @@ internal sealed partial class TypeDefinitionTable
+     }
+ 
++    private static readonly string[] OptionVariantNames = Shared.TypeNamePolicy.OptionVariantNames().Split('|');
++
+     internal static BoundEnumDefinition CreateOptionDefinition(
+         TypeId id, TypeId valueType, string displayName, int payloadWords) =>
+         new(id, displayName, Array.AsReadOnly<BoundEnumVariant>([
+-            new BoundEnumVariant("None", null, 0, 0, 0),
+-            new BoundEnumVariant("Some", valueType, 1, 0, 0)
++            new BoundEnumVariant(OptionVariantNames[0], null, 0, 0, 0),
++            new BoundEnumVariant(OptionVariantNames[1], valueType, 1, 0, 0)
+         ]), payloadWords, 0, 0, ModuleName: "", IsPublic: true);
+ 
+@@ -1305,9 +1337,11 @@ internal sealed partial class TypeDefinitionTable
+     }
+ 
++    private static readonly string[] ResultVariantNames = Shared.TypeNamePolicy.ResultVariantNames().Split('|');
++
+     internal static BoundEnumDefinition CreateResultDefinition(
+         TypeId id, TypeId okType, TypeId errorType, string displayName, int payloadWords) =>
+         new(id, displayName, Array.AsReadOnly<BoundEnumVariant>([
+-            new BoundEnumVariant("Ok", okType, 0, 0, 0),
+-            new BoundEnumVariant("Err", errorType, 1, 0, 0)
++            new BoundEnumVariant(ResultVariantNames[0], okType, 0, 0, 0),
++            new BoundEnumVariant(ResultVariantNames[1], errorType, 1, 0, 0)
+         ]), payloadWords, 0, 0, ModuleName: "", IsPublic: true);
+ 
+@@ -1634,5 +1668,6 @@ internal sealed partial class TypeDefinitionTable
+             _ when IsTask(type) => 16,
+             _ when IsStream(type) || IsEventStream(type) => checked(_pointerSize * 3),
+-            TypeId.GenericParameter or TypeId.SecondaryGenericParameter or TypeId.TertiaryGenericParameter => 8,
++            TypeId.GenericParameter or TypeId.SecondaryGenericParameter or TypeId.TertiaryGenericParameter =>
++                checked((int)Shared.FunctionTypeBindingPolicy.GenericParameterInlineSize()),
+             _ => throw new InvalidOperationException($"type {type} has no inline size")
+         };

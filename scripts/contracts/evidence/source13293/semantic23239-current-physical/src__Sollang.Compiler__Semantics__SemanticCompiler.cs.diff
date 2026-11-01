@@ -1,0 +1,1060 @@
+diff --git a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+index f55f890de..48240c99f 100644
+--- a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -2,4 +2,5 @@ using System.Globalization;
+ using System.Numerics;
+ using Sollang.Compiler.Diagnostics;
++using Sollang.Compiler.Shared;
+ using Sollang.Compiler.Syntax;
+ 
+@@ -8,5 +9,8 @@ namespace Sollang.Compiler.Semantics;
+ internal sealed partial class SemanticCompiler
+ {
++    private static readonly HashSet<string> ParallelRoleFunctionNames =
++        FunctionTypeBindingPolicy.ParallelRoleNames().Split('|').ToHashSet(StringComparer.Ordinal);
+     private SollangProgram _program;
++    private readonly Dictionary<(string Trait, TypeId Type), BoundTraitImplementation> _traitImplementations = [];
+     private readonly TypeDefinitionTable _types;
+     private readonly List<(TypeId KeyType, int Line, int Column, string ModuleName)> _declaredDictionaryKeyChecks = [];
+@@ -18,4 +22,5 @@ internal sealed partial class SemanticCompiler
+         new(ReferenceEqualityComparer.Instance);
+     private string? _currentFunctionName;
++    private (string Name, int Value)? _currentFunctionValueArgument;
+     private string? _currentFunctionDeclarationName;
+     private bool _currentFunctionIsMain;
+@@ -205,5 +210,6 @@ internal sealed partial class SemanticCompiler
+             _types,
+             _traits.Values,
+-            functions.Values);
++            functions.Values,
++            _traitImplementations.Values);
+         var activeReuse = reusePlan is not null
+             && reusePlan.DeclarationFingerprint.AsSpan().SequenceEqual(declarationFingerprint)
+@@ -437,5 +443,6 @@ internal sealed partial class SemanticCompiler
+     private void ValidateTraitImplementations(IReadOnlyDictionary<string, BoundFunction> functions)
+     {
+-        var implementations = new Dictionary<(string Trait, BoundType Type), HashSet<string>>();
++        var implementations = _traitImplementations.Keys.ToDictionary(
++            static key => key, static _ => new HashSet<string>(StringComparer.Ordinal));
+         foreach (var function in functions.Values)
+         {
+@@ -526,4 +533,5 @@ internal sealed partial class SemanticCompiler
+     private IReadOnlyDictionary<string, BoundFunction> DeclareFunctions()
+     {
++        DeclareTraitImplementations();
+         var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+         _boundFunctions = functions;
+@@ -658,4 +666,5 @@ internal sealed partial class SemanticCompiler
+             ReferenceEqualityComparer.Instance);
+         var reconstructedSyntax = new Dictionary<string, object>(StringComparer.Ordinal);
++        var availableFunctions = new Dictionary<string, BoundFunction>(declaredFunctionsByIdentity, StringComparer.Ordinal);
+         var indexedSpecializations = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+         try
+@@ -690,5 +699,5 @@ internal sealed partial class SemanticCompiler
+                             syntaxNode,
+                             reusePlan,
+-                            declaredFunctionsByIdentity,
++                            availableFunctions,
+                             out var target))
+                     {
+@@ -714,4 +723,8 @@ internal sealed partial class SemanticCompiler
+                             // calls of that concrete owner, not its template.
+                             var identities = SemanticStableIdentity.IndexFunctions(_types, [target], []);
++                            foreach (var (function, identity) in identities)
++                                if (!availableFunctions.TryAdd(identity, function)
++                                    && !ReferenceEquals(availableFunctions[identity], function))
++                                    throw new InvalidDataException("cached function identity has multiple lexical owners");
+                             foreach (var syntax in SemanticStableIdentity.IndexSyntaxCallSites(
+                                          [target], [], identities))
+@@ -915,4 +928,7 @@ internal sealed partial class SemanticCompiler
+         ICollection<(BoundFunction Function, SemanticFunctionReuse Reuse)> tree)
+     {
++        if (function.GenericParameterName is not null
++            && function.SpecializedType is null && function.SpecializedValue is null)
++            return true;
+         var identity = SemanticStableIdentity.Function(_types, function, parentIdentity);
+         if (!reusePlan.Functions.TryGetValue(identity, out var reusable)
+@@ -1038,14 +1054,15 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        var isParallelRole = function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
++        var isParallelRole = ParallelRoleFunctionNames.Contains(function.Name);
+         var hasCompositeGenericInput = function.GenericParameterName is not null
+             && function.InputType is not null
+             && !genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
+             && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames);
+-        var inputTypeTemplate = (isParallelRole || function.HasValueGenericFixedArrayInput || hasCompositeGenericInput)
+-            && function.InputType is not null
+-            && (function.HasValueGenericFixedArrayInput
+-                || (!genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
+-                    && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames)))
++        var inputTypeTemplate = function.InputType is not null
++            && (((isParallelRole || function.HasValueGenericFixedArrayInput || hasCompositeGenericInput)
++                && (function.HasValueGenericFixedArrayInput
++                    || (!genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
++                        && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames))))
++                || ReferencesLexicalTypeParameter(function.InputType, genericParameterNames))
+                 ? function.InputType
+                 : null;
+@@ -1066,7 +1083,8 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        var returnTypeTemplate = function.GenericParameterName is not null
++        var returnTypeTemplate = (function.GenericParameterName is not null
+             && !genericParameterNames.Contains(function.ReturnType, StringComparer.Ordinal)
+-            && TypeSyntaxReferencesAnyParameter(function.ReturnType, genericParameterNames)
++            && TypeSyntaxReferencesAnyParameter(function.ReturnType, genericParameterNames))
++            || ReferencesLexicalTypeParameter(function.ReturnType, genericParameterNames)
+                 ? function.ReturnType
+                 : null;
+@@ -1074,5 +1092,6 @@ internal sealed partial class SemanticCompiler
+         // concrete call exists. Keep that shape while retaining its syntax for
+         // canonical specialization; user templates may defer their layout.
+-        var returnType = returnTypeTemplate is null || (function.IsIntrinsic && !isParallelRole)
++        var returnType = FunctionTypeBindingPolicy.BindReturnTypeEagerly(
++            returnTypeTemplate is not null, function.IsIntrinsic, isParallelRole)
+             ? ParseFunctionType(
+                 function.ReturnType,
+@@ -1094,5 +1113,6 @@ internal sealed partial class SemanticCompiler
+                 function.Column);
+         var blockInputTypeTemplate = function.BlockInputType is not null
+-            && TypeSyntaxReferencesAnyParameter(function.BlockInputType, genericParameterNames)
++            && (TypeSyntaxReferencesAnyParameter(function.BlockInputType, genericParameterNames)
++                || ReferencesLexicalTypeParameter(function.BlockInputType, genericParameterNames))
+                 ? function.BlockInputType
+                 : null;
+@@ -1101,8 +1121,9 @@ internal sealed partial class SemanticCompiler
+             : ParseType(function.BlockInputType, function.Line, function.Column);
+         var blockResultTypeTemplate = function.BlockResultType is not null
+-            && TypeSyntaxReferencesAnyParameter(function.BlockResultType, genericParameterNames)
++            && (TypeSyntaxReferencesAnyParameter(function.BlockResultType, genericParameterNames)
++                || ReferencesLexicalTypeParameter(function.BlockResultType, genericParameterNames))
+                 ? function.BlockResultType
+                 : null;
+-        var blockResultType = function.BlockInputType is null
++        var blockResultType = !FunctionTypeBindingPolicy.BindCallbackResultEagerly(function.BlockInputType is not null)
+             ? (BoundType?)null
+             : function.BlockResultType is null
+@@ -1117,5 +1138,6 @@ internal sealed partial class SemanticCompiler
+                     genericParameterNames);
+         var streamElementTypeTemplate = function.StreamElementType is not null
+-            && TypeSyntaxReferencesAnyParameter(function.StreamElementType, genericParameterNames)
++            && (TypeSyntaxReferencesAnyParameter(function.StreamElementType, genericParameterNames)
++                || ReferencesLexicalTypeParameter(function.StreamElementType, genericParameterNames))
+                 ? function.StreamElementType
+                 : null;
+@@ -1140,18 +1162,18 @@ internal sealed partial class SemanticCompiler
+                 function.Column,
+                 genericParameterNames);
+-        IReadOnlyDictionary<string, TypeId>? implAssociatedTypes = function.ImplAssociatedTypes is null
+-            ? null
+-            : function.ImplAssociatedTypes.ToDictionary(
+-                static pair => pair.Key,
+-                pair => (TypeId)ParseType(pair.Value, function.Line, function.Column),
+-                StringComparer.Ordinal);
+-        if (function.TraitName is null && implAssociatedTypes is { Count: > 0 })
++        IReadOnlyDictionary<string, TypeId>? implAssociatedTypes = null;
++        if (function.TraitName is { } implementationTrait)
+         {
+-            throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
++            if (inputType is not { } receiver
++                || !_traitImplementations.TryGetValue((implementationTrait, receiver), out var implementation))
++                throw Error(function.Line, function.Column, "trait methods require a user type self receiver");
++            implAssociatedTypes = implementation.ImplAssociatedTypes;
+         }
+-        var inputOwnershipType = inputTypeTemplate is not null
+-            && !function.HasValueGenericFixedArrayInput
+-            && function.InputOwnership != FunctionInputOwnership.Default
+-                ? ParseOwnershipTemplateType(inputTypeTemplate, genericParameterNames, function.Line, function.Column)
++        else if (function.ImplAssociatedTypes is { Count: > 0 })
++            throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
++        var inputOwnershipType = FunctionTypeBindingPolicy.BindOwnershipTypeEagerly(
++            inputTypeTemplate is not null, function.HasValueGenericFixedArrayInput,
++            function.InputOwnership != FunctionInputOwnership.Default)
++                ? ParseOwnershipTemplateType(inputTypeTemplate!, genericParameterNames, function.Line, function.Column)
+                 : inputType;
+         var inputOwnership = BindFunctionInputOwnership(function, inputOwnershipType);
+@@ -1159,7 +1181,8 @@ internal sealed partial class SemanticCompiler
+             .Select(parameter =>
+             {
+-                var parameterTypeTemplate = function.GenericParameterName is not null
++                var parameterTypeTemplate = (function.GenericParameterName is not null
+                     && TypeSyntaxReferencesAnyParameter(parameter.TypeName, genericParameterNames)
+-                    && !genericParameterNames.Contains(parameter.TypeName, StringComparer.Ordinal)
++                    && !genericParameterNames.Contains(parameter.TypeName, StringComparer.Ordinal))
++                    || ReferencesLexicalTypeParameter(parameter.TypeName, genericParameterNames)
+                         ? parameter.TypeName
+                         : null;
+@@ -1191,6 +1214,8 @@ internal sealed partial class SemanticCompiler
+                         : BindFunctionInputOwnership(
+                             parameter.Ownership,
+-                            parameterTypeTemplate is not null && parameter.Ownership != FunctionInputOwnership.Default
+-                                ? ParseOwnershipTemplateType(parameterTypeTemplate, genericParameterNames, parameter.Line, parameter.Column)
++                            FunctionTypeBindingPolicy.BindOwnershipTypeEagerly(
++                                parameterTypeTemplate is not null, function.IsValueGeneric,
++                                parameter.Ownership != FunctionInputOwnership.Default)
++                                ? ParseOwnershipTemplateType(parameterTypeTemplate!, genericParameterNames, parameter.Line, parameter.Column)
+                                 : parameterType,
+                             parameter.Line,
+@@ -1280,5 +1305,5 @@ internal sealed partial class SemanticCompiler
+         var localFunctions = BindLocalFunctions(function);
+ 
+-        return new BoundFunction(
++        var boundFunction = new BoundFunction(
+             function.Name,
+             function.InputName,
+@@ -1327,4 +1352,6 @@ internal sealed partial class SemanticCompiler
+             GenericParameters: function.GenericParameters,
+             DeclarationName: function.Name);
++        BindLexicalChildren(boundFunction);
++        return boundFunction;
+     }
+ 
+@@ -1437,7 +1464,7 @@ internal sealed partial class SemanticCompiler
+         if (function.GenericParameterName is not null)
+         {
+-            if (isLocal || function.TraitName is not null)
++            if (function.TraitName is not null)
+             {
+-                throw Error(function.Line, function.Column, "generic local and impl functions are not implemented yet");
++                throw Error(function.Line, function.Column, "generic trait impl functions are not implemented yet");
+             }
+             if (!function.IsValueGeneric
+@@ -1465,9 +1492,4 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        if (isLocal && function.Name.Contains('.', StringComparison.Ordinal))
+-        {
+-            throw Error(function.Line, function.Column, "local function names cannot be path-qualified");
+-        }
+-
+         if (IsReservedName(function.Name))
+         {
+@@ -1852,22 +1874,36 @@ internal sealed partial class SemanticCompiler
+     private IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
+     {
+-        var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+-        foreach (var localDeclaration in owner.LocalFunctions)
++        var previousArguments = _activeGenericTypeArguments;
++        var arguments = new Dictionary<string, BoundType>(previousArguments, StringComparer.Ordinal);
++        var names = (owner.GenericParameters ?? []).Select(parameter => parameter.Name).ToArray();
++        if (names.Length == 0)
++            names = new[] { owner.GenericParameterName, owner.SecondaryGenericParameterName,
++                owner.TertiaryGenericParameterName }.OfType<string>().ToArray();
++        for (var index = owner.IsValueGeneric ? 1 : 0; index < names.Length; index++)
++            arguments[names[index]] = (BoundType)((int)BoundType.GenericParameter + index);
++        _activeGenericTypeArguments = arguments;
++        try
+         {
+-            if (functions.ContainsKey(localDeclaration.Name))
++            var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
++            foreach (var declaration in owner.LocalFunctions)
+             {
+-                throw Error(
+-                    localDeclaration.Line,
+-                    localDeclaration.Column,
+-                    $"local function '{localDeclaration.Name}' already exists in function '{owner.Name}'");
++                if (functions.ContainsKey(declaration.Name))
++                    throw Error(declaration.Line, declaration.Column,
++                        $"local function '{declaration.Name}' already exists in function '{owner.Name}'");
++                var function = BindFunctionDeclaration(declaration, isLocal: true);
++                functions.Add(function.Name, function);
+             }
+-
+-            var localFunction = BindFunctionDeclaration(localDeclaration, isLocal: true);
+-            functions.Add(localFunction.Name, localFunction);
++            return functions;
++        }
++        finally
++        {
++            _activeGenericTypeArguments = previousArguments;
+         }
+-
+-        return functions;
+     }
+ 
++    private bool ReferencesLexicalTypeParameter(string syntax, IReadOnlyList<string> ownParameters) =>
++        _activeGenericTypeArguments.Keys.Any(name =>
++            !ownParameters.Contains(name, StringComparer.Ordinal) && TypeSyntaxReferencesParameter(syntax, name));
++
+     // Complete already validated sibling captures from actual selected call edges.
+     // A shared lexical owner and an absent caller-local name establish the same
+@@ -1878,13 +1914,7 @@ internal sealed partial class SemanticCompiler
+     {
+         var owners = new Dictionary<BoundFunction, BoundFunction>(ReferenceEqualityComparer.Instance);
+-        var ambiguousOwners = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+-        foreach (var parent in functionIdentities.Keys)
+-        {
+-            foreach (var child in parent.LocalFunctions.Values)
+-            {
+-                if (!owners.TryAdd(child, parent) && !ReferenceEquals(owners[child], parent))
+-                    ambiguousOwners.Add(child);
+-            }
+-        }
++        foreach (var function in functionIdentities.Keys)
++            if (function.LexicalParent is { } parent)
++                owners.Add(function, parent);
+         var functionsByIdentity = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+         var ambiguousIdentities = new HashSet<string>(StringComparer.Ordinal);
+@@ -1892,5 +1922,4 @@ internal sealed partial class SemanticCompiler
+         {
+             if (!function.IsLocal || !owners.ContainsKey(function)
+-                || ambiguousOwners.Contains(function)
+                 || !_functionCaptureCandidates.ContainsKey(function))
+                 continue;
+@@ -1909,6 +1938,4 @@ internal sealed partial class SemanticCompiler
+                 || !functionsByIdentity.TryGetValue(callIdentity[..boundary], out var caller)
+                 || ReferenceEquals(caller, callee)
+-                || ambiguousOwners.Contains(caller)
+-                || ambiguousOwners.Contains(callee)
+                 || !owners.TryGetValue(caller, out var callerOwner)
+                 || !owners.TryGetValue(callee, out var calleeOwner)
+@@ -2486,4 +2513,7 @@ internal sealed partial class SemanticCompiler
+         IReadOnlyDictionary<string, BoundType> capturedBindings)
+     {
++        if (function.GenericParameterName is not null
++            && function.SpecializedType is null && function.SpecializedValue is null)
++            return;
+         var previousTypeNames = _currentFunctionTypeNames;
+         var previousTypeNameBindings = _currentFunctionTypeNameBindings;
+@@ -2496,4 +2526,8 @@ internal sealed partial class SemanticCompiler
+         var previousFunctionDeclarationName = _currentFunctionDeclarationName;
+         _currentFunctionDeclarationName = function.DeclarationName ?? function.Name;
++        var previousValueArgument = _currentFunctionValueArgument;
++        _currentFunctionValueArgument = function.IsValueGeneric
++            && function.GenericParameterName is { } valueName && function.SpecializedValue is { } value
++                ? (valueName, value) : null;
+         var previousFunctionIsMain = _currentFunctionIsMain;
+         _currentFunctionIsMain = false;
+@@ -2526,4 +2560,5 @@ internal sealed partial class SemanticCompiler
+             _expressionInferenceContext = previousExpressionContext;
+             _currentFunctionDeclarationName = previousFunctionDeclarationName;
++            _currentFunctionValueArgument = previousValueArgument;
+             _currentFunctionIsMain = previousFunctionIsMain;
+             _currentFunctionAllowsRuntimeCalls = previousRuntimeCallAuthority;
+@@ -2863,5 +2898,6 @@ internal sealed partial class SemanticCompiler
+     private void ValidateGenericSpecialization(
+         BoundFunction function,
+-        IReadOnlyDictionary<string, BoundFunction> parentFunctions)
++        IReadOnlyDictionary<string, BoundFunction> parentFunctions,
++        IReadOnlyDictionary<string, BoundType>? capturedBindings = null)
+     {
+         // Specialization creates reference-bearing signatures after the initial
+@@ -2892,5 +2928,5 @@ internal sealed partial class SemanticCompiler
+         try
+         {
+-            var genericTypeArguments = new Dictionary<string, BoundType>(StringComparer.Ordinal);
++            var genericTypeArguments = LexicalGenericTypeArguments(function);
+             if (function.GenericParameterName is { } primaryName
+                 && function.SpecializedType is { } primaryType)
+@@ -2912,5 +2948,5 @@ internal sealed partial class SemanticCompiler
+                 function,
+                 parentFunctions,
+-                new Dictionary<string, BoundType>(StringComparer.Ordinal));
++                capturedBindings ?? new Dictionary<string, BoundType>(StringComparer.Ordinal));
+         }
+         finally
+@@ -6864,5 +6900,5 @@ internal sealed partial class SemanticCompiler
+             && function.SpecializedValue is null)
+         {
+-            function = ResolveGenericSpecialization(function, streamedInputType, functions, call.ResolutionSite);
++            function = ResolveGenericSpecialization(function, streamedInputType, functions, call.ResolutionSite, capturedBindings: bindings);
+         }
+         if (function.InputType != streamedInputType)
+@@ -7092,5 +7128,8 @@ internal sealed partial class SemanticCompiler
+             && IsBlockFunction(qualified))
+         {
+-            if (qualified.InputType != receiverType)
++            // Namespace qualification does not assert a self receiver. A
++            // generic top-level block still specializes its declared input
++            // in BindUserBlockFunctionCall after this exact-name lookup.
++            if (qualified.InputName == "self" && qualified.InputType != receiverType)
+             {
+                 throw Error(
+@@ -7252,5 +7291,5 @@ internal sealed partial class SemanticCompiler
+                 specializedInputType: inputType,
+                 explicitSecondaryType: parallelValueType,
+-                explicitTertiaryType: parallelErrorType);
++                explicitTertiaryType: parallelErrorType, capturedBindings: bindings);
+         }
+         if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel
+@@ -7460,5 +7499,5 @@ internal sealed partial class SemanticCompiler
+                 specializedInputType: inputType,
+                 explicitSecondaryType: secondaryType,
+-                explicitTertiaryType: tertiaryType);
++                explicitTertiaryType: tertiaryType, capturedBindings: bindings);
+         }
+         if (function.GenericParameterName is not null
+@@ -7466,5 +7505,5 @@ internal sealed partial class SemanticCompiler
+             && function.SpecializedValue is null)
+         {
+-            function = ResolveGenericSpecialization(function, inputType, functions, call);
++            function = ResolveGenericSpecialization(function, inputType, functions, call, capturedBindings: bindings);
+         }
+         if (function.InputType is null || function.BlockInputType is null)
+@@ -7556,5 +7595,6 @@ internal sealed partial class SemanticCompiler
+                 bodyBindings,
+                 callbackMutableBindings);
+-            if (actualCallbackResultType != callbackResultType)
++            if (!BlockValueContractPolicy.AcceptsValue(
++                    actualCallbackResultType == callbackResultType, false, false))
+             {
+                 throw Error(
+@@ -8078,5 +8118,5 @@ internal sealed partial class SemanticCompiler
+             NameExpression name => InferNameExpression(name, functions, bindings, allowReadIntCall),
+             ArrayLiteralExpression array => InferArrayLiteralExpression(array, functions, bindings, allowReadIntCall),
+-            TypeApplicationExpression application => InferTypeApplicationExpression(application, functions, allowReadIntCall),
++            TypeApplicationExpression application => InferTypeApplicationExpression(application, functions, bindings, allowReadIntCall),
+             ArrayRepeatExpression repeat => InferArrayRepeatExpression(repeat, functions, bindings, allowReadIntCall),
+             TypedEmptyArrayExpression typedArray => InferTypedEmptyArrayExpression(typedArray),
+@@ -8866,5 +8906,5 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        if (expression.Count is { } concreteCount)
++        if (ArrayRepeatCount(expression) is { } concreteCount)
+         {
+             return _types.GetOrAddFixedStaticArray(valueType, concreteCount);
+@@ -8876,4 +8916,11 @@ internal sealed partial class SemanticCompiler
+     }
+ 
++    private int? ArrayRepeatCount(ArrayRepeatExpression expression)
++    {
++        if (expression.Count is { } count) return count;
++        return _currentFunctionValueArgument is { } argument
++            && expression.CountParameterName == argument.Name ? argument.Value : null;
++    }
++
+     private BoundType InferTypedEmptyArrayExpression(TypedEmptyArrayExpression expression)
+     {
+@@ -9005,5 +9052,5 @@ internal sealed partial class SemanticCompiler
+             return _types.GetOrAddBoundedDictionary(keyType, valueType, boundedCapacity);
+         }
+-        return keyType == BoundType.Int && valueType == BoundType.Int
++        return Shared.TypeNamePolicy.SourceDictionaryIsImplicit(keyType == BoundType.Int, valueType == BoundType.Int)
+             ? BoundType.IntDictionary
+             : _types.GetOrAddDictionary(keyType, valueType);
+@@ -9440,5 +9487,5 @@ internal sealed partial class SemanticCompiler
+                 && _types.GetStaticArray(expectedType).FixedLength is { } fixedLength)
+             {
+-                if (repeat.Count != fixedLength)
++                if (ArrayRepeatCount(repeat) != fixedLength)
+                 {
+                     throw Error(
+@@ -9452,5 +9499,5 @@ internal sealed partial class SemanticCompiler
+             {
+                 var capacity = _types.GetBoundedArray(expectedType).Capacity;
+-                if (repeat.Count is { } count && count > capacity)
++                if (ArrayRepeatCount(repeat) is { } count && count > capacity)
+                 {
+                     throw Error(
+@@ -11188,6 +11235,9 @@ internal sealed partial class SemanticCompiler
+                 }
+ 
+-                var yieldTypeMatches = currentType == yieldInputType.Value
+-                    || (_types.IsReference(yieldInputType.Value)
++                var yieldInputIsReference = _types.IsReference(yieldInputType.Value);
++                var yieldTypeMatches = BlockValueContractPolicy.AcceptsValue(
++                    currentType == yieldInputType.Value,
++                    yieldInputIsReference,
++                    yieldInputIsReference
+                         && currentType == _types.GetReference(yieldInputType.Value).ElementType);
+                 if (!yieldTypeMatches)
+@@ -11379,5 +11429,5 @@ internal sealed partial class SemanticCompiler
+                         return new FlowResult(BoundType.Unit, FlowEffect.None);
+                     case BoundFunctionKind.RuntimeWriteScalar:
+-                        function = ResolveGenericSpecialization(function, currentType, functions, target);
++                        function = ResolveGenericSpecialization(function, currentType, functions, target, capturedBindings: bindings);
+                         if (!isLast)
+                         {
+@@ -11579,5 +11629,5 @@ internal sealed partial class SemanticCompiler
+                         {
+                             function = ResolveValueGenericSpecialization(
+-                                function, currentType, target.CompileTimeValueArgument, target);
++                                function, currentType, target.CompileTimeValueArgument, target, lexicalFunctions: functions, capturedBindings: bindings);
+                         }
+                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+@@ -11631,5 +11681,5 @@ internal sealed partial class SemanticCompiler
+                         {
+                             function = function.IsValueGeneric
+-                                ? ResolveValueGenericSpecialization(function, currentType, target.CompileTimeValueArgument, target)
++                                ? ResolveValueGenericSpecialization(function, currentType, target.CompileTimeValueArgument, target, lexicalFunctions: functions, capturedBindings: bindings)
+                                 : ResolveGenericFlowSpecialization(function, currentType, target, functions, bindings, allowReadIntCall);
+                         }
+@@ -11805,7 +11855,5 @@ internal sealed partial class SemanticCompiler
+         var requestedTrait = separator < 0 ? "" : path[..separator];
+         var methodName = separator < 0 ? path : path[(separator + 1)..];
+-        if (requestedTrait.Length > 0
+-            && requestedTrait != trait.Name
+-            && requestedTrait != CanonicalTraitName(trait))
++        if (requestedTrait.Length > 0 && !IsExplicitDynTraitDispatchTarget(dynType, path))
+         {
+             throw Error(target.Line, target.Column,
+@@ -11869,5 +11917,10 @@ internal sealed partial class SemanticCompiler
+ 
+     private static string CanonicalTraitName(BoundTraitDefinition trait) =>
+-        trait.ModuleName.Length == 0 ? trait.Name : trait.ModuleName + "." + trait.Name;
++        CanonicalTraitName(trait.Name, trait.ModuleName);
++
++    private static string CanonicalTraitName(string name, string moduleName) =>
++        moduleName.Length == 0 || name.StartsWith(moduleName + ".", StringComparison.Ordinal)
++            ? name
++            : moduleName + "." + name;
+ 
+     private bool TryInferContainerFlowTarget(
+@@ -13511,5 +13564,5 @@ internal sealed partial class SemanticCompiler
+                 $"generic function '{template.Name}' cannot infer type parameter '{missing}'");
+         var specialization = ResolveGenericSpecialization(template, inferred[names[0]], functions,
+-            target, specializedInputType: inputType, explicitGenericTypes: inferred);
++            target, specializedInputType: inputType, explicitGenericTypes: inferred, capturedBindings: bindings);
+         RequireDiagnosticTrackTaskSpecialization(specialization, target.Line, target.Column);
+         return specialization;
+@@ -13591,5 +13644,5 @@ internal sealed partial class SemanticCompiler
+             functions,
+             expression,
+-            explicitGenericTypes: inferredTypes);
++            explicitGenericTypes: inferredTypes, capturedBindings: bindings);
+         return InferUserCallExpression(
+             expression,
+@@ -13643,5 +13696,6 @@ internal sealed partial class SemanticCompiler
+         BoundType? explicitTertiaryType = null,
+         IReadOnlyDictionary<string, BoundType>? explicitGenericTypes = null,
+-        bool validateSpecialization = true)
++        bool validateSpecialization = true,
++        IReadOnlyDictionary<string, BoundType>? capturedBindings = null)
+     {
+         if (template.Kind == BoundFunctionKind.RuntimeDiagnosticSessionTrack
+@@ -13699,7 +13753,7 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        BoundFunction? traitImplementation = null;
++        BoundTraitImplementation? traitImplementation = null;
+         if (template.GenericTraitBound is { } traitBound
+-            && !TryFindTraitImplementation(functions, traitBound, actualType, out traitImplementation))
++            && !TryFindTraitImplementation(traitBound, actualType, out traitImplementation))
+         {
+             throw new SollangException(
+@@ -13712,5 +13766,5 @@ internal sealed partial class SemanticCompiler
+                 continue;
+             }
+-            BoundFunction? parameterTraitImplementation = null;
++            BoundTraitImplementation? parameterTraitImplementation = null;
+             string? parameterTraitName = null;
+             foreach (var constraint in parameter.Constraints)
+@@ -13719,5 +13773,5 @@ internal sealed partial class SemanticCompiler
+                 {
+                     parameterTraitName = requiredTrait;
+-                    if (!TryFindTraitImplementation(functions, requiredTrait, parameterType, out parameterTraitImplementation))
++                    if (!TryFindTraitImplementation(requiredTrait, parameterType, out parameterTraitImplementation))
+                     {
+                         throw new SollangException(
+@@ -13831,5 +13885,9 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
++        var storageKey = SpecializationStorageKey(template, specializedName);
++        var signatureTypes = LexicalGenericTypeArguments(template);
++        foreach (var (name, type) in specializedGenericTypes)
++            signatureTypes[name] = type;
++        if (!_boundFunctions.TryGetValue(storageKey, out var specialization))
+         {
+             specialization = CloneGenericFunctionSyntax(template) with
+@@ -13843,9 +13901,9 @@ internal sealed partial class SemanticCompiler
+                     ? template.InputType is null ? null : specializedInputType ?? actualType
+                     : ParseSpecializedFunctionType(
+-                        template.InputTypeTemplate, specializedGenericTypes, template.Line, template.Column),
++                        template.InputTypeTemplate, signatureTypes, template.Line, template.Column),
+                 ReturnType = template.ReturnTypeTemplate is null
+                     ? SubstituteGenericType(template.ReturnType, template, specializedGenericTypes)
+                     : ParseSpecializedFunctionType(
+-                        template.ReturnTypeTemplate, specializedGenericTypes, template.Line, template.Column),
++                        template.ReturnTypeTemplate, signatureTypes, template.Line, template.Column),
+                 AdditionalParameters = (template.AdditionalParameters ?? [])
+                     .Select(parameter => parameter with
+@@ -13854,5 +13912,5 @@ internal sealed partial class SemanticCompiler
+                             ? SubstituteGenericType(parameter.Type, template, specializedGenericTypes)
+                             : ParseSpecializedFunctionType(
+-                                parameter.TypeTemplate, specializedGenericTypes, parameter.Line, parameter.Column)
++                                parameter.TypeTemplate, signatureTypes, parameter.Line, parameter.Column)
+                     })
+                     .ToArray(),
+@@ -13868,13 +13926,13 @@ internal sealed partial class SemanticCompiler
+                         : SubstituteGenericType(template.BlockInputType.Value, template, specializedGenericTypes)
+                     : ParseSpecializedFunctionType(
+-                        template.BlockInputTypeTemplate, specializedGenericTypes, template.Line, template.Column),
++                        template.BlockInputTypeTemplate, signatureTypes, template.Line, template.Column),
+                 BlockResultType = template.BlockResultTypeTemplate is null
+                     ? template.BlockResultType
+                     : ParseSpecializedFunctionType(
+-                        template.BlockResultTypeTemplate, specializedGenericTypes, template.Line, template.Column),
++                        template.BlockResultTypeTemplate, signatureTypes, template.Line, template.Column),
+                 StreamElementType = template.StreamElementTypeTemplate is null
+                     ? template.StreamElementType
+                     : ParseSpecializedFunctionType(
+-                        template.StreamElementTypeTemplate, specializedGenericTypes, template.Line, template.Column),
++                        template.StreamElementTypeTemplate, signatureTypes, template.Line, template.Column),
+                 SpecializedType = actualType,
+                 SpecializedSecondaryType = inferredSecondaryType,
+@@ -13882,10 +13940,12 @@ internal sealed partial class SemanticCompiler
+                 SpecializedGenericTypes = specializedGenericTypes
+             };
+-            _boundFunctions.Add(specializedName, specialization);
++            specialization = CompleteLexicalSpecialization(specialization);
++            _boundFunctions.Add(storageKey, specialization);
+             if (validateSpecialization
+                 && specialization.Kind is (BoundFunctionKind.User or BoundFunctionKind.UserBlock)
+                 && _validatingGenericSpecializations.Add(specialization))
+             {
+-                ValidateGenericSpecialization(specialization, _boundFunctions);
++                ValidateGenericSpecialization(specialization,
++                    template.IsLocal ? functions : _boundFunctions, template.IsLocal ? capturedBindings : null);
+             }
+         }
+@@ -13903,4 +13963,67 @@ internal sealed partial class SemanticCompiler
+     };
+ 
++    private static void BindLexicalChildren(BoundFunction parent)
++    {
++        foreach (var child in parent.LocalFunctions.Values)
++        {
++            child.LexicalParent = parent;
++            BindLexicalChildren(child);
++        }
++    }
++
++    private Dictionary<string, BoundType> LexicalGenericTypeArguments(BoundFunction function)
++    {
++        var context = function.LexicalParent is { } parent
++            ? LexicalGenericTypeArguments(parent)
++            : new Dictionary<string, BoundType>(StringComparer.Ordinal);
++        foreach (var (name, type) in function.SpecializedGenericTypes ?? new Dictionary<string, BoundType>())
++            context[name] = type;
++        if (function.GenericParameterName is { } primary && function.SpecializedType is { } primaryType)
++            context[primary] = primaryType;
++        if (function.SecondaryGenericParameterName is { } secondary && function.SpecializedSecondaryType is { } secondaryType)
++            context[secondary] = secondaryType;
++        if (function.TertiaryGenericParameterName is { } tertiary && function.SpecializedTertiaryType is { } tertiaryType)
++            context[tertiary] = tertiaryType;
++        return context;
++    }
++
++    private BoundFunction CompleteLexicalSpecialization(BoundFunction parent)
++    {
++        var context = LexicalGenericTypeArguments(parent);
++        var children = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
++        foreach (var (name, child) in parent.LocalFunctions)
++        {
++            var ownParameters = GenericParameterNames(child);
++            BoundType? Resolve(string? syntax, BoundType? current) =>
++                syntax is not null && !TypeSyntaxReferencesAnyParameter(syntax, ownParameters)
++                    ? ParseSpecializedFunctionType(syntax, context, child.Line, child.Column)
++                    : current;
++            var local = child with
++            {
++                InputType = Resolve(child.InputTypeTemplate, child.InputType),
++                ReturnType = Resolve(child.ReturnTypeTemplate, child.ReturnType)!.Value,
++                BlockInputType = Resolve(child.BlockInputTypeTemplate, child.BlockInputType),
++                BlockResultType = Resolve(child.BlockResultTypeTemplate, child.BlockResultType),
++                StreamElementType = Resolve(child.StreamElementTypeTemplate, child.StreamElementType),
++                AdditionalParameters = child.AdditionalParameters?.Select(parameter => parameter with
++                {
++                    Type = Resolve(parameter.TypeTemplate, parameter.Type)!.Value
++                }).ToArray()
++            };
++            local.LexicalParent = parent;
++            if (local.GenericParameterName is null)
++                local = CompleteLexicalSpecialization(local);
++            children.Add(name, local);
++        }
++        var result = parent with { LocalFunctions = children };
++        BindLexicalChildren(result);
++        return result;
++    }
++
++    private string SpecializationStorageKey(BoundFunction template, string specializedName) =>
++        template.IsLocal
++            ? "local:" + SemanticStableIdentity.Function(_types, template) + ":" + specializedName
++            : specializedName;
++
+     private BoundType SubstituteGenericType(
+         BoundType type,
+@@ -14083,4 +14206,5 @@ internal sealed partial class SemanticCompiler
+         TypeApplicationExpression expression,
+         IReadOnlyDictionary<string, BoundFunction> functions,
++        IReadOnlyDictionary<string, BoundType> bindings,
+         bool allowRuntimeCall)
+     {
+@@ -14214,5 +14338,5 @@ internal sealed partial class SemanticCompiler
+             functions,
+             expression,
+-            explicitGenericTypes: specializedTypes));
++            explicitGenericTypes: specializedTypes, capturedBindings: bindings));
+     }
+ 
+@@ -14222,5 +14346,7 @@ internal sealed partial class SemanticCompiler
+         int? valueArgument,
+         object callSite,
+-        bool validateSpecialization = true)
++        bool validateSpecialization = true,
++        IReadOnlyDictionary<string, BoundFunction>? lexicalFunctions = null,
++        IReadOnlyDictionary<string, BoundType>? capturedBindings = null)
+     {
+         if (valueArgument is null)
+@@ -14229,8 +14355,20 @@ internal sealed partial class SemanticCompiler
+                 $"value-generic function '{template.Name}' requires an explicit compile-time Int argument");
+         }
++        var fixedArrayInputTemplate = template.InputTypeTemplate;
++        while (fixedArrayInputTemplate?.StartsWith("ref ", StringComparison.Ordinal) == true)
++        {
++            fixedArrayInputTemplate = fixedArrayInputTemplate[4..];
++        }
++        var hasFixedArrayInputTemplate = fixedArrayInputTemplate?.StartsWith('[', StringComparison.Ordinal) == true
++            && fixedArrayInputTemplate.EndsWith($"; {template.GenericParameterName}]", StringComparison.Ordinal);
+         BoundType? fixedArrayElementType = null;
+-        if (template.HasValueGenericFixedArrayInput)
++        if (hasFixedArrayInputTemplate)
+         {
+-            fixedArrayElementType = FixedArrayElementType(actualType);
++            var arrayType = actualType;
++            while (_types.IsReference(arrayType))
++            {
++                arrayType = _types.GetReference(arrayType).ElementType;
++            }
++            fixedArrayElementType = FixedArrayElementType(arrayType);
+             if (fixedArrayElementType is null)
+             {
+@@ -14239,5 +14377,5 @@ internal sealed partial class SemanticCompiler
+             }
+ 
+-            var elementTypeSyntax = FixedArrayElementTypeSyntax(template.InputTypeTemplate!);
++            var elementTypeSyntax = FixedArrayElementTypeSyntax(fixedArrayInputTemplate!);
+             if (elementTypeSyntax == template.SecondaryGenericParameterName)
+             {
+@@ -14260,10 +14398,4 @@ internal sealed partial class SemanticCompiler
+             }
+         }
+-        if (!template.HasValueGenericFixedArrayInput
+-            && !CanPassFunctionArgument(actualType, template.InputType!.Value))
+-        {
+-            throw new SollangException(
+-                $"function '{template.Name}' expects {FormatType(template.InputType!.Value)} but received {FormatType(actualType)}");
+-        }
+         if (_boundFunctions is null)
+         {
+@@ -14279,19 +14411,34 @@ internal sealed partial class SemanticCompiler
+                 System.Globalization.CultureInfo.InvariantCulture);
+         }
+-        if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
++        var secondaryType = template.SecondaryGenericParameterName is { } secondaryName
++            && hasFixedArrayInputTemplate && FixedArrayElementTypeSyntax(fixedArrayInputTemplate!) == secondaryName
++                ? fixedArrayElementType
++                : null;
++        var tertiaryType = template.TertiaryGenericParameterName is { } tertiaryName
++            && hasFixedArrayInputTemplate && FixedArrayElementTypeSyntax(fixedArrayInputTemplate!) == tertiaryName
++                ? fixedArrayElementType
++                : null;
++        var primaryType = fixedArrayElementType ?? BoundType.Int;
++        var inputType = template.HasValueGenericFixedArrayInput ? actualType
++            : template.InputTypeTemplate is { } inputSyntax
++                ? SpecializeValueGenericType(template, inputSyntax, valueArgument.Value, primaryType, secondaryType, tertiaryType)
++                : template.InputType;
++        if (inputType is not { } expectedInput)
++            throw new SollangException($"value-generic function '{template.Name}' does not accept an input");
++        if (!CanPassFunctionArgument(actualType, expectedInput))
++        {
++            throw new SollangException(
++                $"function '{template.Name}' expects {FormatType(expectedInput)} but received {FormatType(actualType)}");
++        }
++        var storageKey = SpecializationStorageKey(template, specializedName);
++        if (!_boundFunctions.TryGetValue(storageKey, out var specialization))
+         {
+-            var secondaryType = template.SecondaryGenericParameterName is { } secondaryName
+-                && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == secondaryName
+-                    ? fixedArrayElementType
+-                    : null;
+-            var tertiaryType = template.TertiaryGenericParameterName is { } tertiaryName
+-                && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == tertiaryName
+-                    ? fixedArrayElementType
+-                    : null;
+             specialization = CloneGenericFunctionSyntax(template) with
+             {
+                 Name = specializedName,
+-                InputType = template.HasValueGenericFixedArrayInput ? actualType : template.InputType,
+-                ReturnType = SubstituteGenericType(
++                InputType = inputType,
++                ReturnType = template.ReturnTypeTemplate is { } returnSyntax
++                    ? SpecializeValueGenericType(template, returnSyntax, valueArgument.Value, primaryType, secondaryType, tertiaryType)
++                    : SubstituteGenericType(
+                     template.ReturnType,
+                     fixedArrayElementType ?? BoundType.Int,
+@@ -14303,5 +14450,5 @@ internal sealed partial class SemanticCompiler
+                 SpecializedValue = valueArgument.Value,
+                 AdditionalParameters = SpecializeValueGenericAdditionalParameters(
+-                    template, valueArgument.Value)
++                    template, valueArgument.Value, primaryType, secondaryType, tertiaryType)
+             };
+             // A deferred value-generic declaration has no concrete input type.
+@@ -14309,10 +14456,13 @@ internal sealed partial class SemanticCompiler
+             // including the path that deliberately skips body revalidation.
+             ValidateConcreteAsyncSignature(specialization);
+-            _boundFunctions.Add(specializedName, specialization);
++            specialization = CompleteLexicalSpecialization(specialization);
++            _boundFunctions.Add(storageKey, specialization);
+             if (validateSpecialization
+                 && specialization.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
+                 && _validatingGenericSpecializations.Add(specialization))
+             {
+-                ValidateGenericSpecialization(specialization, _boundFunctions);
++                ValidateGenericSpecialization(specialization,
++                    template.IsLocal ? lexicalFunctions ?? throw new InvalidOperationException("Local specialization requires its lexical function scope.") : _boundFunctions,
++                    template.IsLocal ? capturedBindings : null);
+             }
+         }
+@@ -14324,21 +14474,32 @@ internal sealed partial class SemanticCompiler
+     private IReadOnlyList<BoundFunctionParameter> SpecializeValueGenericAdditionalParameters(
+         BoundFunction template,
+-        int value)
++        int value,
++        BoundType primaryType,
++        BoundType? secondaryType,
++        BoundType? tertiaryType)
+     {
+-        var valueText = value.ToString(CultureInfo.InvariantCulture);
+         return (template.AdditionalParameters ?? []).Select(parameter =>
+         {
+             if (parameter.TypeTemplate is not { } typeTemplate
+-                || template.GenericParameterName is not { } valueName)
++                || template.GenericParameterName is null)
+             {
+                 return parameter;
+             }
+-            var specializedSyntax = typeTemplate.Replace(
+-                $"; {valueName}]", $"; {valueText}]", StringComparison.Ordinal);
+-            var specializedType = ParseType(specializedSyntax, parameter.Line, parameter.Column);
++            var specializedType = SpecializeValueGenericType(template, typeTemplate, value, primaryType, secondaryType, tertiaryType);
+             return parameter with { Type = specializedType, TypeTemplate = null };
+         }).ToArray();
+     }
+ 
++    private BoundType SpecializeValueGenericType(
++        BoundFunction template, string syntax, int value, BoundType primaryType,
++        BoundType? secondaryType, BoundType? tertiaryType)
++    {
++        var specializedSyntax = syntax.Replace(
++            $"; {template.GenericParameterName}]", $"; {value.ToString(CultureInfo.InvariantCulture)}]", StringComparison.Ordinal);
++        return ParseSpecializedFunctionType(specializedSyntax, template.GenericParameterName, primaryType,
++            template.SecondaryGenericParameterName, secondaryType,
++            template.TertiaryGenericParameterName, tertiaryType, template.Line, template.Column);
++    }
++
+     private BoundType? FixedArrayElementType(BoundType type)
+     {
+@@ -14517,13 +14678,6 @@ internal sealed partial class SemanticCompiler
+         }
+         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
+-        if (!_types.TryResolveInModule(typeName, _currentModuleName, out type))
+-        {
+-            if (!typeName.StartsWith("Option<", StringComparison.Ordinal)
+-                && !typeName.StartsWith("Result<", StringComparison.Ordinal))
+-            {
+-                return false;
+-            }
+-            type = ParseType(typeName, expression.Line, expression.Column);
+-        }
++        if (!TryResolveConstructorType(typeName, expression.Line, expression.Column, out type))
++            return false;
+         if (!_types.IsEnum(type))
+         {
+@@ -14734,17 +14888,9 @@ internal sealed partial class SemanticCompiler
+     }
+ 
+-    private static bool TryFindTraitImplementation(
+-        IReadOnlyDictionary<string, BoundFunction> functions,
++    private bool TryFindTraitImplementation(
+         string traitName,
+         BoundType receiverType,
+-        out BoundFunction? implementation)
+-    {
+-        implementation = functions.Values
+-            .Where(candidate => candidate.TraitName == traitName
+-                && candidate.InputType == receiverType)
+-            .Distinct()
+-            .FirstOrDefault();
+-        return implementation is not null;
+-    }
++        out BoundTraitImplementation? implementation) =>
++        _traitImplementations.TryGetValue((traitName, receiverType), out implementation);
+ 
+     private BoundType InferUserCallExpression(
+@@ -15431,26 +15577,10 @@ internal sealed partial class SemanticCompiler
+ 
+         var boxes = new Dictionary<TypeId, BoundBoxDefinition>();
+-        var predeclaredFixedStaticArrays = new Dictionary<TypeId, (TypeId ElementType, int Length)>
+-        {
+-            [TypeId.FixedUInt8Array12] = (TypeId.UInt8, 12),
+-            [TypeId.FixedUInt8Array16] = (TypeId.UInt8, 16),
+-            [TypeId.FixedUInt8Array32] = (TypeId.UInt8, 32)
+-        };
+-        var predeclaredFixedStaticArraysByShape = new Dictionary<(TypeId ElementType, int Length), TypeId>
+-        {
+-            [(TypeId.UInt8, 12)] = TypeId.FixedUInt8Array12,
+-            [(TypeId.UInt8, 16)] = TypeId.FixedUInt8Array16,
+-            [(TypeId.UInt8, 32)] = TypeId.FixedUInt8Array32
+-        };
+-        var predeclaredDynamicArrays = new Dictionary<TypeId, TypeId>
+-        {
+-            [TypeId.DynamicUInt8Array] = TypeId.UInt8,
+-            [TypeId.DynamicDirectoryEntryArray] = TypeId.DirectoryEntry
+-        };
+-        var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>
+-        {
+-            [TypeId.UInt8] = TypeId.DynamicUInt8Array,
+-            [TypeId.DirectoryEntry] = TypeId.DynamicDirectoryEntryArray
+-        };
++        var predeclaredFixedStaticArrays = StorageTypeDefinitions.FixedArrays(names);
++        var predeclaredFixedStaticArraysByShape = predeclaredFixedStaticArrays
++            .ToDictionary(item => item.Value, item => item.Key);
++        var predeclaredDynamicArrays = StorageTypeDefinitions.DynamicArrays(names);
++        var predeclaredDynamicArraysByElement = predeclaredDynamicArrays
++            .ToDictionary(item => item.Value, item => item.Key);
+         var predeclaredBitSets = new Dictionary<TypeId, int>();
+         var predeclaredBitSetsByCount = new Dictionary<int, TypeId>();
+@@ -15461,14 +15591,13 @@ internal sealed partial class SemanticCompiler
+         var predeclaredDictionaries = new Dictionary<TypeId, (TypeId KeyType, TypeId ValueType)>();
+         var predeclaredDictionariesByShape = new Dictionary<(TypeId KeyType, TypeId ValueType), TypeId>();
++        var declaredStructIds = structTypes.Values.ToHashSet();
++        var declaredEnumIds = enumTypes.Values.ToHashSet();
++        var declaredNames = structTypes.Select(item => KeyValuePair.Create(item.Value, item.Key.Name))
++            .Concat(enumTypes.Select(item => KeyValuePair.Create(item.Value, item.Key.Name)))
++            .ToDictionary(item => item.Key, item => item.Value);
+         var boxableTypes = names
+-            .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
+-                || (structTypes.Values.Contains(item.Value)
+-                    && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
+-                && item.Value is not (TypeId.ProcessCommand or TypeId.AtomicReplaceRequest)
+-                || enumTypes.Values.Contains(item.Value))
+-            .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle
+-                or TypeId.DirectoryRaw or TypeId.DirectoryEntryKind or TypeId.DirectoryEntry
+-                or TypeId.DirectoryRawResult or TypeId.DirectoryReadResult
+-                or TypeId.MouseEvent or TypeId.MouseEventKind or TypeId.EventOverflowPolicy))
++            .Where(item => SemanticTypeRegistrationNames.BoxName(item.Key,
++                declaredStructIds.Contains(item.Value), declaredEnumIds.Contains(item.Value),
++                declaredNames.GetValueOrDefault(item.Value, string.Empty)))
+             .OrderBy(item => (int)item.Value)
+             .ToArray();
+@@ -15491,14 +15620,5 @@ internal sealed partial class SemanticCompiler
+         var structs = new Dictionary<TypeId, BoundStructDefinition>
+         {
+-            [TypeId.Range] = new BoundStructDefinition(
+-                TypeId.Range,
+-                "Range",
+-                [
+-                    new BoundStructField("start", TypeId.Int, 0, 0, 0),
+-                    new BoundStructField("endInclusive", TypeId.Int, 1, 0, 0)
+-                ],
+-                0,
+-                0,
+-                IsPublic: true)
++            [TypeId.Range] = BuiltinTypeDefinitions.Range()
+         };
+         var declaredProducts = new Dictionary<string, TypeId>(StringComparer.Ordinal);
+@@ -15832,5 +15952,5 @@ internal sealed partial class SemanticCompiler
+                 return false;
+             }
+-            if (elementType == BoundType.Int)
++            if (Shared.TypeNamePolicy.SourceDynamicArrayIsImplicit(elementType == BoundType.Int))
+             {
+                 type = BoundType.DynamicIntArray;
+@@ -15928,5 +16048,5 @@ internal sealed partial class SemanticCompiler
+             var value = ResolveDefinitionType(typeName[(separator + 1)..^1].Trim(), line, column);
+             _declaredDictionaryKeyChecks.Add((key, line, column, _currentModuleName));
+-            if (key == TypeId.Int && value == TypeId.Int)
++            if (Shared.TypeNamePolicy.SourceDictionaryIsImplicit(key == TypeId.Int, value == TypeId.Int))
+                 type = TypeId.IntDictionary;
+             else if (!predeclaredDictionariesByShape.TryGetValue((key, value), out type))
+@@ -16111,6 +16231,5 @@ internal sealed partial class SemanticCompiler
+             var declarations = _program.Traits
+                 .Where(trait => trait.Name == requestedName
+-                    || (trait.ModuleName.Length > 0
+-                        && trait.ModuleName + "." + trait.Name == requestedName))
++                    || CanonicalTraitName(trait.Name, trait.ModuleName) == requestedName)
+                 .ToArray();
+             if (declarations.Length == 0)
+@@ -16128,7 +16247,5 @@ internal sealed partial class SemanticCompiler
+                     $"trait '{declaration.Name}' is internal to module '{declaration.ModuleName}'");
+             }
+-            var canonicalName = declaration.ModuleName.Length == 0
+-                ? declaration.Name
+-                : declaration.ModuleName + "." + declaration.Name;
++            var canonicalName = CanonicalTraitName(declaration.Name, declaration.ModuleName);
+             return _types.GetOrAddDynTrait(canonicalName);
+         }
+@@ -16194,5 +16311,5 @@ internal sealed partial class SemanticCompiler
+                 throw Error(line, column, "growable array elements must have a supported inline value layout");
+             }
+-            return elementType == BoundType.Int
++            return Shared.TypeNamePolicy.SourceDynamicArrayIsImplicit(elementType == BoundType.Int)
+                 ? BoundType.DynamicIntArray
+                 : _types.GetOrAddDynamicArray(elementType);
+@@ -16272,5 +16389,5 @@ internal sealed partial class SemanticCompiler
+                     return _types.GetOrAddBoundedDictionary(keyType, valueType, capacity);
+                 }
+-                return keyType == BoundType.Int && valueType == BoundType.Int
++                return Shared.TypeNamePolicy.SourceDictionaryIsImplicit(keyType == BoundType.Int, valueType == BoundType.Int)
+                     ? BoundType.IntDictionary
+                     : _types.GetOrAddDictionary(keyType, valueType);
+@@ -16544,38 +16661,5 @@ internal sealed partial class SemanticCompiler
+         }
+ 
+-        return type switch
+-        {
+-            BoundType.Unit => "Unit",
+-            BoundType.Text => "Text",
+-            BoundType.Int => "Int",
+-            BoundType.Int8 => "Int8",
+-            BoundType.Int16 => "Int16",
+-            BoundType.Int64 => "Long",
+-            BoundType.UInt8 => "UInt8",
+-            BoundType.UInt16 => "UInt16",
+-            BoundType.UInt32 => "UInt32",
+-            BoundType.UInt64 => "UInt64",
+-            BoundType.Size => "Size",
+-            BoundType.UIntSize => "UIntSize",
+-            BoundType.CodePoint => "CodePoint",
+-            BoundType.Arena => "Arena",
+-            BoundType.SourceText => "SourceText",
+-            BoundType.Arguments => "Arguments",
+-            BoundType.MappedBytes => "MappedBytes",
+-            BoundType.MutableMappedBytes => "MutableMappedBytes",
+-            BoundType.Float32 => "Float",
+-            BoundType.Float64 => "Double",
+-            BoundType.Bool => "Bool",
+-            BoundType.IntSlice => "[Int]",
+-            BoundType.StaticIntArray => "[Int; N]",
+-            BoundType.StaticTextArray => "[Text; N]",
+-            BoundType.DynamicIntArray => "[Int; ~]",
+-            BoundType.IntDictionaryView => "{Int: Int}",
+-            BoundType.IntDictionary => "{Int: Int}",
+-            BoundType.GenericParameter => "generic parameter",
+-            BoundType.SecondaryGenericParameter => "secondary generic parameter",
+-            BoundType.TertiaryGenericParameter => "tertiary generic parameter",
+-            _ => type.ToString()
+-        };
++        return SemanticTypeDisplayNames.Builtin(type);
+     }
+ 
+@@ -18512,5 +18596,5 @@ internal sealed partial class SemanticCompiler
+             return [];
+         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
+-        if (!_types.TryResolveInModule(typeName, _currentModuleName, out var type) || !_types.IsEnum(type))
++        if (!TryResolveConstructorType(typeName, expression.Line, expression.Column, out var type) || !_types.IsEnum(type))
+             return [];
+         var variant = _types.GetEnum(type).Variants
+@@ -19352,6 +19436,5 @@ internal sealed partial class SemanticCompiler
+             var trait = _traits.Values.FirstOrDefault(candidate =>
+                 candidate.Name == traitName
+-                || (candidate.ModuleName.Length > 0
+-                    && candidate.ModuleName + "." + candidate.Name == traitName));
++                || CanonicalTraitName(candidate) == traitName);
+             if (trait is not null)
+             {

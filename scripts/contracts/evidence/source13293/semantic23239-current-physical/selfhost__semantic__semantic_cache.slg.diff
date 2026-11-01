@@ -1,0 +1,97 @@
+diff --git a/selfhost/semantic/semantic_cache.slg b/selfhost/semantic/semantic_cache.slg
+index c0399e097..de6b3e256 100644
+--- a/selfhost/semantic/semantic_cache.slg
++++ b/selfhost/semantic/semantic_cache.slg
+@@ -4,4 +4,5 @@ import sollang.compiler.semantic.context as context
+ import sollang.compiler.semantic.expression_type_ids as expressions
+ import sollang.compiler.semantic.semantic_generations as generations
++import sollang.compiler.semantic.semantic_static_arrays as staticArrays
+ import sollang.compiler.semantic.owner_call_facts as owners
+ import sollang.compiler.semantic.owner_type_facts as ownerTypes
+@@ -103,11 +104,15 @@ public validate words: ref [UInt64; ~] -> Int {
+     (words -> len) < 41 or (words -> len) > maximumFrameWords()
+         -> if { 21 -> return }
+-    words[0] != 6002245308512486735 or words[1] != 1 or words[2] != UInt64(words -> len)
+-        or words[3] > UInt64(((words -> len) - 41) / 2) or words[4] > 255 or words[5] > words[3] or words[6] > UInt64(maximumFrameWords()) or words[7] > words[3] or words[8] != 0
++    words[0] != 6002245308512486735 or (words[1] != 1 and words[1] != 2) or words[2] != UInt64(words -> len)
++        or words[3] > UInt64(((words -> len) - 41) / 2) or words[4] > 255 or words[5] > words[3] or words[6] > UInt64(maximumFrameWords()) or words[7] > words[3] or (words[1] == 1 and words[8] != 0)
+         -> if { 21 -> return }
+     Int(words -> len) - 32 => end
++    words[8] > UInt64(end - 9) or (words[1] == 2 and words[8] < 39)
++        -> if { 21 -> return }
++    words[3] > UInt64((end - 9 - Int(words[8])) / 2)
++        -> if { 21 -> return }
+     words -> generations.checksum(end) => digest
+     0..<32 -> each index { words[end + index] != UInt64(digest[index]) -> if { 23 -> return } }
+-    9 => cursor!
++    9 + Int(words[8]) => cursor!
+     UInt64(0) => row!
+     row! < words[3] -> while {
+@@ -220,22 +225,32 @@ public resolveWithExternalResults initialPrepared: move context.SemanticSnapshot
+         loaded.words -> validate => loadStatus!
+         loadStatus! == 0 -> if {
+-            9 => cursor!
+-            UInt64(0) => row!
+-            row! < loaded.words[3] -> while {
+-                Int(loaded.words[cursor! + 1]) => length
+-                loaded.words[cursor!] == 0 -> if {
+-                    [UInt64; ~] => payload!
+-                    0..<length -> each index { payload! -> push(loaded.words[cursor! + 2 + index]) }
+-                    payload! -> generations.restore(prepared!, paths, identity, declarationFingerprint) => restored
+-                    # The owning restoration result is consumed on both paths;
+-                    # appendRestoredOwner rejects failed admission before mutation.
+-                    restored -> generations.appendRestoredOwner(prepared!, seeds!) => status
+-                    status == 0 -> if { reused! + 1 => reused! } else {
+-                        status == 16 or status == 17 -> if { status -> Result<Resolution, Int>.Err -> return }
+-                        rejected! + 1 => rejected!
+-                    }
+-                } else { rejected! + 1 => rejected! }
+-                cursor! + 2 + length => cursor!
+-                row! + 1 => row!
++            loaded.words[8] > 0 -> if {
++                [UInt64; ~] => arrayPlan!
++                0..<Int(loaded.words[8]) -> each index { arrayPlan! -> push(loaded.words[9 + index]) }
++                arrayPlan! -> staticArrays.restore(prepared!.package, prepared!.semantic, identity, declarationFingerprint) -> when {
++                    Err(code) { code => loadStatus! }
++                    Ok(semantic) { semantic => prepared!.semantic }
++                }
++            }
++            loadStatus! == 0 -> if {
++                9 + Int(loaded.words[8]) => cursor!
++                UInt64(0) => row!
++                row! < loaded.words[3] -> while {
++                    Int(loaded.words[cursor! + 1]) => length
++                    loaded.words[cursor!] == 0 -> if {
++                        [UInt64; ~] => payload!
++                        0..<length -> each index { payload! -> push(loaded.words[cursor! + 2 + index]) }
++                        payload! -> generations.restore(prepared!, paths, identity, declarationFingerprint) => restored
++                        # The owning restoration result is consumed on both paths;
++                        # appendRestoredOwner rejects failed admission before mutation.
++                        restored -> generations.appendRestoredOwner(prepared!, seeds!) => status
++                        status == 0 -> if { reused! + 1 => reused! } else {
++                            status == 16 or status == 17 -> if { status -> Result<Resolution, Int>.Err -> return }
++                            rejected! + 1 => rejected!
++                        }
++                    } else { rejected! + 1 => rejected! }
++                    cursor! + 2 + length => cursor!
++                    row! + 1 => row!
++                }
+             }
+         }
+@@ -244,9 +259,15 @@ public resolveWithExternalResults initialPrepared: move context.SemanticSnapshot
+         Err(code) { (90 + code) -> Result<Resolution, Int>.Err -> return }
+         Ok(resolved) {
+-            [UInt64(6002245308512486735), 1, 0, UInt64(resolved.prepared.package.ranges -> len), UInt64(loadStatus!), UInt64(reused!), UInt64(rejected!), 0, 0; ~] => words!
++            [UInt64(6002245308512486735), 2, 0, UInt64(resolved.prepared.package.ranges -> len), UInt64(loadStatus!), UInt64(reused!), UInt64(rejected!), 0, 0; ~] => words!
+             0 => skipped!
+             true => captureAllowed!
+             Int(resolved.prepared.package.ranges -> len) => sourceCount
+             resolved.prepared -> ownerTypes.prepareCaptureMetadata(resolved.types) => captureMetadata
++            resolved.types.types -> staticArrays.capture(captureMetadata.details, captureMetadata.declarations, identity, declarationFingerprint) -> when {
++                Err(code) { code -> Result<Resolution, Int>.Err -> return }
++                Ok(value) { value }
++            } => arrayPlan
++            UInt64(arrayPlan -> len) => words![8]
++            arrayPlan -> each word { words! -> push(word) }
+             0..<sourceCount -> each source {
+                 captureAllowed! -> if {

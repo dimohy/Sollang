@@ -1,0 +1,108 @@
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index 4ff8c2301..0a47b6d44 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -902,4 +902,6 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+     pathChanged! -> while {
+         false => pathChanged!
++        resolveDeclaredBlockRoleReads(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings)
++            -> if { true => pathChanged! }
+         # Callback locals and member paths become concrete in these rounds.
+         # Publish the completed terminal type before consumers inherit it.
+@@ -1264,5 +1266,8 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                         } else {
+                                                             prepared.package.nodes[inferredReturnTargetRange.astStart + inferredReturnAncestor!] => inferredReturnAncestorNode
++                                                            # Infer a product result from the complete value,
++                                                            # never an operand typed before that value is ready.
+                                                             inferredReturnAncestorNode.kind == 7 or inferredReturnAncestorNode.kind == 29 or inferredReturnAncestorNode.kind == 31
++                                                                or inferredReturnAncestorNode.kind == 71
+                                                                 -> if {
+                                                                     true => inferredReturnNested!
+@@ -1779,5 +1784,5 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                         }
+                                     branchProductType! < 0 -> if {
+-                                        types -> len => branchProductType!
++                                        types -> typeIds.allocateSemanticTypeSlot => branchProductType!
+                                         false => branchContainsParameter!
+                                         0 => branchParameterField!
+@@ -1788,5 +1793,5 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                 branchParameterField! + 1 => branchParameterField!
+                                             }
+-                                        types -> push(typeIds.SemanticType {
++                                        typeIds.SemanticType {
+                                             kind: 10
+                                             origin: -1
+@@ -1799,7 +1804,6 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                             containsParameter: branchContainsParameter!
+                                             status: 0
+-                                        })
+-                                        firstFieldByOwnerType! -> push(-1)
+-                                        lastFieldByOwnerType! -> push(-1)
++                                        } => types[branchProductType!]
++                                        (types -> len) -> typeIds.ensureTypeFieldSlots(firstFieldByOwnerType!, lastFieldByOwnerType!)
+                                         0 => branchNewFieldOrdinal!
+                                         branchNewFieldOrdinal! < Int(branchFieldTypes! -> len)
+@@ -2031,8 +2035,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                     }
+                                                     homogeneousJoinProductType! < 0 -> if {
+-                                                        types -> len => homogeneousJoinProductType!
+-                                                        types -> push(typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: Int(homogeneousJoinInputTypes! -> len), lengthHash: 0, containsParameter: false, status: 0 })
+-                                                        firstFieldByOwnerType! -> push(-1)
+-                                                        lastFieldByOwnerType! -> push(-1)
++                                                        types -> typeIds.allocateSemanticTypeSlot => homogeneousJoinProductType!
++                                                        typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: Int(homogeneousJoinInputTypes! -> len), lengthHash: 0, containsParameter: false, status: 0 } => types[homogeneousJoinProductType!]
++                                                        (types -> len) -> typeIds.ensureTypeFieldSlots(firstFieldByOwnerType!, lastFieldByOwnerType!)
+                                                         0 => homogeneousJoinNewFieldOrdinal!
+                                                         homogeneousJoinNewFieldOrdinal! < Int(homogeneousJoinInputTypes! -> len)
+@@ -2152,5 +2155,5 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                 }
+                                             homogeneousJoinOutputProduct! < 0 -> if {
+-                                                types -> len => homogeneousJoinOutputProduct!
++                                                types -> typeIds.allocateSemanticTypeSlot => homogeneousJoinOutputProduct!
+                                                 false => homogeneousJoinOutputContainsParameter!
+                                                 0 => homogeneousJoinOutputParameterField!
+@@ -2161,7 +2164,6 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                         homogeneousJoinOutputParameterField! + 1 => homogeneousJoinOutputParameterField!
+                                                     }
+-                                                types -> push(typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: homogeneousJoinFieldCount!, lengthHash: 0, containsParameter: homogeneousJoinOutputContainsParameter!, status: 0 })
+-                                                firstFieldByOwnerType! -> push(-1)
+-                                                lastFieldByOwnerType! -> push(-1)
++                                                typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: homogeneousJoinFieldCount!, lengthHash: 0, containsParameter: homogeneousJoinOutputContainsParameter!, status: 0 } => types[homogeneousJoinOutputProduct!]
++                                                (types -> len) -> typeIds.ensureTypeFieldSlots(firstFieldByOwnerType!, lastFieldByOwnerType!)
+                                                 0 => homogeneousJoinOutputNewOrdinal!
+                                                 homogeneousJoinOutputNewOrdinal! < homogeneousJoinFieldCount!
+@@ -2193,8 +2195,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                 }
+                                             homogeneousJoinOutputWrapper! < 0 -> if {
+-                                                types -> len => homogeneousJoinOutputWrapper!
+-                                                types -> push(typeIds.SemanticType { kind: 7, origin: homogeneousJoinWrapper.origin, module: homogeneousJoinWrapper.module, symbol: homogeneousJoinResultSymbol, first: homogeneousJoinElementType!, second: homogeneousJoinWrapper.second, length: -1, lengthHash: 0, containsParameter: types[homogeneousJoinElementType!].containsParameter, status: 0 })
+-                                                firstFieldByOwnerType! -> push(-1)
+-                                                lastFieldByOwnerType! -> push(-1)
++                                                types -> typeIds.allocateSemanticTypeSlot => homogeneousJoinOutputWrapper!
++                                                typeIds.SemanticType { kind: 7, origin: homogeneousJoinWrapper.origin, module: homogeneousJoinWrapper.module, symbol: homogeneousJoinResultSymbol, first: homogeneousJoinElementType!, second: homogeneousJoinWrapper.second, length: -1, lengthHash: 0, containsParameter: types[homogeneousJoinElementType!].containsParameter, status: 0 } => types[homogeneousJoinOutputWrapper!]
++                                                (types -> len) -> typeIds.ensureTypeFieldSlots(firstFieldByOwnerType!, lastFieldByOwnerType!)
+                                             }
+                                             homogeneousJoinOutputWrapper! => homogeneousJoinResultType!
+@@ -2255,5 +2256,5 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+         prepared.package -> resolveWhenResultTypes(expressions, expressionIndexByAst, continuationByAst, types -> typeIds.builtinTypeId(0)) => whenResultsChanged
+         whenResultsChanged -> if { true => pathChanged! }
+-        resolveMutableRebindLiteralTypes(prepared, types, mutableOwners, bindingValues, expressions, expressionIndexByAst) => mutableRebindChanged
++        resolveMutableRebindNumericTypes(prepared, types, mutableOwners, bindingValues, expressions, expressionIndexByAst, contextualRecords, expectedContextByAst) => mutableRebindChanged
+         resolveContextualNumericLiteralTypesWithExpectedContext(prepared, types, expressions, expressionIndexByAst, expectedContextByAst) => contextualNumericChanged
+         resolveMissingUnaryExpressionTypes(prepared, types, expressions, expressionIndexByAst) => unaryResultChanged
+@@ -3183,6 +3184,6 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                         }
+                                         lateDictionaryType! < 0 -> if {
+-                                            types -> len => lateDictionaryType!
+-                                            types -> push(typeIds.SemanticType {
++                                            types -> typeIds.allocateSemanticTypeSlot => lateDictionaryType!
++                                            typeIds.SemanticType {
+                                                 kind: lateDictionaryKind
+                                                 origin: -1
+@@ -3195,5 +3196,5 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                 containsParameter: types[lateDictionaryFirstType!].containsParameter or types[lateDictionarySecondType!].containsParameter
+                                                 status: 0
+-                                            })
++                                            } => types[lateDictionaryType!]
+                                         }
+                                         expressionIndexByAst[lateDictionaryGlobalAst] >= 0

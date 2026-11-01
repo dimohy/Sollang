@@ -1,0 +1,390 @@
+diff --git a/selfhost/semantic/library_interfaces.slg b/selfhost/semantic/library_interfaces.slg
+index 8679e2139..52945e472 100644
+--- a/selfhost/semantic/library_interfaces.slg
++++ b/selfhost/semantic/library_interfaces.slg
+@@ -4,4 +4,5 @@ import sys.file as file
+ import std.crypto.sha256 as sha256
+ import std.text.json as json
++import std.text.json.error as jsonErrors
+ 
+ # The shared JSON reader owns decoded UTF-8 strings. Interface fields use spans
+@@ -139,19 +140,30 @@ spanPrecedes source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
+ }
+ 
+-hashEquals source: Text, declared: MetadataSpan, bytes: [UInt8] -> Bool {
+-    declared.length != 64 -> if { false -> return }
++public hashHex bytes: [UInt8] -> [UInt8; 64] {
+     sha256.create() => hasher!
+     hasher! -> update(bytes)
+     hasher! -> finish => digest
+-    UIntSize(0) => index!
+-    true => matches!
++    [UInt8(0); 64] => hex!
++    0 => index!
+     index! < 32 -> while {
+-        digest[Int(index!)] => value
++        digest[index!] => value
+         value / 16 => high
+         value % 16 => low
+         high < 10 -> if { high + 48 } else { high + 87 } => highHex
+         low < 10 -> if { low + 48 } else { low + 87 } => lowHex
+-        (source -> byte(declared.start + index! * 2)) != highHex
+-            or (source -> byte(declared.start + index! * 2 + 1)) != lowHex
++        highHex => hex![index! * 2]
++        lowHex => hex![index! * 2 + 1]
++        index! + 1 => index!
++    }
++    hex!
++}
++
++hashEquals source: Text, declared: MetadataSpan, bytes: [UInt8] -> Bool {
++    declared.length != 64 -> if { false -> return }
++    bytes -> hashHex => actual
++    UIntSize(0) => index!
++    true => matches!
++    index! < 64 -> while {
++        (source -> byte(declared.start + index!)) != actual[Int(index!)]
+             -> if { false => matches! }
+         index! + 1 => index!
+@@ -206,27 +218,8 @@ abiSafe source: Text, span: MetadataSpan -> Bool {
+ validationIssue status: Int, exportIndex: Int, parameterIndex: Int -> ValidationIssue => ValidationIssue { status: status, exportIndex: exportIndex, parameterIndex: parameterIndex }
+ 
+-validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: Text -> ValidationIssue {
+-    document.schema != 1 -> if { 21 -> validationIssue(-1, -1) -> return }
+-    source -> spanIs(document.abi, "sollang-c-v1")
+-        -> unless { 22 -> validationIssue(-1, -1) -> return }
+-    (expectedTarget -> len) > 0 -> if {
+-        source -> spanIs(document.target, expectedTarget)
+-            -> unless { 23 -> validationIssue(-1, -1) -> return }
+-    } else {
+-        not (source -> spanIs(document.target, "windows-x64"))
+-            and not (source -> spanIs(document.target, "linux-x64"))
+-            -> if { 23 -> validationIssue(-1, -1) -> return }
+-    }
+-    (document.exports -> len) == 0 -> if { 71 -> validationIssue(-1, -1) -> return }
+-    document.libraryFile.length == 0 -> if { 72 -> validationIssue(-1, -1) -> return }
+-    UIntSize(0) => fileIndex!
+-    fileIndex! < document.libraryFile.length -> while {
+-        source -> byte(document.libraryFile.start + fileIndex!) => current
+-        current == 47 or current == 92 -> if { 72 -> validationIssue(-1, -1) -> return }
+-        fileIndex! + 1 => fileIndex!
+-    }
++public abiMaterial source: Text, exports: ref [LibraryExport; ~], parameters: ref [LibraryParameter; ~] -> [UInt8; ~] {
+     [Int; ~] => order!
+     0 => exportIndex!
+-    exportIndex! < (document.exports -> len) -> while {
++    exportIndex! < (exports -> len) -> while {
+         order! -> push(exportIndex!)
+         exportIndex! + 1 => exportIndex!
+@@ -238,5 +231,5 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget:
+             order![cursor!] => right
+             order![cursor! - 1] => left
+-            source -> spanPrecedes(document.exports[right].qualifiedName, document.exports[left].qualifiedName)
++            source -> spanPrecedes(exports[right].qualifiedName, exports[left].qualifiedName)
+                 -> unless { break }
+             left => order![cursor!]
+@@ -250,5 +243,5 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget:
+     ordinal! < (order! -> len) -> while {
+         ordinal! > 0 -> if { abiBytes! -> push(10) }
+-        document.exports[order![ordinal!]] => exported
++        exports[order![ordinal!]] => exported
+         source -> appendSpan(exported.qualifiedName, abiBytes!)
+         abiBytes! -> push(0)
+@@ -256,5 +249,5 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget:
+         parameterOrdinal! < exported.parameterCount -> while {
+             parameterOrdinal! > 0 -> if { abiBytes! -> push(0) }
+-            source -> appendSpan(document.parameters[exported.parameterStart + parameterOrdinal!].typeName, abiBytes!)
++            source -> appendSpan(parameters[exported.parameterStart + parameterOrdinal!].typeName, abiBytes!)
+             parameterOrdinal! + 1 => parameterOrdinal!
+         }
+@@ -265,5 +258,51 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget:
+         ordinal! + 1 => ordinal!
+     }
+-    source -> hashEquals(document.abiHash, abiBytes!)
++    abiBytes!
++}
++
++public signatureMaterial source: Text, exported: LibraryExport, parameters: ref [LibraryParameter; ~] -> [UInt8; ~] {
++    [UInt8; ~] => signature!
++    source -> appendSpan(exported.name, signature!)
++    signature! -> push(0)
++    source -> appendSpan(exported.symbol, signature!)
++    signature! -> push(0)
++    0 => parameterOrdinal!
++    parameterOrdinal! < exported.parameterCount -> while {
++        parameterOrdinal! > 0 -> if { signature! -> push(0) }
++        parameters[exported.parameterStart + parameterOrdinal!] => parameter
++        source -> appendSpan(parameter.name, signature!)
++        signature! -> push(58)
++        source -> appendSpan(parameter.typeName, signature!)
++        parameterOrdinal! + 1 => parameterOrdinal!
++    }
++    signature! -> push(0)
++    signature! -> push(45)
++    signature! -> push(62)
++    source -> appendSpan(exported.resultType, signature!)
++    signature!
++}
++
++validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: Text -> ValidationIssue {
++    document.schema != 1 -> if { 21 -> validationIssue(-1, -1) -> return }
++    source -> spanIs(document.abi, "sollang-c-v1")
++        -> unless { 22 -> validationIssue(-1, -1) -> return }
++    (expectedTarget -> len) > 0 -> if {
++        source -> spanIs(document.target, expectedTarget)
++            -> unless { 23 -> validationIssue(-1, -1) -> return }
++    } else {
++        not (source -> spanIs(document.target, "windows-x64"))
++            and not (source -> spanIs(document.target, "linux-x64"))
++            -> if { 23 -> validationIssue(-1, -1) -> return }
++    }
++    (document.exports -> len) == 0 -> if { 71 -> validationIssue(-1, -1) -> return }
++    document.libraryFile.length == 0 -> if { 72 -> validationIssue(-1, -1) -> return }
++    UIntSize(0) => fileIndex!
++    fileIndex! < document.libraryFile.length -> while {
++        source -> byte(document.libraryFile.start + fileIndex!) => current
++        current == 47 or current == 92 -> if { 72 -> validationIssue(-1, -1) -> return }
++        fileIndex! + 1 => fileIndex!
++    }
++    source -> abiMaterial(document.exports, document.parameters) => abiBytes
++    source -> hashEquals(document.abiHash, abiBytes)
+         -> unless { 73 -> validationIssue(-1, -1) -> return }
+     0 => signatureIndex!
+@@ -288,23 +327,6 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget:
+         }
+         source -> abiSafe(exported.resultType) -> unless { 74 -> validationIssue(signatureIndex!, -1) -> return }
+-        [UInt8; ~] => signature!
+-        source -> appendSpan(exported.name, signature!)
+-        signature! -> push(0)
+-        source -> appendSpan(exported.symbol, signature!)
+-        signature! -> push(0)
+-        0 => parameterOrdinal!
+-        parameterOrdinal! < exported.parameterCount -> while {
+-            parameterOrdinal! > 0 -> if { signature! -> push(0) }
+-            document.parameters[exported.parameterStart + parameterOrdinal!] => parameter
+-            source -> appendSpan(parameter.name, signature!)
+-            signature! -> push(58)
+-            source -> appendSpan(parameter.typeName, signature!)
+-            parameterOrdinal! + 1 => parameterOrdinal!
+-        }
+-        signature! -> push(0)
+-        signature! -> push(45)
+-        signature! -> push(62)
+-        source -> appendSpan(exported.resultType, signature!)
+-        source -> hashEquals(exported.signatureHash, signature!)
++        source -> signatureMaterial(exported, document.parameters) => signature
++        source -> hashEquals(exported.signatureHash, signature)
+             -> unless { 65 -> validationIssue(signatureIndex!, -1) -> return }
+         0 => previous!
+@@ -319,4 +341,211 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget:
+ }
+ 
++writeMetadataSpan writer: mut json.Writer, source: Text, span: MetadataSpan -> Result<Unit, json.Error> {
++    span.start <= (source -> len) and span.length <= (source -> len) - span.start
++        -> unless {
++            Result<Unit, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: span.start }) -> return
++        }
++    writer -> string(source -> slice(span.start, span.length))
++}
++
++storeMetadataText bytes: mut [UInt8; ~], value: Text -> MetadataSpan {
++    UIntSize(bytes -> len) => start
++    UIntSize(0) => offset!
++    offset! < (value -> len) -> while {
++        bytes -> push(value -> byte(offset!))
++        offset! + 1 => offset!
++    }
++    MetadataSpan { start: start, length: UIntSize(bytes -> len) - start }
++}
++
++storeMetadataHash bytes: mut [UInt8; ~], value: [UInt8; 64] -> MetadataSpan {
++    UIntSize(bytes -> len) => start
++    value -> each digit { bytes -> push(digit) }
++    MetadataSpan { start: start, length: 64 }
++}
++
++metadataSpanValid span: MetadataSpan, byteCount: UIntSize -> Bool {
++    span.start <= byteCount and span.length <= byteCount - span.start
++}
++
++producerShapeValid strings: ref [UInt8; ~], exports: ref [LibraryExport; ~], parameters: ref [LibraryParameter; ~] -> Bool {
++    UIntSize(strings -> len) => size
++    (exports -> len) == 0 -> if { false -> return }
++    exports -> each exported {
++        not (exported.name -> metadataSpanValid(size))
++            or not (exported.qualifiedName -> metadataSpanValid(size))
++            or not (exported.resultType -> metadataSpanValid(size))
++            or exported.parameterStart < 0 or exported.parameterCount < 0
++            or exported.parameterStart > (parameters -> len)
++            or exported.parameterCount > (parameters -> len) - exported.parameterStart
++            -> if { false -> return }
++    }
++    parameters -> each parameter {
++        not (parameter.name -> metadataSpanValid(size)) or not (parameter.typeName -> metadataSpanValid(size))
++            -> if { false -> return }
++    }
++    strings -> file.borrowBytes => owner
++    owner -> slice(UIntSize(0), owner -> len) => source
++    0 => index!
++    index! < (exports -> len) -> while {
++        exports[index!] => exported
++        source -> abiSafe(exported.resultType) -> unless { false -> return }
++        0 => previous!
++        previous! < index! -> while {
++            source -> sameSpan(exports[previous!].name, exported.name)
++                -> if { false -> return }
++            previous! + 1 => previous!
++        }
++        index! + 1 => index!
++    }
++    parameters -> each parameter {
++        source -> abiSafe(parameter.typeName) -> unless { false -> return }
++    }
++    true
++}
++
++producerAbiHash strings: ref [UInt8; ~], exports: ref [LibraryExport; ~], parameters: ref [LibraryParameter; ~] -> [UInt8; 64] {
++    strings -> file.borrowBytes => owner
++    owner -> slice(UIntSize(0), owner -> len) -> abiMaterial(exports, parameters) -> hashHex
++}
++
++producerSignatureHash strings: ref [UInt8; ~], exported: LibraryExport, parameters: ref [LibraryParameter; ~] -> [UInt8; 64] {
++    strings -> file.borrowBytes => owner
++    owner -> slice(UIntSize(0), owner -> len) -> signatureMaterial(exported, parameters) -> hashHex
++}
++
++storeExportSymbol strings: mut [UInt8; ~], qualifiedName: MetadataSpan, abiHash: [UInt8; 64] -> MetadataSpan {
++    UIntSize(strings -> len) => start
++    strings -> push(115)
++    strings -> push(108)
++    strings -> push(103)
++    strings -> push(95)
++    abiHash -> each digit { strings -> push(digit) }
++    strings -> push(95)
++    UIntSize(0) => offset!
++    offset! < qualifiedName.length -> while {
++        strings[Int(qualifiedName.start + offset!)] => value
++        # Valid source identifiers contain BMP scalars. Emit one underscore for
++        # each non-ASCII scalar, matching the C# UTF-16 character sanitizer.
++        value < 128 or value >= 192 -> if {
++            (value >= 48 and value <= 57) or (value >= 65 and value <= 90) or (value >= 97 and value <= 122)
++                -> if { strings -> push(value) } else { strings -> push(95) }
++        }
++        offset! + 1 => offset!
++    }
++    MetadataSpan { start: start, length: UIntSize(strings -> len) - start }
++}
++
++# Call after declaration admission. Hash material, symbol construction and
++# strict consumer validation share one metadata model with the reader.
++public create exports: move [LibraryExport; ~], parameters: move [LibraryParameter; ~], strings: move [UInt8; ~], target: Text, libraryFile: Text -> Result<LibraryInterface, json.Error> {
++    target == "windows-x64" or target == "linux-x64"
++        -> unless { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return }
++    (libraryFile -> len) > 0 -> unless { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return }
++    UIntSize(0) => pathIndex!
++    pathIndex! < (libraryFile -> len) -> while {
++        libraryFile -> byte(pathIndex!) => value
++        value == 47 or value == 92 -> if { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: pathIndex! }) -> return }
++        pathIndex! + 1 => pathIndex!
++    }
++    strings -> producerShapeValid(exports, parameters)
++        -> unless { Result<LibraryInterface, json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return }
++    strings -> producerAbiHash(exports, parameters) => digest
++    strings => ownedStrings!
++    ownedStrings! -> storeMetadataText("sollang-c-v1") => abi
++    ownedStrings! -> storeMetadataText(target) => targetSpan
++    ownedStrings! -> storeMetadataText(libraryFile) => fileSpan
++    ownedStrings! -> storeMetadataHash(digest) => hashSpan
++    [LibraryExport; ~] => completedExports!
++    exports -> each exported {
++        ownedStrings! -> storeExportSymbol(exported.qualifiedName, digest) => symbol
++        LibraryExport { name: exported.name, qualifiedName: exported.qualifiedName, symbol: symbol,
++            parameterStart: exported.parameterStart, parameterCount: exported.parameterCount,
++            resultType: exported.resultType, signatureHash: MetadataSpan { start: 0, length: 0 } } => pending
++        ownedStrings! -> producerSignatureHash(pending, parameters) => signature
++        ownedStrings! -> storeMetadataHash(signature) => signatureSpan
++        completedExports! -> push(LibraryExport { name: pending.name, qualifiedName: pending.qualifiedName, symbol: pending.symbol,
++            parameterStart: pending.parameterStart, parameterCount: pending.parameterCount,
++            resultType: pending.resultType, signatureHash: signatureSpan })
++    }
++    emptyDocument() => document!
++    1 => document!.schema
++    abi => document!.abi
++    targetSpan => document!.target
++    fileSpan => document!.libraryFile
++    hashSpan => document!.abiHash
++    completedExports! => document!.exports
++    parameters => document!.parameters
++    ownedStrings! => document!.strings
++    Result<LibraryInterface, json.Error>.Ok(document!)
++}
++
++# The metadata model and JSON writer are shared with the strict reader. The
++# caller supplies its output budget; one byte is reserved for the final LF.
++public serialize document: ref LibraryInterface, maxOutputBytes: Int -> Result<[UInt8; ~], json.Error> {
++    document.status == 0 and document.schema == 1
++        -> unless {
++            Result<[UInt8; ~], json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return
++        }
++    maxOutputBytes >= 1 -> unless {
++        Result<[UInt8; ~], json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidLimit, offset: 0 }) -> return
++    }
++    document.strings -> file.borrowBytes => owner
++    owner -> slice(UIntSize(0), owner -> len) => source
++    (maxOutputBytes - 1) -> json.writer(5)? => writer!
++    writer! -> beginObject?
++    writer! -> name("schema")?
++    writer! -> number("1")?
++    writer! -> name("abi")?
++    writer! -> writeMetadataSpan(source, document.abi)?
++    writer! -> name("target")?
++    writer! -> writeMetadataSpan(source, document.target)?
++    writer! -> name("libraryFile")?
++    writer! -> writeMetadataSpan(source, document.libraryFile)?
++    writer! -> name("abiHash")?
++    writer! -> writeMetadataSpan(source, document.abiHash)?
++    writer! -> name("exports")?
++    writer! -> beginArray?
++    document.exports -> each exported {
++        exported.parameterStart >= 0 and exported.parameterCount >= 0
++            and exported.parameterStart <= (document.parameters -> len)
++            and exported.parameterCount <= (document.parameters -> len) - exported.parameterStart
++            -> unless {
++                Result<[UInt8; ~], json.Error>.Err(json.Error { kind: jsonErrors.Kind.InvalidModel, offset: 0 }) -> return
++            }
++        writer! -> beginObject?
++        writer! -> name("name")?
++        writer! -> writeMetadataSpan(source, exported.name)?
++        writer! -> name("qualifiedName")?
++        writer! -> writeMetadataSpan(source, exported.qualifiedName)?
++        writer! -> name("symbol")?
++        writer! -> writeMetadataSpan(source, exported.symbol)?
++        writer! -> name("parameters")?
++        writer! -> beginArray?
++        0 => parameterOrdinal!
++        parameterOrdinal! < exported.parameterCount -> while {
++            document.parameters[exported.parameterStart + parameterOrdinal!] => parameter
++            writer! -> beginObject?
++            writer! -> name("name")?
++            writer! -> writeMetadataSpan(source, parameter.name)?
++            writer! -> name("type")?
++            writer! -> writeMetadataSpan(source, parameter.typeName)?
++            writer! -> endObject?
++            parameterOrdinal! + 1 => parameterOrdinal!
++        }
++        writer! -> endArray?
++        writer! -> name("result")?
++        writer! -> writeMetadataSpan(source, exported.resultType)?
++        writer! -> name("signatureHash")?
++        writer! -> writeMetadataSpan(source, exported.signatureHash)?
++        writer! -> endObject?
++    }
++    writer! -> endArray?
++    writer! -> endObject?
++    writer! -> intoBytes? => bytes!
++    bytes! -> push(10)
++    Result<[UInt8; ~], json.Error>.Ok(bytes!)
++}
++
+ emptyDocument: -> LibraryInterface => LibraryInterface {
+     status: 0

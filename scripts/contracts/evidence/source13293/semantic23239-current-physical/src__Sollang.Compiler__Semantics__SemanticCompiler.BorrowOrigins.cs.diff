@@ -1,0 +1,173 @@
+diff --git a/src/Sollang.Compiler/Semantics/SemanticCompiler.BorrowOrigins.cs b/src/Sollang.Compiler/Semantics/SemanticCompiler.BorrowOrigins.cs
+index c8c8612e8..23aa2d584 100644
+--- a/src/Sollang.Compiler/Semantics/SemanticCompiler.BorrowOrigins.cs
++++ b/src/Sollang.Compiler/Semantics/SemanticCompiler.BorrowOrigins.cs
+@@ -1356,6 +1356,14 @@ internal sealed partial class SemanticCompiler
+                 return TryGetConcreteBorrowOrigins(target.Arguments[0], bindings, out origins);
+             if (target.Path.Count == 1 && target.Path[0] == "slice")
++            {
++                // SourceText owns its backing bytes even when its borrowed Text
++                // payload loan is known empty. Text itself remains a span, whose
++                // existing upstream loan must stay authoritative.
++                if (TryGetBorrowedViewReceiverType(current, bindings, out var receiverType)
++                    && receiverType == BoundType.SourceText)
++                    return TryGetBorrowedSourceCallSiteOrigins(current, functions, bindings, out origins);
+                 return TryGetBorrowedTextCallOrigins(current, functions, bindings, out origins)
+                     || TryGetConcreteBorrowOrigins(current, bindings, out origins);
++            }
+             if (TryGetBorrowedCallSiteFunction(target, target.Path, functions, out var targetFunction))
+             {
+@@ -2021,5 +2029,8 @@ internal sealed partial class SemanticCompiler
+                 ? called.InputOwnership
+                 : (called.AdditionalParameters ?? [])[ordinal - (called.InputType is null ? 0 : 1)].Ownership;
+-            if (parameterTypes[ordinal] is BoundType.SourceText or BoundType.Arena
++            var parameterType = parameterTypes[ordinal];
++            var parameterValueType = _types.IsReference(parameterType)
++                ? _types.GetReference(parameterType).ElementType : parameterType;
++            if (parameterValueType is BoundType.SourceText or BoundType.Arena
+                 || (IsBorrowedTextByteStorage(parameterTypes[ordinal])
+                     && (parameterTypes[ordinal] == TypeId.DynamicUInt8Array
+@@ -2345,6 +2356,10 @@ internal sealed partial class SemanticCompiler
+         {
+             var root = SplitBorrowPlace(origin)[0];
+-            if (returnOuterBindings.TryGetValue(root, out var outerType)
+-                && !(_currentMoveInputNames.Contains(root) && _types.ContainsOwnedStorage(outerType)))
++            var outerParameter = returnOuterBindings.TryGetValue(root, out var outerType);
++            var movesOwner = outerParameter && _currentMoveInputNames.Contains(root);
++            var ownsStorage = movesOwner && _types.ContainsOwnedStorage(outerType);
++            var externalTextPayload = ownsStorage && TextPayloadSurvivesMovedOwner(origin, outerType);
++            if (!Shared.BorrowedTextReturnPolicy.RequiresOriginCheck(
++                outerParameter, movesOwner, ownsStorage) || externalTextPayload)
+             {
+                 continue;
+@@ -2357,4 +2372,75 @@ internal sealed partial class SemanticCompiler
+     }
+ 
++    private bool TextPayloadSurvivesMovedOwner(string origin, BoundType ownerType)
++    {
++        var type = ownerType;
++        foreach (var projection in SplitBorrowPlace(origin).Skip(1))
++        {
++            if (_types.IsReference(type))
++                type = _types.GetReference(type).ElementType;
++            if (projection.StartsWith('.') && _types.IsStruct(type))
++            {
++                var field = _types.GetStruct(type).Fields.FirstOrDefault(field =>
++                    StringComparer.Ordinal.Equals(field.Name, projection[1..]));
++                if (field is null) return false;
++                type = field.Type;
++            }
++            else if (projection.StartsWith('[') && TryGetContextualArrayElementType(type, out var element))
++                type = element;
++            else if (projection.StartsWith('[') && _types.IsDictionary(type))
++                type = _types.IsBoundedDictionary(type)
++                    ? _types.GetBoundedDictionary(type).ValueType
++                    : _types.GetDictionary(type).ValueType;
++            else if (projection.StartsWith('[') && _types.IsEnum(type))
++            {
++                var variant = _types.GetEnum(type).Variants.FirstOrDefault(variant =>
++                    StringComparer.Ordinal.Equals(variant.Name, projection[1..^1]));
++                if (variant?.PayloadType is not { } payload) return false;
++                type = payload;
++            }
++            else
++                return false;
++        }
++        // Text elements store spans, not their backing bytes. Moving/dropping
++        // their carrier must retain the caller's upstream payload loan instead
++        // of turning the carrier's descriptor allocation into the byte owner.
++        return TypeContains(type, BoundType.Text)
++            && HasOnlyExternalTextPayloads(type, []);
++    }
++
++    private bool HasOnlyExternalTextPayloads(BoundType type, HashSet<BoundType> visiting)
++    {
++        if (type == BoundType.Text || _types.IsReference(type)) return true;
++        if (type is BoundType.SourceText or BoundType.Arena or BoundType.MappedBytes or BoundType.MutableMappedBytes)
++            return false;
++        if (!visiting.Add(type)) return true;
++        try
++        {
++            if (TryGetContextualArrayElementType(type, out var element))
++                return element != BoundType.UInt8 && HasOnlyExternalTextPayloads(element, visiting);
++            if (_types.IsDictionary(type))
++            {
++                var (key, value) = _types.IsBoundedDictionary(type)
++                    ? (_types.GetBoundedDictionary(type).KeyType, _types.GetBoundedDictionary(type).ValueType)
++                    : (_types.GetDictionary(type).KeyType, _types.GetDictionary(type).ValueType);
++                return HasOnlyExternalTextPayloads(key, visiting)
++                    && HasOnlyExternalTextPayloads(value, visiting);
++            }
++            if (_types.IsBox(type))
++                return HasOnlyExternalTextPayloads(_types.GetBox(type).ElementType, visiting);
++            if (_types.IsStruct(type))
++            {
++                var structure = _types.GetStruct(type);
++                return structure.NativeHandle is null && structure.ComInterface is null
++                    && structure.Fields.All(field => HasOnlyExternalTextPayloads(field.Type, visiting));
++            }
++            if (_types.IsEnum(type))
++                return _types.GetEnum(type).Variants.All(variant =>
++                    variant.PayloadType is not { } payload || HasOnlyExternalTextPayloads(payload, visiting));
++            return !_types.ContainsOwnedStorage(type);
++        }
++        finally { visiting.Remove(type); }
++    }
++
+     private static List<BoundType> FunctionParameterTypes(BoundFunction function)
+     {
+@@ -2368,4 +2454,47 @@ internal sealed partial class SemanticCompiler
+     }
+ 
++    private bool TryGetBorrowedViewReceiverType(
++        Expression expression,
++        IReadOnlyDictionary<string, BoundType> bindings,
++        out BoundType type)
++    {
++        switch (expression)
++        {
++            case NameExpression name when bindings.TryGetValue(name.Name, out type):
++                break;
++            case FieldAccessExpression field
++                when TryGetBorrowedViewReceiverType(field.Source, bindings, out var owner)
++                    && _types.IsStruct(owner):
++                var selected = _types.GetStruct(owner).Fields.FirstOrDefault(candidate =>
++                    StringComparer.Ordinal.Equals(candidate.Name, field.FieldName));
++                if (selected is null)
++                {
++                    type = default;
++                    return false;
++                }
++                type = selected.Type;
++                break;
++            case IndexExpression index
++                when TryGetBorrowedViewReceiverType(index.Source, bindings, out var container):
++                if (TryGetContextualArrayElementType(container, out type))
++                    break;
++                if (_types.IsDictionary(container))
++                {
++                    type = _types.IsBoundedDictionary(container)
++                        ? _types.GetBoundedDictionary(container).ValueType
++                        : _types.GetDictionary(container).ValueType;
++                    break;
++                }
++                type = default;
++                return false;
++            default:
++                type = default;
++                return false;
++        }
++        if (_types.IsReference(type))
++            type = _types.GetReference(type).ElementType;
++        return true;
++    }
++
+     private bool TryGetConcreteBorrowOrigins(
+         Expression expression,
+@@ -2452,5 +2581,5 @@ internal sealed partial class SemanticCompiler
+         if (TryGetOwnedPlaceType(field, out var fieldType)
+             && _types.ContainsOwnedStorage(fieldType)
+-            && !TypeCanCarryBorrowedTextOrigin(fieldType)
++            && (fieldType == BoundType.SourceText || !TypeCanCarryBorrowedTextOrigin(fieldType))
+             && !TypeContainsReadonlyReference(fieldType)
+             && TryGetBorrowPlace(field, out place))
