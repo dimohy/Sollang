@@ -50,15 +50,14 @@ internal readonly record struct LlvmCodegenKey(ulong InterfaceHash, ulong Implem
 {
     public LlvmCodegenKey WithEmissionSet(IEnumerable<string> identities)
     {
-        const ulong prime = 1099511628211;
-        var hash = unchecked(ImplementationHash * prime + 101);
+        var hash = Shared.CodegenCachePolicy.EmissionSetStart(ImplementationHash);
         foreach (var identity in identities.Order(StringComparer.Ordinal))
         {
             var bytes = Encoding.UTF8.GetBytes(identity);
-            hash = unchecked(hash * prime + (ulong)bytes.Length);
+            hash = Shared.CodegenCachePolicy.EmissionIdentityStart(hash, (ulong)bytes.Length);
             foreach (var value in bytes)
             {
-                hash = unchecked(hash * prime + value);
+                hash = Shared.CodegenCachePolicy.EmissionIdentityByte(hash, value);
             }
         }
         return new LlvmCodegenKey(InterfaceHash, hash);

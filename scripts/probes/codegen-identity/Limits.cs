@@ -1,6 +1,30 @@
 using System.Reflection;
 using System.Text.Json;
 
+if (args.Length == 3 && args[2] == "emission-set-vectors")
+{
+    var emissionAssembly = Assembly.LoadFrom(args[0]);
+    var emissionKeyType = emissionAssembly.GetType("Sollang.Compiler.CodeGen.LlvmCodegenKey", true)!;
+    var refineEmissionKey = emissionKeyType.GetMethod("WithEmissionSet")!;
+    var emissionVectors = new[]
+    {
+        (Id: "empty", Base: 0UL, Names: Array.Empty<string>()),
+        (Id: "order", Base: 123UL, Names: new[] { "zeta", "alpha" }),
+        (Id: "unicode", Base: 42UL, Names: new[] { "\uE000", "\U00010000", "가𐐀a" }),
+        (Id: "duplicate", Base: 7UL, Names: new[] { "same", "same", "alpha" }),
+        (Id: "wrap", Base: ulong.MaxValue, Names: new[] { "omega" })
+    };
+    Console.Write(JsonSerializer.Serialize(emissionVectors.Select(vector =>
+    {
+        var planned = Activator.CreateInstance(emissionKeyType, [17UL, vector.Base])!;
+        var refined = refineEmissionKey.Invoke(planned, [vector.Names])!;
+        return new { vector.Id, vector.Base, vector.Names,
+            InterfaceHash = (ulong)emissionKeyType.GetProperty("InterfaceHash")!.GetValue(refined)!,
+            ImplementationHash = (ulong)emissionKeyType.GetProperty("ImplementationHash")!.GetValue(refined)! };
+    })));
+    return;
+}
+
 if (args.Length is not (2 or 3 or 4)
     || args.Length == 3 && args[2] == "registered-declaration-type-use-vectors"
     || args.Length == 4 && args[2] is not ("registered-stable-identity-vectors" or "registered-declaration-type-use-vectors")

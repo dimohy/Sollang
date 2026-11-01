@@ -217,3 +217,43 @@ public buildCompilationCodegenRequest catalog: ref CompilationModules, universe:
         order: order
     })
 }
+
+public enum EmissionSetError { FunctionIndex, MissingIdentity }
+
+appendEmissionSetIdentity function: ref CompilationFunction, hash: UInt64 -> UInt64 {
+    arithmetic.emissionIdentityStart(hash, UInt64(function.identity.bytes -> len)) => mixed!
+    function.identity.bytes -> each byte { arithmetic.emissionIdentityByte(mixed!, UInt64(byte)) => mixed! }
+    mixed!
+}
+
+public refineModuleEmissionKey key: CodegenKey, captured: ref CompilationFunctions, emitted: ref [Int; ~], start: Int, length: Int -> Result<CodegenKey, EmissionSetError> {
+    start < 0 or length < 0 or start > (emitted -> len) or length > (emitted -> len) - start
+        -> if { Result<CodegenKey, EmissionSetError>.Err(EmissionSetError.FunctionIndex) -> return }
+    [Int; ~] => order!
+    start..<(start + length) -> each position {
+        emitted[position] => node
+        node < 0 or node >= (captured.byNode -> len) -> if { Result<CodegenKey, EmissionSetError>.Err(EmissionSetError.FunctionIndex) -> return }
+        captured.byNode[node] => selected
+        selected < 0 or selected >= (captured.functions -> len)
+            -> if { Result<CodegenKey, EmissionSetError>.Err(EmissionSetError.MissingIdentity) -> return }
+        order! -> len => index!
+        order! -> push(selected)
+        index! > 0 and (captured.functions[order![index! - 1]].identity -> compareFieldText(captured.functions[selected].identity)) > 0
+            -> while { order![index! - 1] => order![index!]
+                index! - 1 => index! }
+        selected => order![index!]
+    }
+    arithmetic.emissionSetStart(key.implementationHash) => hash!
+    order! -> each index { captured.functions[index] -> appendEmissionSetIdentity(hash!) => hash! }
+    Result<CodegenKey, EmissionSetError>.Ok(CodegenKey { interfaceHash: key.interfaceHash, implementationHash: hash! })
+}
+
+public requestModuleKey request: ref CompilationCodegenRequest, identity: Text -> Result<CodegenKey, CodegenRequestError> {
+    request.modules -> each module {
+        module.identity -> stableFieldMatches(identity)
+            -> if {
+                Result<CodegenKey, CodegenRequestError>.Ok(CodegenKey { interfaceHash: module.interfaceHash, implementationHash: module.implementationHash }) -> return
+            }
+    }
+    Result<CodegenKey, CodegenRequestError>.Err(CodegenRequestError.Catalog)
+}

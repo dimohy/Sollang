@@ -2,12 +2,16 @@ namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.codegen_cache_keys as keys
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_registration as registration
 import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.expression_type_ids as expressionIds
 import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.codegen_units as units
+import sys.process as process
+import sys.file as file
 import sollang.compiler.llvm.codegen_type_registration as functionTypes
 
 # Capture while the authoritative snapshot is still available. The private
@@ -62,26 +66,89 @@ preparedCodegenNames prepared: ref semanticContext.SemanticSnapshot -> keys.Type
     keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: 0, ownerSymbol: -1 }
 }
 
-capturePreparedFunctionEmissions prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionIds.ExpressionTypeIdSet, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], fields: ref [typeIds.NominalField; ~], ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], bodies: ref typedIr.GenericBodyBindings, signatures: ref Result<[Int; ~], signatureIds.Error> -> Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError> {
+capturePreparedFunctionEmissions prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionIds.ExpressionTypeIdSet, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], fields: ref [typeIds.NominalField; ~], ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], bodies: ref typedIr.GenericBodyBindings, signatures: ref Result<[Int; ~], signatureIds.Error> -> Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError> {
     signatures -> when {
-        Err(_) { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.SignatureRegistration) -> return }
+        Err(_) { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.SignatureRegistration) -> return }
         Ok(ids) {
             types -> copyPreparedCodegenSemantic(references, fields) => semantic!
             prepared -> signatureIds.registerDeclarations -> when {
-                Err(_) { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
+                Err(_) { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
                 Ok(value) { value }
             } => declarations
             prepared -> functionTypes.collect(resolved, ir, semantic!.types, plans, declarations.ids) => uses
-            uses.unresolvedCalls != 0 -> if { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
+            uses.unresolvedCalls != 0 -> if { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
             [Int; ~] => roots!
             uses.uses -> each use { roots! -> push(use.typeId) }
             prepared -> signatureIds.registerResolvedTypeUses(semantic!, roots!) -> when {
-                Err(_) { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
+                Err(_) { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
                 Ok(value) { value }
             } => registered
             prepared -> preparedCodegenNames => context!
             context! -> keys.collectCompilationFunctions(prepared, semantic!, ir, plans, registered.ids, ids, bodies) => functions
-            context! -> keys.captureFunctionEmissions(prepared, functions)
+            context! -> keys.captureFunctionEmissions(prepared, functions) -> when {
+                Err(error) { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(error) }
+                Ok(emissions) { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Ok(keys.CodegenFunctionMetadata { functions: functions, emissions: emissions }) }
+            }
+        }
+    }
+}
+
+capturePreparedCodegenModules prepared: ref semanticContext.SemanticSnapshot, paths: ref [Text; ~], standardCount: Int -> Result<keys.CompilationModules, keys.CompilationModuleError> {
+    prepared -> preparedCodegenNames => names!
+    names! -> keys.captureCompilationModules(prepared.package, paths, standardCount)
+}
+
+enum PreparedCodegenRequestError { NoCatalog, Catalog(keys.CompilationModuleError), Types(keys.TypeUniverseCaptureError), Functions(keys.FunctionEmissionError), Request(keys.CodegenRequestError) }
+
+capturePreparedCodegenRequest context: ref emitterContext.EmitContext, catalog: ref Option<Result<keys.CompilationModules, keys.CompilationModuleError>> -> Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError> {
+    catalog -> when {
+        None { Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError>.Err(PreparedCodegenRequestError.NoCatalog) }
+        Some(captured) { captured -> when {
+                Err(error) { Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError>.Err(PreparedCodegenRequestError.Catalog(error)) }
+                Ok(modules) {
+                    context.codegenTypeUniverseHash -> when {
+                        Err(error) { Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError>.Err(PreparedCodegenRequestError.Types(error)) }
+                        Ok(universe) { context.codegenFunctionEmissions -> when {
+                                Err(error) { Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError>.Err(PreparedCodegenRequestError.Functions(error)) }
+                                Ok(metadata) { modules -> keys.buildCompilationCodegenRequest(universe, metadata.emissions) -> when {
+                                        Err(error) { Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError>.Err(PreparedCodegenRequestError.Request(error)) }
+                                        Ok(request) { Result<keys.CompilationCodegenRequest, PreparedCodegenRequestError>.Ok(request) }
+                                } }
+                        } }
+                    }
+                }
+        } }
+    }
+}
+
+beginPreparedCodegenBoundary context: ref emitterContext.EmitContext, kind: Int -> Unit uses Console {
+    context.codegenRequest -> when {
+        None { kind -> units.beginStreamedUnit("") }
+        Some(request) {
+            kind == 0 -> if { request.prefix } else { request.suffix } => key
+            kind -> units.beginKeyedStreamedUnit("", key.interfaceHash, key.implementationHash)
+        }
+    }
+}
+
+beginPreparedCodegenModule context: ref emitterContext.EmitContext, identity: Text, groups: ref units.FunctionGroups, group: Int -> Unit uses Console, Process {
+    context.codegenRequest -> when {
+        None { 1 -> units.beginStreamedUnit(identity) }
+        Some(request) {
+            request -> keys.requestModuleKey(identity) -> when {
+                Err(_) { process.exit(1)
+                    return }
+                Ok(value) { value }
+            } => planned
+            context.codegenFunctionEmissions -> when {
+                Err(_) { process.exit(1)
+                    return }
+                Ok(metadata) { planned -> keys.refineModuleEmissionKey(metadata.functions, groups.functions, groups.starts[group], groups.lengths[group]) -> when {
+                        Err(_) { process.exit(1)
+                            return }
+                        Ok(key) { 1 -> units.beginKeyedStreamedUnit(identity, key.interfaceHash, key.implementationHash) }
+                } }
+            }
         }
     }
 }

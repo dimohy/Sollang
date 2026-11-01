@@ -9,15 +9,56 @@ public struct StreamedUnit {
     public kind: Int
     public identity: Text
     public fragment: Text
+    public hasKey: Bool
+    public interfaceHash: UInt64
+    public implementationHash: UInt64
 }
 
-public enum UnitStreamError { Framing, Incomplete, Identity, Order, Limit }
+public enum UnitStreamError { Framing, Incomplete, Identity, Order, Limit, Key }
+
+struct StreamKey { interfaceHash: UInt64, implementationHash: UInt64 }
+
+readStreamHash source: Text -> Result<UInt64, UnitStreamError> {
+    (source -> len) == 0 or (source -> len) > 20 -> if { Result<UInt64, UnitStreamError>.Err(UnitStreamError.Key) -> return }
+    (source -> len) > 1 and (source -> byte(0)) == '0'
+        -> if { Result<UInt64, UnitStreamError>.Err(UnitStreamError.Key) -> return }
+    UInt64(0) => hash!
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        Int(source -> byte(index!)) - '0' => digit
+        digit < 0 or digit > 9 or hash! > 1844674407370955161 or (hash! == 1844674407370955161 and digit > 5)
+            -> if { Result<UInt64, UnitStreamError>.Err(UnitStreamError.Key) -> return }
+        hash! * 10 + UInt64(digit) => hash!
+        index! + 1 => index!
+    }
+    Result<UInt64, UnitStreamError>.Ok(hash!)
+}
+
+readStreamKey source: Text -> Result<StreamKey, UnitStreamError> {
+    UIntSize(0) => separator!
+    separator! < (source -> len) and (source -> byte(separator!)) != ':'
+        -> while { separator! + 1 => separator! }
+    separator! >= (source -> len) -> if { Result<StreamKey, UnitStreamError>.Err(UnitStreamError.Key) -> return }
+    source -> slice(0, separator!) -> readStreamHash -> when {
+        Err(error) { Result<StreamKey, UnitStreamError>.Err(error) -> return }
+        Ok(value) { value }
+    } => interfaceHash
+    source -> slice(separator! + 1, (source -> len) - separator! - 1) -> readStreamHash -> when {
+        Err(error) { Result<StreamKey, UnitStreamError>.Err(error) -> return }
+        Ok(value) { value }
+    } => implementationHash
+    Result<StreamKey, UnitStreamError>.Ok(StreamKey { interfaceHash: interfaceHash, implementationHash: implementationHash })
+}
 
 public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamError> {
     [StreamedUnit; ~] => units!
     [UInt64; ~] => identityWords!
     -1 => kind!
     "" => identity!
+    false => hasKey!
+    UInt64(0) => interfaceHash!
+    UInt64(0) => implementationHash!
+    -1 => keyMode!
     UIntSize(0) => fragmentStart!
     UIntSize(0) => lineStart!
     UInt64(0) => previousHash!
@@ -42,7 +83,9 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
             source -> slice(fragmentStart!, lineStart! - fragmentStart!) => fragment
             (units! -> len) >= 1000000 or (fragment -> len) > 1073741824
                 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Limit) -> return }
-            units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment })
+            keyMode! == 1 and not hasKey! or keyMode! == 0 and hasKey!
+                -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
+            units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment, hasKey: hasKey!, interfaceHash: interfaceHash!, implementationHash: implementationHash! })
             units! -> Result<[StreamedUnit; ~], UnitStreamError>.Ok -> return
         }
         line -> text.startsWith(prefix) -> if {
@@ -61,7 +104,10 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
                 source -> slice(fragmentStart!, lineStart! - fragmentStart!) => fragment
                 (units! -> len) >= 1000000 or (fragment -> len) > 1073741824
                     -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Limit) -> return }
-                units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment })
+                keyMode! == 1 and not hasKey! or keyMode! == 0 and hasKey!
+                    -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
+                hasKey! -> if { 1 } else { 0 } => keyMode!
+                units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment, hasKey: hasKey!, interfaceHash: interfaceHash!, implementationHash: implementationHash! })
             }
             nextKind == 1 -> if {
                 identityWords! -> len => start
@@ -87,11 +133,27 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
                 start => previousStart!
                 identityLength => previousLength!
             }
+            false => hasKey!
+            0 => interfaceHash!
+            0 => implementationHash!
             nextKind => kind!
             nextIdentity => identity!
             lineEnd! + 1 => fragmentStart!
         } else {
-            kind! < 0 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return }
+            line -> text.startsWith(streamKeyPrefix()) -> if {
+                kind! < 0 or hasKey! or keyMode! == 0 or fragmentStart! != lineStart!
+                    -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
+                streamKeyPrefix() -> len => keyPrefixLength
+                line -> slice(keyPrefixLength, (line -> len) - keyPrefixLength) -> readStreamKey -> when {
+                    Err(error) { Result<[StreamedUnit; ~], UnitStreamError>.Err(error) -> return }
+                    Ok(key) {
+                        true => hasKey!
+                        key.interfaceHash => interfaceHash!
+                        key.implementationHash => implementationHash!
+                        lineEnd! + 1 => fragmentStart!
+                    }
+                }
+            } else { kind! < 0 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return } }
         }
         lineEnd! + 1 => lineStart!
     }

@@ -28,6 +28,22 @@ checkViews source: Text, label: Text -> Unit uses Console, Process {
     "$label=ok" -> println
 }
 
+checkKeyViews source: Text -> Unit uses Console, Process {
+    source -> units.readStreamedUnits -> when {
+        Err(_) { process.exit(1) }
+        Ok(parts) {
+            (parts -> len) != 3 -> if { process.exit(1) }
+            not parts[0].hasKey or not parts[1].hasKey or not parts[2].hasKey
+                -> if { process.exit(1) }
+            parts[0].interfaceHash != 18446744073709551615 or parts[1].implementationHash != 0
+                -> if { process.exit(1) }
+            not (parts[0].fragment == "prefix\n") or not (parts[1].fragment == "body\n") or not (parts[2].fragment == "suffix\n")
+                -> if { process.exit(1) }
+        }
+    }
+    "keyed-views=ok" -> println
+}
+
 main {
     "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" -> check(true, "valid")
     "; sollang.codegen.unit 0:\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "empty-modules")
@@ -78,6 +94,20 @@ main {
     }
     invalidBytes! -> file.borrowBytes => invalidOwner
     invalidOwner -> slice(0, invalidOwner -> len) -> check(false, "invalid-utf8")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 18446744073709551615:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:0\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> check(true, "keyed-valid")
+    "; sollang.codegen.unit 0:\r\n; sollang.codegen.key 1:2\r\n; sollang.codegen.unit 2:\r\n; sollang.codegen.key 3:4\r\n; sollang.codegen.end\r\n" -> check(true, "keyed-crlf")
+    "; sollang.codegen.unit 0:\nbody\n; sollang.codegen.key 1:2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-late")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\n; sollang.codegen.key 1:2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-duplicate")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-missing-prefix")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(false, "keyed-missing-suffix")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key -1:2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-negative")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 18446744073709551616:2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-overflow")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 01:2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-leading-zero")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 12\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-no-colon")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2:3\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-extra-colon")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key a:2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-nonnumeric")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key :2\n; sollang.codegen.unit 2:\n; sollang.codegen.key 3:4\n; sollang.codegen.end\n" -> check(false, "keyed-empty-hash")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 18446744073709551615:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:0\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> checkKeyViews
     0 -> units.beginStreamedUnit("")
     "prefix" -> println
     1 -> units.beginStreamedUnit("cache.beta")

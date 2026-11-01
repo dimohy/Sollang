@@ -80,7 +80,7 @@ emitCodegenModule groupIndex: Int, groups: ref codegenUnits.FunctionGroups, cont
         words! -> each word { bytes! -> push(UInt8(word)) }
         bytes! -> file.borrowBytes => owner
         owner -> slice(0, owner -> len) => identity
-        1 -> codegenUnits.beginStreamedUnit(identity)
+        context -> beginPreparedCodegenModule(identity, groups, groupIndex)
     }
     groups.starts[groupIndex] => first
     first + groups.lengths[groupIndex] => end
@@ -123,7 +123,7 @@ emitCoreFunctionGroupsWithEntry context: ref emitterContext.EmitContext, state: 
     moduleIndices! -> parallel groupIndex {
         groupIndex -> emitCodegenModule(groups, context, state, usesAes128Specialization, streamed)
     } => moduleEmissionEnds
-    streamed -> if { 2 -> codegenUnits.beginStreamedUnit("") }
+    streamed -> if { context -> beginPreparedCodegenBoundary(2) }
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function

@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.codegen_units as codegenUnits
+import sollang.compiler.llvm.codegen_cache_keys as codegenKeys
 
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
 import sollang.compiler.semantic.reference_prepared_type_ids as referencePrepared
@@ -421,6 +422,9 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
     product.windows -> if { 1 } else { 0 } => expectedPathStyle
     PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: expectedPathStyle } => prepareRequest
     parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
+    cache.enabled -> if {
+        prepared -> capturePreparedCodegenModules(paths, userSourceStart) -> Option<Result<codegenKeys.CompilationModules, codegenKeys.CompilationModuleError>>.Some
+    } else { Option<Result<codegenKeys.CompilationModules, codegenKeys.CompilationModuleError>>.None } => codegenCatalog
     # Keep reference identities before preparation moves the source snapshot.
     # A retained mapping error matters only if an ABI rejection needs its ID;
     # earlier semantic/export failures keep their existing diagnostic priority.
@@ -450,75 +454,70 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
             1 -> return
         }
         Ready(context) { context }
-    } => context
-    context -> checkedContextDiagnosticCount => diagnosticCount!
-    product.windows -> if { 0 } else { context -> diagnostics.comInteropFunctionCount } => comInteropCount
+    } => context!
+    context! -> checkedContextDiagnosticCount => diagnosticCount!
+    product.windows -> if { 0 } else { context! -> diagnostics.comInteropFunctionCount } => comInteropCount
     comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
         cache.enabled -> if {
-            context.codegenTypeUniverseHash -> when {
-                Err(_) { "; sollang codegen cache type metadata capture failed" -> println
+            context! -> capturePreparedCodegenRequest(codegenCatalog) -> when {
+                Err(_) { "; sollang codegen cache request capture failed" -> println
                     1 -> return }
-                Ok(_) {}
-            }
-            context.codegenFunctionEmissions -> when {
-                Err(_) { "; sollang codegen cache function metadata capture failed" -> println
-                    1 -> return }
-                Ok(_) {}
+                Ok(request) { Option<codegenKeys.CompilationCodegenRequest>.Some(request) => context!.codegenRequest }
             }
         }
-        context -> emitInterpolationSemanticWarnings
-        context -> emitOrdinaryNumericWarnings(userSourceStart)
+        context! -> emitInterpolationSemanticWarnings
+        context! -> emitOrdinaryNumericWarnings(userSourceStart)
         product.sharedLibrary -> if {
-            context -> collectLibraryDeclarations(0, userSourceStart) => declarations
-            context -> prepareLibraryInterface(declarations, targetName, product.libraryFile) -> when {
+            context! -> collectLibraryDeclarations(0, userSourceStart) => declarations
+            context! -> prepareLibraryInterface(declarations, targetName, product.libraryFile) -> when {
                 Ok(plan) { plan }
-                Err(rejection) { rejection -> emitLibraryExportRejection(context, referenceIdentities)
+                Err(rejection) { rejection -> emitLibraryExportRejection(context!, referenceIdentities)
                     1 -> return }
             } => plan
-            context -> prepareScheduledCoreEmitterStateWithRoots(plan.functions) => scheduledState
-            context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+            context! -> prepareScheduledCoreEmitterStateWithRoots(plan.functions) => scheduledState
+            context! -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
             preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
-            plan -> validateLibraryExports(context, scheduledState) -> when {
+            plan -> validateLibraryExports(context!, scheduledState) -> when {
                 Ok(_) { }
-                Err(rejection) { rejection -> emitLibraryWrapperRejection(plan, context, referenceIdentities)
+                Err(rejection) { rejection -> emitLibraryWrapperRejection(plan, context!, referenceIdentities)
                     1 -> return }
             }
             plan.document -> writeLibraryInterfaceStage(product.interfaceStage)
                 -> unless { 1 -> return }
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
-            cache.enabled -> if { 0 -> codegenUnits.beginStreamedUnit("") }
+            cache.enabled -> if { context! -> beginPreparedCodegenBoundary(0) }
             target.dataLayoutLine -> println
             target.tripleLine -> println
             product.windows -> if {
-                context -> emitPreparedWindowsContextWithUnitStream(scheduledState, false, cache.enabled)
+                context! -> emitPreparedWindowsContextWithUnitStream(scheduledState, false, cache.enabled)
             } else {
-                context -> emitPreparedLinuxContextWithUnitStream(scheduledState, false, cache.enabled)
+                context! -> emitPreparedLinuxContextWithUnitStream(scheduledState, false, cache.enabled)
             }
-            plan -> emitLibraryExports(context, scheduledState, product.windows)
+            plan -> emitLibraryExports(context!, scheduledState, product.windows)
             cache.enabled -> if { codegenUnits.endStreamedUnits() }
         } else {
-            context -> prepareScheduledCoreEmitterState => scheduledState
-            context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+            context! -> prepareScheduledCoreEmitterState => scheduledState
+            context! -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
             preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
-            cache.enabled -> if { 0 -> codegenUnits.beginStreamedUnit("") }
+            cache.enabled -> if { context! -> beginPreparedCodegenBoundary(0) }
             target.dataLayoutLine -> println
             target.tripleLine -> println
             product.windows -> if {
-                context -> emitPreparedWindowsContextWithUnitStream(scheduledState, true, cache.enabled)
+                context! -> emitPreparedWindowsContextWithUnitStream(scheduledState, true, cache.enabled)
             } else {
-                context -> emitPreparedLinuxContextWithUnitStream(scheduledState, true, cache.enabled)
+                context! -> emitPreparedLinuxContextWithUnitStream(scheduledState, true, cache.enabled)
             }
             cache.enabled -> if { codegenUnits.endStreamedUnits() }
         }
     } else {
-        context -> diagnostics.emitBlockingDiagnostics
-        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        context! -> diagnostics.emitBlockingDiagnostics
+        context! -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
         emittedSemanticCount == 0 -> if {
-            context -> emitIrInvariantDiagnostics
+            context! -> emitIrInvariantDiagnostics
         }
         comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
     }

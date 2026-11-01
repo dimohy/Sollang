@@ -6441,6 +6441,16 @@ Current backend:
   `; sollang.codegen.unit 1:<complete namespace>`, starts the suffix with
   `; sollang.codegen.unit 2:`, and ends with `; sollang.codegen.end`.
   Header lines end in LF or CRLF; fragment bytes retain their original spelling.
+  A keyed unit places `; sollang.codegen.key <interface>:<implementation>`
+  immediately after its unit header. Hashes are canonical unsigned decimal
+  UInt64 values. Every unit in a keyed stream has exactly one key; a stream
+  cannot mix keyed and unkeyed units. Legacy unkeyed streams remain readable.
+  The reader rejects malformed, overflowing, duplicated or misplaced keys and
+  excludes key comments from borrowed fragment views. Module implementation
+  keys also include the stable identities of the functions actually emitted,
+  in ordinal order, using the generated C# emission-set arithmetic policy.
+  Identity lengths and byte mixing use UTF-8 bytes, independently of the UTF-16
+  field framing inside stable identities.
   The prefix and suffix have empty identities. Module identities obey the
   canonical UTF-8, size, hash and ordinal ordering rules above, including the
   valid empty global identity. The reader rejects missing or repeated boundaries,

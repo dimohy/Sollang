@@ -1,0 +1,34 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sys.process as process
+
+verify implementation: UInt64, names: ref [Text; ~], expected: UInt64, caseId: Int -> Unit uses Process {
+    [keys.CompilationFunction; ~] => functions!
+    [Int; ~] => byNode!
+    [Int; ~] => emitted!
+    names -> each name {
+        functions! -> len => index
+        functions! -> push(keys.CompilationFunction { sourceModule: 0, ownerSymbol: index, name: keys.textField(name), identity: keys.textField(name), isSpecialization: false, parentIndex: -1, functionNode: index, typeParameters: [Int; ~], typeArguments: [Int; ~] })
+        byNode! -> push(index)
+        emitted! -> push(index)
+    }
+    keys.CompilationFunctions { functions: functions!, failures: [keys.FunctionCaptureFailure; ~], byNode: byNode! } => captured
+    keys.CodegenKey { interfaceHash: 17, implementationHash: implementation } -> keys.refineModuleEmissionKey(captured, emitted!, 0, emitted! -> len) -> when {
+        Err(_) { process.exit(caseId) }
+        Ok(key) { key.interfaceHash != 17 or key.implementationHash != expected
+                -> if { process.exit(caseId) } }
+    }
+}
+
+main {
+    [Text; ~] => names0
+    0 -> verify(names0, 101, 1)
+    ["zeta", "alpha"; ~] => names1
+    123 -> verify(names1, 15734924786276713685, 2)
+    ["", "𐀀", "가𐐀a"; ~] => names2
+    42 -> verify(names2, 15110904689956186707, 3)
+    ["same", "same", "alpha"; ~] => names3
+    7 -> verify(names3, 18431915807684703527, 4)
+    ["omega"; ~] => names4
+    UInt64(18446744073709551615) -> verify(names4, 10421074457385039314, 5)
+    "emission-sets:5/5" -> println
+}
