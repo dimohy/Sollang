@@ -1,0 +1,82 @@
+diff --git a/selfhost/semantic/diagnostics.slg b/selfhost/semantic/diagnostics.slg
+index 5d347dfc7..f742d3112 100644
+--- a/selfhost/semantic/diagnostics.slg
++++ b/selfhost/semantic/diagnostics.slg
+@@ -3316,13 +3316,13 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
+     contextualAst => contextualOrigin!
+     contextualOwnerAst >= 0 -> if { contextualOwnerAst => contextualOrigin! }
+     # Infer operands before admitting the enclosing arithmetic operation.
+-    (contextualCode == 40 or contextualCode == 71) and selected! == 2
++    (contextualCode == 40 or contextualCode == 71 or contextualCode == 77) and selected! == 2
+         and literal.sourceModule == contextualSource
+         and (package -> declarationAncestor(contextualSource, contextualAst, literal.locationAst))
+         => contextualOperandLiteralFailure
+     contextualSource >= 0 and contextualCode > 0
+         and not contextualOperandLiteralFailure
+-        and (contextualOwnerAst >= 0 or contextualCode == 23 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71)
++        and (contextualOwnerAst >= 0 or contextualCode == 23 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71 or contextualCode == 77)
+         -> if {
+             package -> diagnosticOriginBefore(contextualSource, contextualOrigin!, source!, location!) => contextualEarlier
+             selected! == 4 and source! == contextualSource and location! == contextualOrigin! => sameContextualInitializer
+@@ -3675,6 +3675,27 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
+     # virtual module identity distinguishes them from unresolved source calls.
+     # Share signed spelling/range checks with ordinary and specialized calls.
+     ir -> each call {
++        # A canonical numeric conversion checks its source literal before
++        # the enclosing expression, even when IR already carries the target type.
++        call.kind == 6 and call.symbol == -1 and call.targetModule < 0
++            and call.typeOrigin == 1 and call.typeSymbol >= 2 and call.typeSymbol <= 14
++            and call.operand0 >= 0 and call.operand0 < (ir -> len)
++            and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
++            -> if {
++                prepared.package.ranges[call.sourceModule] => range
++                call.astNode >= 0 and call.astNode < range.astCount
++                    and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.astNode))
++                    -> if {
++                        calls.ModuleCallResolution { sourceModule: call.sourceModule, callAst: call.astNode, origin: 0, targetModule: -1, targetSourceModule: -1, functionSymbol: -1, status: 0 } => conversion
++                        prepared.package -> semanticContext.indexedCallArgumentAsts(conversion, flowSources, firstChild!, nextChild!) => arguments
++                        (arguments -> len) == 1 -> if {
++                            prepared -> numericCallLiteralAt(call.sourceModule, arguments[0] - range.astStart, call.typeSymbol -> typeIds.canonicalBuiltinSymbol, pointerBitWidth) => candidate
++                            candidate.code > 0
++                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
++                                -> if { candidate => selected! }
++                        }
++                    }
++            }
+         # Intrinsic numeric context belongs to the original source argument,
+         # never to an IR producer that can point back to a named binding.
+         call -> textIntrinsicOpcode(resolved.types, ir) => textOpcode
+@@ -6947,6 +6968,33 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                     firstChildByAst![ifGlobal] => thenGlobal
+                     thenGlobal >= 0 -> if {
+                         nextChildByAst![thenGlobal] => elseGlobal
++                        # C# infers the then body before admitting a missing else.
++                        # Returning bodies and statement-only bodies remain Unit.
++                        elseGlobal < 0 and package.nodes[thenGlobal].kind == 43
++                            and continuationByAst[thenGlobal]
++                            -> if {
++                                lastChildByAst![thenGlobal] => thenValue
++                                thenValue >= 0 -> if {
++                                    resolved.types -> typeIds.builtinTypeId(0) => unitType
++                                    package.nodes[thenValue].kind == 9 or package.nodes[thenValue].kind == 61
++                                        -> if { unitType } else { typeIdByAst![thenValue] } => thenTypeId
++                                    thenTypeId >= 0 and thenTypeId != unitType -> if {
++                                        ExpressionOperandDiagnostic {
++                                            code: 77
++                                            sourceModule: sourceIndex!
++                                            astNode: logical.parent
++                                            operandAst: astIndex!
++                                            operatorKind: -1
++                                            locationOffset: logical.start
++                                            operandTypeSymbol: -1
++                                            operandTypeId: thenTypeId
++                                            firstTypeId: unitType
++                                        } => candidate
++                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                            -> if { candidate => selected! }
++                                    }
++                                }
++                            }
+                         elseGlobal >= 0 and nextChildByAst![elseGlobal] < 0
+                             and package.nodes[thenGlobal].kind == 43
+                             and package.nodes[elseGlobal].kind == 43

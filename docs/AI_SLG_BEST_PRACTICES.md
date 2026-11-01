@@ -1252,6 +1252,8 @@ For a computed integer value, conversion checks the destination range before
 changing width or signedness. A direct integer literal is checked at the
 destination width; a computed same-width conversion keeps the original value
  after its checks. `CodePoint` also rejects Unicode surrogates.
+Classify literal conversions from the original argument syntax. A named binding
+does not become a literal because its IR producer is a constant.
 When multiple interpolation fragments fail semantic checks, report the first
 failure in source order before evaluating later fragments.
 For dictionary `put` and `putIfAbsent`, supply exactly one key and one value

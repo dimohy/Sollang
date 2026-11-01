@@ -3721,7 +3721,8 @@ removed. A `CodePoint` literal outside `0..1114111` reports the range; a value
 inside the Unicode surrogate interval `55296..57343` reports the surrogate
 restriction separately. The same distinction applies to enum payload literals
 and explicit numeric conversions of literals. Computed conversions retain
-runtime range checks. On Windows and the browser target, a failed computed
+runtime range checks. A named binding remains a computed argument even when
+its initializer is a literal. On Windows and the browser target, a failed computed
 integer conversion reports its source function declaration identity (or `main`)
 and `numeric_conversion_lower`, `numeric_conversion_upper`, or
 `numeric_conversion_surrogate` before trapping. The diagnostic code does not
