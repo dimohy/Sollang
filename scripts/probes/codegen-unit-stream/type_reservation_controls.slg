@@ -1,0 +1,89 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.type_ids as types
+import sollang.compiler.semantic.owner_type_facts as facts
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+import sollang.compiler.semantic.semantic_static_arrays as arrays
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.ir.module_artifact_types as artifacts
+import sys.process as process
+
+require condition: Bool, code: Int -> Unit uses Process {
+    not condition -> if { process.exit(code) }
+}
+
+run: -> Unit uses Console, Process {
+    "main { (left: 7, flag: true) => row }" => source
+    [source,; ~] -> context.prepare => initial
+    [source,; ~] -> context.prepare -> expressions.resolveCallContext => resolved
+    -1 => product!
+    0 => index!
+    resolved.types.types -> each type {
+        type.kind == 10 and type.length == 2 -> if { index! => product! }
+        index! + 1 => index!
+    }
+    product! >= 0 -> require(1)
+    resolved.prepared -> facts.prepareCaptureMetadata(resolved.types) => metadata
+    "diagnostic:product:$(product!):details:$(metadata.details.status):fields:$(resolved.types.fields -> len)" -> println
+    resolved.types.fields -> each field {
+        field.ownerType == product! -> if { "diagnostic:field:$(field.ordinal):$(field.fieldType):$(field.status):$(field.labelToken)" -> println }
+    }
+    [product!,; ~] => roots
+    resolved.types.types -> artifacts.encodeSelectedRecipes(metadata.details, metadata.declarations, roots) => encoded
+    "diagnostic:encoded:$(encoded.status)" -> println
+    encoded.status == 0 -> require(2)
+    initial.semantic => current!
+    Int(current!.types -> len) => firstFree
+    types.builtinSymbolByName("Int") => integerSymbol
+    current!.types -> types.builtinTypeId(integerSymbol) => integer
+    current!.types -> types.reserveStaticArrayType(firstFree + 2, integer, 9) -> require(3)
+    encoded.words -> artifacts.restoreRecipes(resolved.prepared.package, current!) => restored
+    restored.status == 0 -> require(4)
+    restored.typeIds[encoded.recipeBySourceType[product!]] => rebound
+    rebound == firstFree -> require(5)
+    0 => fields!
+    restored.semantic.fields -> each field {
+        field.ownerType == rebound -> if {
+            (field.status == 0 and field.labelToken >= 0) -> require(6)
+            fields! + 1 => fields!
+        }
+    }
+    fields! == 2 -> require(7)
+    current!.types[firstFree] -> types.vacantSemanticTypeSlot -> require(8)
+    (restored.semantic.types[firstFree + 2].kind == 4 and restored.semantic.types[firstFree + 2].length == 9) -> require(9)
+    resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(restored.semantic.types, restored.semantic.references, restored.semantic.fields) => details
+    resolved.prepared -> fingerprints.capture => fingerprint
+    fingerprint.status == 0 -> require(10)
+    generations.CompilationIdentity { compiler: 1, target: 0, configuration: 1 } => identity
+    restored.semantic.types -> arrays.capture(details, metadata.declarations, identity, fingerprint.bytes) -> when {
+        Err(_) { process.exit(11)
+            return }
+        Ok(value) { value }
+    } => plan
+    [source,; ~] -> context.prepare => fresh
+    plan -> arrays.restore(resolved.prepared.package, fresh.semantic, identity, fingerprint.bytes) -> when {
+        Err(_) { process.exit(12)
+            return }
+        Ok(table) {
+            (table.types[firstFree + 2].kind == 4 and table.types[firstFree + 2].length == 9) -> require(13)
+            table.types[firstFree] -> types.vacantSemanticTypeSlot -> require(14)
+        }
+    }
+    generations.CompilationIdentity { compiler: 2, target: 0, configuration: 1 } => wrong
+    plan -> arrays.restore(resolved.prepared.package, fresh.semantic, wrong, fingerprint.bytes) -> when {
+        Ok(_) { process.exit(15)
+            return }
+        Err(code) { code == 42 -> require(16) }
+    }
+    [UInt64; ~] => trailing!
+    plan -> each word { trailing! -> push(word) }
+    trailing! -> push(0)
+    trailing! -> arrays.restore(resolved.prepared.package, fresh.semantic, identity, fingerprint.bytes) -> when {
+        Ok(_) { process.exit(17)
+            return }
+        Err(code) { code == 43 -> require(18) }
+    }
+    "reservation-controls:ok" -> println
+}
+
+main { run() }

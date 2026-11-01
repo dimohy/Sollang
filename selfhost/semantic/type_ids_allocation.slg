@@ -1,0 +1,49 @@
+namespace sollang.compiler.semantic.type_ids
+
+# Dense storage preserves the sparse allocation contract used by the managed
+# type table. Vacant slots are not semantic types and cannot satisfy a recipe.
+public vacantSemanticTypeSlot type: SemanticType -> Bool {
+    type.kind == 0 and type.origin == -2 and type.status == 2
+}
+
+semanticTypeSlot origin: Int -> SemanticType {
+    SemanticType { kind: 0, origin: origin, module: -1, symbol: -1, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: true, status: 2 }
+}
+
+public allocateSemanticTypeSlot types: mut [SemanticType; ~] -> Int {
+    0..<(types -> len) -> each index {
+        types[index] -> vacantSemanticTypeSlot -> if {
+            -3 -> semanticTypeSlot => types[index]
+            index -> return
+        }
+    }
+    types -> len => identity
+    -3 -> semanticTypeSlot => allocated
+    types -> push(allocated)
+    identity
+}
+
+public ensureTypeFieldSlots count: Int, first: mut [Int; ~], last: mut [Int; ~] -> Unit {
+    (first -> len) < count -> while { first -> push(-1) }
+    (last -> len) < count -> while { last -> push(-1) }
+}
+
+public reserveStaticArrayType types: mut [SemanticType; ~], identity: Int, element: Int, length: Int -> Bool {
+    identity < 0 or element < 0 or element >= (types -> len) or length < -1
+        -> if { false -> return }
+    types[element].status != 0 or types[element].containsParameter
+        -> if { false -> return }
+    types -> each type {
+        type.kind == 4 and type.first == element and type.length == length and type.lengthHash == 0 and type.status == 0
+            -> if { false -> return }
+    }
+    identity < (types -> len) -> if {
+        types[identity] -> vacantSemanticTypeSlot -> unless { false -> return }
+    }
+    (types -> len) <= identity -> while {
+        -2 -> semanticTypeSlot => vacant
+        types -> push(vacant)
+    }
+    SemanticType { kind: 4, origin: -1, module: -1, symbol: -1, first: element, second: -1, length: length, lengthHash: 0, containsParameter: false, status: 0 } => types[identity]
+    true
+}

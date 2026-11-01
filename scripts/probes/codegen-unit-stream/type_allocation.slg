@@ -1,0 +1,36 @@
+import sollang.compiler.semantic.type_ids as types
+import sys.process as process
+
+plain symbol: Int -> types.SemanticType {
+    types.SemanticType { kind: 1, origin: 1, module: -1, symbol: symbol, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 }
+}
+
+require condition: Bool, code: Int -> Unit uses Process {
+    not condition -> if { process.exit(code) }
+}
+
+run: -> Unit uses Console, Process {
+    [0 -> plain, 1 -> plain; ~] => table!
+    table! -> types.allocateSemanticTypeSlot => first
+    first == 2 -> require(1)
+    2 -> plain => table![first]
+    table! -> types.reserveStaticArrayType(6, 0, 4) -> require(2)
+    not (table! -> types.reserveStaticArrayType(7, 0, 4)) -> require(3)
+    not (table! -> types.reserveStaticArrayType(2, 0, 8)) -> require(4)
+    not (table! -> types.reserveStaticArrayType(-1, 0, 8)) -> require(5)
+    not (table! -> types.reserveStaticArrayType(8, 99, 8)) -> require(6)
+    not (table! -> types.reserveStaticArrayType(8, 3, 8)) -> require(7)
+    not (table! -> types.reserveStaticArrayType(8, 0, -2)) -> require(8)
+    3..<6 -> each expected {
+        table! -> types.allocateSemanticTypeSlot => actual
+        actual == expected -> require(9)
+        expected -> plain => table![actual]
+    }
+    table! -> types.allocateSemanticTypeSlot => next
+    next == 7 -> require(10)
+    7 -> plain => table![next]
+    (table![6].kind == 4 and table![6].first == 0 and table![6].length == 4) -> require(11)
+    "allocation:13/13" -> println
+}
+
+main { run() }

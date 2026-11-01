@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.codegen_units as codegenUnits
+import sollang.compiler.llvm.codegen_store as codegenStore
 import sollang.compiler.llvm.codegen_cache_keys as codegenKeys
 
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
@@ -465,6 +466,11 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
                     1 -> return }
                 Ok(request) { Option<codegenKeys.CompilationCodegenRequest>.Some(request) => context!.codegenRequest }
             }
+            Arena(0) => codegenLocationStorage!
+            cache.destination -> codegenStore.location(codegenLocationStorage!) -> codegenStore.load(cache.identity) => loadedCodegen
+            loadedCodegen.status => context!.codegenCacheLoadStatus
+            loadedCodegen.units => cachedCodegen
+            cachedCodegen => context!.codegenCache
         }
         context! -> emitInterpolationSemanticWarnings
         context! -> emitOrdinaryNumericWarnings(userSourceStart)
@@ -488,14 +494,18 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
             cache.enabled -> if { context! -> beginPreparedCodegenBoundary(0) }
-            target.dataLayoutLine -> println
-            target.tripleLine -> println
+            not (context! -> preparedCodegenBoundaryReused(0))
+                -> if {
+                    target.dataLayoutLine -> println
+                    target.tripleLine -> println
+                }
             product.windows -> if {
                 context! -> emitPreparedWindowsContextWithUnitStream(scheduledState, false, cache.enabled)
             } else {
                 context! -> emitPreparedLinuxContextWithUnitStream(scheduledState, false, cache.enabled)
             }
-            plan -> emitLibraryExports(context!, scheduledState, product.windows)
+            not (context! -> preparedCodegenBoundaryReused(2))
+                -> if { plan -> emitLibraryExports(context!, scheduledState, product.windows) }
             cache.enabled -> if { codegenUnits.endStreamedUnits() }
         } else {
             context! -> prepareScheduledCoreEmitterState => scheduledState
@@ -504,8 +514,11 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
             cache.enabled -> if { context! -> beginPreparedCodegenBoundary(0) }
-            target.dataLayoutLine -> println
-            target.tripleLine -> println
+            not (context! -> preparedCodegenBoundaryReused(0))
+                -> if {
+                    target.dataLayoutLine -> println
+                    target.tripleLine -> println
+                }
             product.windows -> if {
                 context! -> emitPreparedWindowsContextWithUnitStream(scheduledState, true, cache.enabled)
             } else {

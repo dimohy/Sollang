@@ -3,7 +3,7 @@ namespace sollang.compiler.semantic.reference_synthetic_type_ids
 # Reference compiler compatibility for ordered synthetic shape interning.
 # Callers retain declaration traversal order and supply nominal/builtin seeds.
 # Product field chains carry exact label identities without allocating TypeIds.
-public enum Kind { Named, Slice, Dynamic, Fixed, Reference, Option, Result, Task, Stream, EventStream, Product, ProductField }
+public enum Kind { Named, Slice, Dynamic, Fixed, Reference, Option, Result, Task, Stream, EventStream, Product, ProductField, Dictionary, DynTrait }
 
 public struct Recipe {
     public kind: Kind
@@ -40,6 +40,8 @@ kindKey kind: Kind -> Int => kind -> when {
     EventStream => 9
     Product => 10
     ProductField => 11
+    Dictionary => 12
+    DynTrait => 13
 }
 
 struct Allocation {
@@ -87,13 +89,18 @@ resolve ids: mut [Int; ~], visiting: mut [Bool; ~], allocation: mut Allocation, 
         -> if { Result<Int, Error>.Err(Error.InvalidType) -> return }
     (recipe.kind -> kindKey) == 3 and recipe.length < 0
         -> if { Result<Int, Error>.Err(Error.InvalidShape) -> return }
+    (recipe.kind -> kindKey) == 13 and recipe.length < 0
+        -> if { Result<Int, Error>.Err(Error.InvalidShape) -> return }
     true => visiting[index]
-    (recipe.kind -> kindKey) == 10 -> if {
-        ids -> internFields(visiting, allocation, recipe.first, recipe.length, recipes)?
-    } else { ids -> resolve(visiting, allocation, recipe.first, recipes)? } => first
-    (recipe.kind -> kindKey) == 6 -> if {
-        ids -> resolve(visiting, allocation, recipe.second, recipes)?
-    } else { -1 } => second
+    (recipe.kind -> kindKey) == 13 -> if { -1 } else {
+        (recipe.kind -> kindKey) == 10 -> if {
+            ids -> internFields(visiting, allocation, recipe.first, recipe.length, recipes)?
+        } else { ids -> resolve(visiting, allocation, recipe.first, recipes)? }
+    } => first
+    (recipe.kind -> kindKey) == 6 or (recipe.kind -> kindKey) == 12
+        -> if {
+            ids -> resolve(visiting, allocation, recipe.second, recipes)?
+        } else { -1 } => second
     0 => found!
     found! < (allocation.shapes -> len) -> while {
         allocation.shapes[found!] => shape
@@ -137,7 +144,7 @@ public register recipes: ref [Recipe; ~], seeds: ref [Int; ~], aliases: ref [Sha
     aliases -> each alias {
         alias.identity < 0 or alias.identity >= nextTypeId
             or alias.first < 0 or alias.first >= nextTypeId
-            or ((alias.kind -> kindKey) == 6 and (alias.second < 0 or alias.second >= nextTypeId))
+            or (((alias.kind -> kindKey) == 6 or (alias.kind -> kindKey) == 12) and (alias.second < 0 or alias.second >= nextTypeId))
             -> if { Result<Identities, Error>.Err(Error.InvalidShape) -> return }
         shapes! -> each existing {
             (existing.kind -> kindKey) == (alias.kind -> kindKey) and existing.first == alias.first

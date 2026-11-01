@@ -116,67 +116,68 @@ locateFieldLabel package: ref analysis.PackageAnalysis, words: ref [UInt64; ~], 
 # Reuse current fields and populate newly interned product owners from the
 # normalized detail arena. The caller commits this table with rebound.types.
 # 1 invalid detail, 5 no exact current label token. Failure publishes no fields.
-public materializeProductFields table: ref ReboundTypeTable, package: ref analysis.PackageAnalysis, currentFields: ref [typeIds.NominalField; ~], currentTypeCount: Int -> MaterializedTypeFields {
+public materializeProductFields table: ref ReboundTypeTable, package: ref analysis.PackageAnalysis, currentFields: ref [typeIds.NominalField; ~], currentTypes: ref [typeIds.SemanticType; ~] -> MaterializedTypeFields {
     table.status != 0 -> if {
         MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: table.status } -> return
     }
-    currentTypeCount < 0 or currentTypeCount > (table.types -> len)
+    (currentTypes -> len) > (table.types -> len)
         or (table.details.starts -> len) != (table.types -> len)
         or (table.details.lengths -> len) != (table.types -> len)
         -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
     [typeIds.NominalField; ~] => fields!
     currentFields -> each field { fields! -> push(field) }
-    currentTypeCount => owner!
+    0 => owner!
     owner! < (table.types -> len) -> while {
         table.types[owner!] => type
-        type.kind == 10 -> if {
-            table.details.starts[owner!] => start
-            table.details.lengths[owner!] => length
-            start < 0 or length <= 0 or start > (table.details.words -> len)
-                -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
-            length > (table.details.words -> len) - start or type.length < 0
-                -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
-            start + length => end
-            table.details.words[start] != UInt64(type.length)
-                -> if {
-                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
-                }
-            start + 1 => cursor!
-            0 => ordinal!
-            ordinal! < type.length -> while {
-                cursor! >= end -> if {
-                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
-                }
-                table.details.words[cursor!] => label
-                cursor! + 1 => cursor!
-                FieldLabelLocation { sourceModule: -1, token: -1, status: 0 } => location!
-                label > 0 -> if {
-                    label <= 1 or label - 1 > UInt64(end - cursor!)
-                        -> if {
-                            MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
-                        }
-                    Int(label - 1) => labelLength
-                    package -> locateFieldLabel(table.details.words, cursor!, labelLength) => location!
-                    location!.status != 0 -> if {
-                        MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 5 } -> return
-                    }
-                    cursor! + labelLength => cursor!
-                }
-                cursor! >= end -> if {
-                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
-                }
-                table.details.words[cursor!] >= UInt64(table.types -> len)
+        type.kind == 10 and (owner! >= (currentTypes -> len) or (currentTypes[owner!] -> typeIds.vacantSemanticTypeSlot))
+            -> if {
+                table.details.starts[owner!] => start
+                table.details.lengths[owner!] => length
+                start < 0 or length <= 0 or start > (table.details.words -> len)
+                    -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
+                length > (table.details.words -> len) - start or type.length < 0
+                    -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
+                start + length => end
+                table.details.words[start] != UInt64(type.length)
                     -> if {
                         MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
                     }
-                fields! -> push(typeIds.NominalField { ownerType: owner!, sourceModule: location!.sourceModule, ownerSymbol: -1, fieldSymbol: -1, labelToken: location!.token, ordinal: ordinal!, fieldType: Int(table.details.words[cursor!]), status: 0 })
-                cursor! + 1 => cursor!
-                ordinal! + 1 => ordinal!
+                start + 1 => cursor!
+                0 => ordinal!
+                ordinal! < type.length -> while {
+                    cursor! >= end -> if {
+                        MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                    }
+                    table.details.words[cursor!] => label
+                    cursor! + 1 => cursor!
+                    FieldLabelLocation { sourceModule: -1, token: -1, status: 0 } => location!
+                    label > 0 -> if {
+                        label <= 1 or label - 1 > UInt64(end - cursor!)
+                            -> if {
+                                MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                            }
+                        Int(label - 1) => labelLength
+                        package -> locateFieldLabel(table.details.words, cursor!, labelLength) => location!
+                        location!.status != 0 -> if {
+                            MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 5 } -> return
+                        }
+                        cursor! + labelLength => cursor!
+                    }
+                    cursor! >= end -> if {
+                        MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                    }
+                    table.details.words[cursor!] >= UInt64(table.types -> len)
+                        -> if {
+                            MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                        }
+                    fields! -> push(typeIds.NominalField { ownerType: owner!, sourceModule: location!.sourceModule, ownerSymbol: -1, fieldSymbol: -1, labelToken: location!.token, ordinal: ordinal!, fieldType: Int(table.details.words[cursor!]), status: 0 })
+                    cursor! + 1 => cursor!
+                    ordinal! + 1 => ordinal!
+                }
+                cursor! != end -> if {
+                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                }
             }
-            cursor! != end -> if {
-                MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
-            }
-        }
         owner! + 1 => owner!
     }
     MaterializedTypeFields { fields: fields!, status: 0 }
@@ -251,6 +252,35 @@ appendDerivedProductLabel typeIndex: Int, types: ref [typeIds.SemanticType; ~], 
     true
 }
 
+# Inferred products keep their fields in the semantic field arena. Signature
+# products additionally have canonical field terms; retain that cross-check.
+appendResolvedProductDetails package: ref analysis.PackageAnalysis, owner: Int, count: Int, typeCount: Int, fields: ref [typeIds.NominalField; ~], words: mut [UInt64; ~] -> Bool {
+    0 => ownerFields!
+    fields -> each field { field.ownerType == owner -> if { ownerFields! + 1 => ownerFields! } }
+    ownerFields! != count -> if { false -> return }
+    words -> push(UInt64(count))
+    0..<count -> each ordinal {
+        -1 => selected!
+        0 => index!
+        fields -> each field {
+            field.ownerType == owner and field.ordinal == ordinal
+                -> if {
+                    selected! >= 0 -> if { false -> return }
+                    index! => selected!
+                }
+            index! + 1 => index!
+        }
+        selected! < 0 -> if { false -> return }
+        fields[selected!] => field
+        field.status != 0 or field.fieldType < 0 or field.fieldType >= typeCount
+            -> if { false -> return }
+        package -> appendLabel(field.sourceModule, field.labelToken, words)
+            -> unless { false -> return }
+        words -> push(UInt64(field.fieldType))
+    }
+    true
+}
+
 public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceTypes: ref [typeIds.SemanticType; ~], sourceReferences: ref [typeIds.TypeReference; ~], sourceFields: ref [typeIds.NominalField; ~] -> TypeDetails {
     [Int; ~] => starts!
     [Int; ~] => lengths!
@@ -263,63 +293,68 @@ public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceT
             starts! -> push(start)
             sourceTypes[typeIndex!] => type
             type.kind == 10 -> if {
-                type.length < 0 -> if { 1 => status! }
-                false => declared!
-                sourceReferences -> each reference {
-                    reference.typeId == typeIndex! and reference.status == 0
-                        -> if { true => declared! }
-                }
-                status! == 0 -> if { words! -> push(UInt64(type.length)) }
-                type.first => fieldType!
-                0 => ordinal!
-                ordinal! < type.length and status! == 0 -> while {
-                    fieldType! < 0 or fieldType! >= typeIndex! -> if { 1 => status! } else {
-                        sourceTypes[fieldType!] => canonicalField
-                        canonicalField.kind != 11 or canonicalField.first < 0 or canonicalField.first >= fieldType!
-                            -> if { 1 => status! } else {
-                                -1 => selected!
-                                0 => fieldIndex!
-                                fieldIndex! < (sourceFields -> len) -> while {
-                                    sourceFields[fieldIndex!] => field
-                                    field.ownerType == typeIndex! and field.ordinal == ordinal!
-                                        -> if {
-                                            selected! >= 0 -> if { 1 => status! }
-                                            fieldIndex! => selected!
-                                        }
-                                    fieldIndex! + 1 => fieldIndex!
-                                }
-                                words! -> len => labelStart
-                                lengths![fieldType!] => labelLength
-                                selected! >= 0 -> if {
-                                    sourceFields[selected!] => field
-                                    field.status != 0 or field.fieldType != canonicalField.first
-                                        -> if { 1 => status! }
-                                    package -> appendLabel(field.sourceModule, field.labelToken, words!)
-                                        -> unless { 1 => status! }
-                                    (words! -> len) - labelStart != labelLength -> if { 1 => status! } else {
-                                        0 => byte!
-                                        byte! < labelLength and status! == 0 -> while {
-                                            words![labelStart + byte!] != words![starts![fieldType!] + byte!]
-                                                -> if { 1 => status! }
-                                            byte! + 1 => byte!
-                                        }
-                                    }
-                                } else {
-                                    declared! -> if { 1 => status! } else {
-                                        0 => byte!
-                                        byte! < labelLength -> while {
-                                            words! -> push(words![starts![fieldType!] + byte!])
-                                            byte! + 1 => byte!
-                                        }
-                                    }
-                                }
-                                words! -> push(UInt64(canonicalField.first))
-                                canonicalField.second => fieldType!
-                            }
+                type.first < 0 and type.length > 0 -> if {
+                    package -> appendResolvedProductDetails(typeIndex!, type.length, sourceTypes -> len, sourceFields, words!)
+                        -> unless { 1 => status! }
+                } else {
+                    type.length < 0 -> if { 1 => status! }
+                    false => declared!
+                    sourceReferences -> each reference {
+                        reference.typeId == typeIndex! and reference.status == 0
+                            -> if { true => declared! }
                     }
-                    ordinal! + 1 => ordinal!
+                    status! == 0 -> if { words! -> push(UInt64(type.length)) }
+                    type.first => fieldType!
+                    0 => ordinal!
+                    ordinal! < type.length and status! == 0 -> while {
+                        fieldType! < 0 or fieldType! >= typeIndex! -> if { 1 => status! } else {
+                            sourceTypes[fieldType!] => canonicalField
+                            canonicalField.kind != 11 or canonicalField.first < 0 or canonicalField.first >= fieldType!
+                                -> if { 1 => status! } else {
+                                    -1 => selected!
+                                    0 => fieldIndex!
+                                    fieldIndex! < (sourceFields -> len) -> while {
+                                        sourceFields[fieldIndex!] => field
+                                        field.ownerType == typeIndex! and field.ordinal == ordinal!
+                                            -> if {
+                                                selected! >= 0 -> if { 1 => status! }
+                                                fieldIndex! => selected!
+                                            }
+                                        fieldIndex! + 1 => fieldIndex!
+                                    }
+                                    words! -> len => labelStart
+                                    lengths![fieldType!] => labelLength
+                                    selected! >= 0 -> if {
+                                        sourceFields[selected!] => field
+                                        field.status != 0 or field.fieldType != canonicalField.first
+                                            -> if { 1 => status! }
+                                        package -> appendLabel(field.sourceModule, field.labelToken, words!)
+                                            -> unless { 1 => status! }
+                                        (words! -> len) - labelStart != labelLength -> if { 1 => status! } else {
+                                            0 => byte!
+                                            byte! < labelLength and status! == 0 -> while {
+                                                words![labelStart + byte!] != words![starts![fieldType!] + byte!]
+                                                    -> if { 1 => status! }
+                                                byte! + 1 => byte!
+                                            }
+                                        }
+                                    } else {
+                                        declared! -> if { 1 => status! } else {
+                                            0 => byte!
+                                            byte! < labelLength -> while {
+                                                words! -> push(words![starts![fieldType!] + byte!])
+                                                byte! + 1 => byte!
+                                            }
+                                        }
+                                    }
+                                    words! -> push(UInt64(canonicalField.first))
+                                    canonicalField.second => fieldType!
+                                }
+                        }
+                        ordinal! + 1 => ordinal!
+                    }
+                    fieldType! != -1 -> if { 1 => status! }
                 }
-                fieldType! != -1 -> if { 1 => status! }
             }
             type.kind == 11 -> if {
                 false => found!
@@ -530,10 +565,14 @@ public rebindWithDetails recipes: ref [typeIds.SemanticType; ~], cachedDetails: 
                 existing! + 1 => existing!
             }
         found! < 0 -> if {
-            staged! -> len => found!
-            staged! -> push(recipe!)
-            detailStarts! -> push(detailWords! -> len)
-            detailLengths! -> push(detail.words -> len)
+            staged! -> typeIds.allocateSemanticTypeSlot => found!
+            recipe! => staged![found!]
+            (detailStarts! -> len) < (staged! -> len) -> while {
+                detailStarts! -> push(0)
+                detailLengths! -> push(0)
+            }
+            (detailWords! -> len) => detailStarts![found!]
+            (detail.words -> len) => detailLengths![found!]
             detail.words -> each word { detailWords! -> push(word) }
         }
         mapped! -> push(found!)
@@ -1156,7 +1195,7 @@ public restoreRecipes words: ref [UInt64; ~], package: ref analysis.PackageAnaly
     package -> interfaces.declarationIdentitiesAnalyzed(identities) => declarations
     decoded.types -> rebindWithDetails(decoded.details, decoded.declarations, declarations, current.types, currentDetails) => rebound
     rebound.status != 0 -> if { rebound.status -> failedTypeRecipeRestoration -> return }
-    rebound -> materializeProductFields(package, current.fields, current.types -> len) => fields
+    rebound -> materializeProductFields(package, current.fields, current.types) => fields
     fields.status != 0 -> if { fields.status -> failedTypeRecipeRestoration -> return }
     [typeIds.TypeReference; ~] => references!
     current.references -> each reference { references! -> push(reference) }

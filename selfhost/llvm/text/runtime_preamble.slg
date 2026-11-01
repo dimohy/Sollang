@@ -622,31 +622,16 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         "%sollang.int_dictionary = type { ptr, i64, i64 }" -> println
     }
     dropTypeActive -> emitSemanticDropHelpers(context, state)
-    false => usesNativeInterop!
-    false => hasNativeDeclarations!
-    false => usesComInterop!
-    0 => nativeInteropSearch!
-    nativeInteropSearch! < (context.ir -> len) -> while {
-        (context.ir[nativeInteropSearch!].kind == 6 or context.ir[nativeInteropSearch!].kind == 9)
-            and (context.ir[nativeInteropSearch!] -> targetsNativeFunction(context, state))
-            and (nativeInteropSearch! -> irNodeReachable(context, state))
-            -> if { true => usesNativeInterop! }
-        context.ir[nativeInteropSearch!] -> isNativeFunction(context, state)
-            -> if {
-                true => hasNativeDeclarations!
-                nativeInteropSearch! -> nativeFunctionReachable(state)
-                    -> if { true => usesNativeInterop! }
-            }
-        context.ir[nativeInteropSearch!] -> isComFunction(context, state)
-            -> if { true => usesComInterop! }
-        nativeInteropSearch! + 1 => nativeInteropSearch!
-    }
-    usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> usesReachableOwnedFileRuntime(state))
+    context -> coreEntryFeatures(state) => entryFeatures
+    entryFeatures.usesNativeInterop => usesNativeInterop
+    entryFeatures.hasNativeDeclarations => hasNativeDeclarations
+    entryFeatures.usesComInterop => usesComInterop
+    usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations or usesComInterop or (context -> usesReachableOwnedFileRuntime(state))
         -> if { "declare void @llvm.trap()" -> println }
     emitRawArenaRuntime(usesRawArenaAllocation!, usesRawArenaAccess!, usesArenaConstruction!)
     usesDictionary! -> if { "declare i16 @llvm.cttz.i16(i16, i1)" -> println }
     usesBitSetCount! -> if { "declare i64 @llvm.ctpop.i64(i64)" -> println }
-    hasNativeDeclarations! -> if {
+    hasNativeDeclarations -> if {
         context.expectedPathStyle == 1 -> if {
             "declare dllimport ptr @LoadLibraryA(ptr)" -> println
             "declare dllimport ptr @GetProcAddress(ptr, ptr)" -> println
@@ -710,15 +695,8 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             textGlobalIndex! + 1 => textGlobalIndex!
         }
     }
-    false => usesArguments!
-    0 => argumentsTypeSearch!
-    argumentsTypeSearch! < (context.ir -> len) -> while {
-        (argumentsTypeSearch! -> irNodeReachable(context, state))
-            and (context.ir[argumentsTypeSearch!] -> isArgumentsType)
-            -> if { true => usesArguments! }
-        argumentsTypeSearch! + 1 => argumentsTypeSearch!
-    }
-    usesArguments! -> if {
+    entryFeatures.usesArguments => usesArguments
+    usesArguments -> if {
         context.pointerBitWidth == 32 -> if {
             """
             @sollang_browser_program_name = private constant [8 x i8] c"sollangc"
@@ -915,8 +893,46 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         }
     }
     CoreRuntimePreambleResult {
-        usesArguments: usesArguments!
-        usesNativeInterop: usesNativeInterop!
-        usesComInterop: usesComInterop!
+        usesArguments: usesArguments
+        usesNativeInterop: usesNativeInterop
+        usesComInterop: usesComInterop
     }
+}
+
+struct CoreEntryFeatures {
+    usesArguments: Bool
+    usesNativeInterop: Bool
+    usesComInterop: Bool
+    hasNativeDeclarations: Bool
+}
+
+coreEntryFeatures context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> CoreEntryFeatures {
+    false => usesNativeInterop!
+    false => hasNativeDeclarations!
+    false => usesComInterop!
+    0 => nativeInteropSearch!
+    nativeInteropSearch! < (context.ir -> len) -> while {
+        (context.ir[nativeInteropSearch!].kind == 6 or context.ir[nativeInteropSearch!].kind == 9)
+            and (context.ir[nativeInteropSearch!] -> targetsNativeFunction(context, state))
+            and (nativeInteropSearch! -> irNodeReachable(context, state))
+            -> if { true => usesNativeInterop! }
+        context.ir[nativeInteropSearch!] -> isNativeFunction(context, state)
+            -> if {
+                true => hasNativeDeclarations!
+                nativeInteropSearch! -> nativeFunctionReachable(state)
+                    -> if { true => usesNativeInterop! }
+            }
+        context.ir[nativeInteropSearch!] -> isComFunction(context, state)
+            -> if { true => usesComInterop! }
+        nativeInteropSearch! + 1 => nativeInteropSearch!
+    }
+    false => usesArguments!
+    0 => argumentsTypeSearch!
+    argumentsTypeSearch! < (context.ir -> len) -> while {
+        (argumentsTypeSearch! -> irNodeReachable(context, state))
+            and (context.ir[argumentsTypeSearch!] -> isArgumentsType)
+            -> if { true => usesArguments! }
+        argumentsTypeSearch! + 1 => argumentsTypeSearch!
+    }
+    CoreEntryFeatures { usesArguments: usesArguments!, usesNativeInterop: usesNativeInterop!, usesComInterop: usesComInterop!, hasNativeDeclarations: hasNativeDeclarations! }
 }

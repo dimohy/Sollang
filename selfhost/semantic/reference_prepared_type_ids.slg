@@ -4,6 +4,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.diagnostics as diagnostics
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_registration as registration
 import sollang.compiler.semantic.reference_type_ids as nominal
 import sollang.compiler.semantic.reference_synthetic_type_ids as synthetic
 import sollang.compiler.semantic.function_type_binding_policy as bindingPolicy
@@ -436,6 +437,7 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
             == 2 => synthetic.Kind.Slice
             == 3 => synthetic.Kind.Dynamic
             == 4 => synthetic.Kind.Fixed
+            == 5 => synthetic.Kind.Dictionary
             == 8 => synthetic.Kind.Reference
             == 10 => synthetic.Kind.Product
             == 11 => synthetic.Kind.ProductField
@@ -451,18 +453,52 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
                     }
                 } else { synthetic.Kind.Named }
             }
+            == 1 {
+                type.origin == 16 -> if { synthetic.Kind.DynTrait } else { synthetic.Kind.Named }
+            }
             else => synthetic.Kind.Named
         } => kind
         recipes! -> push(synthetic.Recipe {
             kind: kind
             first: type.first
-            second: (type.kind == 7 and type.origin == 4 and type.symbol == 1) or type.kind == 11
+            second: (type.kind == 7 and type.origin == 4 and type.symbol == 1) or type.kind == 11 or type.kind == 5
                 -> if { type.second } else { -1 }
             length: type.kind == 4 or type.kind == 10 -> if { type.length } else {
-                type.kind == 11 -> if { labels.components[typeIndex!] } else { 0 }
+                type.kind == 11 -> if { labels.components[typeIndex!] } else {
+                    # A resolved trait symbol is an exact declaration identity;
+                    # aliases share it, equal names in other modules do not.
+                    type.kind == 1 and type.origin == 16
+                        -> if { prepared.package.ranges[type.module].symbolStart + type.symbol } else { 0 }
+                }
             }
         })
         typeIndex! + 1 => typeIndex!
+    }
+    # Reuse the shared-policy box catalog, including alias multiplicity, rather
+    # than maintaining a second primitive-spelling/semantic-symbol switch.
+    [typeIds.SemanticType; ~] => boxTypes!
+    semantic.types -> each type { boxTypes! -> push(type) }
+    prepared.package -> registration.registerNamedBoxes(boxTypes!) -> when {
+        Err(_) { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+        Ok(value) { value }
+    } => boxCatalog
+    [Int; ~] => boxIdentities!
+    boxed.primitiveIds -> each identity { boxIdentities! -> push(identity) }
+    [3, 4] -> each declarationKind {
+        0 => declaration!
+        declaration! < (declarations! -> len) -> while {
+            declarations![declaration!].kind == declarationKind and boxed.ids[declaration!] >= 0
+                -> if { boxIdentities! -> push(boxed.ids[declaration!]) }
+            declaration! + 1 => declaration!
+        }
+    }
+    (boxCatalog.ids -> len) != (boxIdentities! -> len)
+        -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+    0 => boxIndex!
+    boxIndex! < (boxCatalog.ids -> len) -> while {
+        boxCatalog.ids[boxIndex!] => semanticId
+        semanticId < (seeds! -> len) -> if { boxIdentities![boxIndex!] => seeds![semanticId] }
+        boxIndex! + 1 => boxIndex!
     }
     # Body products carry their ordered fields in the resolved field table.
     # Recipe-only field chains do not allocate semantic or reference TypeIds.
@@ -493,6 +529,7 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
     # These canonical runtime aliases are reserved by BuildTypeDefinitions
     # before all field roots, and share their IDs with Result annotations.
     [
+    synthetic.Shape { kind: synthetic.Kind.Dictionary, first: 2, second: 2, length: 0, identity: 25 },
     synthetic.Shape { kind: synthetic.Kind.Slice, first: 2, second: -1, length: 0, identity: 20 },
     synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 2, second: -1, length: 0, identity: 23 },
     synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 7, second: -1, length: 0, identity: 36 },

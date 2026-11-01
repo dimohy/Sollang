@@ -1,0 +1,148 @@
+namespace sollang.compiler.llvm.codegen_store
+
+import sollang.compiler.llvm.codegen_units as units
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.semantic.library_interfaces as files
+import sys.file as file
+import sys.text as text
+
+public struct Loaded { public units: Option<units.CodegenUnits>, public status: Int }
+public struct Publication { public total: Int, public reused: Int }
+
+public location semanticDestination: Text, storage: mut Arena -> Text {
+    semanticDestination -> text.endsWith(".semantic")
+        -> if {
+            semanticDestination -> slice(0, (semanticDestination -> len) - 9) => stem
+            "$stem.cgu" -> materialize(storage)
+        } else { "$semanticDestination.cgu" -> materialize(storage) }
+}
+
+public load path: Text, identity: generations.CompilationIdentity -> Loaded uses File {
+    path -> files.readSourcePath -> when {
+        Err(code) { Loaded { units: Option<units.CodegenUnits>.None, status: code } }
+        Ok(owner) {
+            owner -> len => length
+            # Match the managed byte-array consumer's upper bound.
+            length < 64 or length > 2147483591 or length % 8 != 0
+                -> if { Loaded { units: Option<units.CodegenUnits>.None, status: 21 } -> return }
+            [UInt64; ~] => words!
+            UIntSize(0) => offset!
+            offset! < length -> while {
+                UInt64(0) => word!
+                UInt64(1) => factor!
+                0..<8 -> each byte {
+                    word! + UInt64(owner -> byte(offset! + UIntSize(byte))) * factor! => word!
+                    byte < 7 -> if { factor! * 256 => factor! }
+                }
+                words! -> push(word!)
+                offset! + 8 => offset!
+            }
+            words! -> units.decode(identity.compiler, identity.target, identity.configuration) => decoded
+            decoded.status != 0
+                -> if { Loaded { units: Option<units.CodegenUnits>.None, status: 100 + decoded.status } -> return }
+            Loaded { units: Option<units.CodegenUnits>.Some(decoded.units), status: 0 }
+        }
+    }
+}
+
+public find cached: ref units.CodegenUnits, kind: Int, identity: Text, interfaceHash: UInt64, implementationHash: UInt64 -> Int {
+    0..<(cached.kinds -> len) -> each index {
+        cached.kinds[index] == kind and cached.interfaceHashes[index] == interfaceHash
+            and cached.implementationHashes[index] == implementationHash and cached.identityLengths[index] == Int(identity -> len)
+            -> if {
+                true => equal!
+                0..<cached.identityLengths[index] -> each offset {
+                    cached.identityWords[cached.identityStarts[index] + offset] != UInt64(identity -> byte(UIntSize(offset)))
+                        -> if { false => equal! }
+                }
+                equal! -> if { index -> return }
+            }
+    }
+    -1
+}
+
+public emitFragment cached: ref units.CodegenUnits, index: Int -> Unit uses Console {
+    [UInt8; ~] => bytes!
+    0 => copied!
+    0..<cached.fragmentWordLengths[index] -> each offset {
+        cached.fragmentWords[cached.fragmentStarts[index] + offset] => word!
+        0..<8 -> each {
+            copied! < cached.fragmentByteLengths[index] -> if {
+                bytes! -> push(UInt8(word! % 256))
+                copied! + 1 => copied!
+            }
+            word! / 256 => word!
+        }
+    }
+    bytes! -> file.borrowBytes => owner
+    owner -> slice(0, owner -> len) -> print
+}
+
+public publish source: Text, temporary: Text, destination: Text, identity: generations.CompilationIdentity -> Result<Publication, Int> uses File {
+    temporary == destination -> if { Result<Publication, Int>.Err(35) -> return }
+    source -> units.readStreamedUnits -> when {
+        Err(_) { Result<Publication, Int>.Err(52) -> return }
+        Ok(value) { value }
+    } => parts
+    [Int; ~] => kinds!
+    [UInt64; ~] => moduleHashes!
+    [UInt64; ~] => interfaces!
+    [UInt64; ~] => implementations!
+    [Int; ~] => identityStarts!
+    [Int; ~] => identityLengths!
+    [UInt64; ~] => identityWords!
+    [Int; ~] => fragmentStarts!
+    [Int; ~] => fragmentLengths!
+    [Int; ~] => fragmentBytes!
+    [UInt64; ~] => fragmentWords!
+    0 => reused!
+    parts -> each part {
+        not part.hasKey -> if { Result<Publication, Int>.Err(53) -> return }
+        kinds! -> push(part.kind)
+        interfaces! -> push(part.interfaceHash)
+        implementations! -> push(part.implementationHash)
+        identityWords! -> len => start
+        identityStarts! -> push(start)
+        identityLengths! -> push(Int(part.identity -> len))
+        UIntSize(0) => offset!
+        offset! < (part.identity -> len) -> while {
+            identityWords! -> push(UInt64(part.identity -> byte(offset!)))
+            offset! + 1 => offset!
+        }
+        part.kind == 1 -> if { identityWords! -> units.identityHash(start, Int(part.identity -> len)) } else { UInt64(0) } => moduleHash
+        moduleHashes! -> push(moduleHash)
+        part.fragment -> units.pack => fragment
+        fragmentWords! -> len => fragmentStart
+        fragmentStarts! -> push(fragmentStart)
+        fragmentLengths! -> push(fragment.words -> len)
+        fragmentBytes! -> push(fragment.byteLength)
+        fragment.words -> each word { fragmentWords! -> push(word) }
+        part.reused -> if { reused! + 1 => reused! }
+    }
+    units.CodegenUnits { kinds: kinds!, moduleHashes: moduleHashes!, interfaceHashes: interfaces!, implementationHashes: implementations!, identityStarts: identityStarts!, identityLengths: identityLengths!, identityWords: identityWords!, fragmentStarts: fragmentStarts!, fragmentWordLengths: fragmentLengths!, fragmentByteLengths: fragmentBytes!, fragmentWords: fragmentWords! } => captured
+    captured -> units.encode(identity.compiler, identity.target, identity.configuration) => words
+    words -> units.validate(identity.compiler, identity.target, identity.configuration) => validation
+    validation.status != 0 -> if { Result<Publication, Int>.Err(100 + validation.status) -> return }
+    (temporary -> file.createExclusive) != 1 -> if { Result<Publication, Int>.Err(36) -> return }
+    [UInt8; ~] => bytes!
+    words -> each word {
+        word => value!
+        0..<8 -> each { bytes! -> push(UInt8(value! % 256))
+            value! / 256 => value! }
+    }
+    temporary -> file.openWrite -> when {
+        Err(_) { Result<Publication, Int>.Err(30) -> return }
+        Ok(writer) {
+            writer -> writeRangeAt(bytes!, 0, UIntSize(bytes! -> len), 0) -> when {
+                Err(_) { Result<Publication, Int>.Err(31) -> return }
+                Ok(count) { count != UIntSize(bytes! -> len) -> if { Result<Publication, Int>.Err(31) -> return } }
+            }
+            not (writer -> file.sync) -> if { Result<Publication, Int>.Err(32) -> return }
+        }
+    }
+    temporary -> load(identity) => checked
+    checked.status != 0 -> if { Result<Publication, Int>.Err(checked.status) -> return }
+    file.AtomicReplaceRequest { temporary: temporary, destination: destination } -> file.atomicReplace
+        -> unless { Result<Publication, Int>.Err(34) -> return }
+    Result<Publication, Int>.Ok(Publication { total: parts -> len, reused: reused! })
+}

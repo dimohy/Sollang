@@ -10,6 +10,7 @@ public struct StreamedUnit {
     public identity: Text
     public fragment: Text
     public hasKey: Bool
+    public reused: Bool
     public interfaceHash: UInt64
     public implementationHash: UInt64
 }
@@ -17,6 +18,33 @@ public struct StreamedUnit {
 public enum UnitStreamError { Framing, Incomplete, Identity, Order, Limit, Key }
 
 struct StreamKey { interfaceHash: UInt64, implementationHash: UInt64 }
+
+# The CLI's worker-count header describes this invocation, not a cached unit.
+# Keep the unit parser strict; only the process transport removes this header.
+public compilerStreamPayload source: Text -> Text {
+    "; sollang workers = " => prefix
+    not (source -> text.startsWith(prefix)) -> if { source -> return }
+    prefix -> len => start
+    start => end!
+    end! < (source -> len) and (source -> byte(end!)) != 10
+        -> while { end! + 1 => end! }
+    end! == (source -> len) -> if { source -> return }
+    end! => digitsEnd!
+    digitsEnd! > start and (source -> byte(digitsEnd! - 1)) == 13
+        -> if { digitsEnd! - 1 => digitsEnd! }
+    digitsEnd! == start or (source -> byte(start)) == '0'
+        -> if { source -> return }
+    UInt64(0) => workers!
+    start => index!
+    index! < digitsEnd! -> while {
+        Int(source -> byte(index!)) - '0' => digit
+        digit < 0 or digit > 9 or workers! > 214748364 or (workers! == 214748364 and digit > 7)
+            -> if { source -> return }
+        workers! * 10 + UInt64(digit) => workers!
+        index! + 1 => index!
+    }
+    source -> slice(end! + 1, (source -> len) - end! - 1)
+}
 
 readStreamHash source: Text -> Result<UInt64, UnitStreamError> {
     (source -> len) == 0 or (source -> len) > 20 -> if { Result<UInt64, UnitStreamError>.Err(UnitStreamError.Key) -> return }
@@ -56,6 +84,7 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
     -1 => kind!
     "" => identity!
     false => hasKey!
+    false => reused!
     UInt64(0) => interfaceHash!
     UInt64(0) => implementationHash!
     -1 => keyMode!
@@ -85,7 +114,7 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
                 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Limit) -> return }
             keyMode! == 1 and not hasKey! or keyMode! == 0 and hasKey!
                 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
-            units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment, hasKey: hasKey!, interfaceHash: interfaceHash!, implementationHash: implementationHash! })
+            units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment, hasKey: hasKey!, reused: reused!, interfaceHash: interfaceHash!, implementationHash: implementationHash! })
             units! -> Result<[StreamedUnit; ~], UnitStreamError>.Ok -> return
         }
         line -> text.startsWith(prefix) -> if {
@@ -107,7 +136,7 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
                 keyMode! == 1 and not hasKey! or keyMode! == 0 and hasKey!
                     -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
                 hasKey! -> if { 1 } else { 0 } => keyMode!
-                units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment, hasKey: hasKey!, interfaceHash: interfaceHash!, implementationHash: implementationHash! })
+                units! -> push(StreamedUnit { kind: kind!, identity: identity!, fragment: fragment, hasKey: hasKey!, reused: reused!, interfaceHash: interfaceHash!, implementationHash: implementationHash! })
             }
             nextKind == 1 -> if {
                 identityWords! -> len => start
@@ -134,26 +163,33 @@ public readStreamedUnits source: Text -> Result<[StreamedUnit; ~], UnitStreamErr
                 identityLength => previousLength!
             }
             false => hasKey!
+            false => reused!
             0 => interfaceHash!
             0 => implementationHash!
             nextKind => kind!
             nextIdentity => identity!
             lineEnd! + 1 => fragmentStart!
         } else {
-            line -> text.startsWith(streamKeyPrefix()) -> if {
-                kind! < 0 or hasKey! or keyMode! == 0 or fragmentStart! != lineStart!
+            line == "; sollang.codegen.reused" -> if {
+                not hasKey! or reused! or fragmentStart! != lineStart!
                     -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
-                streamKeyPrefix() -> len => keyPrefixLength
-                line -> slice(keyPrefixLength, (line -> len) - keyPrefixLength) -> readStreamKey -> when {
-                    Err(error) { Result<[StreamedUnit; ~], UnitStreamError>.Err(error) -> return }
-                    Ok(key) {
-                        true => hasKey!
-                        key.interfaceHash => interfaceHash!
-                        key.implementationHash => implementationHash!
-                        lineEnd! + 1 => fragmentStart!
+                true => reused!
+                lineEnd! + 1 => fragmentStart!
+            } else { line -> text.startsWith(streamKeyPrefix()) -> if {
+                    kind! < 0 or hasKey! or keyMode! == 0 or fragmentStart! != lineStart!
+                        -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Key) -> return }
+                    streamKeyPrefix() -> len => keyPrefixLength
+                    line -> slice(keyPrefixLength, (line -> len) - keyPrefixLength) -> readStreamKey -> when {
+                        Err(error) { Result<[StreamedUnit; ~], UnitStreamError>.Err(error) -> return }
+                        Ok(key) {
+                            true => hasKey!
+                            key.interfaceHash => interfaceHash!
+                            key.implementationHash => implementationHash!
+                            lineEnd! + 1 => fragmentStart!
+                        }
                     }
-                }
-            } else { kind! < 0 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return } }
+                } else { kind! < 0 -> if { Result<[StreamedUnit; ~], UnitStreamError>.Err(UnitStreamError.Framing) -> return } }
+            }
         }
         lineEnd! + 1 => lineStart!
     }

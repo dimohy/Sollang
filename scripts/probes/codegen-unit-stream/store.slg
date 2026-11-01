@@ -1,0 +1,44 @@
+import sollang.compiler.llvm.codegen_store as store
+import sollang.compiler.semantic.semantic_generations as generations
+import sys.process as process
+
+require condition: Bool, code: Int -> Unit uses Process {
+    not condition -> if { process.exit(code) }
+}
+
+run: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    generations.CompilationIdentity { compiler: 123, target: 0, configuration: 456 } => identity
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" => source
+    source -> store.publish(arguments[2], arguments[1], identity) -> when {
+        Err(_) { process.exit(1)
+            return }
+        Ok(published) { (published.total == 3 and published.reused == 1) -> require(2) }
+    }
+    arguments[1] -> store.load(identity) => loaded
+    loaded.status == 0 -> require(3)
+    loaded.units -> when {
+        None { process.exit(4)
+            return }
+        Some(cached) {
+            (cached -> store.find(1, "cache.beta", 3, 4)) == 1 -> require(5)
+            (cached -> store.find(1, "Cache.beta", 3, 4)) == -1 -> require(6)
+            (cached -> store.find(1, "cache.beta", 9, 4)) == -1 -> require(7)
+            (cached -> store.find(1, "cache.beta", 3, 9)) == -1 -> require(8)
+            cached -> store.emitFragment(1)
+        }
+    }
+    generations.CompilationIdentity { compiler: 124, target: 0, configuration: 456 } => wrong
+    arguments[1] -> store.load(wrong) => incompatible
+    incompatible.status != 0 -> require(9)
+    arguments[3] -> store.load(identity) => absent
+    absent.status != 0 -> require(10)
+    "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" -> store.publish(arguments[2], arguments[1], identity) -> when {
+        Ok(_) { process.exit(11)
+            return }
+        Err(code) { code == 53 -> require(12) }
+    }
+    "store:10/10" -> println
+}
+
+main { run() }

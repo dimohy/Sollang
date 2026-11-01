@@ -1,6 +1,7 @@
 namespace sollang.compiler.semantic.reference_type_ids
 
 import sys.file as file
+import sollang.compiler.semantic.type_name_policy as policy
 
 # Compatibility identities follow C# BuildTypeDefinitions declaration order.
 # The library ABI diagnostic path consumes the complete prepared registry.
@@ -32,7 +33,7 @@ public struct NominalIdentities {
 
 public struct BoxIdentities {
     public ids: [Int; ~]
-    public primitiveIds: [Int; 4]
+    public primitiveIds: [Int; ~]
     public nextTypeId: Int
 }
 
@@ -101,8 +102,15 @@ public registerNominalBoxes declarations: ref [NominalDeclaration; ~], strings: 
         Err(error) { Result<BoxIdentities, Error>.Err(error) -> return }
         Ok(nominal) {
             nominal.nextTypeId => first
-            [first, first + 1, first + 2, first + 3] => primitiveIds
-            first + 4 => nextTypeId!
+            [Int; ~] => primitiveIds!
+            policy.primitiveBoxNames() => primitiveNames
+            UIntSize(0) => primitiveCursor!
+            primitiveCursor! <= (primitiveNames -> len) -> while {
+                primitiveCursor! == (primitiveNames -> len) or (primitiveNames -> byte(primitiveCursor!)) == '|'
+                    -> if { primitiveIds! -> push(first + (primitiveIds! -> len)) }
+                primitiveCursor! + 1 => primitiveCursor!
+            }
+            first + (primitiveIds! -> len) => nextTypeId!
             [Int; ~] => ids!
             0 => fill!
             fill! < (declarations -> len) -> while {
@@ -123,7 +131,7 @@ public registerNominalBoxes declarations: ref [NominalDeclaration; ~], strings: 
                     index! + 1 => index!
                 }
             }
-            BoxIdentities { ids: ids!, primitiveIds: primitiveIds, nextTypeId: nextTypeId! } -> Result<BoxIdentities, Error>.Ok -> return
+            BoxIdentities { ids: ids!, primitiveIds: primitiveIds!, nextTypeId: nextTypeId! } -> Result<BoxIdentities, Error>.Ok -> return
         }
     }
 }

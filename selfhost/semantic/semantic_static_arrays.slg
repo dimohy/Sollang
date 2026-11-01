@@ -1,0 +1,99 @@
+namespace sollang.compiler.semantic.semantic_static_arrays
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as types
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+public capture table: ref [types.SemanticType; ~], details: ref artifacts.TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, identity: generations.CompilationIdentity, fingerprint: [UInt8] -> Result<[UInt64; ~], Int> {
+    (fingerprint -> len) != 32 or (table -> len) > 1000000
+        -> if { Result<[UInt64; ~], Int>.Err(41) -> return }
+    [UInt64(5931875489630604371), 1, identity.compiler, identity.target, identity.configuration, UInt64(table -> len), 0; ~] => words!
+    fingerprint -> each byte { words! -> push(UInt64(byte)) }
+    UInt64(0) => count!
+    0..<(table -> len) -> each index {
+        table[index] => type
+        type.kind == 4 and type.status == 0 and not type.containsParameter and type.lengthHash == 0
+            -> if {
+                type.length < -1 -> if { Result<[UInt64; ~], Int>.Err(44) -> return }
+                [type.first,; ~] => roots
+                table -> artifacts.encodeSelectedRecipes(details, declarations, roots) => encoded
+                encoded.status != 0 -> if { Result<[UInt64; ~], Int>.Err(44) -> return }
+                type.first < 0 or type.first >= (encoded.recipeBySourceType -> len)
+                    -> if { Result<[UInt64; ~], Int>.Err(44) -> return }
+                encoded.recipeBySourceType[type.first] => element
+                element < 0 -> if { Result<[UInt64; ~], Int>.Err(44) -> return }
+                words! -> push(UInt64(index))
+                type.length < 0 -> if { UInt64(0) } else { UInt64(type.length) + 1 } => length
+                words! -> push(length)
+                words! -> push(UInt64(element))
+                words! -> push(UInt64(encoded.words -> len))
+                encoded.words -> each word { words! -> push(word) }
+                count! + 1 => count!
+            }
+    }
+    count! => words![6]
+    Result<[UInt64; ~], Int>.Ok(words!)
+}
+
+copySemantic source: ref types.SemanticTypeSet -> types.SemanticTypeSet {
+    [types.SemanticType; ~] => copiedTypes!
+    source.types -> each type { copiedTypes! -> push(type) }
+    [types.TypeReference; ~] => references!
+    source.references -> each reference { references! -> push(reference) }
+    [types.NominalField; ~] => fields!
+    source.fields -> each field { fields! -> push(field) }
+    types.SemanticTypeSet { types: copiedTypes!, references: references!, fields: fields! }
+}
+
+public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, current: ref types.SemanticTypeSet, identity: generations.CompilationIdentity, fingerprint: [UInt8] -> Result<types.SemanticTypeSet, Int> {
+    (words -> len) < 39 or words[0] != 5931875489630604371 or words[1] != 1
+        or words[5] > 1000000 or words[6] > words[5] or (fingerprint -> len) != 32
+        -> if { Result<types.SemanticTypeSet, Int>.Err(41) -> return }
+    words[2] != identity.compiler or words[3] != identity.target or words[4] != identity.configuration
+        -> if { Result<types.SemanticTypeSet, Int>.Err(42) -> return }
+    0..<32 -> each index {
+        words[7 + index] != UInt64(fingerprint[index])
+            -> if { Result<types.SemanticTypeSet, Int>.Err(42) -> return }
+    }
+    current -> copySemantic => semantic!
+    39 => cursor!
+    -1 => previous!
+    UInt64(0) => row!
+    row! < words[6] -> while {
+        cursor! > Int(words -> len) - 4 -> if { Result<types.SemanticTypeSet, Int>.Err(43) -> return }
+        words[cursor!] >= words[5] or words[cursor! + 1] > 2147483648
+            -> if { Result<types.SemanticTypeSet, Int>.Err(43) -> return }
+        Int(words[cursor!]) => target
+        target <= previous! -> if { Result<types.SemanticTypeSet, Int>.Err(43) -> return }
+        words[cursor! + 1] == 0 -> if { -1 } else { Int(words[cursor! + 1] - 1) } => length
+        words[cursor! + 2] => elementRecipe
+        words[cursor! + 3] => recipeLength
+        cursor! + 4 => cursor!
+        recipeLength == 0 or recipeLength > UInt64(Int(words -> len) - cursor!)
+            -> if { Result<types.SemanticTypeSet, Int>.Err(43) -> return }
+        [UInt64; ~] => recipe!
+        0..<Int(recipeLength) -> each index { recipe! -> push(words[cursor! + index]) }
+        recipe! -> artifacts.restoreRecipes(package, semantic!) => restored
+        restored.status != 0 -> if { Result<types.SemanticTypeSet, Int>.Err(44) -> return }
+        elementRecipe >= UInt64(restored.typeIds -> len)
+            -> if { Result<types.SemanticTypeSet, Int>.Err(44) -> return }
+        restored.typeIds[Int(elementRecipe)] => element
+        restored.semantic.types[element].status != 0 or restored.semantic.types[element].containsParameter
+            -> if { Result<types.SemanticTypeSet, Int>.Err(44) -> return }
+        restored.semantic => nextSemantic
+        nextSemantic.types => nextTypes
+        nextTypes => semantic!.types
+        nextSemantic.references => nextReferences
+        nextReferences => semantic!.references
+        nextSemantic.fields => nextFields
+        nextFields => semantic!.fields
+        semantic!.types -> types.reserveStaticArrayType(target, element, length) => reserved
+        cursor! + Int(recipeLength) => cursor!
+        target => previous!
+        row! + 1 => row!
+    }
+    cursor! != (words -> len) -> if { Result<types.SemanticTypeSet, Int>.Err(43) -> return }
+    Result<types.SemanticTypeSet, Int>.Ok(semantic!)
+}

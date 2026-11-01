@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('compiler', 'output', 'semantic-result', 'source-comparison'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--cli', action='store_true', help='Build the canonical native CLI entrypoint instead of the emitter probe')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     compiler, output = args.compiler.resolve(), args.output.resolve()
@@ -50,6 +51,9 @@ def main():
         assert semantic['inputHashes'][str(source.resolve())] == sha(source)
     wrapper = ROOT / 'scripts/probes/codegen-unit-stream/emitter.slg'
     support = [wrapper.with_name('registry_context.slg'), wrapper.with_name('registry_root.slg'), wrapper.with_name('registry_uses.slg'), wrapper.with_name('registry_universe.slg')]
+    if args.cli:
+        wrapper = manifest.with_name('selfhost-sollangc-driver.slg')
+        support = []
     llvm = ROOT / '.tools/llvm-22.1.8'
     assert (llvm / 'bin/clang.exe').is_file() and (llvm / 'bin/llvm-as.exe').is_file()
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.semantic_result,

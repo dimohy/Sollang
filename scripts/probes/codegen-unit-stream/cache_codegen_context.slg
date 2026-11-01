@@ -1,0 +1,73 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as cacheTarget
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.expression_type_ids as cachedExpressions
+import sollang.compiler.semantic.diagnostics as cacheDiagnostics
+import sollang.compiler.semantic.library_imports as cacheLibraries
+import sollang.compiler.semantic.owner_type_facts as cacheFacts
+import sys.file as file
+
+public inspectCachedCodegenContext sources: move [Text; ~], resolved: move cachedExpressions.ResolvedCallContext, label: Text -> Int uses Console {
+    resolved.prepared -> cacheFacts.prepareCaptureMetadata(resolved.types) => typeMetadata
+    0 => rawIndex!
+    resolved.types.types -> each raw {
+        raw.kind == 10 and raw.first < 0 and raw.length > 0
+            -> if {
+                -1 => equal!
+                0 => candidate!
+                resolved.types.types -> each other {
+                    other.kind == 10 and candidate! != rawIndex! and other.length == raw.length
+                        -> if {
+                            typeMetadata.details.lengths[rawIndex!] == typeMetadata.details.lengths[candidate!] => matches!
+                            0 => word!
+                            matches! and word! < typeMetadata.details.lengths[rawIndex!]
+                                -> while {
+                                    typeMetadata.details.words[typeMetadata.details.starts[rawIndex!] + word!] != typeMetadata.details.words[typeMetadata.details.starts[candidate!] + word!]
+                                        -> if { false => matches! }
+                                    word! + 1 => word!
+                                }
+                            matches! -> if { candidate! => equal! }
+                        }
+                    candidate! + 1 => candidate!
+                }
+                0 => matchingFields!
+                resolved.types.fields -> each field { field.ownerType == equal! -> if { matchingFields! + 1 => matchingFields! } }
+                "product-shape:$label:$(rawIndex!):$(equal!):$(matchingFields!)" -> println
+                0..<typeMetadata.details.lengths[rawIndex!] -> each offset {
+                    typeMetadata.details.words[typeMetadata.details.starts[rawIndex!] + offset] => word
+                    "product-word:$label:$(rawIndex!):$offset:$word" -> println
+                }
+            }
+        rawIndex! + 1 => rawIndex!
+    }
+    cacheTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: resolved.prepared.standardLibrarySourceCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    resolved.prepared.package -> cacheDiagnostics.unresolvedMutableLocalReads => mutableNames
+    resolved.prepared -> cacheDiagnostics.firstPreparedSignatureTypeDiagnostic => signature
+    request -> prepareResolvedSnapshot(resolved, cacheLibraries.empty(), [cacheLibraries.LibraryFunctionResolution; ~], mutableNames, signature) => context
+    context.codegenTypeUniverseHash -> when {
+        Err(_) { "context-error:$label" -> println
+            1 -> return }
+        Ok(hash) { "context:$label:$hash" -> println }
+    }
+    context.codegenFunctionEmissions -> when {
+        Err(error) {
+            error -> when {
+                keys.FunctionEmissionError.FunctionCapture(failure) { "emission-error:$label:capture:$(failure.sourceModule):$(failure.ownerSymbol):$(failure.stage)" -> println }
+                keys.FunctionEmissionError.SourceModule { "emission-error:$label:module" -> println }
+                keys.FunctionEmissionError.TypeRegistration { "emission-error:$label:registration" -> println }
+                keys.FunctionEmissionError.SignatureRegistration { "emission-error:$label:signature" -> println }
+            }
+            2 -> return
+        }
+        Ok(metadata) {
+            metadata.emissions -> each emission {
+                emission.identity.bytes -> file.borrowBytes => owner
+                owner -> slice(0, owner -> len) => identity
+                "emission:$label:$(emission.hash):$identity" -> println
+            }
+        }
+    }
+    0
+}

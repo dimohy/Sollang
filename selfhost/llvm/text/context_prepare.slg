@@ -2,6 +2,7 @@ namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.scoped_declarations as scopedDeclarations
 import sollang.compiler.llvm.codegen_cache_keys as codegenKeys
+import sollang.compiler.llvm.codegen_units as codegenUnits
 import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
 
 import sollang.compiler.semantic.storage_placement_package as storagePackage
@@ -662,6 +663,8 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
         codegenTypeUniverseHash: codegenTypeUniverseHash
         codegenFunctionEmissions: codegenFunctionEmissions
         codegenRequest: Option<codegenKeys.CompilationCodegenRequest>.None
+        codegenCache: Option<codegenUnits.CodegenUnits>.None
+        codegenCacheLoadStatus: 1
         globalFunctionAliasDiagnostic: calls.noGlobalFunctionAliasDiagnostic()
         initializerDiagnostics: [emitterContext.InitializerDiagnostic; ~]
         missingEnumVariants: missingEnumVariants
@@ -839,8 +842,11 @@ emitPreparedWindowsContextWithEntry context: ref emitterContext.EmitContext, sta
 }
 
 emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, streamed: Bool -> Unit uses Console, Process {
-    context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
-    context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
+    not (context -> preparedCodegenBoundaryReused(0))
+        -> if {
+            context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
+            context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
+        }
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesStandardError => usesStandardError
@@ -860,19 +866,25 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
     context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     context -> diagnostics.comInteropFunctionCount => comInteropCount
     context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
-    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
-    usesTextOutput or capturesParallelOutput -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime(usesStandardError) }
-    capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime() }
-    context -> diagnostics.usesIntMaterialization
-        -> if { numberFormat.emitIntFormatRuntime() }
+    not (context -> preparedCodegenBoundaryReused(0))
+        -> if {
+            capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
+            usesTextOutput or capturesParallelOutput -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime(usesStandardError) }
+            capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime() }
+            context -> diagnostics.usesIntMaterialization
+                -> if { numberFormat.emitIntFormatRuntime() }
+        }
     (context -> diagnostics.usesIntInterpolation) or (context -> usesDeferredScalarCapture(state, 0)) => usesIntOutput
     (context -> diagnostics.usesBoolInterpolation) or (context -> usesDeferredScalarCapture(state, 23)) => usesBoolOutput
-    usesIntOutput -> if { numberFormat.emitIntTextRuntime() }
-    usesBoolOutput -> if { numberFormat.emitBoolTextRuntime() }
-    usesStandardError and usesIntOutput
-        -> if { numberFormat.emitIntStandardErrorRuntime() }
-    usesStandardError and usesBoolOutput
-        -> if { numberFormat.emitBoolStandardErrorRuntime() }
+    not (context -> preparedCodegenBoundaryReused(0))
+        -> if {
+            usesIntOutput -> if { numberFormat.emitIntTextRuntime() }
+            usesBoolOutput -> if { numberFormat.emitBoolTextRuntime() }
+            usesStandardError and usesIntOutput
+                -> if { numberFormat.emitIntStandardErrorRuntime() }
+            usesStandardError and usesBoolOutput
+                -> if { numberFormat.emitBoolStandardErrorRuntime() }
+        }
     context -> usesReachableSourceTextRuntime(state) => needsSourceTextRuntime
     context -> diagnostics.usesMappedBytesRuntime => needsMappedBytesRuntime
     context -> diagnostics.usesStandardInputSourceTextRuntimeWithReachability(state.frozenReachableFunctions) => needsStandardInputSourceTextRuntime
@@ -885,151 +897,157 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                 -> if { moduleIdentity.sourceIndex => runtimeModule! }
             runtimeModuleSearch! + 1 => runtimeModuleSearch!
         }
-    needsOwnedFileRuntime or needsSourceTextRuntime or needsProcessRuntime or runtimeModule! >= 0
+    not (context -> preparedCodegenBoundaryReused(0))
         -> if {
-            "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
-        }
-    needsDirectoryRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsProcessRuntime or needsMappedBytesRuntime or runtimeModule! >= 0
-        -> if { "declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)" -> println }
-    (needsMappedBytesRuntime or needsSourceTextRuntime) and not needsOwnedFileRuntime and not needsDirectoryRuntime
-        and not needsEnvironmentRuntime and not needsProcessRuntime and not usesTextOutput and not capturesParallelOutput
-        -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
-    needsOwnedFileRuntime -> if {
-        "declare dllimport i32 @DeleteFileW(ptr)" -> println
-        not needsDirectoryRuntime and not usesTextOutput and not capturesParallelOutput and not needsEnvironmentRuntime and not needsProcessRuntime
-            -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
-        not needsDirectoryRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
-            -> if { "declare dllimport i32 @GetLastError()" -> println }
-    }
-    capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
-        -> if {
-            "declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)" -> println
-        }
-    capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
-        -> if {
-            "declare dllimport i32 @WaitForSingleObject(ptr, i32)" -> println
-        }
-    needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0 or capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
-        -> if {
-            "declare dllimport i32 @CloseHandle(ptr)" -> println
-        }
-    needsDirectoryRuntime -> if {
-        "declare dllimport i32 @CreateDirectoryW(ptr, ptr)" -> println
-        "declare dllimport i32 @GetFileAttributesW(ptr)" -> println
-        "declare dllimport ptr @FindFirstFileW(ptr, ptr)" -> println
-        "declare dllimport i32 @FindNextFileW(ptr, ptr)" -> println
-        "declare dllimport i32 @FindClose(ptr)" -> println
-        "declare dllimport void @SetLastError(i32)" -> println
-        "declare dllimport i32 @GetLastError()" -> println
-        "declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)" -> println
-        "declare dllimport i32 @GetFullPathNameW(ptr, i32, ptr, ptr)" -> println
-        "declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)" -> println
-        not usesTextOutput and not capturesParallelOutput
-            -> if {
-                "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+            needsOwnedFileRuntime or needsSourceTextRuntime or needsProcessRuntime or runtimeModule! >= 0
+                -> if {
+                    "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+                }
+            needsDirectoryRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsProcessRuntime or needsMappedBytesRuntime or runtimeModule! >= 0
+                -> if { "declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)" -> println }
+            (needsMappedBytesRuntime or needsSourceTextRuntime) and not needsOwnedFileRuntime and not needsDirectoryRuntime
+                and not needsEnvironmentRuntime and not needsProcessRuntime and not usesTextOutput and not capturesParallelOutput
+                -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
+            needsOwnedFileRuntime -> if {
+                "declare dllimport i32 @DeleteFileW(ptr)" -> println
+                not needsDirectoryRuntime and not usesTextOutput and not capturesParallelOutput and not needsEnvironmentRuntime and not needsProcessRuntime
+                    -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
+                not needsDirectoryRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
+                    -> if { "declare dllimport i32 @GetLastError()" -> println }
             }
-        "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
-    }
-    needsIoCompletionRuntime and not capturesParallelOutput and not needsMouseEventsRuntime
-        -> if {
-            "declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)" -> println
-            "declare dllimport i32 @SetEvent(ptr)" -> println
-        }
-    needsSocketCompletionRuntime and not needsOwnedFileRuntime and not needsDirectoryRuntime
-        and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
-        -> if { "declare dllimport i32 @GetLastError()" -> println }
-    needsArgumentsRuntime -> if {
-        "declare dllimport ptr @GetCommandLineW()" -> println
-        "declare dllimport ptr @CommandLineToArgvW(ptr, ptr)" -> println
-        "declare dllimport ptr @LocalFree(ptr)" -> println
-        not needsDirectoryRuntime -> if {
-            "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
-        }
-    }
-    needsEnvironmentRuntime -> if {
-        "declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)" -> println
-        not needsDirectoryRuntime -> if {
-            "declare dllimport void @SetLastError(i32)" -> println
-            "declare dllimport i32 @GetLastError()" -> println
-        }
-        not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime
-            -> if {
-                "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
-            }
-        not needsDirectoryRuntime and not needsArgumentsRuntime
-            -> if {
+            capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
+                -> if {
+                    "declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)" -> println
+                }
+            capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
+                -> if {
+                    "declare dllimport i32 @WaitForSingleObject(ptr, i32)" -> println
+                }
+            needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0 or capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
+                -> if {
+                    "declare dllimport i32 @CloseHandle(ptr)" -> println
+                }
+            needsDirectoryRuntime -> if {
+                "declare dllimport i32 @CreateDirectoryW(ptr, ptr)" -> println
+                "declare dllimport i32 @GetFileAttributesW(ptr)" -> println
+                "declare dllimport ptr @FindFirstFileW(ptr, ptr)" -> println
+                "declare dllimport i32 @FindNextFileW(ptr, ptr)" -> println
+                "declare dllimport i32 @FindClose(ptr)" -> println
+                "declare dllimport void @SetLastError(i32)" -> println
+                "declare dllimport i32 @GetLastError()" -> println
+                "declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)" -> println
+                "declare dllimport i32 @GetFullPathNameW(ptr, i32, ptr, ptr)" -> println
+                "declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)" -> println
+                not usesTextOutput and not capturesParallelOutput
+                    -> if {
+                        "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+                    }
                 "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
             }
-        environmentRuntime.emitTypeRuntime()
-    }
-    needsOwnedFileRuntime and runtimeModule! < 0
-        -> if {
-            not usesTextOutput and not capturesParallelOutput
+            needsIoCompletionRuntime and not capturesParallelOutput and not needsMouseEventsRuntime
                 -> if {
-                    "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
+                    "declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)" -> println
+                    "declare dllimport i32 @SetEvent(ptr)" -> println
                 }
-        }
-    needsProcessRuntime or needsAsyncFileRuntime -> if {
-        "declare dllimport ptr @GetCurrentProcess()" -> println
-        "declare dllimport i32 @DuplicateHandle(ptr, ptr, ptr, ptr, i32, i32, i32)" -> println
-        "declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)" -> println
-        "declare dllimport ptr @GetEnvironmentStringsW()" -> println
-        "declare dllimport i32 @FreeEnvironmentStringsW(ptr)" -> println
-        "declare dllimport i32 @CompareStringOrdinal(ptr, i32, ptr, i32, i32)" -> println
-        "declare dllimport i32 @GetProcessId(ptr)" -> println
-        "declare dllimport i32 @GetExitCodeProcess(ptr, ptr)" -> println
-        "declare dllimport i32 @TerminateProcess(ptr, i32)" -> println
-        needsProcessCapture -> if {
-            "declare dllimport i32 @CreatePipe(ptr, ptr, ptr, i32)" -> println
-            not needsOwnedFileRuntime -> if {
-                "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println
+            needsSocketCompletionRuntime and not needsOwnedFileRuntime and not needsDirectoryRuntime
+                and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
+                -> if { "declare dllimport i32 @GetLastError()" -> println }
+            needsArgumentsRuntime -> if {
+                "declare dllimport ptr @GetCommandLineW()" -> println
+                "declare dllimport ptr @CommandLineToArgvW(ptr, ptr)" -> println
+                "declare dllimport ptr @LocalFree(ptr)" -> println
+                not needsDirectoryRuntime -> if {
+                    "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+                }
             }
-            not needsDirectoryRuntime and not needsEnvironmentRuntime
-                -> if { "declare dllimport i32 @GetLastError()" -> println }
+            needsEnvironmentRuntime -> if {
+                "declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)" -> println
+                not needsDirectoryRuntime -> if {
+                    "declare dllimport void @SetLastError(i32)" -> println
+                    "declare dllimport i32 @GetLastError()" -> println
+                }
+                not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime
+                    -> if {
+                        "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+                    }
+                not needsDirectoryRuntime and not needsArgumentsRuntime
+                    -> if {
+                        "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+                    }
+                environmentRuntime.emitTypeRuntime()
+            }
+            needsOwnedFileRuntime and runtimeModule! < 0
+                -> if {
+                    not usesTextOutput and not capturesParallelOutput
+                        -> if {
+                            "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
+                        }
+                }
+            needsProcessRuntime or needsAsyncFileRuntime -> if {
+                "declare dllimport ptr @GetCurrentProcess()" -> println
+                "declare dllimport i32 @DuplicateHandle(ptr, ptr, ptr, ptr, i32, i32, i32)" -> println
+                "declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)" -> println
+                "declare dllimport ptr @GetEnvironmentStringsW()" -> println
+                "declare dllimport i32 @FreeEnvironmentStringsW(ptr)" -> println
+                "declare dllimport i32 @CompareStringOrdinal(ptr, i32, ptr, i32, i32)" -> println
+                "declare dllimport i32 @GetProcessId(ptr)" -> println
+                "declare dllimport i32 @GetExitCodeProcess(ptr, ptr)" -> println
+                "declare dllimport i32 @TerminateProcess(ptr, i32)" -> println
+                needsProcessCapture -> if {
+                    "declare dllimport i32 @CreatePipe(ptr, ptr, ptr, i32)" -> println
+                    not needsOwnedFileRuntime -> if {
+                        "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println
+                    }
+                    not needsDirectoryRuntime and not needsEnvironmentRuntime
+                        -> if { "declare dllimport i32 @GetLastError()" -> println }
+                }
+                not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime and not needsEnvironmentRuntime
+                    -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
+                processRuntime.emitProcessTypeRuntime()
+            }
+            needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
+            needsSocketRuntime -> if { "declare i64 @strlen(ptr)" -> println }
+            comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
         }
-        not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime and not needsEnvironmentRuntime
-            -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
-        processRuntime.emitProcessTypeRuntime()
-    }
-    needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
-    needsSocketRuntime -> if { "declare i64 @strlen(ptr)" -> println }
-    comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
     context -> emitCoreWithUnitStream(state, emitEntry, streamed)
-    needsSocketRuntime -> if { socketRuntime.emitWindowsRuntime() }
-    needsSocketCompletionRuntime -> if { socketRuntime.emitWindowsCompletionRuntime() }
-    needsDnsRuntime -> if { dnsRuntime.emitWindowsRuntime() }
-    needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
-    needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
-    needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
-    needsProcessCapture -> if { processRuntime.emitWindowsProcessCaptureRuntime() }
-    needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
-    needsDirectoryRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime
-        -> if { llvmRuntime.emitWindowsUtf8Path() }
-    needsOwnedFileRuntime -> if {
-        llvmRuntime.emitWindowsOwnedFile()
-        needsAsyncFileRuntime -> if { llvmRuntime.emitWindowsOwnedFileDuplicate() }
-        llvmRuntime.emitGlobalBinaryFileRuntime(true, context -> diagnostics.usesTextRuntime)
-    }
-    runtimeModule! >= 0 -> if {
-        runtimeModule! -> runtimeFunctionSymbolsForEmission(context, state) => runtimeSymbols
-        runtimeSymbols -> llvmRuntime.emitWindows(not needsOwnedFileRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime, not usesTextOutput and not capturesParallelOutput, not needsMappedBytesRuntime)
-        needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitWindowsRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
-    } else {
-        needsAsyncRuntime -> if { needsAsyncFileRuntime -> asyncRuntime.emitStandaloneWindowsRuntime(needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
-    }
-    needsSourceTextRuntime -> if {
-        runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
-        llvmRuntime.emitWindowsSourceText()
-        needsStandardInputSourceTextRuntime -> if {
-            not usesTextOutput and not capturesParallelOutput
-                -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
-            not needsOwnedFileRuntime and not needsProcessCapture
-                -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
-            not needsDirectoryRuntime and not needsProcessCapture and not needsEnvironmentRuntime
-                -> if { "declare dllimport i32 @GetLastError()" -> println }
-            llvmRuntime.emitWindowsStandardInputSourceText()
+    not (context -> preparedCodegenBoundaryReused(2))
+        -> if {
+            needsSocketRuntime -> if { socketRuntime.emitWindowsRuntime() }
+            needsSocketCompletionRuntime -> if { socketRuntime.emitWindowsCompletionRuntime() }
+            needsDnsRuntime -> if { dnsRuntime.emitWindowsRuntime() }
+            needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
+            needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
+            needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
+            needsProcessCapture -> if { processRuntime.emitWindowsProcessCaptureRuntime() }
+            needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
+            needsDirectoryRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime
+                -> if { llvmRuntime.emitWindowsUtf8Path() }
+            needsOwnedFileRuntime -> if {
+                llvmRuntime.emitWindowsOwnedFile()
+                needsAsyncFileRuntime -> if { llvmRuntime.emitWindowsOwnedFileDuplicate() }
+                llvmRuntime.emitGlobalBinaryFileRuntime(true, context -> diagnostics.usesTextRuntime)
+            }
+            runtimeModule! >= 0 -> if {
+                runtimeModule! -> runtimeFunctionSymbolsForEmission(context, state) => runtimeSymbols
+                runtimeSymbols -> llvmRuntime.emitWindows(not needsOwnedFileRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime, not usesTextOutput and not capturesParallelOutput, not needsMappedBytesRuntime)
+                needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitWindowsRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
+            } else {
+                needsAsyncRuntime -> if { needsAsyncFileRuntime -> asyncRuntime.emitStandaloneWindowsRuntime(needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
+            }
+            needsSourceTextRuntime -> if {
+                runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
+                llvmRuntime.emitWindowsSourceText()
+                needsStandardInputSourceTextRuntime -> if {
+                    not usesTextOutput and not capturesParallelOutput
+                        -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
+                    not needsOwnedFileRuntime and not needsProcessCapture
+                        -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
+                    not needsDirectoryRuntime and not needsProcessCapture and not needsEnvironmentRuntime
+                        -> if { "declare dllimport i32 @GetLastError()" -> println }
+                    llvmRuntime.emitWindowsStandardInputSourceText()
+                }
+            }
         }
-    }
 }
 
 emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -1041,8 +1059,11 @@ emitPreparedLinuxContextWithEntry context: ref emitterContext.EmitContext, state
 }
 
 emitPreparedLinuxContextWithUnitStream context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, streamed: Bool -> Unit uses Console, Process {
-    context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
-    context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
+    not (context -> preparedCodegenBoundaryReused(0))
+        -> if {
+            context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
+            context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
+        }
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesStandardError => usesStandardError
@@ -1071,95 +1092,104 @@ emitPreparedLinuxContextWithUnitStream context: ref emitterContext.EmitContext, 
                 -> if { moduleIdentity.sourceIndex => runtimeModule! }
             runtimeModuleSearch! + 1 => runtimeModuleSearch!
         }
-    capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
+    not (context -> preparedCodegenBoundaryReused(0))
         -> if {
-            "declare i32 @pthread_create(ptr, ptr, ptr, ptr)" -> println
-            "declare i32 @pthread_join(i64, ptr)" -> println
+            capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
+                -> if {
+                    "declare i32 @pthread_create(ptr, ptr, ptr, ptr)" -> println
+                    "declare i32 @pthread_join(i64, ptr)" -> println
+                }
+            needsConcurrentStreamJoins or needsSocketCompletionRuntime
+                -> if {
+                    "declare i32 @pthread_mutex_init(ptr, ptr)" -> println
+                    "declare i32 @pthread_mutex_destroy(ptr)" -> println
+                    "declare i32 @pthread_mutex_lock(ptr)" -> println
+                    "declare i32 @pthread_mutex_unlock(ptr)" -> println
+                }
+            capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
+            usesTextOutput or capturesParallelOutput -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime(usesStandardError) }
+            capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
+            context -> diagnostics.usesIntMaterialization
+                -> if { numberFormat.emitIntFormatRuntime() }
         }
-    needsConcurrentStreamJoins or needsSocketCompletionRuntime
-        -> if {
-            "declare i32 @pthread_mutex_init(ptr, ptr)" -> println
-            "declare i32 @pthread_mutex_destroy(ptr)" -> println
-            "declare i32 @pthread_mutex_lock(ptr)" -> println
-            "declare i32 @pthread_mutex_unlock(ptr)" -> println
-        }
-    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
-    usesTextOutput or capturesParallelOutput -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime(usesStandardError) }
-    capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
-    context -> diagnostics.usesIntMaterialization
-        -> if { numberFormat.emitIntFormatRuntime() }
     (context -> diagnostics.usesIntInterpolation) or (context -> usesDeferredScalarCapture(state, 0)) => usesIntOutput
     (context -> diagnostics.usesBoolInterpolation) or (context -> usesDeferredScalarCapture(state, 23)) => usesBoolOutput
-    usesIntOutput -> if { numberFormat.emitIntTextRuntime() }
-    usesBoolOutput -> if { numberFormat.emitBoolTextRuntime() }
-    usesStandardError and usesIntOutput
-        -> if { numberFormat.emitIntStandardErrorRuntime() }
-    usesStandardError and usesBoolOutput
-        -> if { numberFormat.emitBoolStandardErrorRuntime() }
-    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
-    needsEnvironmentRuntime -> if { environmentRuntime.emitTypeRuntime() }
-    needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
-    context -> emitCoreWithUnitStream(state, emitEntry, streamed)
-    needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime or needsOwnedFileRuntime
-        -> if { "declare ptr @__errno_location()" -> println }
-    needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime
-        -> if { "declare i64 @strlen(ptr)" -> println }
-    needsSocketRuntime -> if { socketRuntime.emitLinuxRuntime() }
-    needsSocketCompletionRuntime -> if { socketRuntime.emitLinuxCompletionRuntime() }
-    needsIoCompletionRuntime -> if {
-        not capturesParallelOutput and not needsMouseEventsRuntime
-            -> if { "declare i32 @eventfd(i32, i32)" -> println }
-        not needsSocketRuntime and not needsMouseEventsRuntime
-            -> if { "declare i32 @poll(ptr, i64, i32)" -> println }
-        not needsProcessCapture and not needsMouseEventsRuntime and not needsStandardInputSourceTextRuntime
-            -> if { "declare i64 @read(i32, ptr, i64)" -> println }
-        not usesTextOutput and not capturesParallelOutput and not needsMouseEventsRuntime
-            -> if { "declare i64 @write(i32, ptr, i64)" -> println }
-    }
-    needsDnsRuntime -> if { dnsRuntime.emitLinuxRuntime() }
-    needsEnvironmentRuntime -> if { environmentRuntime.emitLinuxRuntime() }
-    needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
-    capturesParallelOutput
-        or needsSocketRuntime
-        or (needsMouseEventsRuntime and usesTextOutput)
-        => hasCloseDeclaration
-    capturesParallelOutput or (needsMouseEventsRuntime and usesTextOutput)
-        => hasReadDeclaration
-    needsProcessRuntime -> if {
-        hasCloseDeclaration -> processRuntime.emitLinuxProcessRuntime
-    }
-    needsProcessCapture -> if {
-        "declare i32 @pipe2(ptr, i32)" -> println
-        not hasReadDeclaration
-            -> if { "declare i64 @read(i32, ptr, i64)" -> println }
-        processRuntime.emitLinuxProcessCaptureRuntime()
-    }
-    needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
-    needsOwnedFileRuntime -> if {
-        not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile
-        needsAsyncFileRuntime -> if { llvmRuntime.emitLinuxOwnedFileDuplicate() }
-        llvmRuntime.emitGlobalBinaryFileRuntime(false, context -> diagnostics.usesTextRuntime)
-    }
-    runtimeModule! >= 0 -> if {
-        runtimeModule! -> runtimeFunctionSymbolsForEmission(context, state) => runtimeSymbols
-        runtimeSymbols -> llvmRuntime.emitLinux(not (hasReadDeclaration or needsMouseEventsRuntime or needsProcessCapture or needsStandardInputSourceTextRuntime or needsIoCompletionRuntime), not (usesTextOutput or capturesParallelOutput or needsMouseEventsRuntime or needsIoCompletionRuntime), not (needsSourceTextRuntime or needsMappedBytesRuntime), not (needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime), not (hasCloseDeclaration or needsMouseEventsRuntime or needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime))
-        needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitLinuxRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
-    } else {
-        needsAsyncRuntime -> if { needsAsyncFileRuntime -> asyncRuntime.emitStandaloneLinuxRuntime(needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
-    }
-    needsSourceTextRuntime -> if {
-        not needsProcessRuntime and not needsOwnedFileRuntime
-            -> if { "declare i32 @open(ptr, i32, i32)" -> println }
-        not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime
-            -> if { "declare i32 @close(i32)" -> println }
-        llvmRuntime.emitLinuxSourceTextDeclarations()
-        llvmRuntime.emitLinuxSourceText()
-        needsStandardInputSourceTextRuntime -> if {
-            not hasReadDeclaration and not needsProcessCapture
-                -> if { "declare i64 @read(i32, ptr, i64)" -> println }
-            llvmRuntime.emitLinuxStandardInputSourceText()
+    not (context -> preparedCodegenBoundaryReused(0))
+        -> if {
+            usesIntOutput -> if { numberFormat.emitIntTextRuntime() }
+            usesBoolOutput -> if { numberFormat.emitBoolTextRuntime() }
+            usesStandardError and usesIntOutput
+                -> if { numberFormat.emitIntStandardErrorRuntime() }
+            usesStandardError and usesBoolOutput
+                -> if { numberFormat.emitBoolStandardErrorRuntime() }
+            needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
+            needsEnvironmentRuntime -> if { environmentRuntime.emitTypeRuntime() }
+            needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
         }
-    }
+    context -> emitCoreWithUnitStream(state, emitEntry, streamed)
+    not (context -> preparedCodegenBoundaryReused(2))
+        -> if {
+            needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime or needsOwnedFileRuntime
+                -> if { "declare ptr @__errno_location()" -> println }
+            needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime
+                -> if { "declare i64 @strlen(ptr)" -> println }
+            needsSocketRuntime -> if { socketRuntime.emitLinuxRuntime() }
+            needsSocketCompletionRuntime -> if { socketRuntime.emitLinuxCompletionRuntime() }
+            needsIoCompletionRuntime -> if {
+                not capturesParallelOutput and not needsMouseEventsRuntime
+                    -> if { "declare i32 @eventfd(i32, i32)" -> println }
+                not needsSocketRuntime and not needsMouseEventsRuntime
+                    -> if { "declare i32 @poll(ptr, i64, i32)" -> println }
+                not needsProcessCapture and not needsMouseEventsRuntime and not needsStandardInputSourceTextRuntime
+                    -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+                not usesTextOutput and not capturesParallelOutput and not needsMouseEventsRuntime
+                    -> if { "declare i64 @write(i32, ptr, i64)" -> println }
+            }
+            needsDnsRuntime -> if { dnsRuntime.emitLinuxRuntime() }
+            needsEnvironmentRuntime -> if { environmentRuntime.emitLinuxRuntime() }
+            needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
+            capturesParallelOutput
+                or needsSocketRuntime
+                or (needsMouseEventsRuntime and usesTextOutput)
+                => hasCloseDeclaration
+            capturesParallelOutput or (needsMouseEventsRuntime and usesTextOutput)
+                => hasReadDeclaration
+            needsProcessRuntime -> if {
+                hasCloseDeclaration -> processRuntime.emitLinuxProcessRuntime
+            }
+            needsProcessCapture -> if {
+                "declare i32 @pipe2(ptr, i32)" -> println
+                not hasReadDeclaration
+                    -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+                processRuntime.emitLinuxProcessCaptureRuntime()
+            }
+            needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
+            needsOwnedFileRuntime -> if {
+                not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile
+                needsAsyncFileRuntime -> if { llvmRuntime.emitLinuxOwnedFileDuplicate() }
+                llvmRuntime.emitGlobalBinaryFileRuntime(false, context -> diagnostics.usesTextRuntime)
+            }
+            runtimeModule! >= 0 -> if {
+                runtimeModule! -> runtimeFunctionSymbolsForEmission(context, state) => runtimeSymbols
+                runtimeSymbols -> llvmRuntime.emitLinux(not (hasReadDeclaration or needsMouseEventsRuntime or needsProcessCapture or needsStandardInputSourceTextRuntime or needsIoCompletionRuntime), not (usesTextOutput or capturesParallelOutput or needsMouseEventsRuntime or needsIoCompletionRuntime), not (needsSourceTextRuntime or needsMappedBytesRuntime), not (needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime), not (hasCloseDeclaration or needsMouseEventsRuntime or needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime))
+                needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitLinuxRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
+            } else {
+                needsAsyncRuntime -> if { needsAsyncFileRuntime -> asyncRuntime.emitStandaloneLinuxRuntime(needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
+            }
+            needsSourceTextRuntime -> if {
+                not needsProcessRuntime and not needsOwnedFileRuntime
+                    -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+                not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime
+                    -> if { "declare i32 @close(i32)" -> println }
+                llvmRuntime.emitLinuxSourceTextDeclarations()
+                llvmRuntime.emitLinuxSourceText()
+                needsStandardInputSourceTextRuntime -> if {
+                    not hasReadDeclaration and not needsProcessCapture
+                        -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+                    llvmRuntime.emitLinuxStandardInputSourceText()
+                }
+            }
+        }
 }
 
 emitPreparedWasmContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {

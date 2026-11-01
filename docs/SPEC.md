@@ -6445,6 +6445,12 @@ Current backend:
   immediately after its unit header. Hashes are canonical unsigned decimal
   UInt64 values. Every unit in a keyed stream has exactly one key; a stream
   cannot mix keyed and unkeyed units. Legacy unkeyed streams remain readable.
+  A reused unit places `; sollang.codegen.reused` immediately after its key.
+  This marker is unique and is excluded from the cached fragment bytes.
+  The CLI transport may precede the stream with one `; sollang workers = N`
+  line, where N is a canonical positive Int. Transport consumers remove this
+  invocation metadata before validating or publishing units; the strict unit
+  reader still rejects text before the first unit header.
   The reader rejects malformed, overflowing, duplicated or misplaced keys and
   excludes key comments from borrowed fragment views. Module implementation
   keys also include the stable identities of the functions actually emitted,
@@ -6490,6 +6496,37 @@ Current backend:
   still reuse independently valid LLVM units. Snapshot comparison is streamed;
   publication uses a same-directory write-through temporary file and atomic
   replacement after a successful link.
+- semantic owner restoration retains a static-array allocation plan alongside
+  owner facts. Before restoring owners, it validates compiler, target,
+  configuration and the current declaration fingerprint, resolves each saved
+  element recipe, and reserves array slots in saved ID order. A saved slot is
+  an allocation coordinate, never a replacement for structural type identity.
+  Other types use the first unreserved vacant slot before extending the table.
+  Restoration is transactional; rejected metadata leaves the current table
+  unchanged. The SLG owner container writes version 2 with this plan and still
+  reads version 1. The plan accepts at most one million saved type slots,
+  matching the managed semantic cache's record bound.
+  Inferred product fields serialize from the ordered semantic field arena;
+  signature products additionally validate their canonical field terms.
+  Both retain exact label bytes, label presence, field order and field types.
+- code-generation signature registration includes named boxes, dictionaries
+  and dynamic traits. Box identities consume the existing named-box catalog
+  and generated primitive-name policy in declaration registration order;
+  dictionaries intern both resolved component identities, including the
+  predeclared `Int`/`Int` shape. Dynamic traits intern resolved declaration
+  identities, so aliases share an identity and names in distinct modules do
+  not collide. Registration errors are not successful cache admission.
+- explicit-source, project and workspace builds use the same cache-aware
+  native compilation and publication path. Manifest loading retains graph
+  resolution, dependency locks and target filtering; its path adapter only
+  supplies source text views to the common build. Output locking, compiler
+  invocation, linking and cache publication do not have a second executable
+  implementation for manifest inputs.
+  Cached LLVM uses its producer's type coordinates. The compiler identity
+  envelope prevents another compiler product from consuming those fragments.
+  Cross-implementation verification resolves internal coordinates through
+  complete declarations, structural layouts and alias multiplicity; internal
+  numeric equality is not a language-level requirement.
 - exact-product cache: a small checksummed `.product` generation binds the
   validated source snapshot, LLVM-unit generation, and final target artifact by
   SHA-256 together with compiler, target, and configuration identity. If all

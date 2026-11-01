@@ -1,0 +1,75 @@
+namespace sollang.compiler.llvm.source_root
+
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.semantic.type_ids as types
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.llvm.text as cachedCodegen
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+printTypeTable semantic: ref expressions.ExpressionTypeIdSet, label: Text -> Unit uses Console {
+    0 => index!
+    semantic.types -> each type {
+        "type:$label:$(index!):$(type.kind):$(type.origin):$(type.module):$(type.symbol):$(type.first):$(type.second):$(type.length):$(type.lengthHash):$(type.containsParameter):$(type.status)" -> println
+        index! + 1 => index!
+    }
+}
+
+run: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
+    UIntSize(2) -> collectExplicitPaths => explicitPaths
+    [Text; ~] => mappedPaths!
+    paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
+        Err(_) { process.exit(1)
+            return }
+        Ok(value) { value }
+    } => batch
+    [Text; ~] => coldSources!
+    batch.owners -> each owner { owner -> slice(0, owner -> len) => source
+        coldSources! -> push(source) }
+    generations.CompilationIdentity { compiler: 1, target: 0, configuration: 1 } => identity
+    cache.Loaded { words: [UInt64; ~], status: 50 } => empty
+    coldSources! -> context.prepareParallelWithStandardLibrarySources(batch.standardLibrarySourceCount) -> cache.resolve(empty, mappedPaths!, identity) -> when {
+        Err(code) { "cold-error:$code" -> println
+            process.exit(2)
+            return }
+        Ok(cold) {
+            cold.resolved.types -> printTypeTable("cold")
+            "meta:cold:$(cold.reused):$(cold.rejected):$(cold.skipped):$(cold.resolved.types.types -> len)" -> println
+            cold.resolved => coldResolved
+            [Text; ~] => coldCodegenSources!
+            batch.owners -> each owner { owner -> slice(0, owner -> len) => source
+                coldCodegenSources! -> push(source) }
+            coldCodegenSources! -> cachedCodegen.inspectCachedCodegenContext(coldResolved, "cold") => coldStatus
+            coldStatus != 0 -> if { process.exit(4)
+                return }
+            cache.Loaded { words: cold.words, status: 0 } => loaded
+            [Text; ~] => warmSources!
+            batch.owners -> each owner { owner -> slice(0, owner -> len) => source
+                warmSources! -> push(source) }
+            warmSources! -> context.prepareParallelWithStandardLibrarySources(batch.standardLibrarySourceCount) -> cache.resolve(loaded, mappedPaths!, identity) -> when {
+                Err(code) { "warm-error:$code" -> println
+                    process.exit(3)
+                    return }
+                Ok(warm) {
+                    warm.resolved.types -> printTypeTable("warm")
+                    "meta:warm:$(warm.reused):$(warm.rejected):$(warm.skipped):$(warm.resolved.types.types -> len)" -> println
+                    warm.resolved => warmResolved
+                    [Text; ~] => warmCodegenSources!
+                    batch.owners -> each owner { owner -> slice(0, owner -> len) => source
+                        warmCodegenSources! -> push(source) }
+                    warmCodegenSources! -> cachedCodegen.inspectCachedCodegenContext(warmResolved, "warm") => warmStatus
+                    warmStatus != 0 -> if { process.exit(5)
+                        return }
+                }
+            }
+        }
+    }
+}
+
+main { run() }

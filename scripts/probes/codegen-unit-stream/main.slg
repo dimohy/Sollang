@@ -44,7 +44,34 @@ checkKeyViews source: Text -> Unit uses Console, Process {
     "keyed-views=ok" -> println
 }
 
+checkReusedViews source: Text -> Unit uses Console, Process {
+    source -> units.readStreamedUnits -> when {
+        Err(_) { process.exit(1) }
+        Ok(parts) {
+            (parts -> len) != 3 -> if { process.exit(1) }
+            parts[0].reused or not parts[1].reused or parts[2].reused
+                -> if { process.exit(1) }
+            not (parts[0].fragment == "prefix\n") or not (parts[1].fragment == "body\n") or not (parts[2].fragment == "suffix\n")
+                -> if { process.exit(1) }
+        }
+    }
+    "reused-views=ok" -> println
+}
+
 main {
+    "; sollang workers = 1\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(true, "worker-valid")
+    "; sollang workers = 32\r\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(true, "worker-crlf")
+    "; sollang workers = 0\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(false, "worker-zero")
+    "; sollang workers = -1\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(false, "worker-negative")
+    "; sollang workers = 01\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(false, "worker-leading-zero")
+    "; sollang workers = 2147483648\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(false, "worker-overflow")
+    "; sollang workers = 1x\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(false, "worker-suffix")
+    "; sollang workers = 1\n; sollang workers = 1\n; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> units.compilerStreamPayload -> check(false, "worker-duplicate")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> check(true, "reused-valid")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> check(false, "reused-missing-key")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> check(false, "reused-duplicate")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\nbody\n; sollang.codegen.reused\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> check(false, "reused-late")
+    "; sollang.codegen.unit 0:\n; sollang.codegen.key 1:2\nprefix\n; sollang.codegen.unit 1:cache.beta\n; sollang.codegen.key 3:4\n; sollang.codegen.reused\nbody\n; sollang.codegen.unit 2:\n; sollang.codegen.key 5:6\nsuffix\n; sollang.codegen.end\n" -> checkReusedViews
     "; sollang.codegen.unit 0:\nprefix\n; sollang.codegen.unit 1:cache.beta\nbody\n; sollang.codegen.unit 2:\nsuffix\n; sollang.codegen.end\n" -> check(true, "valid")
     "; sollang.codegen.unit 0:\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "empty-modules")
     "; sollang.codegen.unit 0:\n; sollang.codegen.unit 1:\n; sollang.codegen.unit 2:\n; sollang.codegen.end\n" -> check(true, "global-module")
