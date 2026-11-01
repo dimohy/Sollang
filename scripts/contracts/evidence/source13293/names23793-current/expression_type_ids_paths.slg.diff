@@ -1,0 +1,83 @@
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index 163e14ac3..de21406b3 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -672,7 +672,36 @@ public subjectWhenValueAstIndexed package: ref analysis.PackageAnalysis, sourceI
+     subjectAst!
+ }
+ 
+-resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~] -> Bool {
++struct ResolvedNameReferenceIndex {
++    firstBySymbol: [Int; ~]
++    nextName: [Int; ~]
++}
++
++# Name resolution already fixes lexical ownership. Group only those immutable
++# coordinates; payload types and expression publication remain live.
++indexResolvedNameReferences package: ref analysis.PackageAnalysis -> ResolvedNameReferenceIndex {
++    [Int; ~] => first!
++    [Int; ~] => next!
++    package.symbols -> each symbol { first! -> push(-1) }
++    package.names -> each name { next! -> push(-1) }
++    package.ranges -> each range {
++        range.nameCount => nameIndex!
++        nameIndex! > 0 -> while {
++            nameIndex! - 1 => nameIndex!
++            range.nameStart + nameIndex! => globalName
++            package.names[globalName] => name
++            name.symbol >= 0 and name.symbol < range.symbolCount
++                -> if {
++                    range.symbolStart + name.symbol => globalSymbol
++                    first![globalSymbol] => next![globalName]
++                    globalName => first![globalSymbol]
++                }
++        }
++    }
++    ResolvedNameReferenceIndex { firstBySymbol: first!, nextName: next! }
++}
++
++resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], nameReferences: ref ResolvedNameReferenceIndex -> Bool {
+     false => changed!
+     0 => sourceIndex!
+     sourceIndex! < (prepared.package.ranges -> len)
+@@ -706,10 +735,10 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+                                                             payloadType >= 0 and payloadType < (types -> len)
+                                                                 -> if {
+                                                                     payloadType => patternBindingTypeBySymbol[range.symbolStart + symbolIndex!]
+-                                                                    0 => nameIndex!
+-                                                                    nameIndex! < range.nameCount -> while {
+-                                                                        prepared.package.names[range.nameStart + nameIndex!] => name
+-                                                                        name.symbol == symbolIndex! and name.astNode >= 0 and name.astNode < range.astCount
++                                                                    nameReferences.firstBySymbol[range.symbolStart + symbolIndex!] => nameIndex!
++                                                                    nameIndex! >= 0 -> while {
++                                                                        prepared.package.names[nameIndex!] => name
++                                                                        name.astNode >= 0 and name.astNode < range.astCount
+                                                                             -> if {
+                                                                                 range.astStart + name.astNode => nameGlobalAst
+                                                                                 expressionIndexByAst[nameGlobalAst] => existingIndex!
+@@ -733,7 +762,7 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+                                                                                     }
+                                                                                 }
+                                                                             }
+-                                                                        nameIndex! + 1 => nameIndex!
++                                                                        nameReferences.nextName[nameIndex!] => nameIndex!
+                                                                     }
+                                                                 }
+                                                         }
+@@ -752,6 +781,7 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+ 
+ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~] -> Unit {
+     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
++    prepared.package -> indexResolvedNameReferences => nameReferences
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+     # An omitted input is constrained by its committed primary argument AST,
+     # never by an already-typed expression nested inside that argument.
+@@ -2298,7 +2328,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                     }
+                 homogeneousJoinSource! + 1 => homogeneousJoinSource!
+             }
+-        prepared -> resolvePatternPayloadTypes(types, expressions, expressionIndexByAst, patternBindingTypeBySymbol, contextualRecords.firstChild, contextualRecords.nextChild) => patternTypesChanged
++        prepared -> resolvePatternPayloadTypes(types, expressions, expressionIndexByAst, patternBindingTypeBySymbol, contextualRecords.firstChild, contextualRecords.nextChild, nameReferences) => patternTypesChanged
+         patternTypesChanged -> if { true => pathChanged! }
+         resolveDeclaredNumericReturnLiterals(prepared, types, references, expressions, expressionIndexByAst) => returnLiteralsChanged
+         returnLiteralsChanged -> if { true => pathChanged! }
