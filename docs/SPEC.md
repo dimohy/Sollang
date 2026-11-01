@@ -2040,6 +2040,8 @@ implementation and an implementation containing only associated-type bindings
 remain available to generic trait and associated-type equality constraints.
 Unknown traits, unknown or missing associated bindings, incompatible bindings
 and missing required methods are checked even when an impl has no methods.
+A missing required method is diagnosed at the `trait` keyword in the trait's
+defining module, including a public trait imported by another module.
 Method bindings read the same resolved implementation catalog; no synthetic
 method is introduced to represent an empty implementation.
 Concrete associated types are registered after trait definitions and before

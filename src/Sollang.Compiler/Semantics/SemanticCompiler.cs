@@ -518,6 +518,7 @@ internal sealed partial class SemanticCompiler
         foreach (var ((traitName, type), methods) in implementations)
         {
             var trait = _traits[traitName];
+            _currentModuleName = trait.ModuleName;
             var missing = trait.Methods.FirstOrDefault(method => !methods.Contains(method.Name));
             if (missing is not null)
             {

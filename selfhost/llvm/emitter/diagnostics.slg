@@ -152,10 +152,7 @@ public dynTraitImplementationFunction conversion: typedIr.TypedIrNode, ordinal: 
     context.ranges[dynType.module].symbolStart + dynType.symbol => traitIdentity
     context.types -> typeIds.materializedReadTypeId(context.ir[conversion.operand0].typeId) => receiverType
     receiverType < 0 -> if { -1 -> return }
-    context.types[receiverType] => receiver
-    receiver.module < 0 or receiver.symbol < 0 -> if { -1 -> return }
-    context.ranges[receiver.module].symbolStart + receiver.symbol => receiverIdentity
-    traitIdentity -> traitRequirementImplementations(receiverIdentity, requirement, false, context) => selection
+    traitIdentity -> traitRequirementImplementations(receiverType, requirement, false, context) => selection
     selection.count != 1 -> if { -1 -> return }
     selection.symbol => implementation
     0 => functionIndex!
@@ -6683,17 +6680,24 @@ traitMethodDeclaration source: Int, method: Int, traitIdentity: Int, context: re
     -1
 }
 
-traitImplementationReceiver source: Int, implementation: Int, context: ref emitterContext.EmitContext -> Int {
+traitImplementationReceiverTypeId source: Int, implementation: Int, context: ref emitterContext.EmitContext -> Int {
     context.ranges[source] => range
     context.symbols[range.symbolStart + implementation] => owner
     context.nodes -> typeIds.implTypePaths(range.astStart, range.astCount, owner.astNode) => paths
-    source -> signatureTypeId(paths.ownerAst, context) => ownerTypeId
-    ownerTypeId < 0 -> if { -1 -> return }
-    context.types[ownerTypeId] => ownerType
-    (ownerType.kind == 1 or ownerType.kind == 7) and (ownerType.origin == 0 or ownerType.origin == 2)
-        and ownerType.module >= 0 and ownerType.module < (context.ranges -> len) and ownerType.symbol >= 0
-        -> if { context.ranges[ownerType.module].symbolStart + ownerType.symbol -> return }
-    -1
+    source -> signatureTypeId(paths.ownerAst, context)
+}
+
+traitReceiverTypeIdsMatch left: Int, right: Int, context: ref emitterContext.EmitContext -> Bool {
+    left < 0 or right < 0 or left >= (context.types -> len) or right >= (context.types -> len)
+        -> if { false -> return }
+    left == right -> if { true -> return }
+    context.types[left] => leftType
+    context.types[right] => rightType
+    leftType.kind == rightType.kind and (leftType.kind == 1 or leftType.kind == 7)
+        and (leftType.origin == 0 or leftType.origin == 2)
+        and (rightType.origin == 0 or rightType.origin == 2)
+        and leftType.module >= 0 and leftType.symbol >= 0
+        and leftType.module == rightType.module and leftType.symbol == rightType.symbol
 }
 
 struct TraitRequirementImplementationSelection {
@@ -6701,7 +6705,7 @@ struct TraitRequirementImplementationSelection {
     count: Int
 }
 
-traitRequirementImplementations traitIdentity: Int, receiverIdentity: Int, requirement: Int, firstOnly: Bool, context: ref emitterContext.EmitContext -> TraitRequirementImplementationSelection {
+traitRequirementImplementations traitIdentity: Int, receiverTypeId: Int, requirement: Int, firstOnly: Bool, context: ref emitterContext.EmitContext -> TraitRequirementImplementationSelection {
     -1 => selected!
     0 => count!
     context.ranges -> each range {
@@ -6712,7 +6716,7 @@ traitRequirementImplementations traitIdentity: Int, receiverIdentity: Int, requi
                 and context.symbols[range.symbolStart + actual.parent].kind == 6
                 -> if {
                     range.sourceModule -> traitDeclarationForImpl(actual.parent, context) == traitIdentity
-                        and (range.sourceModule -> traitImplementationReceiver(actual.parent, context)) == receiverIdentity
+                        and ((range.sourceModule -> traitImplementationReceiverTypeId(actual.parent, context)) -> traitReceiverTypeIdsMatch(receiverTypeId, context))
                         and (range.sourceModule -> traitMethodDeclaration(method!, traitIdentity, context)) == requirement
                         -> if {
                             selected! < 0 -> if { range.symbolStart + method! => selected! }
@@ -6728,13 +6732,13 @@ traitRequirementImplementations traitIdentity: Int, receiverIdentity: Int, requi
     TraitRequirementImplementationSelection { symbol: selected!, count: count! }
 }
 
-traitRequirementImplementation traitIdentity: Int, receiverIdentity: Int, requirement: Int, context: ref emitterContext.EmitContext -> Int {
-    traitIdentity -> traitRequirementImplementations(receiverIdentity, requirement, true, context) => selection
+traitRequirementImplementation traitIdentity: Int, receiverTypeId: Int, requirement: Int, context: ref emitterContext.EmitContext -> Int {
+    traitIdentity -> traitRequirementImplementations(receiverTypeId, requirement, true, context) => selection
     selection.symbol
 }
 
-traitRequirementImplemented traitIdentity: Int, receiverIdentity: Int, requirement: Int, context: ref emitterContext.EmitContext -> Bool {
-    (traitIdentity -> traitRequirementImplementation(receiverIdentity, requirement, context)) >= 0
+traitRequirementImplemented traitIdentity: Int, receiverTypeId: Int, requirement: Int, context: ref emitterContext.EmitContext -> Bool {
+    (traitIdentity -> traitRequirementImplementation(receiverTypeId, requirement, context)) >= 0
 }
 
 traitAssociatedBindingIssue source: Int, implementation: Int, traitIdentity: Int, context: ref emitterContext.EmitContext -> Int {
@@ -6894,7 +6898,7 @@ traitImplementationDeclarationDiagnostics context: ref emitterContext.EmitContex
                         code! == 0 -> if {
                             false => repeated!
                             registered! -> each previous {
-                                previous.traitIdentity == trait! and previous.receiverType == receiver
+                                previous.traitIdentity == trait! and (previous.receiverType -> traitReceiverTypeIdsMatch(receiver, context))
                                     -> if {
                                         true => repeated!
                                         range.sourceModule -> traitImplementationBindingsDiffer(implementation!, previous.sourceModule, previous.implementation, context)
@@ -7009,12 +7013,11 @@ traitSignatureDiagnostics context: ref emitterContext.EmitContext, writeDiagnost
         0 => method!
         method! < range.symbolCount -> while {
             context.symbols[range.symbolStart + method!] => actual
-            actual.kind == 31 and actual.parent >= 0 and actual.nameToken >= 0
-                and context.symbols[range.symbolStart + actual.parent].kind == 6
+            actual.kind == 6
                 -> if {
-                    range.sourceModule -> traitDeclarationForImpl(actual.parent, context) => traitIdentity
-                    range.sourceModule -> traitImplementationReceiver(actual.parent, context) => receiverIdentity
-                    traitIdentity >= 0 and receiverIdentity >= 0 -> if {
+                    range.sourceModule -> traitDeclarationForImpl(method!, context) => traitIdentity
+                    range.sourceModule -> traitImplementationReceiverTypeId(method!, context) => receiverTypeId
+                    traitIdentity >= 0 and receiverTypeId >= 0 -> if {
                         context.ranges -> each declarationRange {
                             traitIdentity >= declarationRange.symbolStart and traitIdentity < declarationRange.symbolStart + declarationRange.symbolCount
                                 -> if {
@@ -7023,15 +7026,26 @@ traitSignatureDiagnostics context: ref emitterContext.EmitContext, writeDiagnost
                                         declarationRange.symbolStart + declaration! => requirement
                                         context.symbols[requirement] => expected
                                         expected.kind == 29 and expected.parent == traitIdentity - declarationRange.symbolStart
-                                            and not (traitIdentity -> traitRequirementImplemented(receiverIdentity, requirement, context))
+                                            and not (traitIdentity -> traitRequirementImplemented(receiverTypeId, requirement, context))
                                             -> if {
                                                 writeDiagnostics -> if {
                                                     context.symbols[traitIdentity] => traitDeclaration
-                                                    context -> emitInitializerSemanticPrefix(declarationRange.sourceModule, traitDeclaration.astNode)
+                                                    context.nodes[declarationRange.astStart + traitDeclaration.astNode] => traitHeader
+                                                    traitHeader.start => traitOffset!
+                                                    traitHeader.firstToken => traitToken!
+                                                    traitToken! < traitDeclaration.nameToken -> while {
+                                                        context.tokens[declarationRange.tokenStart + traitToken!] => token
+                                                        token.kind == grammar.tokenIdIdentifier()
+                                                            and (context.sources[declarationRange.sourceModule] -> slice(token.span.start, token.span.length)) == "trait"
+                                                            -> if { token.span.start => traitOffset!
+                                                                break }
+                                                        traitToken! + 1 => traitToken!
+                                                    }
+                                                    context -> emitInitializerSemanticPrefixAtOffset(declarationRange.sourceModule, traitDeclaration.astNode, traitOffset!)
                                                     "impl " -> print
                                                     context -> emitNominalDeclarationName(traitIdentity)
                                                     " for " -> print
-                                                    context -> emitNominalDeclarationName(receiverIdentity)
+                                                    receiverTypeId -> emitBoxOperandTypeName(context)
                                                     context.tokens[declarationRange.tokenStart + expected.nameToken] => nameToken
                                                     context.sources[declarationRange.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
                                                     " is missing method '$name'" -> println
@@ -7102,13 +7116,11 @@ dynConversionImplementationDiagnostic conversion: typedIr.TypedIrNode, context: 
     context.types[conversion.typeId] => dynType
     context.ranges[dynType.module].symbolStart + dynType.symbol => traitIdentity
     context.ir[conversion.operand0].typeId => receiverTypeId
-    context.types[receiverTypeId] => receiver
-    context.ranges[receiver.module].symbolStart + receiver.symbol => receiverIdentity
     conversion.typeId -> dynTraitMethodCount(context) => methodCount
     0 => ordinal!
     ordinal! < methodCount -> while {
         conversion.typeId -> dynTraitMethodDeclaration(ordinal!, context) => requirement
-        traitIdentity -> traitRequirementImplementations(receiverIdentity, requirement, false, context) => selection
+        traitIdentity -> traitRequirementImplementations(receiverTypeId, requirement, false, context) => selection
         selection.count != 1 -> if {
             writeDiagnostics -> if {
                 conversion -> emitDynConversionPrefix(context)
