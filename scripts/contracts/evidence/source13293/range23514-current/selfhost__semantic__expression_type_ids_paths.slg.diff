@@ -1,0 +1,84 @@
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index 5464100b7..8602e2fef 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -2939,43 +2939,49 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                 (memberReadonlyProjection! and types[memberOwnerType!].kind == 8) or types[memberOwnerType!].kind == 6
+                                                     -> if { types[memberOwnerType!].first => memberOwnerType! }
+                                                 -1 => matchedFieldType!
++                                                memberOwnerType! >= 0 and (types[memberOwnerType!] -> typeIds.isBuiltinStruct)
++                                                    -> if {
++                                                        pathSource -> slice(memberToken.span.start, memberToken.span.length) -> typeIds.builtinStructFieldOrdinal => ordinal
++                                                        ordinal >= 0 -> if { types -> typeIds.builtinStructFieldTypeId(ordinal) => matchedFieldType! }
++                                                    }
+                                                 -1 => memberFieldIndex!
+                                                 memberOwnerType! >= 0 and memberOwnerType! < (firstFieldByOwnerType! -> len)
+                                                     -> if {
+                                                         firstFieldByOwnerType![memberOwnerType!] => memberFieldIndex!
+                                                     }
+-                                                memberFieldIndex! >= 0 -> while {
+-                                                    fields[memberFieldIndex!] => memberField
+-                                                    prepared.package.ranges[memberField.sourceModule] => memberFieldRange
+-                                                    prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
+-                                                    prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
+-                                                    -1 => memberFieldNameToken!
+-                                                    memberField.labelToken >= 0 -> if {
+-                                                        memberField.labelToken => memberFieldNameToken!
+-                                                    } else {
+-                                                        memberField.fieldSymbol >= 0 -> if {
+-                                                            prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
+-                                                            memberFieldSymbol.nameToken => memberFieldNameToken!
+-                                                        }
+-                                                    }
+-                                                    memberFieldNameToken! >= 0 -> if {
+-                                                        prepared.package.tokens[memberFieldRange.tokenStart + memberFieldNameToken!] => memberFieldName
+-                                                        memberToken.span.length == memberFieldName.span.length => memberNameEqual!
+-                                                        UIntSize(0) => memberNameByte!
+-                                                        memberNameEqual! and memberNameByte! < memberToken.span.length
+-                                                            -> while {
+-                                                                pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
+-                                                                memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
+-                                                                memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
+-                                                                memberNameByte! + 1 => memberNameByte!
++                                                memberFieldIndex! >= 0 and matchedFieldType! < 0
++                                                    -> while {
++                                                        fields[memberFieldIndex!] => memberField
++                                                        prepared.package.ranges[memberField.sourceModule] => memberFieldRange
++                                                        prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
++                                                        prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
++                                                        -1 => memberFieldNameToken!
++                                                        memberField.labelToken >= 0 -> if {
++                                                            memberField.labelToken => memberFieldNameToken!
++                                                        } else {
++                                                            memberField.fieldSymbol >= 0 -> if {
++                                                                prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
++                                                                memberFieldSymbol.nameToken => memberFieldNameToken!
+                                                             }
+-                                                        memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
+-                                                    } else {
+-                                                        pathSource -> typeIds.structuralFieldNameMatches(memberToken.span.start, memberToken.span.length, memberField.ordinal)
+-                                                            -> if { memberField.fieldType => matchedFieldType! }
++                                                        }
++                                                        memberFieldNameToken! >= 0 -> if {
++                                                            prepared.package.tokens[memberFieldRange.tokenStart + memberFieldNameToken!] => memberFieldName
++                                                            memberToken.span.length == memberFieldName.span.length => memberNameEqual!
++                                                            UIntSize(0) => memberNameByte!
++                                                            memberNameEqual! and memberNameByte! < memberToken.span.length
++                                                                -> while {
++                                                                    pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
++                                                                    memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
++                                                                    memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
++                                                                    memberNameByte! + 1 => memberNameByte!
++                                                                }
++                                                            memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
++                                                        } else {
++                                                            pathSource -> typeIds.structuralFieldNameMatches(memberToken.span.start, memberToken.span.length, memberField.ordinal)
++                                                                -> if { memberField.fieldType => matchedFieldType! }
++                                                        }
++                                                        nextFieldByField![memberFieldIndex!] => memberFieldIndex!
+                                                     }
+-                                                    nextFieldByField![memberFieldIndex!] => memberFieldIndex!
+-                                                }
+                                                 matchedFieldType! >= 0 -> if {
+                                                     # A field read through a readonly reference is still a value
+                                                     # expression. Reference-place lowering decides separately

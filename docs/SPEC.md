@@ -1315,6 +1315,11 @@ the arm result type. The payload binding is only the arm input; it is not an
 implicit replacement for transformations such as `Err(error) => -error`, and
 an unrelated nested enum producer cannot replace an enclosing scalar result.
 Struct literal ABI selection uses the literal's canonical nominal owner id.
+The builtin `Range` has source-independent field metadata from the shared
+`RangeDefinition` schema: `start: Int`, then `endInclusive: Int`. Its constructor
+orders named initializers by that schema, and member access validates the exact
+owner, ordinal and canonical field type without requiring a source declaration.
+A module-local `Range` declaration retains its own nominal identity and fields.
 Legacy nominal coordinates are consulted only when that id is absent.
 S033 rejects a nominal struct literal whose id has no fields while a
 coordinate-equivalent canonical identity owns the declaration field table.

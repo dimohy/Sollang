@@ -4037,6 +4037,26 @@ sealLateNominalMemberTypes results: mut [TypedIrNode; ~], prepared: ref semantic
                     }
                 0 => fieldIndex!
                 false => resolved!
+                (frozenRecursiveSemanticTypes[ownerType!] -> typeIds.isBuiltinStruct) and memberNameToken! >= 0
+                    -> if {
+                        prepared.package.tokens[memberRange.tokenStart + memberNameToken!] => name
+                        prepared.package.sources[member!.sourceModule] -> slice(name.span.start, name.span.length) -> typeIds.builtinStructFieldOrdinal => ordinal
+                        frozenRecursiveSemanticTypes -> typeIds.builtinStructFieldTypeId(ordinal) => fieldType
+                        ordinal >= 0 and fieldType >= 0 -> if {
+                            ordinal => member!.symbol
+                            -1 => member!.targetModule
+                            fieldType => member!.typeId
+                            frozenRecursiveSemanticTypes[fieldType] => valueType
+                            valueType.kind => member!.typeKind
+                            valueType.origin => member!.typeOrigin
+                            valueType.module => member!.typeModule
+                            valueType.symbol => member!.typeSymbol
+                            recursiveTypeFlags[fieldType] => member!.typeFlags
+                            member! => results[memberIndex!]
+                            changedTypeIndices -> push(memberIndex!)
+                            true => resolved!
+                        }
+                    }
                 fieldIndex! < (recursiveTypes.fields -> len) and not resolved!
                     -> while {
                         recursiveTypes.fields[fieldIndex!] => field

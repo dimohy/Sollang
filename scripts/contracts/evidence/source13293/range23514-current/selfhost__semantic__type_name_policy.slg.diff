@@ -1,0 +1,49 @@
+diff --git a/selfhost/semantic/type_name_policy.slg b/selfhost/semantic/type_name_policy.slg
+index dd7b3ce37..d08c8644b 100644
+--- a/selfhost/semantic/type_name_policy.slg
++++ b/selfhost/semantic/type_name_policy.slg
+@@ -14,6 +14,44 @@ public boxName name: Text, structure: Bool, enumeration: Bool, declarationName:
+     canRegisterBoxName(primitive, structure, enumeration, excludedStructure, excludedNominal)
+ }
+ 
++# The builtin struct has no user-source declaration tokens. Its labels and
++# field types come from the same compiled schema as BoundStructDefinition.
++public rangeStructName: -> Text { rangeSchemaPart(-1, false) }
++public rangeFieldName ordinal: Int -> Text { rangeSchemaPart(ordinal, false) }
++public rangeFieldType ordinal: Int -> Text { rangeSchemaPart(ordinal, true) }
++public rangeFieldOrdinal name: Text -> Int {
++    0 => ordinal!
++    rangeFieldName(ordinal!) != "" -> while {
++        rangeFieldName(ordinal!) == name -> if { ordinal! -> return }
++        ordinal! + 1 => ordinal!
++    }
++    -1
++}
++
++rangeSchemaPart ordinal: Int, fieldType: Bool -> Text {
++    rangeDefinition() => schema
++    UIntSize(0) => start!
++    -1 => row!
++    start! < (schema -> len) -> while {
++        start! => end!
++        end! < (schema -> len) and (schema -> byte(end!)) != '|'
++            -> while { end! + 1 => end! }
++        row! == ordinal -> if {
++            start! => colon!
++            colon! < end! and (schema -> byte(colon!)) != ':'
++                -> while { colon! + 1 => colon! }
++            fieldType -> if {
++                colon! < end! -> if { schema -> slice(colon! + 1, end! - colon! - 1) -> return }
++                "" -> return
++            }
++            schema -> slice(start!, colon! - start!) -> return
++        }
++        row! + 1 => row!
++        end! + 1 => start!
++    }
++    ""
++}
++
+ containsName names: Text, name: Text -> Bool {
+     UIntSize(0) => start!
+     UIntSize(0) => cursor!

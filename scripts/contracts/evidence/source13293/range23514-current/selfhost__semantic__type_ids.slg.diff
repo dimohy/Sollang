@@ -1,0 +1,47 @@
+diff --git a/selfhost/semantic/type_ids.slg b/selfhost/semantic/type_ids.slg
+index 6e37554df..874e7d738 100644
+--- a/selfhost/semantic/type_ids.slg
++++ b/selfhost/semantic/type_ids.slg
+@@ -7,9 +7,42 @@ import sollang.compiler.semantic.module_resolve as moduleResolve
+ import sollang.compiler.semantic.modules
+ import sollang.compiler.semantic.qualified
+ import sollang.compiler.semantic.symbols
++import sollang.compiler.semantic.type_name_policy as builtinNamesPolicy
+ import sollang.compiler.syntax as syntax
+ import syntax.generated.slg as grammar
+ 
++public isBuiltinStruct type: SemanticType -> Bool {
++    type.kind == 1 and type.origin == 1 and type.symbol == 25 and type.status == 0 and not type.containsParameter
++}
++
++public builtinStructName: -> Text { builtinNamesPolicy.rangeStructName() }
++public builtinStructFieldName ordinal: Int -> Text { builtinNamesPolicy.rangeFieldName(ordinal) }
++public builtinStructFieldOrdinal name: Text -> Int { builtinNamesPolicy.rangeFieldOrdinal(name) }
++public builtinStructFieldTypeId types: ref [SemanticType; ~], ordinal: Int -> Int {
++    builtinNamesPolicy.rangeFieldType(ordinal) -> builtinSymbolByName => symbol
++    symbol < 0 -> if { -1 -> return }
++    types -> builtinTypeId(symbol)
++}
++
++# Only the backend field view needs source-free definitions. Semantic source
++# fields keep their existing source-coordinate contract.
++public appendBuiltinStructFields types: ref [SemanticType; ~], fields: mut [NominalField; ~] -> Unit {
++    types -> builtinTypeId(25) => owner
++    owner < 0 -> if { return }
++    0 => ordinal!
++    builtinStructFieldName(ordinal!) != "" -> while {
++        false => present!
++        fields -> each field { field.ownerType == owner and field.ordinal == ordinal!
++                -> if { true => present! } }
++        not present! -> if {
++            types -> builtinStructFieldTypeId(ordinal!) => fieldType
++            fields -> push(NominalField { ownerType: owner, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: ordinal!, fieldType: fieldType, status: fieldType < 0
++                    -> if { 2 } else { 0 } })
++        }
++        ordinal! + 1 => ordinal!
++    }
++}
++
+ # A nested declaration inherits outer type parameters; its own parameter names
+ # shadow them. Source coordinates select symbols, never type identities.
+ lexicalTypeParameter package: ref analysis.PackageAnalysis, sourceModule: Int, owner: Int, name: syntax.SyntaxToken -> Int {
