@@ -2188,7 +2188,8 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
     resolveDeclaredNumericReturnLiterals(prepared, types!, references!, expressions!, expressionIndexByAst!) => initialReturnLiteralsChanged
     resolveCompositeLiteralTypes(prepared, types!, expressions!, expressionIndexByAst!)
     resolveStructuralProductTypes(prepared, types!, fields!, expressions!, expressionIndexByAst!, productSources!, productAsts!) => initialProductTypesChanged
-    resolveFlowCallTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, seeds.ownerBySource) => flowTargetTokenByAst
+    prepared.package -> indexContextualRecords => numericContextIndex
+    resolveFlowCallTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, seeds.ownerBySource, numericContextIndex) => flowTargetTokenByAst
     resolveQualifiedValueWrapperTypes(prepared, types!, expressions!, expressionIndexByAst!, externalResults) => initialWrapperChanged
     resolveResultPropagationPayloadTypes(prepared, types!, expressions!, expressionIndexByAst!) => initialPropagationChanged
     resolveFileMemberTypes(prepared, types!, expressions!, expressionIndexByAst!, flowTargetTokenByAst)
@@ -2216,7 +2217,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
         }
     }
 
-    resolveFileScalarArgumentTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, flowTargetTokenByAst)
+    resolveFileScalarArgumentTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, flowTargetTokenByAst, numericContextIndex)
 
     # Generic specialization and literal inference can append semantic types
     # after the initial imported-SourceText normalization. Canonicalize the
@@ -2943,8 +2944,8 @@ replaceCallArgument arguments: mut [ResolvedCallArgument; ~], index: Int, argume
     argument => arguments[index]
 }
 
-contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
-    contextualizeNumericCallArgumentArena(prepared, resolved.types, resolved.expressions, expressionByAst, sourceModule, argumentAst, expectedTypeId)
+contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+    contextualizeNumericCallArgumentArena(prepared, resolved.types, resolved.expressions, expressionByAst, index.firstChild, index.nextChild, sourceModule, argumentAst, expectedTypeId)
 }
 
 contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
@@ -2982,7 +2983,8 @@ contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, r
     resolveContextualRecordFieldValue(prepared.package, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, globalAst, contextual!, expectedByAst)
 }
 
-contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+# Reuse source-ordered child links, matching C# traversal of typed subexpressions.
+contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
     expectedTypeId < 0 or expectedTypeId >= (types -> len)
         -> if { false -> return }
     types[expectedTypeId] => expected
@@ -3001,49 +3003,45 @@ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnap
         not floating or expected.symbol >= 19 -> if { true => contextual! }
     }
     argument.kind == 22 -> if {
-        0 => childAst!
-        childAst! < range.astCount -> while {
-            prepared.package.nodes[range.astStart + childAst!] => child
-            child.parent == argumentAst and child.kind == 14
+        firstChild[globalAst] => childGlobal!
+        childGlobal! >= 0 -> while {
+            prepared.package.nodes[childGlobal!].kind == 14
                 -> if {
-                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, childAst!, expectedTypeId) => childContextual
+                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, firstChild, nextChild, sourceModule, childGlobal! - range.astStart, expectedTypeId) => childContextual
                     childContextual -> if { true => contextual! }
                 }
-            childAst! + 1 => childAst!
+            nextChild[childGlobal!] => childGlobal!
         }
     }
     argument.kind == 10 -> if {
         false => foundBranch!
         true => allBranchesContextual!
-        0 => controlAst!
-        controlAst! < range.astCount -> while {
-            prepared.package.nodes[range.astStart + controlAst!] => control
-            control.parent == argumentAst and control.kind == 42
+        firstChild[globalAst] => controlGlobal!
+        controlGlobal! >= 0 -> while {
+            prepared.package.nodes[controlGlobal!].kind == 42
                 -> if {
-                    0 => branchAst!
-                    branchAst! < range.astCount -> while {
-                        prepared.package.nodes[range.astStart + branchAst!] => branch
-                        branch.parent == controlAst! and branch.kind == 43
-                            -> if {
-                                true => foundBranch!
-                                -1 => valueAst!
-                                0 => valueSearch!
-                                valueSearch! < range.astCount -> while {
-                                    prepared.package.nodes[range.astStart + valueSearch!] => value
-                                    value.parent == branchAst!
-                                        and value.start + value.length == branch.start + branch.length
-                                        -> if { valueSearch! => valueAst! }
-                                    valueSearch! + 1 => valueSearch!
-                                }
-                                valueAst! < 0 -> if { false => allBranchesContextual! } else {
-                                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, valueAst!, expectedTypeId) => branchContextual
-                                    not branchContextual -> if { false => allBranchesContextual! }
-                                }
+                    firstChild[controlGlobal!] => branchGlobal!
+                    branchGlobal! >= 0 -> while {
+                        prepared.package.nodes[branchGlobal!] => branch
+                        branch.kind == 43 -> if {
+                            true => foundBranch!
+                            -1 => valueAst!
+                            firstChild[branchGlobal!] => valueGlobal!
+                            valueGlobal! >= 0 -> while {
+                                # The terminal syntax child owns the value. Branch spans
+                                # can include trailing whitespace after that child.
+                                valueGlobal! - range.astStart => valueAst!
+                                nextChild[valueGlobal!] => valueGlobal!
                             }
-                        branchAst! + 1 => branchAst!
+                            valueAst! < 0 -> if { false => allBranchesContextual! } else {
+                                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, firstChild, nextChild, sourceModule, valueAst!, expectedTypeId) => branchContextual
+                                not branchContextual -> if { false => allBranchesContextual! }
+                            }
+                        }
+                        nextChild[branchGlobal!] => branchGlobal!
                     }
                 }
-            controlAst! + 1 => controlAst!
+            nextChild[controlGlobal!] => controlGlobal!
         }
         foundBranch! and allBranchesContextual! -> if { true => contextual! }
     }
@@ -3052,17 +3050,15 @@ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnap
         -> if {
             -1 => leftAst!
             -1 => rightAst!
-            0 => childAst!
-            childAst! < range.astCount -> while {
-                prepared.package.nodes[range.astStart + childAst!].parent == argumentAst
-                    -> if {
-                        leftAst! < 0 -> if { childAst! => leftAst! } else { childAst! => rightAst! }
-                    }
-                childAst! + 1 => childAst!
+            firstChild[globalAst] => childGlobal!
+            childGlobal! >= 0 -> while {
+                childGlobal! - range.astStart => childAst
+                leftAst! < 0 -> if { childAst => leftAst! } else { childAst => rightAst! }
+                nextChild[childGlobal!] => childGlobal!
             }
             leftAst! >= 0 and rightAst! >= 0 -> if {
-                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, leftAst!, expectedTypeId) => leftContextual
-                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, rightAst!, expectedTypeId) => rightContextual
+                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, firstChild, nextChild, sourceModule, leftAst!, expectedTypeId) => leftContextual
+                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, firstChild, nextChild, sourceModule, rightAst!, expectedTypeId) => rightContextual
                 expressionByAst[range.astStart + leftAst!] => leftIndex
                 expressionByAst[range.astStart + rightAst!] => rightIndex
                 leftIndex >= 0 and rightIndex >= 0 -> if {
@@ -3302,7 +3298,7 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                                 -> if {
                                     expectedType! >= 0 and not resolved.types[expectedType!].containsParameter
                                         -> if { true => contextualInput! }
-                                    contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
+                                    contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, contextualIndex, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
                                     contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextualArray
                                 }
                         }
@@ -3395,7 +3391,7 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                                         finalSpecialization.root => fact!.expectedTypeId
                                         fact!.actualTypeId >= 0 -> if { 0 => fact!.status }
                                         callNode.kind != 10 -> if {
-                                            contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
+                                            contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, contextualIndex, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
                                             contextual -> if { fact!.expectedTypeId => fact!.actualTypeId }
                                             contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextualArray
                                             contextualArray -> if {

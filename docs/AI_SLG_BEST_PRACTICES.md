@@ -100,6 +100,8 @@ Propagate that context through terminal arm values, keep independently typed
 values intact, and preserve the committed result type through generic cloning,
 semantic cache reuse, and emission. Evaluate each operand once in source order;
 do not recover a missing type by emitting a conditional again.
+Select a branch's terminal value from its syntax children; trailing whitespace
+or comments must not erase numeric call-argument context.
 Boolean-condition and subject-style `when` share the same all-arms-return
 termination rule. A nested selection that returns on every path produces no
 continuing value; enclosing control emission must preserve that termination

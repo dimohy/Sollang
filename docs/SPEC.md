@@ -957,7 +957,9 @@ source form without changing semantics:
   right conversion. A bare numeric literal is contextual and does not make the
   opposite explicit conversion redundant. A declared numeric call parameter
   supplies context to a bare numeric literal, including literal-valued `if`
-  branches. The same range check applies to ordinary and instance calls:
+  branches. Branch context follows the final value recursively through nested
+  branches; earlier statements and trailing whitespace or comments do not
+  change that context. The same range check applies to ordinary and instance calls:
   integer and character literals must fit the declared parameter type, and an
   out-of-range literal reports its value and destination bounds. Negative zero
   fits an unsigned destination because its value is zero. An explicit literal

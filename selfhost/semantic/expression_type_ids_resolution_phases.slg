@@ -736,7 +736,7 @@ resolveContextualNumericLiteralTypesWithExpectedContext prepared: ref semanticCo
                                                             expressionIndexByAst[leafGlobal] => leafIndex
                                                             -1 => previousLeafType!
                                                             leafIndex >= 0 -> if { expressions[leafIndex].typeId => previousLeafType! }
-                                                            contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, range.sourceModule, literalGlobal - range.astStart, anchorTypeId) => contextual
+                                                            contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, firstChildByAst!, nextChildByAst!, range.sourceModule, literalGlobal - range.astStart, anchorTypeId) => contextual
                                                             contextual and (previousType! != anchorTypeId or previousLeafType! != anchorTypeId)
                                                                 -> if { true => changed! }
                                                         }
@@ -3338,7 +3338,7 @@ resolveNominalEnumOwnerType types: mut [typeIds.SemanticType; ~], targetSource: 
     enumTypeId!
 }
 
-resolveFlowCallTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], seededOwners: ref [Bool; ~] -> [Int; ~] {
+resolveFlowCallTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], seededOwners: ref [Bool; ~], index: ref ContextualRecordIndex -> [Int; ~] {
     [Int; ~] => firstArgumentByAst!
     prepared.package.nodes -> each nodeSlot { firstArgumentByAst! -> push(-1) }
     0 => argumentBindingIndex!
@@ -3503,7 +3503,7 @@ resolveFlowCallTypes prepared: ref semanticContext.SemanticSnapshot, types: mut 
                                             priorSpecialization.status == 0 and priorSpecialization.root >= 0
                                                 and not types[priorSpecialization.root].containsParameter
                                                 -> if {
-                                                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, binding.sourceModule, binding.argumentAst, priorSpecialization.root) => contextual
+                                                    contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, index.firstChild, index.nextChild, binding.sourceModule, binding.argumentAst, priorSpecialization.root) => contextual
                                                 }
                                         }
                                     expressionIndexByAst[callRange.astStart + binding.argumentAst] => actualExpression
@@ -3658,7 +3658,7 @@ resolveFlowCallTypes prepared: ref semanticContext.SemanticSnapshot, types: mut 
 # File scalar specializations consume their declared scalar type, rather than
 # the default type of a numeric literal. Wait for receiver/pattern resolution,
 # then contextualize the exact argument ASTs shared with ordinary call typing.
-resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], flowTargetTokenByAst: ref [Int; ~] -> Unit {
+resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], flowTargetTokenByAst: ref [Int; ~], index: ref ContextualRecordIndex -> Unit {
     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     -1 => fileSource!
     -1 => writerSymbol!
@@ -3723,11 +3723,11 @@ resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, t
                                                 }
                                                 scalarType! >= 0 and prepared.package.nodes[arguments[1]].kind == 14
                                                     -> if {
-                                                        contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, range.sourceModule, arguments[1] - range.astStart, scalarType!) => scalarContextual
+                                                        contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, index.firstChild, index.nextChild, range.sourceModule, arguments[1] - range.astStart, scalarType!) => scalarContextual
                                                     }
                                                 prepared.package.nodes[arguments[2]].kind == 14
                                                     -> if {
-                                                        contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, range.sourceModule, arguments[2] - range.astStart, 11) => offsetContextual
+                                                        contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionIndexByAst, index.firstChild, index.nextChild, range.sourceModule, arguments[2] - range.astStart, 11) => offsetContextual
                                                     }
                                             }
                                         }
