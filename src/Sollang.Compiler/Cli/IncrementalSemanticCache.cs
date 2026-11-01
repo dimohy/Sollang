@@ -355,7 +355,7 @@ internal sealed class IncrementalSemanticCache
     private static SemanticSpecializationReuse[] BuildSpecializations(BoundProgram program)
     {
         var seenFunctions = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
-        var distinctFunctions = program.Functions.Values.Where(seenFunctions.Add).ToArray();
+        var distinctFunctions = EnumerateFunctions(program.Functions.Values, seenFunctions).ToArray();
         var templates = distinctFunctions
             .Where(static function => function.GenericParameterName is not null
                 && function.SpecializedType is null
@@ -370,6 +370,7 @@ internal sealed class IncrementalSemanticCache
                 var template = templates
                     .Where(candidate => StringComparer.Ordinal.Equals(candidate.ModuleName, target.ModuleName)
                         && candidate.Kind == target.Kind
+                        && ReferenceEquals(candidate.LexicalParent, target.LexicalParent)
                         && target.Name.StartsWith(candidate.Name + "$", StringComparison.Ordinal))
                     .OrderByDescending(static candidate => candidate.Name.Length)
                     .FirstOrDefault();

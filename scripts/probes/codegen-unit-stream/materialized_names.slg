@@ -1,0 +1,38 @@
+namespace sollang.compiler.probes.materialized_names
+
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.scoped_declarations as scopedDeclarations
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
+    [file.SourceText; ~] => owners!
+    paths -> sourceRoot.referenceOrder -> each index {
+        paths[index] -> pathText -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    arguments[2] -> file.mapText => fixture
+    owners! -> push(fixture)
+    [Text; ~] => sources!
+    owners! -> each owner {
+        owner -> slice(0, owner -> len) => source
+        sources! -> push(source)
+    }
+    sources! -> semanticContext.prepare -> expressionIds.resolveCallContext => callContext
+    callContext.prepared => prepared
+    callContext.types => resolved!
+    prepared -> typedIr.lowerResolvedContext(resolved!) => ir!
+    ir! -> typedIr.planResolvedGenericCalls(prepared, resolved!) => before
+    ir! -> typedIr.materializeGenericClosure(prepared, resolved!) => instances
+    ir! -> typedIr.bindGenericBodies(instances, prepared.interpolations -> len) => bindings
+    prepared -> scopedDeclarations.prepareGenericSpecializations(resolved!.types, resolved!.references, resolved!.fields, ir!, before, bindings) => beforeNames
+    ir! -> typedIr.planResolvedGenericCalls(prepared, resolved!) => after
+    prepared -> scopedDeclarations.prepareGenericSpecializations(resolved!.types, resolved!.references, resolved!.fields, ir!, after, bindings) => afterNames
+    "names:$(beforeNames.status):$(afterNames.status)" -> println
+}

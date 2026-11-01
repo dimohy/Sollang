@@ -38,7 +38,14 @@ functionHasTemplate context: ref TypeFieldContext, prepared: ref semanticContext
     context -> functionAnnotationType(prepared, annotation) => resolved
     resolved < 0 -> if { false -> return }
     prepared.semantic.types[resolved] => type
-    type.containsParameter and type.kind != 1
+    not type.containsParameter -> if { false -> return }
+    type.kind != 1 -> if { true -> return }
+    type.origin == 3 and type.module == context.sourceModule and type.symbol >= 0
+        -> if {
+            prepared.package.ranges[context.sourceModule] => range
+            prepared.package.symbols[range.symbolStart + type.symbol].parent != context.ownerSymbol -> return
+        }
+    false
 }
 
 functionTemplateField context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, annotation: Int -> Result<Field, TypeUniverseCaptureError> {

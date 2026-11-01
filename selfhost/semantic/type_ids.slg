@@ -10,6 +10,33 @@ import sollang.compiler.semantic.symbols
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
+# A nested declaration inherits outer type parameters; its own parameter names
+# shadow them. Source coordinates select symbols, never type identities.
+lexicalTypeParameter package: ref analysis.PackageAnalysis, sourceModule: Int, owner: Int, name: syntax.SyntaxToken -> Int {
+    package.ranges[sourceModule] => range
+    package.sources[sourceModule] -> slice(0, package.sources[sourceModule] -> len) => source
+    owner => scope!
+    scope! >= 0 -> while {
+        0..<range.symbolCount -> each index {
+            package.symbols[range.symbolStart + index] => candidate
+            candidate.kind == 32 and candidate.parent == scope!
+                -> if {
+                    package.tokens[range.tokenStart + candidate.nameToken] => token
+                    name.span.length == token.span.length => equal!
+                    UIntSize(0) => offset!
+                    equal! and offset! < name.span.length -> while {
+                        (source -> byte(name.span.start + offset!)) != (source -> byte(token.span.start + offset!))
+                            -> if { false => equal! }
+                        offset! + 1 => offset!
+                    }
+                    equal! -> if { index -> return }
+                }
+        }
+        package.symbols[range.symbolStart + scope!].parent => scope!
+    }
+    -1
+}
+
 # Only the literal's own storage suffix contributes to its collection shape.
 # Nested arrays, records and calls retain independent storage contracts.
 public struct ArrayStorageSyntax {
@@ -1883,7 +1910,7 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
                                                 }
                                                 ownerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
                                             }
-                                            -1 => localSymbol!
+                                            package -> lexicalTypeParameter(sourceIndex!, ownerFunction!, name) => localSymbol!
                                             0 => symbolIndex!
                                             symbolIndex! < sourceRange.symbolCount and localSymbol! < 0
                                                 -> while {

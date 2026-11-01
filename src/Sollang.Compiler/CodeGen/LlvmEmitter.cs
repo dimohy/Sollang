@@ -287,7 +287,13 @@ internal sealed partial class LlvmEmitter
     {
         foreach (var function in functions)
         {
-            var scope = CreateFunctionScope(parentScope, function.LocalFunctions);
+            if (_functionScopes.ContainsKey(function))
+                continue;
+            if (function.LexicalParent is { } parent && !_functionScopes.ContainsKey(parent))
+                RecordFunctionScopes([parent], parentScope);
+            var scope = CreateFunctionScope(
+                function.LexicalParent is { } owner ? _functionScopes[owner] : parentScope,
+                function.LocalFunctions);
             _functionScopes[function] = scope;
             RecordFunctionScopes(function.LocalFunctions.Values, scope);
         }

@@ -175,8 +175,33 @@ public struct NominalFieldMismatchDiagnostic {
     public actualTypeId: Int
 }
 
+traitImplementationHeader package: ref analysis.PackageAnalysis, sourceModule: Int, implementation: Int -> Bool {
+    package.ranges[sourceModule] => range
+    package.symbols[range.symbolStart + implementation] => owner
+    owner.astNode < 0 -> if { false -> return }
+    package.nodes[range.astStart + owner.astNode] => node
+    0 => depth!
+    node.firstToken + 1 => token!
+    token! < node.firstToken + node.tokenCount -> while {
+        package.tokens[range.tokenStart + token!] => part
+        depth! == 0 and part.kind == grammar.tokenIdLeftBrace()
+            -> if { false -> return }
+        part.kind == grammar.tokenIdLess() or part.kind == grammar.tokenIdLeftBracket()
+            -> if { depth! + 1 => depth! }
+        part.kind == grammar.tokenIdGreater() or part.kind == grammar.tokenIdRightBracket()
+            -> if { depth! - 1 => depth! }
+        depth! == 0 and part.span.length == 3
+            and (package.sources[sourceModule] -> byte(part.span.start)) == 'f'
+            and (package.sources[sourceModule] -> byte(part.span.start + 1)) == 'o'
+            and (package.sources[sourceModule] -> byte(part.span.start + 2)) == 'r'
+            -> if { true -> return }
+        token! + 1 => token!
+    }
+    false
+}
+
 public struct SignatureTypeDiagnostic {
-    # 15 rejects generic move inputs; 16 rejects generic local declarations.
+    # 15 rejects generic move inputs; 16 rejects generic trait impl declarations.
     public code: Int
     public sourceModule: Int
     public functionSymbol: Int
@@ -1231,8 +1256,8 @@ firstGenericInputUsageDiagnostic package: ref analysis.PackageAnalysis -> Signat
                 package.nodes[range.astStart + function.astNode] => declaration
                 genericTokenByAst![range.astStart + function.astNode] => genericToken
                 genericToken >= 0 -> if {
-                    function.kind == 7 and function.parent >= 0 and function.parent < range.symbolCount
-                        and package.symbols[range.symbolStart + function.parent].kind == 7
+                    function.kind == 31 and function.parent >= 0 and function.parent < range.symbolCount
+                        and (package -> traitImplementationHeader(sourceModule!, function.parent))
                         -> if {
                             SignatureTypeDiagnostic { code: 16, sourceModule: sourceModule!, functionSymbol: functionIndex!, typeAst: function.typeNode, nameToken: function.nameToken, genericToken: genericToken } -> return
                         }

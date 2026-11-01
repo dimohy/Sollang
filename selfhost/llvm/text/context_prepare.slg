@@ -229,7 +229,6 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     prepared -> lowerPreparedIr(recursiveTypes!, supportsComputePool) => ir!
     ir! -> typedIr.materializeContextualArrayOwners(prepared, recursiveTypes!)
     ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics
-    ir! -> typedIr.planResolvedGenericCalls(prepared, recursiveTypes!) => initialGenericCallPlans
     ir! -> typedIr.materializeGenericClosure(prepared, recursiveTypes!) => genericInstances!
     resolvedSignatureDiagnostic!.code == 0 -> if {
         prepared -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(recursiveTypes!, ir!, genericInstances!) => resolvedSignatureDiagnostic!
@@ -275,6 +274,9 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     taskProductsChanged -> if {
         ir! -> typedIr.sealCanonicalTaskAwaitTypes(prepared, recursiveTypes!)
     }
+    # Closure construction adds calls inside concrete generic owners. Their
+    # complete plans must exist before relocation and specialization naming.
+    ir! -> typedIr.planResolvedGenericCalls(prepared, recursiveTypes!) => initialGenericCallPlans
     ir! -> typedIr.sealDirectAwaitFunctionOrder => awaitRelocation
     initialGenericCallPlans -> typedIr.relocateAwaitGenericPlans(awaitRelocation) => awaitGenericCallPlans
     awaitRelocation -> typedIr.relocateAwaitGenericInstances(ir!, genericInstances!)

@@ -871,6 +871,8 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private FunctionDeclaration ParseFunctionDeclaration(bool isLocal, string? methodOwner = null, string? traitName = null, IReadOnlyDictionary<string, string>? implAssociatedTypes = null, string? nativeLibraryOverride = null, string? nativeAlias = null, bool signatureOnly = false)");
         builder.AppendLine("    {");
+        builder.AppendLine("        var outerGenericParameterNames = _activeGenericParameterNames.ToArray();");
+        builder.AppendLine("        var declaredGenericParameterNames = new HashSet<string>(StringComparer.Ordinal);");
         builder.AppendLine("        // FunctionDeclaration = Path Identifier? Colon FunctionSignature (BlockFunctionBody | FunctionBody)");
         builder.AppendLine("        var isPublic = false;");
         builder.AppendLine("        if (CheckIdentifier(\"public\"))");
@@ -898,10 +900,11 @@ internal static class ParserEmitter
         builder.AppendLine("            while (true)");
         builder.AppendLine("            {");
         builder.AppendLine("                var parameter = ExpectIdentifier();");
-        builder.AppendLine("                if (!_activeGenericParameterNames.Add(parameter.Text))");
+        builder.AppendLine("                if (!declaredGenericParameterNames.Add(parameter.Text))");
         builder.AppendLine("                {");
         builder.AppendLine("                    throw Error(parameter, $\"generic parameter '{parameter.Text}' already exists\");");
         builder.AppendLine("                }");
+        builder.AppendLine("                _activeGenericParameterNames.Add(parameter.Text);");
         builder.AppendLine("                genericParameterTokens.Add(parameter);");
         builder.AppendLine("                genericConstraints[parameter.Text] = [];");
         builder.AppendLine("                if (!Match(TokenKind.Comma, out _)) break;");
@@ -1162,6 +1165,7 @@ internal static class ParserEmitter
         builder.AppendLine("                genericConstraints[parameter.Text].Any(constraint => constraint.TraitName == \"Int\")))");
         builder.AppendLine("            .ToArray();");
         builder.AppendLine("        _activeGenericParameterNames.Clear();");
+        builder.AppendLine("        _activeGenericParameterNames.UnionWith(outerGenericParameterNames);");
         builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, tertiaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic, isAsync, effects, blockResultType, additionalParameters, additionalBlockParameters, streamElementType, nativeLibrary, nativeSymbol, GenericParameters: genericParameters);");
         builder.AppendLine("    }");
         builder.AppendLine();

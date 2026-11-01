@@ -501,6 +501,9 @@ A local function name is recognized only in its lexical function scope. A
 visible binding with the same name is read as the binding.
 Qualified local names such as `internal.step` retain their complete path in
 both direct and fluent calls; the path does not extend their lexical visibility.
+Local functions may declare type or integer value parameters. Keep generic
+signatures explicit and preserve the lexical parent's type parameters and
+readonly captures; an inner type parameter may shadow an outer name.
 Inside `$(expression)`, `receiver -> method` uses the same receiver-first
 method lookup as an ordinary flow, including public methods on imported types.
 The semantic analyzer resolves the target before LLVM emission; an unknown

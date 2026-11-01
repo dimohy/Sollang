@@ -665,6 +665,7 @@ internal sealed partial class SemanticCompiler
         var restoredBindings = new Dictionary<BoundFunction, SemanticFunctionReuse>(
             ReferenceEqualityComparer.Instance);
         var reconstructedSyntax = new Dictionary<string, object>(StringComparer.Ordinal);
+        var availableFunctions = new Dictionary<string, BoundFunction>(declaredFunctionsByIdentity, StringComparer.Ordinal);
         var indexedSpecializations = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
         try
         {
@@ -697,7 +698,7 @@ internal sealed partial class SemanticCompiler
                             call.Value,
                             syntaxNode,
                             reusePlan,
-                            declaredFunctionsByIdentity,
+                            availableFunctions,
                             out var target))
                     {
                         RollBackRestoredCalls(originalFunctionNames, originalCalls);
@@ -721,6 +722,10 @@ internal sealed partial class SemanticCompiler
                             // A specialization owns cloned syntax. Restore the
                             // calls of that concrete owner, not its template.
                             var identities = SemanticStableIdentity.IndexFunctions(_types, [target], []);
+                            foreach (var (function, identity) in identities)
+                                if (!availableFunctions.TryAdd(identity, function)
+                                    && !ReferenceEquals(availableFunctions[identity], function))
+                                    throw new InvalidDataException("cached function identity has multiple lexical owners");
                             foreach (var syntax in SemanticStableIdentity.IndexSyntaxCallSites(
                                          [target], [], identities))
                             {
@@ -922,6 +927,9 @@ internal sealed partial class SemanticCompiler
         SemanticReusePlan reusePlan,
         ICollection<(BoundFunction Function, SemanticFunctionReuse Reuse)> tree)
     {
+        if (function.GenericParameterName is not null
+            && function.SpecializedType is null && function.SpecializedValue is null)
+            return true;
         var identity = SemanticStableIdentity.Function(_types, function, parentIdentity);
         if (!reusePlan.Functions.TryGetValue(identity, out var reusable)
             || !StringComparer.Ordinal.Equals(reusable.ModuleName, function.ModuleName))
@@ -1050,11 +1058,12 @@ internal sealed partial class SemanticCompiler
             && function.InputType is not null
             && !genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
             && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames);
-        var inputTypeTemplate = (isParallelRole || function.HasValueGenericFixedArrayInput || hasCompositeGenericInput)
-            && function.InputType is not null
-            && (function.HasValueGenericFixedArrayInput
-                || (!genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
-                    && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames)))
+        var inputTypeTemplate = function.InputType is not null
+            && (((isParallelRole || function.HasValueGenericFixedArrayInput || hasCompositeGenericInput)
+                && (function.HasValueGenericFixedArrayInput
+                    || (!genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
+                        && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames))))
+                || ReferencesLexicalTypeParameter(function.InputType, genericParameterNames))
                 ? function.InputType
                 : null;
         var inputType = function.InputType is null || inputTypeTemplate is not null
@@ -1073,9 +1082,10 @@ internal sealed partial class SemanticCompiler
             inputType = BoundType.IntDictionaryView;
         }
 
-        var returnTypeTemplate = function.GenericParameterName is not null
+        var returnTypeTemplate = (function.GenericParameterName is not null
             && !genericParameterNames.Contains(function.ReturnType, StringComparer.Ordinal)
-            && TypeSyntaxReferencesAnyParameter(function.ReturnType, genericParameterNames)
+            && TypeSyntaxReferencesAnyParameter(function.ReturnType, genericParameterNames))
+            || ReferencesLexicalTypeParameter(function.ReturnType, genericParameterNames)
                 ? function.ReturnType
                 : null;
         // Runtime intrinsic admission checks the abstract signature before any
@@ -1102,14 +1112,16 @@ internal sealed partial class SemanticCompiler
                 function.Line,
                 function.Column);
         var blockInputTypeTemplate = function.BlockInputType is not null
-            && TypeSyntaxReferencesAnyParameter(function.BlockInputType, genericParameterNames)
+            && (TypeSyntaxReferencesAnyParameter(function.BlockInputType, genericParameterNames)
+                || ReferencesLexicalTypeParameter(function.BlockInputType, genericParameterNames))
                 ? function.BlockInputType
                 : null;
         var blockInputType = function.BlockInputType is null || blockInputTypeTemplate is not null
             ? (BoundType?)null
             : ParseType(function.BlockInputType, function.Line, function.Column);
         var blockResultTypeTemplate = function.BlockResultType is not null
-            && TypeSyntaxReferencesAnyParameter(function.BlockResultType, genericParameterNames)
+            && (TypeSyntaxReferencesAnyParameter(function.BlockResultType, genericParameterNames)
+                || ReferencesLexicalTypeParameter(function.BlockResultType, genericParameterNames))
                 ? function.BlockResultType
                 : null;
         var blockResultType = !FunctionTypeBindingPolicy.BindCallbackResultEagerly(function.BlockInputType is not null)
@@ -1125,7 +1137,8 @@ internal sealed partial class SemanticCompiler
                     function.Column,
                     genericParameterNames);
         var streamElementTypeTemplate = function.StreamElementType is not null
-            && TypeSyntaxReferencesAnyParameter(function.StreamElementType, genericParameterNames)
+            && (TypeSyntaxReferencesAnyParameter(function.StreamElementType, genericParameterNames)
+                || ReferencesLexicalTypeParameter(function.StreamElementType, genericParameterNames))
                 ? function.StreamElementType
                 : null;
         var streamElementType = function.StreamElementType is null
@@ -1167,9 +1180,10 @@ internal sealed partial class SemanticCompiler
         var additionalParameters = (function.AdditionalParameters ?? [])
             .Select(parameter =>
             {
-                var parameterTypeTemplate = function.GenericParameterName is not null
+                var parameterTypeTemplate = (function.GenericParameterName is not null
                     && TypeSyntaxReferencesAnyParameter(parameter.TypeName, genericParameterNames)
-                    && !genericParameterNames.Contains(parameter.TypeName, StringComparer.Ordinal)
+                    && !genericParameterNames.Contains(parameter.TypeName, StringComparer.Ordinal))
+                    || ReferencesLexicalTypeParameter(parameter.TypeName, genericParameterNames)
                         ? parameter.TypeName
                         : null;
                 var parameterType = parameterTypeTemplate is null
@@ -1290,7 +1304,7 @@ internal sealed partial class SemanticCompiler
         }
         var localFunctions = BindLocalFunctions(function);
 
-        return new BoundFunction(
+        var boundFunction = new BoundFunction(
             function.Name,
             function.InputName,
             inputType,
@@ -1337,6 +1351,8 @@ internal sealed partial class SemanticCompiler
             NativeSuccessType: nativeSuccessType,
             GenericParameters: function.GenericParameters,
             DeclarationName: function.Name);
+        BindLexicalChildren(boundFunction);
+        return boundFunction;
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -1447,9 +1463,9 @@ internal sealed partial class SemanticCompiler
     {
         if (function.GenericParameterName is not null)
         {
-            if (isLocal || function.TraitName is not null)
+            if (function.TraitName is not null)
             {
-                throw Error(function.Line, function.Column, "generic local and impl functions are not implemented yet");
+                throw Error(function.Line, function.Column, "generic trait impl functions are not implemented yet");
             }
             if (!function.IsValueGeneric
                 && function.InputType is not null
@@ -1857,23 +1873,37 @@ internal sealed partial class SemanticCompiler
 
     private IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
     {
-        var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
-        foreach (var localDeclaration in owner.LocalFunctions)
+        var previousArguments = _activeGenericTypeArguments;
+        var arguments = new Dictionary<string, BoundType>(previousArguments, StringComparer.Ordinal);
+        var names = (owner.GenericParameters ?? []).Select(parameter => parameter.Name).ToArray();
+        if (names.Length == 0)
+            names = new[] { owner.GenericParameterName, owner.SecondaryGenericParameterName,
+                owner.TertiaryGenericParameterName }.OfType<string>().ToArray();
+        for (var index = owner.IsValueGeneric ? 1 : 0; index < names.Length; index++)
+            arguments[names[index]] = (BoundType)((int)BoundType.GenericParameter + index);
+        _activeGenericTypeArguments = arguments;
+        try
         {
-            if (functions.ContainsKey(localDeclaration.Name))
+            var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+            foreach (var declaration in owner.LocalFunctions)
             {
-                throw Error(
-                    localDeclaration.Line,
-                    localDeclaration.Column,
-                    $"local function '{localDeclaration.Name}' already exists in function '{owner.Name}'");
+                if (functions.ContainsKey(declaration.Name))
+                    throw Error(declaration.Line, declaration.Column,
+                        $"local function '{declaration.Name}' already exists in function '{owner.Name}'");
+                var function = BindFunctionDeclaration(declaration, isLocal: true);
+                functions.Add(function.Name, function);
             }
-
-            var localFunction = BindFunctionDeclaration(localDeclaration, isLocal: true);
-            functions.Add(localFunction.Name, localFunction);
+            return functions;
         }
-
-        return functions;
+        finally
+        {
+            _activeGenericTypeArguments = previousArguments;
+        }
     }
+
+    private bool ReferencesLexicalTypeParameter(string syntax, IReadOnlyList<string> ownParameters) =>
+        _activeGenericTypeArguments.Keys.Any(name =>
+            !ownParameters.Contains(name, StringComparer.Ordinal) && TypeSyntaxReferencesParameter(syntax, name));
 
     // Complete already validated sibling captures from actual selected call edges.
     // A shared lexical owner and an absent caller-local name establish the same
@@ -1883,21 +1913,14 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<object, string> callSiteIdentities)
     {
         var owners = new Dictionary<BoundFunction, BoundFunction>(ReferenceEqualityComparer.Instance);
-        var ambiguousOwners = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
-        foreach (var parent in functionIdentities.Keys)
-        {
-            foreach (var child in parent.LocalFunctions.Values)
-            {
-                if (!owners.TryAdd(child, parent) && !ReferenceEquals(owners[child], parent))
-                    ambiguousOwners.Add(child);
-            }
-        }
+        foreach (var function in functionIdentities.Keys)
+            if (function.LexicalParent is { } parent)
+                owners.Add(function, parent);
         var functionsByIdentity = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
         var ambiguousIdentities = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (function, identity) in functionIdentities)
         {
             if (!function.IsLocal || !owners.ContainsKey(function)
-                || ambiguousOwners.Contains(function)
                 || !_functionCaptureCandidates.ContainsKey(function))
                 continue;
             if (!functionsByIdentity.TryAdd(identity, function)
@@ -1914,8 +1937,6 @@ internal sealed partial class SemanticCompiler
                 || ambiguousIdentities.Contains(callIdentity[..boundary])
                 || !functionsByIdentity.TryGetValue(callIdentity[..boundary], out var caller)
                 || ReferenceEquals(caller, callee)
-                || ambiguousOwners.Contains(caller)
-                || ambiguousOwners.Contains(callee)
                 || !owners.TryGetValue(caller, out var callerOwner)
                 || !owners.TryGetValue(callee, out var calleeOwner)
                 || !ReferenceEquals(callerOwner, calleeOwner)
@@ -2491,6 +2512,9 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        if (function.GenericParameterName is not null
+            && function.SpecializedType is null && function.SpecializedValue is null)
+            return;
         var previousTypeNames = _currentFunctionTypeNames;
         var previousTypeNameBindings = _currentFunctionTypeNameBindings;
         var previousTypeNameModule = _currentFunctionTypeNameModule;
@@ -2873,7 +2897,8 @@ internal sealed partial class SemanticCompiler
 
     private void ValidateGenericSpecialization(
         BoundFunction function,
-        IReadOnlyDictionary<string, BoundFunction> parentFunctions)
+        IReadOnlyDictionary<string, BoundFunction> parentFunctions,
+        IReadOnlyDictionary<string, BoundType>? capturedBindings = null)
     {
         // Specialization creates reference-bearing signatures after the initial
         // declaration-wide origin pass. Analyze only this new owner tree before
@@ -2902,7 +2927,7 @@ internal sealed partial class SemanticCompiler
         var previousGenericTypeArguments = _activeGenericTypeArguments;
         try
         {
-            var genericTypeArguments = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+            var genericTypeArguments = LexicalGenericTypeArguments(function);
             if (function.GenericParameterName is { } primaryName
                 && function.SpecializedType is { } primaryType)
             {
@@ -2922,7 +2947,7 @@ internal sealed partial class SemanticCompiler
             ValidateUserFunction(
                 function,
                 parentFunctions,
-                new Dictionary<string, BoundType>(StringComparer.Ordinal));
+                capturedBindings ?? new Dictionary<string, BoundType>(StringComparer.Ordinal));
         }
         finally
         {
@@ -6874,7 +6899,7 @@ internal sealed partial class SemanticCompiler
             && function.SpecializedType is null
             && function.SpecializedValue is null)
         {
-            function = ResolveGenericSpecialization(function, streamedInputType, functions, call.ResolutionSite);
+            function = ResolveGenericSpecialization(function, streamedInputType, functions, call.ResolutionSite, capturedBindings: bindings);
         }
         if (function.InputType != streamedInputType)
         {
@@ -7265,7 +7290,7 @@ internal sealed partial class SemanticCompiler
                 call,
                 specializedInputType: inputType,
                 explicitSecondaryType: parallelValueType,
-                explicitTertiaryType: parallelErrorType);
+                explicitTertiaryType: parallelErrorType, capturedBindings: bindings);
         }
         if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel
             && function.BlockResultType is { } parallelAdmissionResultType)
@@ -7473,13 +7498,13 @@ internal sealed partial class SemanticCompiler
                 call,
                 specializedInputType: inputType,
                 explicitSecondaryType: secondaryType,
-                explicitTertiaryType: tertiaryType);
+                explicitTertiaryType: tertiaryType, capturedBindings: bindings);
         }
         if (function.GenericParameterName is not null
             && function.SpecializedType is null
             && function.SpecializedValue is null)
         {
-            function = ResolveGenericSpecialization(function, inputType, functions, call);
+            function = ResolveGenericSpecialization(function, inputType, functions, call, capturedBindings: bindings);
         }
         if (function.InputType is null || function.BlockInputType is null)
         {
@@ -8092,7 +8117,7 @@ internal sealed partial class SemanticCompiler
             BoolExpression => BoundType.Bool,
             NameExpression name => InferNameExpression(name, functions, bindings, allowReadIntCall),
             ArrayLiteralExpression array => InferArrayLiteralExpression(array, functions, bindings, allowReadIntCall),
-            TypeApplicationExpression application => InferTypeApplicationExpression(application, functions, allowReadIntCall),
+            TypeApplicationExpression application => InferTypeApplicationExpression(application, functions, bindings, allowReadIntCall),
             ArrayRepeatExpression repeat => InferArrayRepeatExpression(repeat, functions, bindings, allowReadIntCall),
             TypedEmptyArrayExpression typedArray => InferTypedEmptyArrayExpression(typedArray),
             DictionaryLiteralExpression dictionary => InferDictionaryLiteralExpression(dictionary, functions, bindings, allowReadIntCall),
@@ -11403,7 +11428,7 @@ internal sealed partial class SemanticCompiler
 
                         return new FlowResult(BoundType.Unit, FlowEffect.None);
                     case BoundFunctionKind.RuntimeWriteScalar:
-                        function = ResolveGenericSpecialization(function, currentType, functions, target);
+                        function = ResolveGenericSpecialization(function, currentType, functions, target, capturedBindings: bindings);
                         if (!isLast)
                         {
                             throw Error(expression.Line, expression.Column, $"{path} must be the final value-flow target");
@@ -11603,7 +11628,7 @@ internal sealed partial class SemanticCompiler
                         if (function.IsValueGeneric && function.SpecializedValue is null)
                         {
                             function = ResolveValueGenericSpecialization(
-                                function, currentType, target.CompileTimeValueArgument, target);
+                                function, currentType, target.CompileTimeValueArgument, target, lexicalFunctions: functions, capturedBindings: bindings);
                         }
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         ValidateAdditionalFunctionArguments(
@@ -11655,7 +11680,7 @@ internal sealed partial class SemanticCompiler
                             && function.SpecializedValue is null)
                         {
                             function = function.IsValueGeneric
-                                ? ResolveValueGenericSpecialization(function, currentType, target.CompileTimeValueArgument, target)
+                                ? ResolveValueGenericSpecialization(function, currentType, target.CompileTimeValueArgument, target, lexicalFunctions: functions, capturedBindings: bindings)
                                 : ResolveGenericFlowSpecialization(function, currentType, target, functions, bindings, allowReadIntCall);
                         }
                         else if (target.CompileTimeValueArgument is not null)
@@ -13538,7 +13563,7 @@ internal sealed partial class SemanticCompiler
             throw Error(target.Line, target.Column,
                 $"generic function '{template.Name}' cannot infer type parameter '{missing}'");
         var specialization = ResolveGenericSpecialization(template, inferred[names[0]], functions,
-            target, specializedInputType: inputType, explicitGenericTypes: inferred);
+            target, specializedInputType: inputType, explicitGenericTypes: inferred, capturedBindings: bindings);
         RequireDiagnosticTrackTaskSpecialization(specialization, target.Line, target.Column);
         return specialization;
     }
@@ -13618,7 +13643,7 @@ internal sealed partial class SemanticCompiler
             inferredTypes[parameterNames[0]],
             functions,
             expression,
-            explicitGenericTypes: inferredTypes);
+            explicitGenericTypes: inferredTypes, capturedBindings: bindings);
         return InferUserCallExpression(
             expression,
             specialization,
@@ -13670,7 +13695,8 @@ internal sealed partial class SemanticCompiler
         BoundType? explicitSecondaryType = null,
         BoundType? explicitTertiaryType = null,
         IReadOnlyDictionary<string, BoundType>? explicitGenericTypes = null,
-        bool validateSpecialization = true)
+        bool validateSpecialization = true,
+        IReadOnlyDictionary<string, BoundType>? capturedBindings = null)
     {
         if (template.Kind == BoundFunctionKind.RuntimeDiagnosticSessionTrack
             && !_types.IsTask(actualType))
@@ -13858,7 +13884,11 @@ internal sealed partial class SemanticCompiler
             throw new InvalidOperationException("generic specialization requires bound functions");
         }
 
-        if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
+        var storageKey = SpecializationStorageKey(template, specializedName);
+        var signatureTypes = LexicalGenericTypeArguments(template);
+        foreach (var (name, type) in specializedGenericTypes)
+            signatureTypes[name] = type;
+        if (!_boundFunctions.TryGetValue(storageKey, out var specialization))
         {
             specialization = CloneGenericFunctionSyntax(template) with
             {
@@ -13870,18 +13900,18 @@ internal sealed partial class SemanticCompiler
                 InputType = template.InputTypeTemplate is null
                     ? template.InputType is null ? null : specializedInputType ?? actualType
                     : ParseSpecializedFunctionType(
-                        template.InputTypeTemplate, specializedGenericTypes, template.Line, template.Column),
+                        template.InputTypeTemplate, signatureTypes, template.Line, template.Column),
                 ReturnType = template.ReturnTypeTemplate is null
                     ? SubstituteGenericType(template.ReturnType, template, specializedGenericTypes)
                     : ParseSpecializedFunctionType(
-                        template.ReturnTypeTemplate, specializedGenericTypes, template.Line, template.Column),
+                        template.ReturnTypeTemplate, signatureTypes, template.Line, template.Column),
                 AdditionalParameters = (template.AdditionalParameters ?? [])
                     .Select(parameter => parameter with
                     {
                         Type = parameter.TypeTemplate is null
                             ? SubstituteGenericType(parameter.Type, template, specializedGenericTypes)
                             : ParseSpecializedFunctionType(
-                                parameter.TypeTemplate, specializedGenericTypes, parameter.Line, parameter.Column)
+                                parameter.TypeTemplate, signatureTypes, parameter.Line, parameter.Column)
                     })
                     .ToArray(),
                 AdditionalBlockParameters = (template.AdditionalBlockParameters ?? [])
@@ -13895,26 +13925,28 @@ internal sealed partial class SemanticCompiler
                         ? null
                         : SubstituteGenericType(template.BlockInputType.Value, template, specializedGenericTypes)
                     : ParseSpecializedFunctionType(
-                        template.BlockInputTypeTemplate, specializedGenericTypes, template.Line, template.Column),
+                        template.BlockInputTypeTemplate, signatureTypes, template.Line, template.Column),
                 BlockResultType = template.BlockResultTypeTemplate is null
                     ? template.BlockResultType
                     : ParseSpecializedFunctionType(
-                        template.BlockResultTypeTemplate, specializedGenericTypes, template.Line, template.Column),
+                        template.BlockResultTypeTemplate, signatureTypes, template.Line, template.Column),
                 StreamElementType = template.StreamElementTypeTemplate is null
                     ? template.StreamElementType
                     : ParseSpecializedFunctionType(
-                        template.StreamElementTypeTemplate, specializedGenericTypes, template.Line, template.Column),
+                        template.StreamElementTypeTemplate, signatureTypes, template.Line, template.Column),
                 SpecializedType = actualType,
                 SpecializedSecondaryType = inferredSecondaryType,
                 SpecializedTertiaryType = inferredTertiaryType,
                 SpecializedGenericTypes = specializedGenericTypes
             };
-            _boundFunctions.Add(specializedName, specialization);
+            specialization = CompleteLexicalSpecialization(specialization);
+            _boundFunctions.Add(storageKey, specialization);
             if (validateSpecialization
                 && specialization.Kind is (BoundFunctionKind.User or BoundFunctionKind.UserBlock)
                 && _validatingGenericSpecializations.Add(specialization))
             {
-                ValidateGenericSpecialization(specialization, _boundFunctions);
+                ValidateGenericSpecialization(specialization,
+                    template.IsLocal ? functions : _boundFunctions, template.IsLocal ? capturedBindings : null);
             }
         }
 
@@ -13929,6 +13961,69 @@ internal sealed partial class SemanticCompiler
         LocalFunctions = template.LocalFunctions.ToDictionary(
             pair => pair.Key, pair => CloneGenericFunctionSyntax(pair.Value), StringComparer.Ordinal)
     };
+
+    private static void BindLexicalChildren(BoundFunction parent)
+    {
+        foreach (var child in parent.LocalFunctions.Values)
+        {
+            child.LexicalParent = parent;
+            BindLexicalChildren(child);
+        }
+    }
+
+    private Dictionary<string, BoundType> LexicalGenericTypeArguments(BoundFunction function)
+    {
+        var context = function.LexicalParent is { } parent
+            ? LexicalGenericTypeArguments(parent)
+            : new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        foreach (var (name, type) in function.SpecializedGenericTypes ?? new Dictionary<string, BoundType>())
+            context[name] = type;
+        if (function.GenericParameterName is { } primary && function.SpecializedType is { } primaryType)
+            context[primary] = primaryType;
+        if (function.SecondaryGenericParameterName is { } secondary && function.SpecializedSecondaryType is { } secondaryType)
+            context[secondary] = secondaryType;
+        if (function.TertiaryGenericParameterName is { } tertiary && function.SpecializedTertiaryType is { } tertiaryType)
+            context[tertiary] = tertiaryType;
+        return context;
+    }
+
+    private BoundFunction CompleteLexicalSpecialization(BoundFunction parent)
+    {
+        var context = LexicalGenericTypeArguments(parent);
+        var children = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+        foreach (var (name, child) in parent.LocalFunctions)
+        {
+            var ownParameters = GenericParameterNames(child);
+            BoundType? Resolve(string? syntax, BoundType? current) =>
+                syntax is not null && !TypeSyntaxReferencesAnyParameter(syntax, ownParameters)
+                    ? ParseSpecializedFunctionType(syntax, context, child.Line, child.Column)
+                    : current;
+            var local = child with
+            {
+                InputType = Resolve(child.InputTypeTemplate, child.InputType),
+                ReturnType = Resolve(child.ReturnTypeTemplate, child.ReturnType)!.Value,
+                BlockInputType = Resolve(child.BlockInputTypeTemplate, child.BlockInputType),
+                BlockResultType = Resolve(child.BlockResultTypeTemplate, child.BlockResultType),
+                StreamElementType = Resolve(child.StreamElementTypeTemplate, child.StreamElementType),
+                AdditionalParameters = child.AdditionalParameters?.Select(parameter => parameter with
+                {
+                    Type = Resolve(parameter.TypeTemplate, parameter.Type)!.Value
+                }).ToArray()
+            };
+            local.LexicalParent = parent;
+            if (local.GenericParameterName is null)
+                local = CompleteLexicalSpecialization(local);
+            children.Add(name, local);
+        }
+        var result = parent with { LocalFunctions = children };
+        BindLexicalChildren(result);
+        return result;
+    }
+
+    private string SpecializationStorageKey(BoundFunction template, string specializedName) =>
+        template.IsLocal
+            ? "local:" + SemanticStableIdentity.Function(_types, template) + ":" + specializedName
+            : specializedName;
 
     private BoundType SubstituteGenericType(
         BoundType type,
@@ -14110,6 +14205,7 @@ internal sealed partial class SemanticCompiler
     private BoundType InferTypeApplicationExpression(
         TypeApplicationExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
         bool allowRuntimeCall)
     {
         var path = string.Join('.', expression.Path);
@@ -14241,7 +14337,7 @@ internal sealed partial class SemanticCompiler
             actualType,
             functions,
             expression,
-            explicitGenericTypes: specializedTypes));
+            explicitGenericTypes: specializedTypes, capturedBindings: bindings));
     }
 
     private BoundFunction ResolveValueGenericSpecialization(
@@ -14249,7 +14345,9 @@ internal sealed partial class SemanticCompiler
         BoundType actualType,
         int? valueArgument,
         object callSite,
-        bool validateSpecialization = true)
+        bool validateSpecialization = true,
+        IReadOnlyDictionary<string, BoundFunction>? lexicalFunctions = null,
+        IReadOnlyDictionary<string, BoundType>? capturedBindings = null)
     {
         if (valueArgument is null)
         {
@@ -14332,7 +14430,8 @@ internal sealed partial class SemanticCompiler
             throw new SollangException(
                 $"function '{template.Name}' expects {FormatType(expectedInput)} but received {FormatType(actualType)}");
         }
-        if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
+        var storageKey = SpecializationStorageKey(template, specializedName);
+        if (!_boundFunctions.TryGetValue(storageKey, out var specialization))
         {
             specialization = CloneGenericFunctionSyntax(template) with
             {
@@ -14356,12 +14455,15 @@ internal sealed partial class SemanticCompiler
             // Check its actual signature for cold binding and cache restoration,
             // including the path that deliberately skips body revalidation.
             ValidateConcreteAsyncSignature(specialization);
-            _boundFunctions.Add(specializedName, specialization);
+            specialization = CompleteLexicalSpecialization(specialization);
+            _boundFunctions.Add(storageKey, specialization);
             if (validateSpecialization
                 && specialization.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
                 && _validatingGenericSpecializations.Add(specialization))
             {
-                ValidateGenericSpecialization(specialization, _boundFunctions);
+                ValidateGenericSpecialization(specialization,
+                    template.IsLocal ? lexicalFunctions ?? throw new InvalidOperationException("Local specialization requires its lexical function scope.") : _boundFunctions,
+                    template.IsLocal ? capturedBindings : null);
             }
         }
 

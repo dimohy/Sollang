@@ -708,6 +708,14 @@ Notes:
   A local declaration may use a qualified name such as `internal.step`.
   Direct and fluent calls resolve its complete source path in the nearest
   lexical scope; equal prefixes do not make distinct declarations aliases.
+  Local functions may declare type parameters or integer value parameters with
+  the same explicit signature and constraint rules as top-level functions.
+  Their instances retain the actual lexical parent, its visible readonly
+  captures, and its concrete type arguments. An inner type parameter shadows
+  an outer parameter of the same name; sibling declarations preserve the
+  enclosing parameter environment. Uninstantiated local templates have no
+  validated body to restore, while their concrete instances participate in
+  semantic cache restoration with their complete lexical identity.
 - A source file may declare one namespace before imports and function
   declarations. Top-level single-segment function declarations in that file are
   qualified by the namespace.

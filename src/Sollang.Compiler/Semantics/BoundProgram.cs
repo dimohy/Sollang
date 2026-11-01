@@ -152,6 +152,8 @@ internal sealed record BoundFunction(
     IReadOnlyDictionary<string, BoundType>? SpecializedGenericTypes = null,
     string? DeclarationName = null)
 {
+    public BoundFunction? LexicalParent { get; set; }
+
     public bool IsVisibleFrom(string moduleName) => IsLocal || IsPublic || ModuleName == moduleName;
 }
 

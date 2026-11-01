@@ -160,6 +160,7 @@ internal static class SemanticStableIdentity
         BoundFunction function,
         string? parentIdentity = null)
     {
+        parentIdentity ??= function.LexicalParent is { } parent ? Function(types, parent) : null;
         var builder = new StringBuilder(256);
         foreach (var part in Sollang.Compiler.Shared.CodegenCacheKeyPolicy.StableFunctionIdentity().Parts
                      .Concat(Sollang.Compiler.Shared.CodegenCacheKeyPolicy.StableFunctionIdentityTail().Parts))

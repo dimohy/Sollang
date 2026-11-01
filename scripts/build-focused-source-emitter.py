@@ -31,6 +31,14 @@ def main():
     reference_path = ROOT / comparison['csharpFirst']
     reference = json.loads(reference_path.read_text(encoding='utf-8'))
     semantic = json.loads(args.semantic_result.read_text(encoding='utf-8'))
+    preflight_paths = [ROOT / name for name in comparison.get('requiredNativePreflights', [])]
+    preflight_inputs = []
+    for preflight_path in preflight_paths:
+        preflight = json.loads(preflight_path.read_text(encoding='utf-8'))
+        assert preflight['status'] == 'passed' and preflight['completed'] == preflight['total'] > 0, 'SOURCE_EMITTER_NATIVE_PREFLIGHT_FAILED'
+        assert preflight['inputsStable'] and preflight['processesStopped'], 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INCOMPLETE'
+        assert all(sha(path) == value for path, value in preflight['inputHashes'].items()), 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INPUT_CHANGED'
+        preflight_inputs.extend(map(Path, preflight['inputHashes']))
     for result in (reference, semantic):
         assert result['status'] == 'passed' and result['completed'] == result['total']
         assert result['inputsStable'] and result['processesStopped']
@@ -45,6 +53,7 @@ def main():
     llvm = ROOT / '.tools/llvm-22.1.8'
     assert (llvm / 'bin/clang.exe').is_file() and (llvm / 'bin/llvm-as.exe').is_file()
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.semantic_result,
+             *preflight_paths, *preflight_inputs,
              args.source_comparison, reference_path, manifest, wrapper, *support, *sources,
              *sorted((ROOT / 'stdlib').rglob('*.slg'))]
     inputs = {str(path.resolve()): sha(path) for path in paths}
