@@ -455,7 +455,12 @@ carried into the validated `std.time.Duration` contract.
    linking, or network activity.
 4. Retain positive, boundary, malformed, ownership, and unavailable-target
    fixtures. Verify managed and self-host compilers plus Windows/Linux native
-   execution; add browser execution or an explicit capability diagnostic.
+   execution. Required browser functionality needs a browser implementation
+   and execution tests; a capability diagnostic does not complete missing
+   implementation work. An unavailable-target diagnostic is acceptable only
+   for an operation the host cannot provide under the declared contract, such
+   as direct native socket access. Keep that boundary distinct from browser
+   networking through host APIs and from any explicitly selected bridge.
 5. Update this backlog, the specification, the Agent guide, user examples, and
    the global Stage 3 installation when the shipped surface changes.
 6. Prefer inherent methods whenever a natural receiver exists. Prove API
