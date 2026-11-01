@@ -68,7 +68,7 @@ if (args.Length == 3 && args[2] == "builtin-display-vectors")
 if (args.Length is not (2 or 3 or 4)
     || args.Length == 3 && args[2] == "registered-declaration-type-use-vectors"
     || args.Length == 4 && args[2] is not ("registered-stable-identity-vectors" or "registered-declaration-type-use-vectors")
-    || args.Length >= 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors" or "registered-declaration-type-use-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length >= 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "bounded-registration-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors" or "registered-declaration-type-use-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -290,6 +290,33 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
     return;
 }
 
+if (args.Length == 3 && args[2] == "bounded-registration-vectors")
+{
+    var tableType = assembly.GetType("Sollang.Compiler.Semantics.TypeDefinitionTable", true)!;
+    var idType = assembly.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+    var constructor = tableType.GetConstructors().Single();
+    var parameters = constructor.GetParameters();
+    var values = new object?[parameters.Length];
+    for (var index = 0; index < 5; index++)
+        values[index] = Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(parameters[index].ParameterType.GetGenericArguments()));
+    values[5] = 8;
+    var table = constructor.Invoke(values);
+    var nextField = tableType.GetField("_nextParametricTypeId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    var initial = (int)nextField.GetValue(table)!;
+    var scalar = Enum.Parse(idType, "Int");
+    int Relative(string method, params object[] arguments) => Convert.ToInt32(tableType.GetMethod(method)!.Invoke(table, arguments)) - initial;
+    var array4 = Relative("GetOrAddBoundedArray", scalar, 4);
+    var array4Repeat = Relative("GetOrAddBoundedArray", scalar, 4);
+    var array5 = Relative("GetOrAddBoundedArray", scalar, 5);
+    var dictionary4 = Relative("GetOrAddBoundedDictionary", scalar, scalar, 4);
+    var dictionary4Repeat = Relative("GetOrAddBoundedDictionary", scalar, scalar, 4);
+    var dictionary5 = Relative("GetOrAddBoundedDictionary", scalar, scalar, 5);
+    var dictionaryHeap = Relative("GetOrAddDictionary", scalar, scalar);
+    var next = (int)nextField.GetValue(table)! - initial;
+    Console.WriteLine(JsonSerializer.Serialize(new { array4, array4Repeat, array5, dictionary4, dictionary4Repeat, dictionary5, dictionaryHeap, next }));
+    return;
+}
+
 if (args.Length == 3 && args[2] == "type-universe-vectors")
 {
     var tableType = assembly.GetType("Sollang.Compiler.Semantics.TypeDefinitionTable", true)!;
@@ -337,7 +364,8 @@ if (args.Length == 3 && args[2] == "type-universe-vectors")
             Dictionary("Structs", facts), Dictionary("Enums", facts), Dictionary("Boxes", facts),
             Dictionary("References", facts), 8, null, null, null]);
         foreach (var (category, member) in new[] { ("DynTraits", "_dynTraits"), ("StaticArrays", "_staticArrays"),
-                     ("DynamicArrays", "_dynamicArrays"), ("Dictionaries", "_dictionaries") })
+                     ("DynamicArrays", "_dynamicArrays"), ("Dictionaries", "_dictionaries"),
+                     ("BoundedArrays", "_boundedArrays"), ("BoundedDictionaries", "_boundedDictionaries") })
         {
             var target = tableType.GetField(member, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(table)!;
             var records = (System.Collections.IEnumerable)Dictionary(category, facts);

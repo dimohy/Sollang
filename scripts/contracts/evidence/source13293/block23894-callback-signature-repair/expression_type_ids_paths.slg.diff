@@ -1,0 +1,62 @@
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index de21406b3..71ac5bf1b 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -163,16 +163,18 @@ indexUserBlockResultRoots package: ref analysis.PackageAnalysis -> [Int; ~] {
+             node.parent >= 0 and node.kind != 16 and node.kind != 12
+                 -> if {
+                     package.nodes[range.astStart + node.parent] => parent
+-                    parent.kind == 48 and parent.tertiaryToken >= 0
+-                        and node.start >= package.tokens[range.tokenStart + parent.tertiaryToken].span.start
+-                        -> if {
+-                            range.astStart + node.parent => owner
+-                            roots![owner] => previous
+-                            previous < 0 or node.start > package.nodes[previous].start
+-                                -> if {
+-                                    range.astStart + index! => roots![owner]
+-                                }
+-                        }
++                    parent.kind == 48 -> if {
++                        parent -> ast.blockBodyToken(package.tokens, range.tokenStart) => bodyToken
++                        bodyToken >= 0 and node.start > package.tokens[range.tokenStart + bodyToken].span.start
++                            -> if {
++                                range.astStart + node.parent => owner
++                                roots![owner] => previous
++                                previous < 0 or node.start > package.nodes[previous].start
++                                    -> if {
++                                        range.astStart + index! => roots![owner]
++                                    }
++                            }
++                    }
+                 }
+             index! + 1 => index!
+         }
+@@ -779,7 +781,7 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+     changed!
+ }
+ 
+-resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~] -> Unit {
++resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
+     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
+     prepared.package -> indexResolvedNameReferences => nameReferences
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+@@ -1037,7 +1039,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+     true => pathChanged!
+     pathChanged! -> while {
+         false => pathChanged!
+-        resolveDeclaredBlockRoleReads(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings)
++        resolveDeclaredBlockRoleReads(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, callbackArgumentIndex)
+             -> if { true => pathChanged! }
+         # Callback locals and member paths become concrete in these rounds.
+         # Publish the completed terminal type before consumers inherit it.
+@@ -2710,6 +2712,10 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                     }
+                                                 }
+ 
++                                                # Stream element approximations cannot replace a completed
++                                                # declared callback contract with its generic template.
++                                                prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, streamRoleCall.sourceModule, streamRoleSymbol, callbackArgumentIndex) => declaredStreamRoleType
++                                                declaredStreamRoleType >= 0 -> if { declaredStreamRoleType => streamRoleType! }
+                                                 streamRoleType! >= 0 -> if {
+                                                     streamRoleType! => streamRoleTypeBySymbol[streamRoleCallRange.symbolStart + streamRoleSymbolSearch!]
+                                                     0 => streamRoleNameSearch!

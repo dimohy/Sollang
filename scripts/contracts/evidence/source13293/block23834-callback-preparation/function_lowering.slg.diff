@@ -1,0 +1,258 @@
+diff --git a/selfhost/ir/typed/function_lowering.slg b/selfhost/ir/typed/function_lowering.slg
+index 1200058d6..463a670b7 100644
+--- a/selfhost/ir/typed/function_lowering.slg
++++ b/selfhost/ir/typed/function_lowering.slg
+@@ -5458,6 +5458,123 @@ public materializeUserBlockScopes nodes: mut [TypedIrNode; ~], instances: ref [G
+     scoped!
+ }
+ 
++# Bind the yielded values, relocate the caller body, and publish its result as
++# one operation, keeping callback ownership decisions in one place.
++materializeBlockCallback nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], callIndex: Int, yieldIndex: Int, callbackNodes: ref [Int; ~], callbackTail: Int, callbackSourceCount: Int, declaredUnit: Bool -> Unit {
++    nodes[callIndex] => call
++    prepared.package.ranges[call.sourceModule] => sourceRange
++    nodes[yieldIndex] => yielded!
++    [Int; ~] => roleBindings!
++    0 => roleMapIndex!
++    roleMapIndex! < sourceRange.symbolCount -> while {
++        roleBindings! -> push(-1)
++        roleMapIndex! + 1 => roleMapIndex!
++    }
++    0 => callerRoleIndex!
++    callerRoleIndex! < sourceRange.symbolCount -> while {
++        prepared.package.symbols[sourceRange.symbolStart + callerRoleIndex!] => callerRole
++        callerRole.kind == 35 and callerRole.parent >= 0
++            and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].kind == 48
++            and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].astNode == call.astNode
++            -> if {
++                0 => roleOrdinal!
++                0 => earlierRoleIndex!
++                earlierRoleIndex! < sourceRange.symbolCount -> while {
++                    prepared.package.symbols[sourceRange.symbolStart + earlierRoleIndex!] => earlierRole
++                    earlierRole.kind == 35 and earlierRole.parent == callerRole.parent
++                        and earlierRole.nameToken < callerRole.nameToken
++                        -> if { roleOrdinal! + 1 => roleOrdinal! }
++                    earlierRoleIndex! + 1 => earlierRoleIndex!
++                }
++                yielded!.operand0 => yieldedInput!
++                0 => inputOrdinal!
++                yieldedInput! >= 0 and inputOrdinal! < roleOrdinal!
++                    -> while {
++                        nodes[yieldedInput!].nextOperand => yieldedInput!
++                        inputOrdinal! + 1 => inputOrdinal!
++                    }
++                yieldedInput! >= 0 -> if {
++                    nodes[yieldedInput!] => inputBinding!
++                    17 => inputBinding!.kind
++                    yieldIndex => inputBinding!.parent
++                    callerRoleIndex! => inputBinding!.symbol
++                    call.sourceModule => inputBinding!.sourceModule
++                    callerRole.astNode => inputBinding!.astNode
++                    -227 => inputBinding!.opcode
++                    yieldedInput! => inputBinding!.operand0
++                    -1 => inputBinding!.operand1
++                    -1 => inputBinding!.nextOperand
++                    0 => inputBinding!.flags
++                    (nodes -> len) => roleBindings![callerRoleIndex!]
++                    nodes -> push(inputBinding!)
++                }
++            }
++        callerRoleIndex! + 1 => callerRoleIndex!
++    }
++    nodes -> len => callbackDestination
++    [Int; ~] => callbackMap!
++    0 => mapIndex!
++    mapIndex! < callbackSourceCount -> while {
++        callbackMap! -> push(-1)
++        mapIndex! + 1 => mapIndex!
++    }
++    0 => callbackOrdinal!
++    callbackNodes -> each index {
++        callbackDestination + callbackOrdinal! => callbackMap![index]
++        callbackOrdinal! + 1 => callbackOrdinal!
++    }
++    callbackNodes -> each index {
++        nodes[index] => callback!
++        callback!.parent == callIndex -> if { yieldIndex => callback!.parent } else {
++            callback!.parent >= 0 and callbackMap![callback!.parent] >= 0
++                -> if { callbackMap![callback!.parent] => callback!.parent }
++        }
++        callback!.operand0 >= 0 and callbackMap![callback!.operand0] >= 0
++            -> if { callbackMap![callback!.operand0] => callback!.operand0 }
++        callback!.operand1 >= 0 and callbackMap![callback!.operand1] >= 0
++            -> if { callbackMap![callback!.operand1] => callback!.operand1 }
++        callback!.nextOperand >= 0 and callbackMap![callback!.nextOperand] >= 0
++            -> if { callbackMap![callback!.nextOperand] => callback!.nextOperand }
++        callback!.kind == 5 and callback!.symbol >= 0
++            -> if {
++                callback!.symbol < (roleBindings! -> len)
++                    and roleBindings![callback!.symbol] >= 0
++                    -> if {
++                        roleBindings![callback!.symbol] => callback!.operand0
++                        # This late alias is already specialized. Preserve
++                        # its exact type on every remapped direct read,
++                        # just as the ordinary late value-alias seal does.
++                        nodes[callback!.operand0] => roleBinding
++                        roleBinding.typeId => callback!.typeId
++                        roleBinding.typeKind => callback!.typeKind
++                        roleBinding.typeOrigin => callback!.typeOrigin
++                        roleBinding.typeModule => callback!.typeModule
++                        roleBinding.typeSymbol => callback!.typeSymbol
++                        roleBinding.typeFlags => callback!.typeFlags
++                    }
++            }
++        nodes -> push(callback!)
++    }
++    declaredUnit => unitResult!
++    yielded!.typeId >= 0 -> if {
++        types[yielded!.typeId] => resultType
++        resultType.kind == 1 and resultType.origin == 1 and resultType.symbol == 0
++            -> if { true => unitResult! }
++    }
++    unitResult! -> if {
++        # Retain the yield marker as runtime order authority.
++        -1 => yielded!.operand0
++        -1 => yielded!.operand1
++        yielded! => nodes[yieldIndex]
++    } else {
++        # The callback owns its value until this yield completes.
++        # Publish the direct result edge without a sibling binding.
++        -1 => yielded!.operand0
++        callbackMap![callbackTail] => yielded!.operand1
++        yielded! => nodes[yieldIndex]
++    }
++}
++
+ # A private body materialization step shares the existing relocatable body
+ # copier. Backend publication and captured lexical control remain separate.
+ public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, genericInstances: ref [GenericFunctionInstance; ~] -> [GenericFunctionInstance; ~] {
+@@ -5570,125 +5687,17 @@ public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref
+                                             destination + instance!.nodeCount => copiedEnd
+                                             destination => yieldIndex!
+                                             yieldIndex! < copiedEnd -> while {
+-                                                nodes[yieldIndex!] => yielded!
+-                                                yielded!.kind == 9 and yielded!.opcode == -227 and yielded!.operand0 >= 0
++                                                nodes[yieldIndex!] => yielded
++                                                yielded.kind == 9 and yielded.opcode == -227 and yielded.operand0 >= 0
+                                                     -> if {
+                                                         resolved.userBlockContracts -> each contract {
+                                                             contract.sourceModule == call.sourceModule and contract.callAst == call.astNode
+                                                                 and contract.expectedInputTypeId >= 0 -> if {
+-                                                                    nodes[yielded!.operand0] => value
++                                                                    nodes[yielded.operand0] => value
+                                                                     resolved.userBlockYieldInputs -> push(expressionTypeIds.ResolvedUserBlockYieldInput { sourceModule: value.sourceModule, valueAst: value.astNode, expectedTypeId: contract.expectedInputTypeId, actualTypeId: value.typeId, callerSourceModule: call.sourceModule, callerCallAst: call.astNode })
+                                                                 }
+                                                         }
+-                                                        [Int; ~] => roleBindings!
+-                                                        0 => roleMapIndex!
+-                                                        roleMapIndex! < sourceRange.symbolCount -> while {
+-                                                            roleBindings! -> push(-1)
+-                                                            roleMapIndex! + 1 => roleMapIndex!
+-                                                        }
+-                                                        0 => callerRoleIndex!
+-                                                        callerRoleIndex! < sourceRange.symbolCount -> while {
+-                                                            prepared.package.symbols[sourceRange.symbolStart + callerRoleIndex!] => callerRole
+-                                                            callerRole.kind == 35 and callerRole.parent >= 0
+-                                                                and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].kind == 48
+-                                                                and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].astNode == call.astNode
+-                                                                -> if {
+-                                                                    0 => roleOrdinal!
+-                                                                    0 => earlierRoleIndex!
+-                                                                    earlierRoleIndex! < sourceRange.symbolCount -> while {
+-                                                                        prepared.package.symbols[sourceRange.symbolStart + earlierRoleIndex!] => earlierRole
+-                                                                        earlierRole.kind == 35 and earlierRole.parent == callerRole.parent
+-                                                                            and earlierRole.nameToken < callerRole.nameToken
+-                                                                            -> if { roleOrdinal! + 1 => roleOrdinal! }
+-                                                                        earlierRoleIndex! + 1 => earlierRoleIndex!
+-                                                                    }
+-                                                                    yielded!.operand0 => yieldedInput!
+-                                                                    0 => inputOrdinal!
+-                                                                    yieldedInput! >= 0 and inputOrdinal! < roleOrdinal!
+-                                                                        -> while {
+-                                                                            nodes[yieldedInput!].nextOperand => yieldedInput!
+-                                                                            inputOrdinal! + 1 => inputOrdinal!
+-                                                                        }
+-                                                                    yieldedInput! >= 0 -> if {
+-                                                                        nodes[yieldedInput!] => inputBinding!
+-                                                                        17 => inputBinding!.kind
+-                                                                        yieldIndex! => inputBinding!.parent
+-                                                                        callerRoleIndex! => inputBinding!.symbol
+-                                                                        call.sourceModule => inputBinding!.sourceModule
+-                                                                        callerRole.astNode => inputBinding!.astNode
+-                                                                        -227 => inputBinding!.opcode
+-                                                                        yieldedInput! => inputBinding!.operand0
+-                                                                        -1 => inputBinding!.operand1
+-                                                                        -1 => inputBinding!.nextOperand
+-                                                                        0 => inputBinding!.flags
+-                                                                        (nodes -> len) => roleBindings![callerRoleIndex!]
+-                                                                        nodes -> push(inputBinding!)
+-                                                                    }
+-                                                                }
+-                                                            callerRoleIndex! + 1 => callerRoleIndex!
+-                                                        }
+-                                                        nodes -> len => callbackDestination
+-                                                        [Int; ~] => callbackMap!
+-                                                        0 => mapIndex!
+-                                                        mapIndex! < callbackSourceCount -> while {
+-                                                            callbackMap! -> push(-1)
+-                                                            mapIndex! + 1 => mapIndex!
+-                                                        }
+-                                                        0 => callbackOrdinal!
+-                                                        callbackNodes! -> each index {
+-                                                            callbackDestination + callbackOrdinal! => callbackMap![index]
+-                                                            callbackOrdinal! + 1 => callbackOrdinal!
+-                                                        }
+-                                                        callbackNodes! -> each index {
+-                                                            nodes[index] => callback!
+-                                                            callback!.parent == callIndex! -> if { yieldIndex! => callback!.parent } else {
+-                                                                callback!.parent >= 0 and callbackMap![callback!.parent] >= 0
+-                                                                    -> if { callbackMap![callback!.parent] => callback!.parent }
+-                                                            }
+-                                                            callback!.operand0 >= 0 and callbackMap![callback!.operand0] >= 0
+-                                                                -> if { callbackMap![callback!.operand0] => callback!.operand0 }
+-                                                            callback!.operand1 >= 0 and callbackMap![callback!.operand1] >= 0
+-                                                                -> if { callbackMap![callback!.operand1] => callback!.operand1 }
+-                                                            callback!.nextOperand >= 0 and callbackMap![callback!.nextOperand] >= 0
+-                                                                -> if { callbackMap![callback!.nextOperand] => callback!.nextOperand }
+-                                                            callback!.kind == 5 and callback!.symbol >= 0
+-                                                                -> if {
+-                                                                    callback!.symbol < (roleBindings! -> len)
+-                                                                        and roleBindings![callback!.symbol] >= 0
+-                                                                        -> if {
+-                                                                            roleBindings![callback!.symbol] => callback!.operand0
+-                                                                            # This late alias is already specialized. Preserve
+-                                                                            # its exact type on every remapped direct read,
+-                                                                            # just as the ordinary late value-alias seal does.
+-                                                                            nodes[callback!.operand0] => roleBinding
+-                                                                            roleBinding.typeId => callback!.typeId
+-                                                                            roleBinding.typeKind => callback!.typeKind
+-                                                                            roleBinding.typeOrigin => callback!.typeOrigin
+-                                                                            roleBinding.typeModule => callback!.typeModule
+-                                                                            roleBinding.typeSymbol => callback!.typeSymbol
+-                                                                            roleBinding.typeFlags => callback!.typeFlags
+-                                                                        }
+-                                                                }
+-                                                            nodes -> push(callback!)
+-                                                        }
+-                                                        declaration.blockResultTypeNode < 0 => unitResult!
+-                                                        yielded!.typeId >= 0 -> if {
+-                                                            resolved.types[yielded!.typeId] => resultType
+-                                                            resultType.kind == 1 and resultType.origin == 1 and resultType.symbol == 0
+-                                                                -> if { true => unitResult! }
+-                                                        }
+-                                                        unitResult! -> if {
+-                                                            # Retain the yield marker as runtime order authority.
+-                                                            -1 => yielded!.operand0
+-                                                            -1 => yielded!.operand1
+-                                                            yielded! => nodes[yieldIndex!]
+-                                                        } else {
+-                                                            # The callback owns its value until this yield completes.
+-                                                            # Publish the direct result edge without a sibling binding.
+-                                                            -1 => yielded!.operand0
+-                                                            callbackMap![callbackTail!] => yielded!.operand1
+-                                                            yielded! => nodes[yieldIndex!]
+-                                                        }
++                                                        nodes -> materializeBlockCallback(prepared, resolved.types, callIndex!, yieldIndex!, callbackNodes!, callbackTail!, callbackSourceCount, declaration.blockResultTypeNode < 0)
+                                                     }
+                                                 yieldIndex! + 1 => yieldIndex!
+                                             }

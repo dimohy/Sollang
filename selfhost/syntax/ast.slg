@@ -25,6 +25,25 @@ public struct AstNode {
     public length: UIntSize
 }
 
+# A callback body starts after the target's argument groups. Explicit role
+# names and the implicit `it` have the same body boundary.
+public blockBodyToken node: AstNode, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int -> Int {
+    node.payloadToken < 0 -> if { -1 -> return }
+    node.payloadToken + 1 => cursor!
+    0 => argumentDepth!
+    cursor! < node.firstToken + node.tokenCount -> while {
+        tokens[tokenStart + cursor!].kind => kind
+        argumentDepth! == 0 and kind == grammar.tokenIdLeftBrace()
+            -> if { cursor! -> return }
+        kind == grammar.tokenIdLeftParen() or kind == grammar.tokenIdLeftBracket()
+            -> if { argumentDepth! + 1 => argumentDepth! }
+        kind == grammar.tokenIdRightParen() or kind == grammar.tokenIdRightBracket()
+            -> if { argumentDepth! - 1 => argumentDepth! }
+        cursor! + 1 => cursor!
+    }
+    -1
+}
+
 # Flag 524288 records an actual expression-statement root, retained from
 # the CST ancestor walk before its transparent syntax nodes are discarded.
 # A binding, call argument, operator operand, or expression body is not a

@@ -1,0 +1,21 @@
+diff --git a/selfhost/semantic/fixed_length_arrays.slg b/selfhost/semantic/fixed_length_arrays.slg
+index 1ed9a19f9..b924d8900 100644
+--- a/selfhost/semantic/fixed_length_arrays.slg
++++ b/selfhost/semantic/fixed_length_arrays.slg
+@@ -198,7 +198,15 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
+         }
+     }
+     resolved.callArguments -> each argument {
+-        argument.status == 0 and argument.argumentAst >= 0 and (resolved.types -> isGrowableType(argument.expectedTypeId))
++        false => blockSource!
++        argument.parameterOrdinal == 0 and argument.callAst >= 0
++            -> if {
++                prepared.package.ranges[argument.sourceModule] => range
++                prepared.package.nodes[range.astStart + argument.callAst].kind == 48 => blockSource!
++            }
++        # A block invocation infers its primary source without a callee-provided
++        # growable requirement. Additional ordinary arguments retain theirs.
++        not blockSource! and argument.status == 0 and argument.argumentAst >= 0 and (resolved.types -> isGrowableType(argument.expectedTypeId))
+             -> if {
+                 prepared.package.ranges[argument.sourceModule] => range
+                 symbolByAst![range.astStart + argument.argumentAst] => owner

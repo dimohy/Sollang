@@ -106,7 +106,9 @@ internal enum CodegenKeyPart
     StableBlockParameters,
     StableAssociated,
     StableEffects,
-    InterfaceImplementations
+    InterfaceImplementations,
+    TypeBoundedArrays,
+    TypeBoundedDictionaries
 }
 
 internal readonly record struct CodegenKeyRule(string Domain, IReadOnlyList<CodegenKeyPart> Parts);
@@ -162,7 +164,8 @@ internal static class CodegenCacheKeyPolicy
     public static CodegenKeyRule TypeUniverseFields() => new("type-universe-1",
         [CodegenKeyPart.TypeStructs, CodegenKeyPart.TypeEnums, CodegenKeyPart.TypeBoxes,
             CodegenKeyPart.TypeReferences, CodegenKeyPart.TypeDynTraits, CodegenKeyPart.TypeStaticArrays,
-            CodegenKeyPart.TypeDynamicArrays, CodegenKeyPart.TypeDictionaries]);
+            CodegenKeyPart.TypeDynamicArrays, CodegenKeyPart.TypeDictionaries,
+            CodegenKeyPart.TypeBoundedArrays, CodegenKeyPart.TypeBoundedDictionaries]);
 
     public static CodegenKeyRule StructLayoutFields() => new("struct",
         [CodegenKeyPart.TypeId, CodegenKeyPart.TypeName, CodegenKeyPart.TypeModule]);
@@ -187,6 +190,15 @@ internal static class CodegenCacheKeyPolicy
         [CodegenKeyPart.TypeId, CodegenKeyPart.TypeKey, CodegenKeyPart.TypeValue,
             CodegenKeyPart.TypeKeySize, CodegenKeyPart.TypeKeyAlignment, CodegenKeyPart.TypeValueOffset,
             CodegenKeyPart.TypeValueSize, CodegenKeyPart.TypeValueAlignment, CodegenKeyPart.TypeEntryStride]);
+
+    public static CodegenKeyRule BoundedArrayLayoutFields() => new("bounded-array",
+        [CodegenKeyPart.TypeId, CodegenKeyPart.TypeElement, CodegenKeyPart.TypeSize,
+            CodegenKeyPart.TypeAlignment, CodegenKeyPart.TypeLength]);
+    public static CodegenKeyRule BoundedDictionaryLayoutFields() => new("bounded-dictionary",
+        [CodegenKeyPart.TypeId, CodegenKeyPart.TypeKey, CodegenKeyPart.TypeValue,
+            CodegenKeyPart.TypeKeySize, CodegenKeyPart.TypeKeyAlignment, CodegenKeyPart.TypeValueOffset,
+            CodegenKeyPart.TypeValueSize, CodegenKeyPart.TypeValueAlignment, CodegenKeyPart.TypeEntryStride,
+            CodegenKeyPart.TypeLength]);
 
     // Declaration categories are ordered within each source, never across files.
     // This plan contributes no domain field to the module's interface stream.

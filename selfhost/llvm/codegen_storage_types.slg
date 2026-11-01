@@ -24,19 +24,14 @@ public appendMetadataSignatureStorageRecord records: mut keys.TypeUniverseRecord
     types -> keys.metadataSignatureIdentity(signatureIds, typeId) => recordIdentity
     types -> keys.metadataSignatureIdentity(signatureIds, type.first) => elementIdentity
     recordIdentity < 0 or elementIdentity < 0 -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
-    plans.KeyPart.TypeBoxes => category!
-    type.kind != 6 -> if {
-        type.kind == 4 -> if { plans.KeyPart.TypeStaticArrays => category! } else {
-            type.kind == 3 -> if { plans.KeyPart.TypeDynamicArrays => category! } else {
-                type.kind != 5 -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
-                plans.KeyPart.TypeDictionaries => category!
-            }
-        }
-    }
+    type.kind -> storageTypeCategory -> when {
+        Err(error) { Result<Unit, keys.TypeUniverseCaptureError>.Err(error) -> return }
+        Ok(category) { category }
+    } => category
     types[type.first] -> aggregateFieldLayout(layouts.sizes[type.first], layouts.aligns[type.first]) => element
     TypeLayout { size: 0, align: 1, status: 0 } => value!
     DictionaryEntryLayout { valueOffset: 0, stride: 0, align: 1 } => entry!
-    type.kind == 5 -> if {
+    type.kind == 5 or type.kind == 13 -> if {
         type.second < 0 or type.second >= (types -> len)
             -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
         layouts.statuses[type.second] != 0
@@ -44,7 +39,7 @@ public appendMetadataSignatureStorageRecord records: mut keys.TypeUniverseRecord
         types[type.second] -> aggregateFieldLayout(layouts.sizes[type.second], layouts.aligns[type.second]) => value!
         element.size -> dictionaryEntryLayout(element.align, value!.size, value!.align) => entry!
     }
-    category! -> keys.registeredTypeRule -> when {
+    category -> keys.registeredTypeRule -> when {
         Err(error) { Result<Unit, keys.TypeUniverseCaptureError>.Err(error -> keys.captureRecordError) -> return }
         Ok(rule) {
             [keys.Binding; ~] => bindings!
@@ -59,7 +54,7 @@ public appendMetadataSignatureStorageRecord records: mut keys.TypeUniverseRecord
                     -> if { element.size => number! }
                 index == (plans.KeyPart.TypeAlignment -> plans.partIndex)
                     -> if { element.align => number! }
-                index == (plans.KeyPart.TypeLength -> plans.partIndex) and type.kind == 4
+                index == (plans.KeyPart.TypeLength -> plans.partIndex) and (type.kind == 4 or type.kind == 12 or type.kind == 13)
                     -> if { type.length => number! }
                 index == (plans.KeyPart.TypeKey -> plans.partIndex)
                     -> if { elementIdentity => number! }
@@ -81,11 +76,22 @@ public appendMetadataSignatureStorageRecord records: mut keys.TypeUniverseRecord
                 number! -> keys.integerLayoutField => field
                 bindings! -> push(keys.Binding { part: part, fields: [field,; ~] })
             }
-            records -> keys.appendTypeUniverseRecord(category!, recordIdentity, -1, bindings!) -> when {
+            records -> keys.appendTypeUniverseRecord(category, recordIdentity, -1, bindings!) -> when {
                 Err(error) { Result<Unit, keys.TypeUniverseCaptureError>.Err(error -> keys.captureRecordError) -> return }
                 Ok {}
             }
         }
     }
     Result<Unit, keys.TypeUniverseCaptureError>.Ok
+}
+
+# Concrete and abstract storage descriptors consume the same generated rules.
+storageTypeCategory kind: Int -> Result<plans.KeyPart, keys.TypeUniverseCaptureError> {
+    kind == 3 -> if { Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Ok(plans.KeyPart.TypeDynamicArrays) -> return }
+    kind == 4 -> if { Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Ok(plans.KeyPart.TypeStaticArrays) -> return }
+    kind == 5 -> if { Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Ok(plans.KeyPart.TypeDictionaries) -> return }
+    kind == 6 -> if { Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Ok(plans.KeyPart.TypeBoxes) -> return }
+    kind == 12 -> if { Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Ok(plans.KeyPart.TypeBoundedArrays) -> return }
+    kind == 13 -> if { Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Ok(plans.KeyPart.TypeBoundedDictionaries) -> return }
+    Result<plans.KeyPart, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType)
 }

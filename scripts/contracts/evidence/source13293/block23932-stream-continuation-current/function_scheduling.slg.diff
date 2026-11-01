@@ -1,0 +1,29 @@
+diff --git a/selfhost/llvm/text/function_scheduling.slg b/selfhost/llvm/text/function_scheduling.slg
+index 40ac3386a..d220e3308 100644
+--- a/selfhost/llvm/text/function_scheduling.slg
++++ b/selfhost/llvm/text/function_scheduling.slg
+@@ -8,6 +8,24 @@ isUserBlockScope node: typedIr.TypedIrNode -> Bool {
+     node.kind == 19 and node.opcode == -227 and node.symbol != -2
+ }
+ 
++# Consumer and per-item scopes own the cleanup target of stream transfers.
++isStreamConsumerScope node: typedIr.TypedIrNode -> Bool {
++    node.kind == 19 and node.opcode == -227 and (node.symbol == -4 or node.symbol == -5)
++}
++
++# Cancellation belongs to the nearest pipeline invocation, including nested
++# consumers. Producer and callback loops observe it after their current body.
++streamPipelineOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
++    nodeIndex => ancestor!
++    ancestor! >= 0 -> while {
++        context.ir[ancestor!] => owner
++        owner.kind == 19 and owner.opcode == -227 and owner.symbol == -4
++            -> if { ancestor! -> return }
++        owner.parent => ancestor!
++    }
++    -1
++}
++
+ # Planned stream terminals own their ordered callback and junction dispatch.
+ # Ordinary iteration and explicit transfers still need region control flow.
+ directIterationNeedsStructuredBody nodeIndex: Int, context: ref emitterContext.EmitContext -> Bool {

@@ -1,0 +1,207 @@
+diff --git a/selfhost/semantic/expression_type_ids_resolution_phases.slg b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+index 57573a0f2..ae465e773 100644
+--- a/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -63,9 +63,39 @@ public intrinsicCollectionRoleKind prepared: ref semanticContext.SemanticSnapsho
+     0
+ }
+ 
++struct CallArgumentBindingIndex {
++    firstByAst: [Int; ~]
++    nextBinding: [Int; ~]
++}
++
++# C# specializes from the owning call's arguments. These source/AST identities
++# stay fixed through the core; actual type and status facts are read live.
++indexCallArgumentBindings package: ref analysis.PackageAnalysis, bindings: ref [semanticContext.CallArgumentBinding; ~] -> CallArgumentBindingIndex {
++    [Int; ~] => first!
++    [Int; ~] => next!
++    package.nodes -> each node { first! -> push(-1) }
++    bindings -> each binding { next! -> push(-1) }
++    bindings -> len => index!
++    index! > 0 -> while {
++        index! - 1 => index!
++        bindings[index!] => binding
++        binding.sourceModule >= 0 and binding.sourceModule < (package.ranges -> len)
++            -> if {
++                package.ranges[binding.sourceModule] => range
++                binding.callAst >= 0 and binding.callAst < range.astCount
++                    -> if {
++                        range.astStart + binding.callAst => globalCall
++                        first![globalCall] => next![index!]
++                        index! => first![globalCall]
++                    }
++            }
++    }
++    CallArgumentBindingIndex { firstByAst: first!, nextBinding: next! }
++}
++
+ # Resolved declaration identity is shared by ordinary role reads and
+ # interpolation-only role reads. Generic roles use the full argument environment.
+-primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, role: symbols.Symbol -> Int {
++primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, role: symbols.Symbol, callbackArgumentIndex: ref CallArgumentBindingIndex -> Int {
+     role.kind != 35 or role.typeNode >= 0 or role.astNode < 0
+         -> if { -1 -> return }
+     prepared.package.ranges[sourceIndex] => range
+@@ -116,10 +146,10 @@ primaryBlockRoleTypeId prepared: ref semanticContext.SemanticSnapshot, types: mu
+     references[referenceIndex] => reference
+     reference.status != 0 or reference.typeId < 0 or reference.typeId >= (types -> len)
+         -> if { -1 -> return }
+-    specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, roleCallAst, reference.typeId, -1, -1)
++    specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, roleCallAst, reference.typeId, -1, -1, callbackArgumentIndex)
+ }
+ 
+-specializeBlockContractTypeId prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, callAst: Int, declaredTypeId: Int, resultTemplate: Int, resultActual: Int -> Int {
++specializeBlockContractTypeId prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, callAst: Int, declaredTypeId: Int, resultTemplate: Int, resultActual: Int, callbackArgumentIndex: ref CallArgumentBindingIndex -> Int {
+     declaredTypeId < 0 or declaredTypeId >= (types -> len)
+         -> if { -1 -> return }
+     not types[declaredTypeId].containsParameter
+@@ -129,25 +159,25 @@ specializeBlockContractTypeId prepared: ref semanticContext.SemanticSnapshot, ty
+     [Int; ~] => actuals!
+     false => seeded!
+     false => unresolved!
+-    argumentBindings -> each binding {
+-        binding.sourceModule == sourceIndex and binding.callAst == callAst
++    callbackArgumentIndex.firstByAst[range.astStart + callAst] => bindingIndex!
++    bindingIndex! >= 0 -> while {
++        argumentBindings[bindingIndex!] => binding
++        not seeded! -> if {
++            seedExplicitFlowGenericArguments(prepared, types, references, referenceIndexByTypeAst, binding, templates!, actuals!)
++            true => seeded!
++        }
++        prepared.package -> typeIds.functionParameterTypeId(references, referenceIndexByTypeAst, binding.targetSourceModule, binding.parameterSymbol) => formalType
++        expressionIndexByAst[range.astStart + binding.argumentAst] => actualIndex
++        formalType >= 0 and actualIndex >= 0 and expressions[actualIndex].status == 0
+             -> if {
+-                not seeded! -> if {
+-                    seedExplicitFlowGenericArguments(prepared, types, references, referenceIndexByTypeAst, binding, templates!, actuals!)
+-                    true => seeded!
+-                }
+-                prepared.package -> typeIds.functionParameterTypeId(references, referenceIndexByTypeAst, binding.targetSourceModule, binding.parameterSymbol) => formalType
+-                expressionIndexByAst[range.astStart + binding.argumentAst] => actualIndex
+-                formalType >= 0 and actualIndex >= 0 and expressions[actualIndex].status == 0
++                expressions[actualIndex].typeId => actualType
++                actualType >= 0 and not types[actualType].containsParameter
+                     -> if {
+-                        expressions[actualIndex].typeId => actualType
+-                        actualType >= 0 and not types[actualType].containsParameter
+-                            -> if {
+-                                templates! -> push(formalType)
+-                                actuals! -> push(actualType)
+-                            } else { true => unresolved! }
++                        templates! -> push(formalType)
++                        actuals! -> push(actualType)
+                     } else { true => unresolved! }
+-            }
++            } else { true => unresolved! }
++        callbackArgumentIndex.nextBinding[bindingIndex!] => bindingIndex!
+     }
+     resultTemplate >= 0 and resultActual >= 0 -> if {
+         templates! -> push(resultTemplate)
+@@ -163,7 +193,7 @@ specializeBlockContractTypeId prepared: ref semanticContext.SemanticSnapshot, ty
+     -1
+ }
+ 
+-resolveUserBlockContracts prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~] -> [ResolvedUserBlockContract; ~] {
++resolveUserBlockContracts prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> [ResolvedUserBlockContract; ~] {
+     [ResolvedUserBlockContract; ~] => contracts!
+     prepared.package -> indexUserBlockResultRoots => roots
+     prepared.calls -> each call {
+@@ -178,7 +208,7 @@ resolveUserBlockContracts prepared: ref semanticContext.SemanticSnapshot, types:
+                         referenceIndexByTypeAst[target.astStart + function.blockTypeNode] => inputReference
+                         inputReference >= 0 and references[inputReference].status == 0
+                             -> if {
+-                                specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, references[inputReference].typeId, -1, -1) => inputType!
++                                specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, references[inputReference].typeId, -1, -1, callbackArgumentIndex) => inputType!
+                             }
+                         types -> typeIds.builtinTypeId(0) => expected!
+                         roots[caller.astStart + call.callAst] => root
+@@ -194,9 +224,9 @@ resolveUserBlockContracts prepared: ref semanticContext.SemanticSnapshot, types:
+                             referenceIndex >= 0 and references[referenceIndex].status == 0
+                                 -> if {
+                                     references[referenceIndex].typeId => template
+-                                    specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, template, -1, -1) => expected!
++                                    specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, template, -1, -1, callbackArgumentIndex) => expected!
+                                     expected! < 0 and actual! >= 0 -> if {
+-                                        specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, template, template, actual!) => expected!
++                                        specializeBlockContractTypeId(prepared, types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, call.sourceModule, call.callAst, template, template, actual!, callbackArgumentIndex) => expected!
+                                     }
+                                 }
+                         }
+@@ -208,8 +238,8 @@ resolveUserBlockContracts prepared: ref semanticContext.SemanticSnapshot, types:
+     contracts!
+ }
+ 
+-publishPrimaryBlockRoleRead prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, role: symbols.Symbol, readAst: Int -> Bool {
+-    prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role) => roleTypeId
++publishPrimaryBlockRoleRead prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], sourceIndex: Int, role: symbols.Symbol, readAst: Int, callbackArgumentIndex: ref CallArgumentBindingIndex -> Bool {
++    prepared -> primaryBlockRoleTypeId(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role, callbackArgumentIndex) => roleTypeId
+     roleTypeId < 0 -> if { false -> return }
+     prepared.package.ranges[sourceIndex].astStart + readAst => globalAst
+     expressionIndexByAst[globalAst] => existing
+@@ -228,7 +258,7 @@ publishPrimaryBlockRoleRead prepared: ref semanticContext.SemanticSnapshot, type
+     true
+ }
+ 
+-resolveDeclaredBlockRoleReads prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~] -> Bool {
++resolveDeclaredBlockRoleReads prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Bool {
+     # Additional arguments can become concrete after initial expression typing.
+     # Publish the specialized declaration before dependent member paths resolve.
+     false => changed!
+@@ -239,7 +269,7 @@ resolveDeclaredBlockRoleReads prepared: ref semanticContext.SemanticSnapshot, ty
+             name.symbol >= 0 -> if {
+                 prepared.package.symbols[range.symbolStart + name.symbol] => role
+                 role.kind == 35 -> if {
+-                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role, name.astNode)
++                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex, role, name.astNode, callbackArgumentIndex)
+                         -> if { true => changed! }
+                 }
+             }
+@@ -947,7 +977,7 @@ indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: re
+     InitialTypeReferenceIndex { firstBySource: first!, next: next! }
+ }
+ 
+-resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~] -> Unit {
++resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValueAsts
+     prepared.package -> indexContextualRecords => syntaxChildren
+     prepared.package -> indexInitialTypeReferences(references) => sourceReferences
+@@ -1896,7 +1926,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
+                                 foldRoleExpression => expressionIndexByAst[sourceRange.astStart + resolvedName.astNode]
+                             }
+                         }
+-                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex!, valueSymbol, resolvedName.astNode) => initialRoleReadChanged
++                    prepared -> publishPrimaryBlockRoleRead(types, references, referenceIndexByTypeAst, expressions, expressionIndexByAst, argumentBindings, sourceIndex!, valueSymbol, resolvedName.astNode, callbackArgumentIndex) => initialRoleReadChanged
+                     valueSymbol.typeNode >= 0 -> if {
+                         referenceIndexByTypeAst[sourceRange.astStart + valueSymbol.typeNode] => referenceIndex
+                         referenceIndex >= 0 -> if {
+@@ -3578,25 +3608,10 @@ resolveFlowCallTypes prepared: ref semanticContext.SemanticSnapshot, types: mut
+                                     # their return from the actual callback body.
+                                     # Argument braces do not delimit that body.
+                                     callNode.start + callNode.length => blockRoleStart!
+-                                    callNode.payloadToken + 1 => blockBodyToken!
+-                                    callNode.firstToken + callNode.tokenCount => blockCallEnd
+-                                    0 => blockArgumentDepth!
+-                                    false => blockBodyFound!
+-                                    blockBodyToken! < blockCallEnd and not blockBodyFound!
+-                                        -> while {
+-                                            prepared.package.tokens[callRange.tokenStart + blockBodyToken!] => blockBodyCandidate
+-                                            blockArgumentDepth! == 0 and blockBodyCandidate.kind == grammar.tokenIdLeftBrace()
+-                                                -> if {
+-                                                    blockBodyCandidate.span.start => blockRoleStart!
+-                                                    true => blockBodyFound!
+-                                                } else {
+-                                                    blockBodyCandidate.kind == grammar.tokenIdLeftParen() or blockBodyCandidate.kind == grammar.tokenIdLeftBracket()
+-                                                        -> if { blockArgumentDepth! + 1 => blockArgumentDepth! }
+-                                                    blockBodyCandidate.kind == grammar.tokenIdRightParen() or blockBodyCandidate.kind == grammar.tokenIdRightBracket()
+-                                                        -> if { blockArgumentDepth! - 1 => blockArgumentDepth! }
+-                                                }
+-                                            blockBodyToken! + 1 => blockBodyToken!
+-                                        }
++                                    callNode -> ast.blockBodyToken(prepared.package.tokens, callRange.tokenStart) => blockBodyToken
++                                    blockBodyToken >= 0 -> if {
++                                        prepared.package.tokens[callRange.tokenStart + blockBodyToken].span.start => blockRoleStart!
++                                    }
+                                     0 => blockResultSearch!
+                                     blockResultSearch! < (expressions -> len) -> while {
+                                         expressions[blockResultSearch!] => blockResultCandidate

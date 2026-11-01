@@ -1,0 +1,905 @@
+diff --git a/selfhost/ir/typed/function_lowering.slg b/selfhost/ir/typed/function_lowering.slg
+index 1200058d6..9659f3554 100644
+--- a/selfhost/ir/typed/function_lowering.slg
++++ b/selfhost/ir/typed/function_lowering.slg
+@@ -5458,9 +5458,184 @@ public materializeUserBlockScopes nodes: mut [TypedIrNode; ~], instances: ref [G
+     scoped!
+ }
+ 
++struct BlockCallbackBody {
++    nodes: [Int; ~]
++    tail: Int
++}
++
++collectBlockCallback nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, callIndex: Int, sourceCount: Int, bodyStart: UIntSize -> BlockCallbackBody {
++    nodes[callIndex] => call
++    prepared.package.ranges[call.sourceModule] => sourceRange
++    [Int; ~] => callbackNodes!
++    -1 => callbackTail!
++    UIntSize(0) => callbackTailStart!
++    0 => callbackIndex!
++    callbackIndex! < sourceCount -> while {
++        nodes[callbackIndex!] => candidate
++        candidate.sourceModule == call.sourceModule and candidate.astNode >= 0
++            -> if {
++                prepared.package.nodes[sourceRange.astStart + candidate.astNode] => candidateAst
++                candidateAst.start > bodyStart -> if {
++                    candidate.parent => ancestor!
++                    false => belongs!
++                    ancestor! >= 0 and not belongs! -> while {
++                        ancestor! == callIndex -> if { true => belongs! } else { nodes[ancestor!].parent => ancestor! }
++                    }
++                    belongs! -> if {
++                        callbackNodes! -> push(callbackIndex!)
++                        candidate.parent == callIndex and candidate.kind != 17
++                            and (callbackTail! < 0 or candidateAst.start >= callbackTailStart!)
++                            -> if {
++                                callbackIndex! => callbackTail!
++                                candidateAst.start => callbackTailStart!
++                            }
++                    }
++                }
++            }
++        callbackIndex! + 1 => callbackIndex!
++    }
++    BlockCallbackBody { nodes: callbackNodes!, tail: callbackTail! }
++}
++
++# Bind the yielded values, relocate the caller body, and publish its result as
++# one operation, keeping callback ownership decisions in one place.
++# A copied call retains its already selected concrete ABI. Call-index tables
++# are rebuilt after materialization, so publish the copied identity here.
++copyUserStreamGenericCall instances: mut [GenericFunctionInstance; ~], source: Int, destination: Int -> Unit {
++    instances -> len => sourceCount
++    0 => index!
++    index! < sourceCount -> while {
++        instances[index!] => instance!
++        instance!.status == 0 and instance!.callNode == source
++            -> if {
++                destination => instance!.callNode
++                instances -> push(instance!)
++            }
++        index! + 1 => index!
++    }
++}
++
++materializeBlockCallback nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], callIndex: Int, yieldIndex: Int, callbackNodes: ref [Int; ~], callbackTail: Int, callbackSourceCount: Int, declaredUnit: Bool, ownsInputs: Bool, genericInstances: mut [GenericFunctionInstance; ~] -> Unit {
++    nodes[callIndex] => call
++    prepared.package.ranges[call.sourceModule] => sourceRange
++    nodes[yieldIndex] => yielded!
++    [Int; ~] => roleBindings!
++    0 => roleMapIndex!
++    roleMapIndex! < sourceRange.symbolCount -> while {
++        roleBindings! -> push(-1)
++        roleMapIndex! + 1 => roleMapIndex!
++    }
++    0 => callerRoleIndex!
++    callerRoleIndex! < sourceRange.symbolCount -> while {
++        prepared.package.symbols[sourceRange.symbolStart + callerRoleIndex!] => callerRole
++        callerRole.kind == 35 and callerRole.parent >= 0
++            and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].kind == 48
++            and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].astNode == call.astNode
++            -> if {
++                0 => roleOrdinal!
++                0 => earlierRoleIndex!
++                earlierRoleIndex! < sourceRange.symbolCount -> while {
++                    prepared.package.symbols[sourceRange.symbolStart + earlierRoleIndex!] => earlierRole
++                    earlierRole.kind == 35 and earlierRole.parent == callerRole.parent
++                        and earlierRole.nameToken < callerRole.nameToken
++                        -> if { roleOrdinal! + 1 => roleOrdinal! }
++                    earlierRoleIndex! + 1 => earlierRoleIndex!
++                }
++                yielded!.operand0 => yieldedInput!
++                0 => inputOrdinal!
++                yieldedInput! >= 0 and inputOrdinal! < roleOrdinal!
++                    -> while {
++                        nodes[yieldedInput!].nextOperand => yieldedInput!
++                        inputOrdinal! + 1 => inputOrdinal!
++                    }
++                yieldedInput! >= 0 -> if {
++                    nodes[yieldedInput!] => inputBinding!
++                    17 => inputBinding!.kind
++                    yieldIndex => inputBinding!.parent
++                    callerRoleIndex! => inputBinding!.symbol
++                    call.sourceModule => inputBinding!.sourceModule
++                    callerRole.astNode => inputBinding!.astNode
++                    callerRole.nameToken => inputBinding!.payloadToken
++                    -227 => inputBinding!.opcode
++                    yieldedInput! => inputBinding!.operand0
++                    -1 => inputBinding!.operand1
++                    -1 => inputBinding!.nextOperand
++                    0 => inputBinding!.flags
++                    ownsInputs -> if { 1 => inputBinding!.flags }
++                    (nodes -> len) => roleBindings![callerRoleIndex!]
++                    nodes -> push(inputBinding!)
++                }
++            }
++        callerRoleIndex! + 1 => callerRoleIndex!
++    }
++    nodes -> len => callbackDestination
++    [Int; ~] => callbackMap!
++    0 => mapIndex!
++    mapIndex! < callbackSourceCount -> while {
++        callbackMap! -> push(-1)
++        mapIndex! + 1 => mapIndex!
++    }
++    0 => callbackOrdinal!
++    callbackNodes -> each index {
++        callbackDestination + callbackOrdinal! => callbackMap![index]
++        callbackOrdinal! + 1 => callbackOrdinal!
++    }
++    callbackNodes -> each index {
++        nodes[index] => callback!
++        callback!.parent == callIndex -> if { yieldIndex => callback!.parent } else {
++            callback!.parent >= 0 and callbackMap![callback!.parent] >= 0
++                -> if { callbackMap![callback!.parent] => callback!.parent }
++        }
++        callback!.operand0 >= 0 and callbackMap![callback!.operand0] >= 0
++            -> if { callbackMap![callback!.operand0] => callback!.operand0 }
++        callback!.operand1 >= 0 and callbackMap![callback!.operand1] >= 0
++            -> if { callbackMap![callback!.operand1] => callback!.operand1 }
++        callback!.nextOperand >= 0 and callbackMap![callback!.nextOperand] >= 0
++            -> if { callbackMap![callback!.nextOperand] => callback!.nextOperand }
++        callback!.kind == 5 and callback!.symbol >= 0
++            -> if {
++                callback!.symbol < (roleBindings! -> len)
++                    and roleBindings![callback!.symbol] >= 0
++                    -> if {
++                        roleBindings![callback!.symbol] => callback!.operand0
++                        # This late alias is already specialized. Preserve
++                        # its exact type on every remapped direct read,
++                        # just as the ordinary late value-alias seal does.
++                        nodes[callback!.operand0] => roleBinding
++                        roleBinding.typeId => callback!.typeId
++                        roleBinding.typeKind => callback!.typeKind
++                        roleBinding.typeOrigin => callback!.typeOrigin
++                        roleBinding.typeModule => callback!.typeModule
++                        roleBinding.typeSymbol => callback!.typeSymbol
++                        roleBinding.typeFlags => callback!.typeFlags
++                    }
++            }
++        genericInstances -> copyUserStreamGenericCall(index, Int(nodes -> len))
++        nodes -> push(callback!)
++    }
++    declaredUnit => unitResult!
++    yielded!.typeId >= 0 -> if {
++        types[yielded!.typeId] => resultType
++        resultType.kind == 1 and resultType.origin == 1 and resultType.symbol == 0
++            -> if { true => unitResult! }
++    }
++    unitResult! -> if {
++        # Retain the yield marker as runtime order authority.
++        -1 => yielded!.operand0
++        -1 => yielded!.operand1
++        yielded! => nodes[yieldIndex]
++    } else {
++        # The callback owns its value until this yield completes.
++        # Publish the direct result edge without a sibling binding.
++        -1 => yielded!.operand0
++        callbackMap![callbackTail] => yielded!.operand1
++        yielded! => nodes[yieldIndex]
++    }
++}
++
+ # A private body materialization step shares the existing relocatable body
+ # copier. Backend publication and captured lexical control remain separate.
+-public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, genericInstances: ref [GenericFunctionInstance; ~] -> [GenericFunctionInstance; ~] {
++public materializeUserCallbacks nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, genericInstances: mut [GenericFunctionInstance; ~] -> [GenericFunctionInstance; ~] {
+     nodes -> functionTemplatesBySymbol(prepared) => templates
+     [GenericFunctionInstance; ~] => instances!
+     0 => callIndex!
+@@ -5477,7 +5652,8 @@ public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref
+                 and owner.targetModule < (prepared.package.ranges -> len) and owner.symbol >= 0
+                 -> if {
+                     prepared.package.ranges[owner.targetModule] => ownerRange
+-                    prepared.package.symbols[ownerRange.symbolStart + owner.symbol].blockTypeNode >= 0
++                    prepared.package.symbols[ownerRange.symbolStart + owner.symbol] => ownerDeclaration
++                    ownerDeclaration.blockTypeNode >= 0 or (ownerDeclaration -> symbols.isUserStreamFunction)
+                         -> if { false => activeCall! }
+                 }
+             owner.parent => callAncestor!
+@@ -5488,7 +5664,7 @@ public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref
+             -> if {
+                 prepared.package.ranges[call.targetModule] => targetRange
+                 prepared.package.symbols[targetRange.symbolStart + call.symbol] => declaration
+-                declaration -> symbols.isUserBlockFunction
++                (declaration -> symbols.isUserBlockFunction) or (declaration -> symbols.isUserStreamFunction)
+                     -> if {
+                         templates[targetRange.symbolStart + call.symbol] => templateIndex!
+                         genericInstances -> each genericInstance {
+@@ -5498,242 +5674,100 @@ public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref
+                         templateIndex! >= 0 -> if {
+                             prepared.package.ranges[call.sourceModule] => sourceRange
+                             prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
+-                            callAst.payloadToken + 1 => tokenIndex!
+-                            0 => parenDepth!
+-                            -1 => bodyToken!
+-                            tokenIndex! < callAst.firstToken + callAst.tokenCount and bodyToken! < 0
+-                                -> while {
+-                                    prepared.package.tokens[sourceRange.tokenStart + tokenIndex!].kind => tokenKind
+-                                    tokenKind == grammar.tokenIdLeftParen() -> if { parenDepth! + 1 => parenDepth! }
+-                                    tokenKind == grammar.tokenIdRightParen() -> if { parenDepth! - 1 => parenDepth! }
+-                                    parenDepth! == 0 and tokenKind == grammar.tokenIdLeftBrace()
+-                                        -> if { tokenIndex! => bodyToken! }
+-                                    tokenIndex! + 1 => tokenIndex!
+-                                }
+-                            bodyToken! >= 0 -> if {
+-                                prepared.package.tokens[sourceRange.tokenStart + bodyToken!].span.start => bodyStart
+-                                [Int; ~] => callbackNodes!
+-                                -1 => callbackTail!
+-                                UIntSize(0) => callbackTailStart!
+-                                0 => callbackIndex!
+-                                callbackIndex! < callbackSourceCount -> while {
+-                                    nodes[callbackIndex!] => candidate
+-                                    candidate.sourceModule == call.sourceModule and candidate.astNode >= 0
++                            callAst -> ast.blockBodyToken(prepared.package.tokens, sourceRange.tokenStart) => bodyToken
++                            bodyToken >= 0 or (declaration -> symbols.isUserStreamFunction)
++                                -> if {
++                                    callAst.start + callAst.length => bodyStart!
++                                    bodyToken >= 0 -> if {
++                                        prepared.package.tokens[sourceRange.tokenStart + bodyToken].span.start => bodyStart!
++                                    }
++                                    nodes -> collectBlockCallback(prepared, callIndex!, callbackSourceCount, bodyStart!) => callbackBody
++                                    declaration.blockResultTypeNode < 0 => callbackReturnsUnit!
++                                    declaration.blockResultTypeNode >= 0
++                                        and declaration.blockResultTypeNode < targetRange.astCount
+                                         -> if {
+-                                            prepared.package.nodes[sourceRange.astStart + candidate.astNode] => candidateAst
+-                                            candidateAst.start > bodyStart -> if {
+-                                                candidate.parent => ancestor!
+-                                                false => belongs!
+-                                                ancestor! >= 0 and not belongs! -> while {
+-                                                    ancestor! == callIndex! -> if { true => belongs! } else { nodes[ancestor!].parent => ancestor! }
+-                                                }
+-                                                belongs! -> if {
+-                                                    callbackNodes! -> push(callbackIndex!)
+-                                                    candidate.parent == callIndex! and candidate.kind != 17
+-                                                        and (callbackTail! < 0 or candidateAst.start >= callbackTailStart!)
++                                            resolved.referenceIndexByTypeAst[targetRange.astStart + declaration.blockResultTypeNode] => resultReference
++                                            resultReference >= 0 and resultReference < (resolved.references -> len)
++                                                -> if {
++                                                    resolved.references[resultReference] => reference
++                                                    reference.status == 0 and reference.typeId >= 0
++                                                        and reference.typeId < (resolved.types -> len)
+                                                         -> if {
+-                                                            callbackIndex! => callbackTail!
+-                                                            candidateAst.start => callbackTailStart!
++                                                            resolved.types[reference.typeId] => callbackType
++                                                            callbackType.kind == 1 and callbackType.origin == 1 and callbackType.symbol == 0
++                                                                => callbackReturnsUnit!
+                                                         }
+                                                 }
+-                                            }
+                                         }
+-                                    callbackIndex! + 1 => callbackIndex!
+-                                }
+-                                declaration.blockResultTypeNode < 0 => callbackReturnsUnit!
+-                                declaration.blockResultTypeNode >= 0
+-                                    and declaration.blockResultTypeNode < targetRange.astCount
+-                                    -> if {
+-                                        resolved.referenceIndexByTypeAst[targetRange.astStart + declaration.blockResultTypeNode] => resultReference
+-                                        resultReference >= 0 and resultReference < (resolved.references -> len)
+-                                            -> if {
+-                                                resolved.references[resultReference] => reference
+-                                                reference.status == 0 and reference.typeId >= 0
+-                                                    and reference.typeId < (resolved.types -> len)
+-                                                    -> if {
+-                                                        resolved.types[reference.typeId] => callbackType
+-                                                        callbackType.kind == 1 and callbackType.origin == 1 and callbackType.symbol == 0
+-                                                            => callbackReturnsUnit!
+-                                                    }
+-                                            }
+-                                    }
+-                                callbackTail! >= 0 or callbackReturnsUnit!
+-                                    -> if {
+-                                        [Int; ~] => emptyTemplates
+-                                        [Int; ~] => emptyActuals
+-                                        [GenericCallPlan; ~] => plans!
+-                                        plans! -> push(GenericCallPlan { callNode: callIndex!, interpolationNode: -1, ownerFunction: -1, templateNode: templateIndex!, inputTemplates: emptyTemplates, actualInputs: emptyActuals, resultType: nodes[templateIndex!].typeId, status: 0 })
+-                                        nodes -> materializeGenericBodies(resolved.types, resolved.fields, plans!) => copied
+-                                        copied[0] => instance!
+-                                        instance!.status == 0 -> if {
+-                                            instance!.functionNode => destination
+-                                            destination + instance!.nodeCount => copiedEnd
+-                                            destination => yieldIndex!
+-                                            yieldIndex! < copiedEnd -> while {
+-                                                nodes[yieldIndex!] => yielded!
+-                                                yielded!.kind == 9 and yielded!.opcode == -227 and yielded!.operand0 >= 0
+-                                                    -> if {
+-                                                        resolved.userBlockContracts -> each contract {
+-                                                            contract.sourceModule == call.sourceModule and contract.callAst == call.astNode
+-                                                                and contract.expectedInputTypeId >= 0 -> if {
+-                                                                    nodes[yielded!.operand0] => value
+-                                                                    resolved.userBlockYieldInputs -> push(expressionTypeIds.ResolvedUserBlockYieldInput { sourceModule: value.sourceModule, valueAst: value.astNode, expectedTypeId: contract.expectedInputTypeId, actualTypeId: value.typeId, callerSourceModule: call.sourceModule, callerCallAst: call.astNode })
+-                                                                }
+-                                                        }
+-                                                        [Int; ~] => roleBindings!
+-                                                        0 => roleMapIndex!
+-                                                        roleMapIndex! < sourceRange.symbolCount -> while {
+-                                                            roleBindings! -> push(-1)
+-                                                            roleMapIndex! + 1 => roleMapIndex!
+-                                                        }
+-                                                        0 => callerRoleIndex!
+-                                                        callerRoleIndex! < sourceRange.symbolCount -> while {
+-                                                            prepared.package.symbols[sourceRange.symbolStart + callerRoleIndex!] => callerRole
+-                                                            callerRole.kind == 35 and callerRole.parent >= 0
+-                                                                and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].kind == 48
+-                                                                and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].astNode == call.astNode
+-                                                                -> if {
+-                                                                    0 => roleOrdinal!
+-                                                                    0 => earlierRoleIndex!
+-                                                                    earlierRoleIndex! < sourceRange.symbolCount -> while {
+-                                                                        prepared.package.symbols[sourceRange.symbolStart + earlierRoleIndex!] => earlierRole
+-                                                                        earlierRole.kind == 35 and earlierRole.parent == callerRole.parent
+-                                                                            and earlierRole.nameToken < callerRole.nameToken
+-                                                                            -> if { roleOrdinal! + 1 => roleOrdinal! }
+-                                                                        earlierRoleIndex! + 1 => earlierRoleIndex!
+-                                                                    }
+-                                                                    yielded!.operand0 => yieldedInput!
+-                                                                    0 => inputOrdinal!
+-                                                                    yieldedInput! >= 0 and inputOrdinal! < roleOrdinal!
+-                                                                        -> while {
+-                                                                            nodes[yieldedInput!].nextOperand => yieldedInput!
+-                                                                            inputOrdinal! + 1 => inputOrdinal!
+-                                                                        }
+-                                                                    yieldedInput! >= 0 -> if {
+-                                                                        nodes[yieldedInput!] => inputBinding!
+-                                                                        17 => inputBinding!.kind
+-                                                                        yieldIndex! => inputBinding!.parent
+-                                                                        callerRoleIndex! => inputBinding!.symbol
+-                                                                        call.sourceModule => inputBinding!.sourceModule
+-                                                                        callerRole.astNode => inputBinding!.astNode
+-                                                                        -227 => inputBinding!.opcode
+-                                                                        yieldedInput! => inputBinding!.operand0
+-                                                                        -1 => inputBinding!.operand1
+-                                                                        -1 => inputBinding!.nextOperand
+-                                                                        0 => inputBinding!.flags
+-                                                                        (nodes -> len) => roleBindings![callerRoleIndex!]
+-                                                                        nodes -> push(inputBinding!)
++                                    callbackBody.tail >= 0 or callbackReturnsUnit!
++                                        -> if {
++                                            [Int; ~] => emptyTemplates
++                                            [Int; ~] => emptyActuals
++                                            [GenericCallPlan; ~] => plans!
++                                            plans! -> push(GenericCallPlan { callNode: callIndex!, interpolationNode: -1, ownerFunction: -1, templateNode: templateIndex!, inputTemplates: emptyTemplates, actualInputs: emptyActuals, resultType: nodes[templateIndex!].typeId, status: 0 })
++                                            nodes -> materializeGenericBodies(resolved.types, resolved.fields, plans!) => copied
++                                            copied[0] => instance!
++                                            instance!.status == 0 -> if {
++                                                instance!.functionNode => destination
++                                                destination + instance!.nodeCount => copiedEnd
++                                                destination => yieldIndex!
++                                                yieldIndex! < copiedEnd -> while {
++                                                    nodes[yieldIndex!] => yielded
++                                                    yielded.kind == 9 and yielded.opcode == -227 and yielded.operand0 >= 0
++                                                        -> if {
++                                                            resolved.userBlockContracts -> each contract {
++                                                                contract.sourceModule == call.sourceModule and contract.callAst == call.astNode
++                                                                    and contract.expectedInputTypeId >= 0 -> if {
++                                                                        nodes[yielded.operand0] => value
++                                                                        resolved.userBlockYieldInputs -> push(expressionTypeIds.ResolvedUserBlockYieldInput { sourceModule: value.sourceModule, valueAst: value.astNode, expectedTypeId: contract.expectedInputTypeId, actualTypeId: value.typeId, callerSourceModule: call.sourceModule, callerCallAst: call.astNode })
+                                                                     }
+-                                                                }
+-                                                            callerRoleIndex! + 1 => callerRoleIndex!
+-                                                        }
+-                                                        nodes -> len => callbackDestination
+-                                                        [Int; ~] => callbackMap!
+-                                                        0 => mapIndex!
+-                                                        mapIndex! < callbackSourceCount -> while {
+-                                                            callbackMap! -> push(-1)
+-                                                            mapIndex! + 1 => mapIndex!
+-                                                        }
+-                                                        0 => callbackOrdinal!
+-                                                        callbackNodes! -> each index {
+-                                                            callbackDestination + callbackOrdinal! => callbackMap![index]
+-                                                            callbackOrdinal! + 1 => callbackOrdinal!
+-                                                        }
+-                                                        callbackNodes! -> each index {
+-                                                            nodes[index] => callback!
+-                                                            callback!.parent == callIndex! -> if { yieldIndex! => callback!.parent } else {
+-                                                                callback!.parent >= 0 and callbackMap![callback!.parent] >= 0
+-                                                                    -> if { callbackMap![callback!.parent] => callback!.parent }
+                                                             }
+-                                                            callback!.operand0 >= 0 and callbackMap![callback!.operand0] >= 0
+-                                                                -> if { callbackMap![callback!.operand0] => callback!.operand0 }
+-                                                            callback!.operand1 >= 0 and callbackMap![callback!.operand1] >= 0
+-                                                                -> if { callbackMap![callback!.operand1] => callback!.operand1 }
+-                                                            callback!.nextOperand >= 0 and callbackMap![callback!.nextOperand] >= 0
+-                                                                -> if { callbackMap![callback!.nextOperand] => callback!.nextOperand }
+-                                                            callback!.kind == 5 and callback!.symbol >= 0
+-                                                                -> if {
+-                                                                    callback!.symbol < (roleBindings! -> len)
+-                                                                        and roleBindings![callback!.symbol] >= 0
+-                                                                        -> if {
+-                                                                            roleBindings![callback!.symbol] => callback!.operand0
+-                                                                            # This late alias is already specialized. Preserve
+-                                                                            # its exact type on every remapped direct read,
+-                                                                            # just as the ordinary late value-alias seal does.
+-                                                                            nodes[callback!.operand0] => roleBinding
+-                                                                            roleBinding.typeId => callback!.typeId
+-                                                                            roleBinding.typeKind => callback!.typeKind
+-                                                                            roleBinding.typeOrigin => callback!.typeOrigin
+-                                                                            roleBinding.typeModule => callback!.typeModule
+-                                                                            roleBinding.typeSymbol => callback!.typeSymbol
+-                                                                            roleBinding.typeFlags => callback!.typeFlags
+-                                                                        }
+-                                                                }
+-                                                            nodes -> push(callback!)
+-                                                        }
+-                                                        declaration.blockResultTypeNode < 0 => unitResult!
+-                                                        yielded!.typeId >= 0 -> if {
+-                                                            resolved.types[yielded!.typeId] => resultType
+-                                                            resultType.kind == 1 and resultType.origin == 1 and resultType.symbol == 0
+-                                                                -> if { true => unitResult! }
+-                                                        }
+-                                                        unitResult! -> if {
+-                                                            # Retain the yield marker as runtime order authority.
+-                                                            -1 => yielded!.operand0
+-                                                            -1 => yielded!.operand1
+-                                                            yielded! => nodes[yieldIndex!]
+-                                                        } else {
+-                                                            # The callback owns its value until this yield completes.
+-                                                            # Publish the direct result edge without a sibling binding.
+-                                                            -1 => yielded!.operand0
+-                                                            callbackMap![callbackTail!] => yielded!.operand1
+-                                                            yielded! => nodes[yieldIndex!]
++                                                            nodes -> materializeBlockCallback(prepared, resolved.types, callIndex!, yieldIndex!, callbackBody.nodes, callbackBody.tail, callbackSourceCount, declaration.blockResultTypeNode < 0, false, genericInstances)
+                                                         }
++                                                    yieldIndex! + 1 => yieldIndex!
++                                                }
++                                                nodes[destination].operand0 => returnIndex
++                                                nodes[returnIndex] => returned!
++                                                returned!.kind == 1 and returned!.operand0 >= 0
++                                                    -> if {
++                                                        returned!.operand0 => bodyIndex
++                                                        nodes[bodyIndex] => region
++                                                        region.kind == 19 and region.parent == returnIndex and region.operand1 >= 0
++                                                            -> if {
++                                                                region.operand1 => returned!.operand0
++                                                                returned! => nodes[returnIndex]
++                                                                # Preserve the producer's lexical owner region.
++                                                                # Only the result edge is transparent to the caller;
++                                                                # moving its children would turn local owners into
++                                                                # apparent outer-scope borrows at the region exit.
++                                                            }
+                                                     }
+-                                                yieldIndex! + 1 => yieldIndex!
+-                                            }
+-                                            nodes[destination].operand0 => returnIndex
+-                                            nodes[returnIndex] => returned!
+-                                            returned!.kind == 1 and returned!.operand0 >= 0
+-                                                -> if {
+-                                                    returned!.operand0 => bodyIndex
+-                                                    nodes[bodyIndex] => region
+-                                                    region.kind == 19 and region.parent == returnIndex and region.operand1 >= 0
+-                                                        -> if {
+-                                                            region.operand1 => returned!.operand0
+-                                                            returned! => nodes[returnIndex]
+-                                                            # Preserve the producer's lexical owner region.
+-                                                            # Only the result edge is transparent to the caller;
+-                                                            # moving its children would turn local owners into
+-                                                            # apparent outer-scope borrows at the region exit.
+-                                                        }
++                                                # Callback children are not runtime arguments. Keep all
++                                                # genuine argument roots, then close their sibling chain.
++                                                nodes[callIndex!] => publishedCall!
++                                                callbackBody.nodes -> each callbackIndex {
++                                                    publishedCall!.operand1 == callbackIndex -> if { -1 => publishedCall!.operand1 }
+                                                 }
+-                                            # Callback children are not runtime arguments. Keep all
+-                                            # genuine argument roots, then close their sibling chain.
+-                                            nodes[callIndex!] => publishedCall!
+-                                            callbackNodes! -> each callbackIndex {
+-                                                publishedCall!.operand1 == callbackIndex -> if { -1 => publishedCall!.operand1 }
+-                                            }
+-                                            publishedCall! => nodes[callIndex!]
+-                                            publishedCall!.operand0 => argumentIndex!
+-                                            argumentIndex! >= 0 -> while {
+-                                                nodes[argumentIndex!] => argument!
+-                                                callbackNodes! -> each callbackIndex {
+-                                                    argument!.nextOperand == callbackIndex -> if { -1 => argument!.nextOperand }
++                                                publishedCall! => nodes[callIndex!]
++                                                publishedCall!.operand0 => argumentIndex!
++                                                argumentIndex! >= 0 -> while {
++                                                    nodes[argumentIndex!] => argument!
++                                                    callbackBody.nodes -> each callbackIndex {
++                                                        argument!.nextOperand == callbackIndex -> if { -1 => argument!.nextOperand }
++                                                    }
++                                                    argument! => nodes[argumentIndex!]
++                                                    argument!.nextOperand => argumentIndex!
+                                                 }
+-                                                argument! => nodes[argumentIndex!]
+-                                                argument!.nextOperand => argumentIndex!
++                                                (nodes -> len) - destination => instance!.nodeCount
++                                                # Close this invocation before visiting copied nested calls.
++                                                # Its original callback becomes deferred provenance.
++                                                [GenericFunctionInstance; ~] => pendingScope!
++                                                pendingScope! -> push(instance!)
++                                                nodes -> materializeUserBlockScopes(pendingScope!) => scopedInvocation
++                                                instances! -> push(scopedInvocation[0])
+                                             }
+-                                            (nodes -> len) - destination => instance!.nodeCount
+-                                            # Close this invocation before visiting copied nested calls.
+-                                            # Its original callback becomes deferred provenance.
+-                                            [GenericFunctionInstance; ~] => pendingScope!
+-                                            pendingScope! -> push(instance!)
+-                                            nodes -> materializeUserBlockScopes(pendingScope!) => scopedInvocation
+-                                            instances! -> push(scopedInvocation[0])
+                                         }
+-                                    }
+-                            }
++                                }
+                         }
+                     }
+             }
+@@ -5742,6 +5776,371 @@ public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref
+     instances!
+ }
+ 
++# A copied source producer keeps its declaration identity after becoming a
++# lexical scope. Deferred provenance and native producers are distinct.
++isUserStreamInvocation node: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
++    node.kind != 19 or node.opcode != -227 or node.symbol < 0
++        or node.targetModule < 0 or node.targetModule >= (prepared.package.ranges -> len)
++        -> if { false -> return }
++    prepared.package.ranges[node.targetModule] => range
++    node.symbol >= range.symbolCount -> if { false -> return }
++    prepared.package.symbols[range.symbolStart + node.symbol] -> symbols.isUserStreamFunction
++}
++
++struct UserStreamContinuationPlan {
++    # Ordered from the final stage back to the first source invocation.
++    stages: [Int; ~]
++    primaryBindings: [Int; ~]
++}
++
++struct UserStreamStageCopy {
++    root: Int
++    emissions: [Int; ~]
++}
++
++struct UserStreamFrameInitialization {
++    copiesBySource: [Int; ~]
++    sourceParent: Int
++}
++
++resolveUserStreamValue index: Int, nodes: ref [TypedIrNode; ~] -> Int {
++    index => current!
++    0 => depth!
++    current! >= 0 and current! < (nodes -> len) and depth! < (nodes -> len)
++        -> while {
++            nodes[current!] => value
++            (value.kind == 5 or value.kind == 17
++                or (value.kind == 19 and value.opcode == -227 and value.symbol == -2))
++                and value.operand0 >= 0 -> if {
++                    value.operand0 => current!
++                } else { current! -> return }
++            depth! + 1 => depth!
++        }
++    current!
++}
++
++userStreamPrimaryBinding invocation: Int, nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Int {
++    nodes[invocation] => source
++    prepared.package.ranges[source.targetModule] => range
++    prepared.package.symbols[range.symbolStart + source.symbol] => declaration
++    0 => index!
++    index! < (nodes -> len) -> while {
++        nodes[index!] => candidate
++        candidate.kind == 17 and candidate.opcode == -227 and candidate.parent == invocation
++            and candidate.sourceModule == source.targetModule and candidate.astNode == declaration.astNode
++            -> if { index! -> return }
++        index! + 1 => index!
++    }
++    -1
++}
++
++planUserStreamContinuation value: Int, nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> UserStreamContinuationPlan {
++    [Int; ~] => stages!
++    [Int; ~] => bindings!
++    value -> resolveUserStreamValue(nodes) => current!
++    0 => depth!
++    current! >= 0 and current! < (nodes -> len) and depth! < (nodes -> len)
++        and (nodes[current!] -> isUserStreamInvocation(prepared))
++        -> while {
++            stages! -> push(current!)
++            current! -> userStreamPrimaryBinding(nodes, prepared) => binding
++            bindings! -> push(binding)
++            binding < 0 -> if { -1 => current! } else {
++                nodes[binding].operand0 -> resolveUserStreamValue(nodes) => current!
++            }
++            depth! + 1 => depth!
++        }
++    UserStreamContinuationPlan { stages: stages!, primaryBindings: bindings! }
++}
++
++# Input producers are separate frames. A frame owns its body, callback and
++# argument expressions; caller bindings referenced by reads remain outside it.
++belongsToUserStreamFrame index: Int, frame: Int, plan: ref UserStreamContinuationPlan, nodes: ref [TypedIrNode; ~] -> Bool {
++    index => current!
++    current! >= 0 -> while {
++        current! == frame -> if { true -> return }
++        plan.stages -> each other {
++            current! == other -> if { false -> return }
++        }
++        nodes[current!].parent => current!
++    }
++    false
++}
++
++userStreamUnitScope node: TypedIrNode, symbol: Int, types: ref [typeIds.SemanticType; ~] -> TypedIrNode {
++    node => scope!
++    types -> typeIds.builtinTypeId(0) => unitId
++    types[unitId] => unit
++    19 => scope!.kind
++    -227 => scope!.opcode
++    symbol => scope!.symbol
++    symbol < 0 -> if { -1 => scope!.targetModule }
++    -1 => scope!.operand0
++    -1 => scope!.operand1
++    -1 => scope!.nextOperand
++    unitId => scope!.typeId
++    unit.kind => scope!.typeKind
++    unit.origin => scope!.typeOrigin
++    unit.module => scope!.typeModule
++    unit.symbol => scope!.typeSymbol
++    0 => scope!.typeFlags
++    scope!
++}
++
++copyUserStreamSharedBinding nodes: mut [TypedIrNode; ~], binding: Int, parent: Int, sourceCount: Int, sharedCopies: mut [Int; ~], genericInstances: mut [GenericFunctionInstance; ~] -> Unit {
++    nodes[binding].operand0 => initializer
++    [Int; ~] => copied!
++    0 => index!
++    index! < sourceCount -> while {
++        false => belongs!
++        index! => ancestor!
++        ancestor! >= 0 and not belongs! -> while {
++            ancestor! == binding or ancestor! == initializer
++                -> if {
++                    true => belongs!
++                } else { nodes[ancestor!].parent => ancestor! }
++        }
++        belongs! and sharedCopies[index!] < 0 -> if {
++            nodes -> len => sharedCopies[index!]
++            genericInstances -> copyUserStreamGenericCall(index!, Int(nodes -> len))
++            nodes -> push(nodes[index!])
++            copied! -> push(index!)
++        }
++        index! + 1 => index!
++    }
++    copied! -> each original {
++        nodes[sharedCopies[original]] => clone!
++        clone!.parent >= 0 and clone!.parent < sourceCount and sharedCopies[clone!.parent] >= 0
++            -> if { sharedCopies[clone!.parent] => clone!.parent } else { parent => clone!.parent }
++        clone!.operand0 >= 0 and clone!.operand0 < sourceCount and sharedCopies[clone!.operand0] >= 0
++            -> if { sharedCopies[clone!.operand0] => clone!.operand0 }
++        clone!.operand1 >= 0 and clone!.operand1 < sourceCount and sharedCopies[clone!.operand1] >= 0
++            -> if { sharedCopies[clone!.operand1] => clone!.operand1 }
++        clone!.nextOperand >= 0 and clone!.nextOperand < sourceCount and sharedCopies[clone!.nextOperand] >= 0
++            -> if { sharedCopies[clone!.nextOperand] => clone!.nextOperand }
++        clone! => nodes[sharedCopies[original]]
++    }
++}
++
++# Stage construction runs from sink to source. Nested initialization scopes
++# retain state and owned arguments until the whole source invocation finishes.
++initializeUserStreamFrames nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], plan: ref UserStreamContinuationPlan, consumer: Int, sourceCount: Int, genericInstances: mut [GenericFunctionInstance; ~] -> UserStreamFrameInitialization {
++    [Int; ~] => sharedCopies!
++    0 => index!
++    index! < sourceCount -> while {
++        sharedCopies! -> push(-1)
++        index! + 1 => index!
++    }
++    consumer => parent!
++    0 => ordinal!
++    ordinal! + 1 < Int(plan.stages -> len) -> while {
++        plan.stages[ordinal!] => stage
++        nodes[stage] -> userStreamUnitScope(-6, types) => scope!
++        parent! => scope!.parent
++        nodes -> len => parent!
++        nodes -> push(scope!)
++        # Additional parameters are bound before this frame's state values.
++        0 => parameterIndex!
++        parameterIndex! < sourceCount -> while {
++            nodes[parameterIndex!] => parameter
++            parameter.parent == stage and parameter.kind == 17 and parameter.opcode == -227
++                and parameterIndex! != plan.primaryBindings[ordinal!]
++                -> if { nodes -> copyUserStreamSharedBinding(parameterIndex!, parent!, sourceCount, sharedCopies!, genericInstances) }
++            parameterIndex! + 1 => parameterIndex!
++        }
++        0 => stateIndex!
++        stateIndex! < sourceCount -> while {
++            nodes[stateIndex!] => binding
++            binding.kind == 17 and binding.astNode >= 0
++                and (stateIndex! -> belongsToUserStreamFrame(stage, plan, nodes))
++                -> if {
++                    prepared.package.ranges[binding.sourceModule] => range
++                    prepared.package.nodes[range.astStart + binding.astNode].kind == 61
++                        -> if {
++                            nodes[binding.parent] => owner
++                            binding.parent == stage or (owner.kind == 19 and owner.opcode == -227 and owner.symbol == -3 and owner.parent == stage)
++                                -> if { nodes -> copyUserStreamSharedBinding(stateIndex!, parent!, sourceCount, sharedCopies!, genericInstances) }
++                        }
++                }
++            stateIndex! + 1 => stateIndex!
++        }
++        ordinal! + 1 => ordinal!
++    }
++    UserStreamFrameInitialization { copiesBySource: sharedCopies!, sourceParent: parent! }
++}
++
++copyUserStreamStage nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], plan: ref UserStreamContinuationPlan, stageOrdinal: Int, input: Int, parent: Int, sourceCount: Int, sharedCopies: ref [Int; ~], genericInstances: mut [GenericFunctionInstance; ~] -> UserStreamStageCopy {
++    plan.stages[stageOrdinal] => source
++    plan.primaryBindings[stageOrdinal] => primary
++    primary >= 0 -> if { nodes[primary].operand0 } else { -1 } => oldInput
++    [Int; ~] => frameMap!
++    [Int; ~] => copied!
++    0 => index!
++    index! < sourceCount -> while {
++        sharedCopies[index!] => destination!
++        index! -> belongsToUserStreamFrame(source, plan, nodes) => belongs!
++        # A downstream frame receives an item, never its old stream argument.
++        input >= 0 and oldInput >= 0 -> if {
++            index! => ancestor!
++            ancestor! >= 0 and ancestor! != source -> while {
++                ancestor! == oldInput -> if { false => belongs! }
++                nodes[ancestor!].parent => ancestor!
++            }
++        }
++        belongs! and destination! < 0 -> if {
++            nodes -> len => destination!
++            genericInstances -> copyUserStreamGenericCall(index!, Int(nodes -> len))
++            nodes -> push(nodes[index!])
++            copied! -> push(index!)
++        }
++        frameMap! -> push(destination!)
++        index! + 1 => index!
++    }
++    [Int; ~] => emissions!
++    copied! -> each original {
++        nodes[frameMap![original]] => clone!
++        clone!.parent >= 0 and clone!.parent < sourceCount and frameMap![clone!.parent] >= 0
++            -> if { frameMap![clone!.parent] => clone!.parent }
++        clone!.operand0 >= 0 and clone!.operand0 < sourceCount and frameMap![clone!.operand0] >= 0
++            -> if { frameMap![clone!.operand0] => clone!.operand0 }
++        clone!.operand1 >= 0 and clone!.operand1 < sourceCount and frameMap![clone!.operand1] >= 0
++            -> if { frameMap![clone!.operand1] => clone!.operand1 }
++        clone!.nextOperand >= 0 and clone!.nextOperand < sourceCount and frameMap![clone!.nextOperand] >= 0
++            -> if { frameMap![clone!.nextOperand] => clone!.nextOperand }
++        original == source -> if {
++            parent => clone!.parent
++            clone! -> userStreamUnitScope(clone!.symbol, types) => clone!
++        }
++        original == primary and input >= 0 -> if { input => clone!.operand0 }
++        clone! => nodes[frameMap![original]]
++    }
++    copied! -> each original {
++        nodes[frameMap![original]] => clone
++        (clone.kind == 6 or clone.kind == 9) and clone.opcode == -228
++            -> if {
++                clone.parent => owner!
++                owner! >= 0 and not (nodes[owner!] -> isUserStreamInvocation(prepared))
++                    -> while { nodes[owner!].parent => owner! }
++                owner! == frameMap![source] -> if { emissions! -> push(frameMap![original]) }
++            }
++    }
++    UserStreamStageCopy { root: frameMap![source], emissions: emissions! }
++}
++
++instantiateUserStreamContinuation nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], plan: ref UserStreamContinuationPlan, stageOrdinal: Int, input: Int, parent: Int, sourceCount: Int, sharedCopies: ref [Int; ~], finalEmissions: mut [Int; ~], genericInstances: mut [GenericFunctionInstance; ~] -> Int {
++    nodes -> copyUserStreamStage(prepared, types, plan, stageOrdinal, input, parent, sourceCount, sharedCopies, genericInstances) => frame
++    frame.emissions -> each emission {
++        stageOrdinal == 0 -> if {
++            finalEmissions -> push(emission)
++        } else {
++            nodes[emission].operand0 => item
++            nodes -> instantiateUserStreamContinuation(prepared, types, plan, stageOrdinal - 1, item, emission, sourceCount, sharedCopies, finalEmissions, genericInstances) => nextFrame
++            nodes[emission] -> userStreamUnitScope(-5, types) => scope!
++            item => scope!.operand0
++            scope! => nodes[emission]
++        }
++    }
++    frame.root
++}
++
++# Each consumption instantiates its own continuation, including stored plans.
++# Cleanup and callback transfers are still attached by the ordinary copier.
++public materializeUserStreamConsumers nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], genericInstances: mut [GenericFunctionInstance; ~] -> Unit {
++    nodes -> len => originalCount
++    0 => consumerIndex!
++    consumerIndex! < (nodes -> len) -> while {
++        nodes[consumerIndex!] => consumer
++        false => deferred!
++        consumer.parent => enclosing!
++        enclosing! >= 0 -> while {
++            nodes[enclosing!] => owner
++            owner.kind == 19 and owner.opcode == -227 and owner.symbol == -2
++                -> if { true => deferred! }
++            owner.parent => enclosing!
++        }
++        not deferred! and consumer.kind == 6 and consumer.opcode == -208 and consumer.operand0 >= 0
++            -> if {
++                consumer.operand0 -> planUserStreamContinuation(nodes, prepared) => plan
++                (plan.stages -> len) > 0 -> if {
++                    nodes -> len => sourceCount
++                    prepared.package.ranges[consumer.sourceModule] => range
++                    prepared.package.nodes[range.astStart + consumer.astNode] => callAst
++                    callAst.start + callAst.length => bodyStart!
++                    callAst -> ast.blockBodyToken(prepared.package.tokens, range.tokenStart) => bodyToken
++                    bodyToken >= 0 -> if {
++                        prepared.package.tokens[range.tokenStart + bodyToken].span.start => bodyStart!
++                    }
++                    nodes -> collectBlockCallback(prepared, consumerIndex!, sourceCount, bodyStart!) => callback
++                    nodes -> initializeUserStreamFrames(prepared, types, plan, consumerIndex!, sourceCount, genericInstances) => initialization
++                    [Int; ~] => finalEmissions!
++                    nodes -> instantiateUserStreamContinuation(prepared, types, plan, Int(plan.stages -> len) - 1, -1, initialization.sourceParent, sourceCount, initialization.copiesBySource, finalEmissions!, genericInstances) => producer
++                    finalEmissions! -> each emission {
++                        nodes[emission].operand0 => item
++                        nodes[emission].parent => producerLoop!
++                        false => foundLoop!
++                        producerLoop! >= 0 and producerLoop! != consumerIndex! and not foundLoop!
++                            -> while {
++                                nodes[producerLoop!] => loop
++                                loop.kind == 20 or (loop.kind == 6 and (loop.opcode -> isDirectIterationOpcode))
++                                    -> if { true => foundLoop! } else { loop.parent => producerLoop! }
++                            }
++                        producerLoop! == consumerIndex! -> if { -1 => producerLoop! }
++                        nodes -> len => copiedStart
++                        nodes -> materializeBlockCallback(prepared, types, consumerIndex!, emission, callback.nodes, callback.tail, sourceCount, true, true, genericInstances)
++                        copiedStart => transferIndex!
++                        transferIndex! < (nodes -> len) -> while {
++                            nodes[transferIndex!] => transfer!
++                            (transfer!.kind == 21 or transfer!.kind == 22) and transfer!.operand0 == consumerIndex!
++                                -> if {
++                                    producerLoop! >= 0 -> if { producerLoop! => transfer!.operand0 }
++                                    transfer! => nodes[transferIndex!]
++                                }
++                            transferIndex! + 1 => transferIndex!
++                        }
++                        nodes[emission] -> userStreamUnitScope(-5, types) => scope!
++                        item => scope!.operand0
++                        scope! => nodes[emission]
++                    }
++                    consumer -> userStreamUnitScope(-2, types) => provenance!
++                    consumerIndex! => provenance!.parent
++                    nodes -> len => provenanceIndex
++                    nodes -> push(provenance!)
++                    callback.nodes -> each index {
++                        nodes[index] => original!
++                        original!.parent == consumerIndex! -> if {
++                            provenanceIndex => original!.parent
++                            original! => nodes[index]
++                        }
++                    }
++                    plan.stages -> each stage {
++                        nodes[stage] => original!
++                        provenanceIndex => original!.parent
++                        original! => nodes[stage]
++                    }
++                    consumer -> userStreamUnitScope(-4, types) => nodes[consumerIndex!]
++                }
++            }
++        consumerIndex! + 1 => consumerIndex!
++    }
++    # Named source streams are compile-time plans, as in C# deferred stream
++    # declarations. Their consumers above retain independent IR instances.
++    0 => bindingIndex!
++    bindingIndex! < originalCount -> while {
++        nodes[bindingIndex!] => binding
++        binding.kind == 17 and binding.opcode != -227 and binding.operand0 >= 0
++            -> if {
++                binding.operand0 -> resolveUserStreamValue(nodes) => value
++                value >= 0 and value < (nodes -> len) and (nodes[value] -> isUserStreamInvocation(prepared))
++                    -> if {
++                        binding -> userStreamUnitScope(-2, types) => deferred!
++                        binding.operand0 => deferred!.operand0
++                        deferred! => nodes[bindingIndex!]
++                    }
++            }
++        bindingIndex! + 1 => bindingIndex!
++    }
++}
++
+ # Readonly user-block inputs retain their source representation. Ordinary
+ # stored names and mutable owners keep their own runtime value identity.
+ public userBlockLiteralInput sourceIndex: Int, nodes: ref [TypedIrNode; ~] -> Int {

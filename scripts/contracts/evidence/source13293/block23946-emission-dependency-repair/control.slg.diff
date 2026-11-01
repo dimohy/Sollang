@@ -1,0 +1,53 @@
+diff --git a/selfhost/llvm/text/control.slg b/selfhost/llvm/text/control.slg
+index 3147bf399..85a578938 100644
+--- a/selfhost/llvm/text/control.slg
++++ b/selfhost/llvm/text/control.slg
+@@ -445,7 +445,13 @@ userBlockStatementOrder rootIndex: Int, scopeIndex: Int, localStart: Int, localE
+     root -> sourceStart(context, state) => position!
+     2 => phase!
+     context.ir[scopeIndex] => scope
+-    scope.kind == 19 and scope.opcode == -227 and scope.symbol >= -1
++    # Stream frame construction records argument/state order in its IR copies.
++    # The source invocation is appended last and owns their remaining lifetime.
++    scope.kind == 19 and scope.opcode == -227 and scope.symbol == -6
++        -> if {
++            UserBlockStatementOrder { phase: 0, position: UIntSize(rootIndex) } -> return
++        }
++    scope.kind == 19 and scope.opcode == -227 and (scope.symbol >= -1 or scope.symbol == -5)
+         -> if {
+             root.kind == 17 and root.opcode == -227
+                 -> if { 1 => phase! }
+@@ -461,6 +467,16 @@ userBlockStatementOrder rootIndex: Int, scopeIndex: Int, localStart: Int, localE
+                 search! + 1 => search!
+             }
+         }
++    # A stream emission retains its input value dependency when it becomes
++    # a continuation scope. Evaluate that subtree before downstream effects.
++    scope.kind == 19 and scope.opcode == -227 and scope.symbol == -5
++        -> if {
++            scope.operand0 => input!
++            input! >= 0 and input! != scopeIndex -> while {
++                input! == rootIndex -> if { 0 => phase! }
++                context.ir[input!].parent => input!
++            }
++        }
+     UserBlockStatementOrder { phase: phase!, position: position! }
+ }
+ 
+@@ -937,6 +953,16 @@ emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterCont
+                         localNodeIndex => regionTaskNodes![regionTaskSize!]
+                     }
+                     regionTaskSize! + 1 => regionTaskSize!
++                    localNode.symbol == -4 -> if {
++                        regionTaskSize! == (regionTaskKinds! -> len) -> if {
++                            regionTaskKinds! -> push(10)
++                            regionTaskNodes! -> push(localNodeIndex)
++                        } else {
++                            10 => regionTaskKinds![regionTaskSize!]
++                            localNodeIndex => regionTaskNodes![regionTaskSize!]
++                        }
++                        regionTaskSize! + 1 => regionTaskSize!
++                    }
+                 } else { localNode.kind == 18 -> if {
+                         regionTaskSize! == (regionTaskKinds! -> len)
+                             -> if {

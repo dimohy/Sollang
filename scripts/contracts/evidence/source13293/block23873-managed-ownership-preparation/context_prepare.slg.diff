@@ -1,0 +1,49 @@
+diff --git a/selfhost/llvm/text/context_prepare.slg b/selfhost/llvm/text/context_prepare.slg
+index 475f77d70..88cb6d38c 100644
+--- a/selfhost/llvm/text/context_prepare.slg
++++ b/selfhost/llvm/text/context_prepare.slg
+@@ -232,6 +232,10 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+     ir! -> typedIr.materializeContextualArrayOwners(prepared, recursiveTypes!)
+     ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics
+     ir! -> typedIr.materializeGenericClosure(prepared, recursiveTypes!) => genericInstances!
++    typeIds.enumPayloadEdges(recursiveTypes!.types, recursiveTypes!.references, prepared.package.ranges, prepared.package.symbols, recursiveTypes!.referenceIndexByTypeAst) => concreteMovePayloadEdges
++    prepared -> semanticContext.ownedResourceSeeds(recursiveTypes!.types) => concreteMoveResourceSeeds
++    typeIds.classifyWithResources(recursiveTypes!.types, recursiveTypes!.fields, concreteMovePayloadEdges, concreteMoveResourceSeeds) => concreteMoveTraits
++    prepared -> ownershipCheck.invalidInlinedMoveInputSignatures(ir!, recursiveTypes!.types, concreteMoveTraits, genericInstances!) => inlinedMoveInputDiagnostics
+     resolvedSignatureDiagnostic!.code == 0 -> if {
+         prepared -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(recursiveTypes!, ir!, genericInstances!) => resolvedSignatureDiagnostic!
+     }
+@@ -241,7 +245,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+             or (reifiedNumericDiagnostic.sourceModule == numericCallLiteralDiagnostic!.sourceModule and reifiedNumericDiagnostic.locationAst < numericCallLiteralDiagnostic!.locationAst)
+             -> if { reifiedNumericDiagnostic => numericCallLiteralDiagnostic! }
+     }
+-    ir! -> typedIr.materializeUserBlockCallbacks(prepared, recursiveTypes!, genericInstances!) => blockInstances
++    ir! -> typedIr.materializeUserCallbacks(prepared, recursiveTypes!, genericInstances!) => blockInstances
+     # Block-specific instances replace generic bodies that have no caller block.
+     # Keep unrelated generic call bindings and all original source identities.
+     0 => genericBlockIndex!
+@@ -254,7 +258,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+                     -> if {
+                         prepared.package.ranges[genericCall.targetModule] => genericRange
+                         prepared.package.symbols[genericRange.symbolStart + genericCall.symbol] => genericDeclaration
+-                        genericDeclaration -> symbols.isUserBlockFunction
++                        (genericDeclaration -> symbols.isUserBlockFunction) or (genericDeclaration -> symbols.isUserStreamFunction)
+                             -> if {
+                                 3 => genericInstance!.status
+                                 genericInstance! => genericInstances![genericBlockIndex!]
+@@ -265,6 +269,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+         }
+     ir! -> typedIr.materializeUserBlockScopes(blockInstances) => scopedBlockInstances
+     scopedBlockInstances -> each instance { genericInstances! -> push(instance) }
++    ir! -> typedIr.materializeUserStreamConsumers(prepared, recursiveTypes!.types)
+     ir! -> typedIr.materializeContextualArrayOwners(prepared, recursiveTypes!)
+     # Imported async methods acquire their final call identity after the
+     # initial IR lowering. Give direct await flows the same value edge here.
+@@ -364,6 +369,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+     prepared -> ownershipCheck.bodyDiagnosticActivity(ir!, recursiveTypes!.types, recursiveTypes!.activeDeclarationBodyByAst, concreteOwnershipFunctions!) => activeOwnershipBodies
+     prepared -> ownershipCheck.analyzeResolvedLoweredContextWithInterpolationFactsAndPaths(ir!, recursiveTypes!.types, recursiveTypes!.fields, genericBodies.functionsByCall, ownershipInterpolationResultTypes, importedInterpolationCallTargetByNode!, activeOwnershipBodies) => ownershipAnalysis
+     ownershipAnalysis.diagnostics => ownershipDiagnostics!
++    inlinedMoveInputDiagnostics -> each invalidMoveInput { ownershipDiagnostics! -> push(invalidMoveInput) }
+     ownershipAnalysis.referencePaths => readonlyReferencePaths
+     ownershipAnalysis.consumedInterpolationBindingByNode => ordinaryConsumedInterpolationBindingByNode
+     prepared -> mutableBindingWarnings.collect(recursiveTypes!, ir!) => unusedMutableBindingWarnings

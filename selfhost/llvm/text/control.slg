@@ -445,7 +445,13 @@ userBlockStatementOrder rootIndex: Int, scopeIndex: Int, localStart: Int, localE
     root -> sourceStart(context, state) => position!
     2 => phase!
     context.ir[scopeIndex] => scope
-    scope.kind == 19 and scope.opcode == -227 and scope.symbol >= -1
+    # Stream frame construction records argument/state order in its IR copies.
+    # The source invocation is appended last and owns their remaining lifetime.
+    scope.kind == 19 and scope.opcode == -227 and scope.symbol == -6
+        -> if {
+            UserBlockStatementOrder { phase: 0, position: UIntSize(rootIndex) } -> return
+        }
+    scope.kind == 19 and scope.opcode == -227 and (scope.symbol >= -1 or scope.symbol == -5)
         -> if {
             root.kind == 17 and root.opcode == -227
                 -> if { 1 => phase! }
@@ -459,6 +465,16 @@ userBlockStatementOrder rootIndex: Int, scopeIndex: Int, localStart: Int, localE
                         alias -> sourceStart(context, state) => position!
                     }
                 search! + 1 => search!
+            }
+        }
+    # A stream emission retains its input value dependency when it becomes
+    # a continuation scope. Evaluate that subtree before downstream effects.
+    scope.kind == 19 and scope.opcode == -227 and scope.symbol == -5
+        -> if {
+            scope.operand0 => input!
+            input! >= 0 and input! != scopeIndex -> while {
+                input! == rootIndex -> if { 0 => phase! }
+                context.ir[input!].parent => input!
             }
         }
     UserBlockStatementOrder { phase: phase!, position: position! }
@@ -753,6 +769,7 @@ emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterCont
                                             and (localPreviousRoot -> regionPreviousStatementPending(regionLocalStart, localScheduled!, statementProjection!, context))
                                             -> if { false => localReady! }
                                         localCandidate.kind != 20 and localCandidate.operand0 >= 0 and (localCandidate.kind != 5 or context.ir[localCandidate.operand0].flags % 2 == 0)
+                                            and not (localCandidateIndex! -> scopeOwnsInputDependency(context))
                                             -> if {
                                                 context.ir[localCandidate.operand0].parent => localOperandAncestor!
                                                 false => localOperandBelongs!
@@ -937,6 +954,16 @@ emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterCont
                         localNodeIndex => regionTaskNodes![regionTaskSize!]
                     }
                     regionTaskSize! + 1 => regionTaskSize!
+                    localNode.symbol == -4 -> if {
+                        regionTaskSize! == (regionTaskKinds! -> len) -> if {
+                            regionTaskKinds! -> push(10)
+                            regionTaskNodes! -> push(localNodeIndex)
+                        } else {
+                            10 => regionTaskKinds![regionTaskSize!]
+                            localNodeIndex => regionTaskNodes![regionTaskSize!]
+                        }
+                        regionTaskSize! + 1 => regionTaskSize!
+                    }
                 } else { localNode.kind == 18 -> if {
                         regionTaskSize! == (regionTaskKinds! -> len)
                             -> if {

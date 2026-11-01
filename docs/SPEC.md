@@ -3137,7 +3137,11 @@ values
 
 The downstream `each` owns the mapped value for one iteration. Its `break` and
 `continue` control the original source loop, so mapping stops as soon as the
-consumer stops. `beforeEach` runs immediately before an outer range item enters
+consumer stops. A producer that emits directly from its first receiver has a
+single-iteration source scope. Its downstream `break` or `continue` leaves that
+source scope and does not target an enclosing loop in the caller. Abandoning
+that source scope releases producer-owned values while retaining caller values
+that survived argument evaluation. `beforeEach` runs immediately before an outer range item enters
 the downstream chain. `afterEach` first emits the item and runs its callback
 only after downstream processing returns. This expresses scoped preprocessing
 and postprocessing without testing the first or last inner index:
@@ -4561,7 +4565,9 @@ In a generic function, a readonly `box T` input infers `T` from the boxed
 element. A `box T` return is resolved after specialization against the same
 registered box types; a generic signature does not make an otherwise ineligible
 element boxable. A function can construct and return a fresh box for an eligible
-specialized element. This does not add support for generic `move` inputs.
+specialized element. Type-generic `move` inputs are validated after type
+substitution with the same owned-container or user-value restrictions as
+concrete `move` inputs, for both primary and additional parameters.
 The boxed element contract also applies through supported enclosing wrappers,
 including `Option<box T>` and `ref box T`. Inference preserves the declared box
 layer and does not insert a heap allocation for an unboxed argument.
@@ -6298,6 +6304,10 @@ Current backend:
   sequence is distinct from a missing input. Layout generation does not replace
   discovery of current source, interface, dependency, type-universe and emission
   facts or prove production cache consumption.
+  Bounded-array and bounded-dictionary layout records include capacity alongside
+  element or entry layout facts. Prepared type identities reuse equal storage
+  shapes including capacity. A new bounded dictionary first interns its heap
+  dictionary layout, preserving the C# type allocation order.
   Public struct, enum, trait and function interface fields use these same
   compiled rules. Current declaration adapters supply complete declaration names,
   parser type spelling, visibility, ordered members and signature facts; the

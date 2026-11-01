@@ -1,0 +1,38 @@
+diff --git a/selfhost/llvm/text/control_regions.slg b/selfhost/llvm/text/control_regions.slg
+index d2c147196..1f43be04d 100644
+--- a/selfhost/llvm/text/control_regions.slg
++++ b/selfhost/llvm/text/control_regions.slg
+@@ -32,6 +32,10 @@ import sys.file as file
+ 
+ writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.ir[transfer.operand0] => loop
++    loop -> isStreamConsumerScope -> if {
++        "  br label %stream_scope$(transfer.operand0 -> valueNameId(state))_cleanup" -> println
++        return
++    }
+     loop.kind == 6 and (loop.opcode -> typedIr.isDirectIterationOpcode)
+         -> if {
+             "  br label %each$(transfer.operand0 -> valueNameId(state))_" -> print
+@@ -467,10 +471,20 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                         }
+                 }
+         }
+-        regionEventKind! == 9 and not regionTerminated!
+-            -> if {
++        regionEventKind! == 9 -> if {
++            regionNode -> isStreamConsumerScope -> if {
++                not regionTerminated! -> if {
++                    "  br label %stream_scope$(regionNodeIndex -> valueNameId(state))_cleanup" -> println
++                }
++                "stream_scope$(regionNodeIndex -> valueNameId(state))_cleanup:" -> println
+                 OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
++                false => regionTerminated!
++            } else {
++                not regionTerminated! -> if {
++                    OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
++                }
+             }
++        }
+         regionEventKind! == 6 -> if {
+             not regionTerminated! -> if {
+                 true => loopActive[regionNodeIndex - regionLocalStart]

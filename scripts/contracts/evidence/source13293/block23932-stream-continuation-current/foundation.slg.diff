@@ -1,0 +1,30 @@
+diff --git a/selfhost/llvm/text/foundation.slg b/selfhost/llvm/text/foundation.slg
+index 0a10005ad..a21119384 100644
+--- a/selfhost/llvm/text/foundation.slg
++++ b/selfhost/llvm/text/foundation.slg
+@@ -236,6 +236,10 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
+             -> if { "control allocas owner $ownerIndex node $(nodeIndex!)" -> runtime.eprintln }
+         context.ir[nodeIndex!] => node
+         nodeIndex! -> emitDeferredTextCaptureAllocas(ownerIndex, context, state)
++        node.kind == 19 and node.opcode == -227 and node.symbol == -4
++            -> if {
++                "  %stream_scope$(nodeIndex! -> valueNameId(state))_cancelled = alloca i1, align 1" -> println
++            }
+         node.kind == 6 and node.opcode == -235 -> if {
+             "  %v$(nodeIndex! -> valueNameId(state))_environment_slot = alloca " -> print
+             node -> writeIrType(context, state)
+@@ -4674,7 +4678,13 @@ isDirectTextEachSource source: typedIr.TypedIrNode, context: ref emitterContext.
+ 
+ emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     not bodyTerminated -> if {
+-        "  br label %each$(eachIndex -> valueNameId(state))_continue" -> println
++        eachIndex -> streamPipelineOwner(context) => pipeline
++        pipeline >= 0 -> if {
++            "  %each$(eachIndex -> valueNameId(state))_stream_cancelled = load i1, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
++            "  br i1 %each$(eachIndex -> valueNameId(state))_stream_cancelled, label %each$(eachIndex -> valueNameId(state))_exit, label %each$(eachIndex -> valueNameId(state))_continue" -> println
++        } else {
++            "  br label %each$(eachIndex -> valueNameId(state))_continue" -> println
++        }
+     }
+     "each$(eachIndex -> valueNameId(state))_continue:" -> println
+     (context.ir[context.ir[eachIndex].operand0] -> typeQueries.isRange(context)) or context.ir[eachIndex].opcode == typedIr.repeatOpcode()

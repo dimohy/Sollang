@@ -944,6 +944,46 @@ internal sealed class IncrementalCodegenCache
                     }
                     break;
                 }
+                case Shared.CodegenKeyPart.TypeBoundedArrays:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.BoundedArrayLayoutFields();
+                    foreach (var d in types.BoundedArrays.OrderBy(static value => (int)value.Id))
+                    {
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeElement => $"{(int)d.ElementType}",
+                            Shared.CodegenKeyPart.TypeSize => $"{d.ElementSize}",
+                            Shared.CodegenKeyPart.TypeAlignment => $"{d.ElementAlignment}",
+                            Shared.CodegenKeyPart.TypeLength => $"{d.Capacity}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
+                case Shared.CodegenKeyPart.TypeBoundedDictionaries:
+                {
+                    var rule = Shared.CodegenCacheKeyPolicy.BoundedDictionaryLayoutFields();
+                    foreach (var d in types.BoundedDictionaries.OrderBy(static value => (int)value.Id))
+                    {
+                        var layout = d.Layout;
+                        fields.Add(TypeUniverseRecord(rule, part => part switch
+                        {
+                            Shared.CodegenKeyPart.TypeId => $"{(int)d.Id}",
+                            Shared.CodegenKeyPart.TypeKey => $"{(int)d.KeyType}",
+                            Shared.CodegenKeyPart.TypeValue => $"{(int)d.ValueType}",
+                            Shared.CodegenKeyPart.TypeKeySize => $"{layout.KeySize}",
+                            Shared.CodegenKeyPart.TypeKeyAlignment => $"{layout.KeyAlignment}",
+                            Shared.CodegenKeyPart.TypeValueOffset => $"{layout.ValueOffset}",
+                            Shared.CodegenKeyPart.TypeValueSize => $"{layout.ValueSize}",
+                            Shared.CodegenKeyPart.TypeValueAlignment => $"{layout.ValueAlignment}",
+                            Shared.CodegenKeyPart.TypeEntryStride => $"{layout.EntryStride}",
+                            Shared.CodegenKeyPart.TypeLength => $"{d.MaxEntries}",
+                            _ => throw UnexpectedKeyPart(part)
+                        }));
+                    }
+                    break;
+                }
                 default:
                     throw UnexpectedKeyPart(category);
             }

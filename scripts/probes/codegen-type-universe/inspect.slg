@@ -18,7 +18,7 @@ show field: ref keys.Field -> Unit uses Console {
     bytes -> slice(0, bytes -> len) -> println
 }
 
-case0: -> Unit uses Console, Process {
+baselineRecords: -> keys.TypeUniverseRecords uses Console, Process {
     keys.TypeUniverseRecords { categories: [plans.KeyPart; ~], typeIds: [Int; ~], memberOrdinals: [Int; ~], fields: [keys.Field; ~] } => records!
     [plans.KeyPart.TypeId, plans.KeyPart.TypeKey, plans.KeyPart.TypeValue, plans.KeyPart.TypeKeySize, plans.KeyPart.TypeKeyAlignment, plans.KeyPart.TypeValueOffset, plans.KeyPart.TypeValueSize, plans.KeyPart.TypeValueAlignment, plans.KeyPart.TypeEntryStride] -> bindings(["2009", "2", "3", "4", "4", "4", "1", "1", "8"]) => values0
     records! -> keys.appendTypeUniverseRecord(plans.KeyPart.TypeDictionaries, 2009, -1, values0) -> when {
@@ -98,12 +98,17 @@ case0: -> Unit uses Console, Process {
         Err(_) { "invalid-record" -> println
             process.exit(1) }
     }
-    records! -> keys.typeUniverseFields -> when {
+    records!
+}
+
+case0: -> Unit uses Console, Process {
+    baselineRecords() => records
+    records -> keys.typeUniverseFields -> when {
         Ok(fields) { fields -> each field { field -> show } }
         Err(_) { "invalid-fields" -> println
             process.exit(1) }
     }
-    records! -> keys.typeUniverseHash -> when {
+    records -> keys.typeUniverseHash -> when {
         Ok(hash) { keys.hexField(hash) => field
             field -> show }
         Err(_) { "invalid-hash" -> println
@@ -855,6 +860,34 @@ case8: -> Unit uses Console, Process {
     }
 }
 
+boundedCase capacity: Int, dictionary: Bool -> Unit uses Console, Process {
+    baselineRecords() => records!
+    dictionary -> if { plans.boundedDictionaryLayoutFields() } else { plans.boundedArrayLayoutFields() } => rule
+    dictionary -> if { "2011" } else { "2010" } => identity
+    Arena(0) => storage!
+    "$capacity" -> materialize(storage!) => length
+    dictionary -> if { [identity, "2", "3", "4", "4", "4", "1", "1", "16", length; ~] } else { [identity, "2", "4", "4", length; ~] } => values
+    dictionary -> if { plans.KeyPart.TypeBoundedDictionaries } else { plans.KeyPart.TypeBoundedArrays } => category
+    rule.parts -> bindings(values) => fields
+    dictionary -> if { 2011 } else { 2010 } => typeId
+    records! -> keys.appendTypeUniverseRecord(category, typeId, -1, fields) -> when {
+        Ok {}
+        Err(_) { "invalid-record" -> println
+            process.exit(1) }
+    }
+    records! -> keys.typeUniverseFields -> when {
+        Ok(fields) { fields -> each field { field -> show } }
+        Err(_) { "invalid-fields" -> println
+            process.exit(1) }
+    }
+    records! -> keys.typeUniverseHash -> when {
+        Ok(hash) { keys.hexField(hash) => field
+            field -> show }
+        Err(_) { "invalid-hash" -> println
+            process.exit(1) }
+    }
+}
+
 main {
     case0()
     case1()
@@ -865,4 +898,8 @@ main {
     case6()
     case7()
     case8()
+    4 -> boundedCase(false)
+    5 -> boundedCase(false)
+    4 -> boundedCase(true)
+    5 -> boundedCase(true)
 }

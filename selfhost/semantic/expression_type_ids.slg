@@ -2015,6 +2015,7 @@ resolveContextCoreSeeded prepared: semanticContext.SemanticSnapshot, seeds: ref 
 # A completed call table owns one source-ordered argument binding table. Share
 # it with initial inference and final call facts instead of rebuilding it.
 resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSnapshot, blockAndFlowArgumentBindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ExpressionTypeIdSet {
+    prepared.package -> indexCallArgumentBindings(blockAndFlowArgumentBindings) => callbackArgumentIndex
     [typeIds.SemanticType; ~] => types!
     0 => semanticTypeCopyIndex56!
     semanticTypeCopyIndex56! < (prepared.semantic.types -> len)
@@ -2181,7 +2182,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
             controlOwnerSource! + 1 => controlOwnerSource!
         }
 
-    resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule!, sourceTextSymbol!, seeds.ownerBySource)
+    resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule!, sourceTextSymbol!, seeds.ownerBySource, callbackArgumentIndex)
     resolveContextualDictionaryStructValues(prepared, types!, expressions!, expressionIndexByAst!)
     # Register literal backing storage with the declared element contract.
     # Readonly array returns keep their own extent and independent values.
@@ -2203,7 +2204,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
     prepared.package.symbols -> each patternSymbol { patternBindingTypeBySymbol! -> push(-1) }
     [Int; ~] => expectedContextByAst!
     prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
-    resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!)
+    resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!, callbackArgumentIndex)
 
     # Imported calls become typed during path resolution. Commit their Result
     # payloads before inferred bindings, members and arithmetic consume them.
@@ -2213,7 +2214,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
         resolveResultPropagationPayloadTypes(prepared, types!, expressions!, expressionIndexByAst!) => payloadChanged
         wrapperChanged or payloadChanged => propagationPathsChanged!
         propagationPathsChanged! -> if {
-            resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!)
+            resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!, callbackArgumentIndex)
         }
     }
 
@@ -2355,7 +2356,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
                                     }
                             }
                         }
-                    prepared -> primaryBlockRoleTypeId(types!, references!, referenceIndexByTypeAst!, expressions!, expressionIndexByAst!, blockAndFlowArgumentBindings, parameterSourceIndex!, parameter) => declaredRoleType
+                    prepared -> primaryBlockRoleTypeId(types!, references!, referenceIndexByTypeAst!, expressions!, expressionIndexByAst!, blockAndFlowArgumentBindings, parameterSourceIndex!, parameter, callbackArgumentIndex) => declaredRoleType
                     declaredRoleType >= 0 -> if {
                         declaredRoleType => lexicalBindingTypeBySymbol![parameterRange.symbolStart + parameterSymbolIndex!]
                     }
@@ -2891,7 +2892,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
     [ExpressionTypeId; ~] => externalCallResults!
     externalResults -> each value { externalCallResults! -> push(value) }
 
-    resolveUserBlockContracts(prepared, types!, references!, referenceIndexByTypeAst!, expressions!, expressionIndexByAst!, blockAndFlowArgumentBindings) => userBlockContracts
+    resolveUserBlockContracts(prepared, types!, references!, referenceIndexByTypeAst!, expressions!, expressionIndexByAst!, blockAndFlowArgumentBindings, callbackArgumentIndex) => userBlockContracts
     ExpressionTypeIdSet {
         types: types!
         references: references!

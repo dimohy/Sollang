@@ -1,0 +1,63 @@
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.Statements.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Statements.cs
+index 4a937ff38..45fbe04dd 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.Statements.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Statements.cs
+@@ -783,6 +783,12 @@ internal sealed partial class LlvmEmitter
+             }
+         }
+ 
++        // The first receiver is a source iteration even when its producer
++        // emits directly. Inner producer loops retain their own authority.
++        var sourceEndLabel = NextLabel("stream_source_end");
++        _loopContexts.Push(new LoopContext(
++            sourceEndLabel, sourceEndLabel, CaptureLocals(), null, null,
++            StreamSourceCallerDepth: _streamProducerCallers.Count));
+         try
+         {
+             EmitUserBlockFunctionCall(
+@@ -792,9 +798,13 @@ internal sealed partial class LlvmEmitter
+         }
+         finally
+         {
++            _loopContexts.Pop();
+             UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+             _currentStreamCancellationSlot = previousCancellationSlot;
+         }
++        if (!_currentBlockTerminated) EmitBranch(sourceEndLabel);
++        EmitLabel(sourceEndLabel);
++        _currentBlockLabel = sourceEndLabel;
+     }
+ 
+     private void EmitRuntimeProducerPipeline(BoundEventStreamPipeline pipeline)
+@@ -1914,6 +1924,23 @@ internal sealed partial class LlvmEmitter
+         _currentFunction = function;
+         RestoreLocals(blockLocals);
+         BindInlineFunctionParameters(function, argument, additionalArguments);
++        var tracksStreamProducer = function.StreamElementType is not null;
++        if (tracksStreamProducer)
++        {
++            // Arguments have now transferred ownership. An abandoned source
++            // must preserve this caller scope, not its pre-argument snapshot.
++            if (_loopContexts.TryPeek(out var sourceLoop)
++                && sourceLoop.StreamSourceCallerDepth == _streamProducerCallers.Count)
++            {
++                _loopContexts.Pop();
++                _loopContexts.Push(sourceLoop with
++                {
++                    OuterScope = returnLocals,
++                    StreamSourceSurvivor = returnLocals
++                });
++            }
++            _streamProducerCallers.Push(returnLocals);
++        }
+         RuntimeValue result = RuntimeUnit.Instance;
+         var preserveCaller = _activeAsyncCfg is not null;
+         if (preserveCaller)
+@@ -1956,6 +1983,7 @@ internal sealed partial class LlvmEmitter
+         }
+         finally
+         {
++            if (tracksStreamProducer) _streamProducerCallers.Pop();
+             if (preserveCaller)
+             {
+                 _asyncHiddenScopes.Pop();

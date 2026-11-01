@@ -176,8 +176,21 @@ internal sealed partial class LlvmEmitter
         var adjustedLoopContext = false;
         if (invocation.OwnsItem && _loopContexts.TryPeek(out var activeLoop))
         {
-            _loopContexts.Push(activeLoop with { OuterScope = callbackOuterLocals });
+            var callbackLoop = activeLoop with { OuterScope = callbackOuterLocals };
+            _loopContexts.Push(callbackLoop);
             adjustedLoopContext = true;
+            if (activeLoop.StreamSourceCallerDepth >= 0)
+            {
+                var sourceCallers = _streamProducerCallers
+                    .Take(_streamProducerCallers.Count - activeLoop.StreamSourceCallerDepth);
+                callbackBoundary = new RuntimeCallbackLoopBoundary(
+                    new RuntimeCallbackLoopAuthority(
+                        [callbackLoop], invocation.LoopAuthority?.HiddenScopes ?? []),
+                    blockFunctionLocals,
+                    producerSnapshots.Concat(sourceCallers).ToArray(),
+                    invocation.CallerLocals, invocation.CallerAsyncScopes ?? []);
+                _callbackLoopBoundaries.Push(callbackBoundary);
+            }
         }
         RuntimeValue result = RuntimeUnit.Instance;
         if (preserveProducer)
@@ -226,8 +239,11 @@ internal sealed partial class LlvmEmitter
             {
                 if (!ReferenceEquals(_callbackLoopBoundaries.Pop(), callbackBoundary))
                     throw new SollangException("block callback lexical boundary stack diverged");
-                _loopContexts.Clear();
-                foreach (var loop in producerLoops.Reverse()) _loopContexts.Push(loop);
+                if (!invocation.OwnsItem)
+                {
+                    _loopContexts.Clear();
+                    foreach (var loop in producerLoops.Reverse()) _loopContexts.Push(loop);
+                }
             }
             if (preserveProducer)
             {
@@ -338,6 +354,7 @@ internal sealed partial class LlvmEmitter
             _asyncScopeSnapshots.Clear();
             _asyncScopeSnapshots.Push(stage.StateLocals);
         }
+        _streamProducerCallers.Push(returnLocals);
         try
         {
             RestoreLocals(stage.StateLocals);
@@ -379,6 +396,7 @@ internal sealed partial class LlvmEmitter
         }
         finally
         {
+            _streamProducerCallers.Pop();
             if (preserveCaller)
             {
                 _asyncHiddenScopes.Pop();
@@ -2141,7 +2159,9 @@ internal sealed partial class LlvmEmitter
         LocalScope OuterScope,
         List<(LocalScope Scope, string Label)>? ContinueEdges,
         List<(LocalScope Scope, string Label)>? BreakEdges,
-        Action<LoopControlKind, string>? CaptureContinuationEdge = null);
+        Action<LoopControlKind, string>? CaptureContinuationEdge = null,
+        int StreamSourceCallerDepth = -1,
+        LocalScope? StreamSourceSurvivor = null);
 
     private sealed record RuntimeBlockInvocation(
         string ItemName,
@@ -2174,6 +2194,7 @@ internal sealed partial class LlvmEmitter
         IReadOnlyList<LocalScope> CallerSnapshots);
 
     private readonly Stack<RuntimeCallbackLoopBoundary> _callbackLoopBoundaries = new();
+    private readonly Stack<LocalScope> _streamProducerCallers = new();
 
     private RuntimeCallbackLoopAuthority CaptureCallbackLoopAuthority() =>
         new(_loopContexts.ToArray(), _asyncHiddenScopes.ToArray());
@@ -2193,7 +2214,7 @@ internal sealed partial class LlvmEmitter
                 .Where(hidden => !retainedHidden.Any(retained => ReferenceEquals(retained, hidden)))
                 .SelectMany(hidden => new[] { hidden.Scope }.Concat(hidden.Mirrors)))
             .Distinct<LocalScope>(ReferenceEqualityComparer.Instance).ToArray();
-        var survivor = target.OuterScope;
+        var survivor = target.StreamSourceSurvivor ?? target.OuterScope;
         var dropped = new List<(LocalScope Scope, string Name)>();
         var obligations = new List<TerminatingOwnedCleanupObligation>();
         try

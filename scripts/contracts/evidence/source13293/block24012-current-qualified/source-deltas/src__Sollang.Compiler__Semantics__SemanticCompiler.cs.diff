@@ -1,0 +1,54 @@
+diff --git a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+index fb842c780..197fc5529 100644
+--- a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -1485,11 +1485,6 @@ internal sealed partial class SemanticCompiler
+                     function.Column,
+                     $"generic function input must use its type parameter '{function.GenericParameterName}' in this slice");
+             }
+-            if (function.InputOwnership == FunctionInputOwnership.Move
+-                && !function.IsValueGeneric)
+-            {
+-                throw Error(function.Line, function.Column, "generic move inputs are not implemented yet");
+-            }
+         }
+ 
+         if (IsReservedName(function.Name))
+@@ -2896,6 +2891,18 @@ internal sealed partial class SemanticCompiler
+ 
+     }
+ 
++    private void ValidateSpecializedInputOwnership(
++        BoundFunctionInputOwnership ownership, BoundType? type, int line, int column)
++    {
++        var declarationOwnership = ownership switch
++        {
++            BoundFunctionInputOwnership.Move => FunctionInputOwnership.Move,
++            BoundFunctionInputOwnership.MutableBorrow => FunctionInputOwnership.MutableBorrow,
++            _ => FunctionInputOwnership.Default
++        };
++        BindFunctionInputOwnership(declarationOwnership, type, line, column);
++    }
++
+     private void ValidateGenericSpecialization(
+         BoundFunction function,
+         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
+@@ -2905,16 +2912,10 @@ internal sealed partial class SemanticCompiler
+         // declaration-wide origin pass. Analyze only this new owner tree before
+         // validating its return; do not rescan every function for each instance.
+         DiscoverReadonlyReferenceReturnOrigins(parentFunctions, [function]);
+-        if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
+-        {
+-            BindFunctionInputOwnership(FunctionInputOwnership.MutableBorrow, function.InputType, function.Line, function.Column);
+-        }
++        ValidateSpecializedInputOwnership(function.InputOwnership, function.InputType, function.Line, function.Column);
+         foreach (var parameter in function.AdditionalParameters ?? [])
+         {
+-            if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
+-            {
+-                BindFunctionInputOwnership(FunctionInputOwnership.MutableBorrow, parameter.Type, parameter.Line, parameter.Column);
+-            }
++            ValidateSpecializedInputOwnership(parameter.Ownership, parameter.Type, parameter.Line, parameter.Column);
+         }
+         var previousModuleName = _currentModuleName;
+         var previousTypeScopeName = _currentTypeScopeName;

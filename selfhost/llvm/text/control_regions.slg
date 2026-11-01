@@ -29,9 +29,14 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
+import sys.process as process
 
 writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[transfer.operand0] => loop
+    loop -> isStreamConsumerScope -> if {
+        "  br label %stream_scope$(transfer.operand0 -> valueNameId(state))_cleanup" -> println
+        return
+    }
     loop.kind == 6 and (loop.opcode -> typedIr.isDirectIterationOpcode)
         -> if {
             "  br label %each$(transfer.operand0 -> valueNameId(state))_" -> print
@@ -101,6 +106,25 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
         regionOrder[regionOrderIndex!] => regionNodeIndex
         context.ir[regionNodeIndex] => regionNode
         regionEventKinds[regionOrderIndex!] => regionEventKind!
+        regionEventKind! == 1 and regionNode.kind == 30 and regionNode.astNode >= 0
+            -> if {
+                context.ranges[regionNode.sourceModule] => sourceRange
+                context.nodes[sourceRange.astStart + regionNode.astNode].kind == 62
+                    -> if { 11 => regionEventKind! }
+            }
+        regionEventKind! == 10 and not regionTerminated!
+            -> if {
+                "  store i1 false, ptr %stream_scope$(regionNodeIndex -> valueNameId(state))_cancelled, align 1" -> println
+            }
+        regionEventKind! == 11 and not regionTerminated!
+            -> if {
+                regionNodeIndex -> streamPipelineOwner(context) => pipeline
+                pipeline < 0 -> if {
+                    "; sollang compiler invariant [STREAM_STOP_SCOPE_MISSING]" -> println
+                    process.exit(1)
+                }
+                "  store i1 true, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
+            }
         # Ordinary enclosing bodies delegate interpolation to its consumer.
         # Once inside that canonical root, its nested regions own their events.
         state.frozenCanonicalInterpolationRootByIr[regionNodeIndex] >= 0
@@ -467,10 +491,20 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                         }
                 }
         }
-        regionEventKind! == 9 and not regionTerminated!
-            -> if {
+        regionEventKind! == 9 -> if {
+            regionNode -> isStreamConsumerScope -> if {
+                not regionTerminated! -> if {
+                    "  br label %stream_scope$(regionNodeIndex -> valueNameId(state))_cleanup" -> println
+                }
+                "stream_scope$(regionNodeIndex -> valueNameId(state))_cleanup:" -> println
                 OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                false => regionTerminated!
+            } else {
+                not regionTerminated! -> if {
+                    OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                }
             }
+        }
         regionEventKind! == 6 -> if {
             not regionTerminated! -> if {
                 true => loopActive[regionNodeIndex - regionLocalStart]
@@ -492,7 +526,13 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                 -> if {
                     not regionTerminated! -> if {
                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-                        "  br label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
+                        regionNodeIndex -> streamPipelineOwner(context) => pipeline
+                        pipeline >= 0 -> if {
+                            "  %while$(regionNodeIndex -> valueNameId(state))_stream_cancelled = load i1, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
+                            "  br i1 %while$(regionNodeIndex -> valueNameId(state))_stream_cancelled, label %while$(regionNodeIndex -> valueNameId(state))_exit, label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
+                        } else {
+                            "  br label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
+                        }
                     }
                     "while$(regionNodeIndex -> valueNameId(state))_exit:" -> println
                     false => regionTerminated!

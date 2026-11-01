@@ -1,0 +1,48 @@
+diff --git a/selfhost/semantic/reference_prepared_type_ids.slg b/selfhost/semantic/reference_prepared_type_ids.slg
+index 7594eaaa2..92018664d 100644
+--- a/selfhost/semantic/reference_prepared_type_ids.slg
++++ b/selfhost/semantic/reference_prepared_type_ids.slg
+@@ -355,7 +355,7 @@ metadataSignatureRoots prepared: ref semanticContext.SemanticSnapshot, sourceRoo
+             true => seen![identity]
+             prepared.semantic.types[identity] => type
+             type.containsParameter -> if {
+-                type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6 or type.kind == 8 or type.kind == 10
++                type.kind == 3 or type.kind == 4 or type.kind == 5 or type.kind == 6 or type.kind == 8 or type.kind == 10 or type.kind == 12 or type.kind == 13
+                     or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1))
+                     -> if { roots! -> push(identity) }
+                 type.first >= 0 -> if { pending! -> push(type.first) }
+@@ -438,6 +438,8 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
+             == 3 => synthetic.Kind.Dynamic
+             == 4 => synthetic.Kind.Fixed
+             == 5 => synthetic.Kind.Dictionary
++            == 12 => synthetic.Kind.BoundedArray
++            == 13 => synthetic.Kind.BoundedDictionary
+             == 8 => synthetic.Kind.Reference
+             == 10 => synthetic.Kind.Product
+             == 11 => synthetic.Kind.ProductField
+@@ -461,16 +463,17 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
+         recipes! -> push(synthetic.Recipe {
+             kind: kind
+             first: type.first
+-            second: (type.kind == 7 and type.origin == 4 and type.symbol == 1) or type.kind == 11 or type.kind == 5
++            second: (type.kind == 7 and type.origin == 4 and type.symbol == 1) or type.kind == 11 or type.kind == 5 or type.kind == 13
+                 -> if { type.second } else { -1 }
+-            length: type.kind == 4 or type.kind == 10 -> if { type.length } else {
+-                type.kind == 11 -> if { labels.components[typeIndex!] } else {
+-                    # A resolved trait symbol is an exact declaration identity;
+-                    # aliases share it, equal names in other modules do not.
+-                    type.kind == 1 and type.origin == 16
+-                        -> if { prepared.package.ranges[type.module].symbolStart + type.symbol } else { 0 }
++            length: type.kind == 4 or type.kind == 10 or type.kind == 12 or type.kind == 13
++                -> if { type.length } else {
++                    type.kind == 11 -> if { labels.components[typeIndex!] } else {
++                        # A resolved trait symbol is an exact declaration identity;
++                        # aliases share it, equal names in other modules do not.
++                        type.kind == 1 and type.origin == 16
++                            -> if { prepared.package.ranges[type.module].symbolStart + type.symbol } else { 0 }
++                    }
+                 }
+-            }
+         })
+         typeIndex! + 1 => typeIndex!
+     }

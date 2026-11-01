@@ -1,0 +1,51 @@
+diff --git a/selfhost/llvm/text/function_scheduling.slg b/selfhost/llvm/text/function_scheduling.slg
+index 40ac3386a..fb7d40c6f 100644
+--- a/selfhost/llvm/text/function_scheduling.slg
++++ b/selfhost/llvm/text/function_scheduling.slg
+@@ -8,6 +8,38 @@ isUserBlockScope node: typedIr.TypedIrNode -> Bool {
+     node.kind == 19 and node.opcode == -227 and node.symbol != -2
+ }
+ 
++# Consumer and per-item scopes own the cleanup target of stream transfers.
++isStreamConsumerScope node: typedIr.TypedIrNode -> Bool {
++    node.kind == 19 and node.opcode == -227 and (node.symbol == -4 or node.symbol == -5)
++}
++
++# Cancellation belongs to the nearest pipeline invocation, including nested
++# consumers. Producer and callback loops observe it after their current body.
++streamPipelineOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
++    nodeIndex => ancestor!
++    ancestor! >= 0 -> while {
++        context.ir[ancestor!] => owner
++        owner.kind == 19 and owner.opcode == -227 and owner.symbol == -4
++            -> if { ancestor! -> return }
++        owner.parent => ancestor!
++    }
++    -1
++}
++
++# Enter an owning scope before scheduling its internal input computation.
++# Inputs outside that scope still have to be ready before the scope starts.
++scopeOwnsInputDependency nodeIndex: Int, context: ref emitterContext.EmitContext -> Bool {
++    context.ir[nodeIndex] => node
++    not (node -> isUserBlockScope) or node.operand0 < 0
++        -> if { false -> return }
++    node.operand0 => ancestor!
++    ancestor! >= 0 -> while {
++        ancestor! == nodeIndex -> if { true -> return }
++        context.ir[ancestor!].parent => ancestor!
++    }
++    false
++}
++
+ # Planned stream terminals own their ordered callback and junction dispatch.
+ # Ordinary iteration and explicit transfers still need region control flow.
+ directIterationNeedsStructuredBody nodeIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+@@ -527,6 +559,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
+                                 }
+                         }
+                     scheduleReady! and scheduleNode.kind != 38 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart]
++                        and not (scheduleCandidate! -> scopeOwnsInputDependency(context))
+                         -> if { false => scheduleReady! }
+                     # Assignment operand0 may be a non-emitting value wrapper.
+                     # Wait for the canonical child that the emitter reads, so a

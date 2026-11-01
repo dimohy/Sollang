@@ -1,0 +1,133 @@
+diff --git a/selfhost/semantic/ownership_check.slg b/selfhost/semantic/ownership_check.slg
+index c55afcfe4..eb5a251d9 100644
+--- a/selfhost/semantic/ownership_check.slg
++++ b/selfhost/semantic/ownership_check.slg
+@@ -3615,6 +3615,15 @@ appendInvalidMoveInputSignature prepared: ref semanticContext.SemanticSnapshot,
+                         parameter.astNode >= 0 and parameter.astNode < sourceRange.astCount
+                             -> if {
+                                 prepared.package.nodes[sourceRange.astStart + parameter.astNode] => declaration
++                                declaration.start => diagnosticStart!
++                                declaration.length => diagnosticLength!
++                                # An additional parameter AST includes its comma;
++                                # C# locates its error at the parameter name.
++                                declaration.kind == 60 -> if {
++                                    prepared.package.tokens[sourceRange.tokenStart + declaration.payloadToken] => parameterName
++                                    parameterName.span.start => diagnosticStart!
++                                    parameterName.span.length => diagnosticLength!
++                                }
+                                 diagnostics -> push(OwnershipDiagnostic {
+                                     code: 37
+                                     sourceModule: function.sourceModule
+@@ -3629,8 +3638,8 @@ appendInvalidMoveInputSignature prepared: ref semanticContext.SemanticSnapshot,
+                                     readonlyReferencePath: -1
+                                     span: syntax.SourceSpan {
+                                         fileId: function.sourceModule
+-                                        start: declaration.start
+-                                        length: declaration.length
++                                        start: diagnosticStart!
++                                        length: diagnosticLength!
+                                     }
+                                 })
+                             }
+@@ -3762,6 +3771,23 @@ public invalidTaskOperationContracts prepared: ref semanticContext.SemanticSnaps
+     diagnostics!
+ }
+ 
++appendInvalidMoveFunctionSignature prepared: ref semanticContext.SemanticSnapshot, function: typedIr.TypedIrNode, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], traits: ref [Int; ~], diagnostics: mut [OwnershipDiagnostic; ~] -> Unit {
++    function.operand1 >= 0 and function.operand1 < (typed -> len)
++        -> if {
++            typed[function.operand1] => primaryParameter
++            prepared -> appendInvalidMoveInputSignature(function, primaryParameter, function.flags % 2 == 1, types, traits, diagnostics)
++        }
++    function.nextOperand => additionalIndex!
++    0 => additionalCount!
++    additionalIndex! >= 0 and additionalIndex! < (typed -> len)
++        and additionalCount! < (typed -> len) -> while {
++            typed[additionalIndex!] => additionalParameter
++            prepared -> appendInvalidMoveInputSignature(function, additionalParameter, additionalParameter.flags % 2 == 1, types, traits, diagnostics)
++            additionalParameter.nextOperand => additionalIndex!
++            additionalCount! + 1 => additionalCount!
++        }
++}
++
+ public invalidMoveInputSignatures prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], traits: ref [Int; ~] -> [OwnershipDiagnostic; ~] {
+     [OwnershipDiagnostic; ~] => diagnostics!
+     0 => functionIndex!
+@@ -3769,22 +3795,64 @@ public invalidMoveInputSignatures prepared: ref semanticContext.SemanticSnapshot
+         typed[functionIndex!] => function
+         function.kind == 0 and not (function -> typedIr.isDiagnosticTrackFunction(prepared))
+             -> if {
+-                function.operand1 >= 0 and function.operand1 < (typed -> len)
++                prepared -> appendInvalidMoveFunctionSignature(function, typed, types, traits, diagnostics!)
++            }
++        functionIndex! + 1 => functionIndex!
++    }
++    diagnostics!
++}
++
++# Concrete move admission is a located signature error, including instances
++# whose IR signature has been replaced. Publish only the first source error.
++public firstInvalidMoveInputSignatureDiagnostic prepared: ref semanticContext.SemanticSnapshot, diagnostics: ref [OwnershipDiagnostic; ~] -> semanticDiagnostics.SignatureTypeDiagnostic {
++    -1 => selected!
++    0 => index!
++    index! < (diagnostics -> len) -> while {
++        diagnostics[index!] => candidate
++        candidate.code == 37 -> if {
++            selected! < 0 -> if { index! => selected! } else {
++                diagnostics[selected!] => previous
++                candidate.sourceModule < previous.sourceModule
++                    or (candidate.sourceModule == previous.sourceModule and candidate.span.start < previous.span.start)
++                    -> if { index! => selected! }
++            }
++        }
++        index! + 1 => index!
++    }
++    selected! < 0 -> if {
++        semanticDiagnostics.SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 } -> return
++    }
++    diagnostics[selected!] => diagnostic
++    prepared.package.ranges[diagnostic.sourceModule] => range
++    # Code 37 captures an actual parameter declaration's AST span before
++    # inlining. Its source token remains stable when IR nodes are replaced.
++    0 => tokenIndex!
++    tokenIndex! < range.tokenCount and prepared.package.tokens[range.tokenStart + tokenIndex!].span.start < diagnostic.span.start
++        -> while { tokenIndex! + 1 => tokenIndex! }
++    semanticDiagnostics.SignatureTypeDiagnostic { code: 24, sourceModule: diagnostic.sourceModule, functionSymbol: diagnostic.functionSymbol, typeAst: -1, nameToken: tokenIndex!, genericToken: -1 }
++}
++
++# Inlining removes concrete function signatures. Preserve their move-type
++# decision before the callback body becomes a lexical invocation scope.
++public invalidInlinedMoveInputSignatures prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], traits: ref [Int; ~], instances: ref [typedIr.GenericFunctionInstance; ~] -> [OwnershipDiagnostic; ~] {
++    [OwnershipDiagnostic; ~] => diagnostics!
++    instances -> each instance {
++        instance.status == 0 and instance.functionNode >= 0 and instance.functionNode < (typed -> len)
++            -> if {
++                typed[instance.functionNode] => function
++                function.kind == 0 and function.sourceModule >= 0
++                    and function.sourceModule < (prepared.package.ranges -> len) and function.symbol >= 0
+                     -> if {
+-                        typed[function.operand1] => primaryParameter
+-                        prepared -> appendInvalidMoveInputSignature(function, primaryParameter, function.flags % 2 == 1, types, traits, diagnostics!)
+-                    }
+-                function.nextOperand => additionalIndex!
+-                0 => additionalCount!
+-                additionalIndex! >= 0 and additionalIndex! < (typed -> len)
+-                    and additionalCount! < (typed -> len) -> while {
+-                        typed[additionalIndex!] => additionalParameter
+-                        prepared -> appendInvalidMoveInputSignature(function, additionalParameter, additionalParameter.flags % 2 == 1, types, traits, diagnostics!)
+-                        additionalParameter.nextOperand => additionalIndex!
+-                        additionalCount! + 1 => additionalCount!
++                        prepared.package.ranges[function.sourceModule] => range
++                        function.symbol < range.symbolCount -> if {
++                            prepared.package.symbols[range.symbolStart + function.symbol] => declaration
++                            (declaration -> symbols.isUserBlockFunction) or (declaration -> symbols.isUserStreamFunction)
++                                -> if {
++                                    prepared -> appendInvalidMoveFunctionSignature(function, typed, types, traits, diagnostics!)
++                                }
++                        }
+                     }
+             }
+-        functionIndex! + 1 => functionIndex!
+     }
+     diagnostics!
+ }

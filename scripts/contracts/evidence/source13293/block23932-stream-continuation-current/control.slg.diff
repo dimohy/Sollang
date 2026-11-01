@@ -1,0 +1,34 @@
+diff --git a/selfhost/llvm/text/control.slg b/selfhost/llvm/text/control.slg
+index 3147bf399..708e0809c 100644
+--- a/selfhost/llvm/text/control.slg
++++ b/selfhost/llvm/text/control.slg
+@@ -445,6 +445,12 @@ userBlockStatementOrder rootIndex: Int, scopeIndex: Int, localStart: Int, localE
+     root -> sourceStart(context, state) => position!
+     2 => phase!
+     context.ir[scopeIndex] => scope
++    # Stream frame construction records argument/state order in its IR copies.
++    # The source invocation is appended last and owns their remaining lifetime.
++    scope.kind == 19 and scope.opcode == -227 and scope.symbol == -6
++        -> if {
++            UserBlockStatementOrder { phase: 0, position: UIntSize(rootIndex) } -> return
++        }
+     scope.kind == 19 and scope.opcode == -227 and scope.symbol >= -1
+         -> if {
+             root.kind == 17 and root.opcode == -227
+@@ -937,6 +943,16 @@ emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterCont
+                         localNodeIndex => regionTaskNodes![regionTaskSize!]
+                     }
+                     regionTaskSize! + 1 => regionTaskSize!
++                    localNode.symbol == -4 -> if {
++                        regionTaskSize! == (regionTaskKinds! -> len) -> if {
++                            regionTaskKinds! -> push(10)
++                            regionTaskNodes! -> push(localNodeIndex)
++                        } else {
++                            10 => regionTaskKinds![regionTaskSize!]
++                            localNodeIndex => regionTaskNodes![regionTaskSize!]
++                        }
++                        regionTaskSize! + 1 => regionTaskSize!
++                    }
+                 } else { localNode.kind == 18 -> if {
+                         regionTaskSize! == (regionTaskKinds! -> len)
+                             -> if {

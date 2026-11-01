@@ -144,6 +144,7 @@ def main():
     parser.add_argument('--include-type-names', action='store_true')
     parser.add_argument('--registered-observation-result', type=Path)
     parser.add_argument('--allocation-controls', action='store_true')
+    parser.add_argument('--bounded-registration-controls', action='store_true')
     parser.add_argument('--builtin-display-controls', action='store_true')
     parser.add_argument('--include-codegen-request', action='store_true')
     parser.add_argument('--emission-only-projection', action='store_true')
@@ -179,10 +180,14 @@ def main():
     assert not args.stable_body_registration_output or (args.include_stable_identities and not args.declaration_type_uses), 'body registration comparison requires whole-program stable identities'
     assert not args.allocation_controls or not (args.registered_sources or args.emitter or args.verify_source or args.baseline_result), 'allocation controls are an independent CSharp factory observation'
     assert not args.builtin_display_controls or not (args.allocation_controls or args.registered_sources or args.emitter or args.verify_source or args.baseline_result), 'builtin display controls are an independent CSharp observation'
+    assert not args.bounded_registration_controls or not (args.allocation_controls or args.builtin_display_controls or args.registered_sources or args.emitter or args.verify_source or args.baseline_result), 'bounded registration controls are an independent CSharp factory observation'
     compiler = args.compiler.resolve()
+    if args.emitter or args.verify_source:
+        assert compiler.suffix.lower() == '.exe' and compiler.is_file(), 'SOURCE_PROOF_REQUIRES_MANAGED_APPHOST_EXE'
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
     vectors = ROOT / 'scripts/probes/codegen-type-universe/vectors.json'
+    vector_count = len(json.loads(vectors.read_text(encoding='utf-8-sig')))
     inputs = [Path(__file__), compiler, *managed_runtime_inputs(compiler), harness,
               harness.with_name('Limits.cs'), vectors, ROOT / 'Directory.Build.props', ROOT / 'global.json']
     if args.builtin_display_controls:
@@ -191,7 +196,7 @@ def main():
     baseline = None
     if args.baseline_result:
         baseline = json.loads(args.baseline_result.read_text(encoding='utf-8'))
-        assert baseline['status'] == 'passed' and baseline['completed'] == baseline['total'] == 9
+        assert baseline['status'] == 'passed' and baseline['completed'] == baseline['total'] == vector_count
         assert baseline['inputsStable'] and baseline['processesStopped']
         # The new compiler is expected to change; frozen input vectors must not.
         assert baseline['inputHashes'][str(vectors.resolve())] == sha(vectors)
@@ -239,11 +244,14 @@ def main():
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
     with VerificationContractLease(list(map(Path, fingerprints))):
-        result = dict(schemaVersion=1, status='running', completed=0, total=1 if args.registered_sources else 18 if args.emitter else 9, cases=[],
+        result = dict(schemaVersion=1, status='running', completed=0, total=1 if args.registered_sources else 2 * vector_count if args.emitter else vector_count, cases=[],
                       inputHashes=fingerprints, claimsGoalComplete=False,
-                      scope='Actual BuildTypeUniverseHash and table records: eight registered layout categories, '
+                      scope='Actual BuildTypeUniverseHash and table records: ten registered layout categories, '
                             'field/variant/type order, null fixed length, Unicode and category mutations. '
                             'Metadata-only; no Native type-pool selection or cache reuse claim.')
+        if args.bounded_registration_controls:
+            result['total'] = 1
+            result['scope'] = 'Actual CSharp bounded storage interning, capacity distinction, reuse and prerequisite heap dictionary allocation; relative identities only.'
         if args.allocation_controls:
             result['total'] = 1
             result['scope'] = 'Actual CSharp deferred fixed-array reservation, occupied identities and relative allocation trajectory; semantic arena coordinates and canonical metadata IDs remain distinct.'
@@ -284,7 +292,7 @@ def main():
                     assert done.stdout == expected, (backend, done.stdout, expected)
                     result['cases'] += [dict(id=backend + ':' + case['id'], passed=True,
                                             observation=case['observation']) for case in baseline['cases']]
-                    result['completed'] += 9
+                    result['completed'] += vector_count
                 result['status'] = 'passed'
             else:
                 shutil.copyfile(vectors, output / 'vectors.json')
@@ -295,7 +303,7 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'builtin-display-vectors' if args.builtin_display_controls else 'type-allocation-vectors' if args.allocation_controls else 'type-universe-vectors',
+                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'bounded-registration-vectors' if args.bounded_registration_controls else 'builtin-display-vectors' if args.builtin_display_controls else 'type-allocation-vectors' if args.allocation_controls else 'type-universe-vectors',
                                       *([str(args.stable_candidate_file.resolve())] if args.stable_candidate_file else [])],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
@@ -307,6 +315,11 @@ def main():
                                {'Int64': 'Long', 'Float32': 'Float', 'Float64': 'Double', 'Bool': 'Bool', 'Range': 'Range'}.items()), 'CSHARP_BUILTIN_DISPLAY_CONTRACT_MISMATCH'
                     result['cases'].append(dict(id='builtin-type-display', passed=True, actual=rows))
                     result.update(completed=1, status='passed')
+                elif args.bounded_registration_controls:
+                    row = json.loads(done.stdout)
+                    assert row == dict(array4=0, array4Repeat=0, array5=1, dictionary4=3,
+                                       dictionary4Repeat=3, dictionary5=4, dictionaryHeap=2, next=5), 'CSHARP_BOUNDED_REGISTRATION_TRAJECTORY_MISMATCH'
+                    result.update(completed=1, status='passed', cases=[dict(id='bounded-storage-registration', passed=True, actual=row)])
                 elif args.allocation_controls:
                     row = json.loads(done.stdout)
                     assert row == dict(first=2, reservation=True, duplicateShape=False, occupied=False,
@@ -394,11 +407,13 @@ def main():
                                   cases=[dict(id='actual-stable-identities' if args.include_stable_identities else 'actual-codegen-request' if args.include_codegen_request else 'actual-registered-types', passed=True, observation=row)])
                 else:
                     rows = [json.loads(line) for line in done.stdout.splitlines()]
-                    assert len(rows) == 9
+                    assert len(rows) == vector_count
                     if baseline:
                         assert rows == [case['observation'] for case in baseline['cases']]
-                    result.update(status='passed', completed=9,
+                    result.update(status='passed', completed=vector_count,
                                   cases=[dict(id=row['id'], passed=True, observation=row) for row in rows])
+            if result['status'] == 'passed':
+                assert result['completed'] == result['total'] == len(result['cases']), 'COMPLETED_CASE_COUNT_MISMATCH'
         except BaseException as exc:
             error = exc
         finally:
@@ -406,7 +421,7 @@ def main():
         if error:
             raise error
     print(json.dumps({k: result.get(k) for k in ['status', 'completed', 'total', 'inputsStable', 'processesStopped']}))
-    if args.allocation_controls and result['status'] == 'passed':
+    if (args.allocation_controls or args.bounded_registration_controls) and result['status'] == 'passed':
         cleanup_output(ROOT, output, reusable_directories=args.reusable_directory)
 
 
