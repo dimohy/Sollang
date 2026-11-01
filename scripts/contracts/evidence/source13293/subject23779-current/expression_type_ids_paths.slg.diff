@@ -1,0 +1,94 @@
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index 41e54e92a..163e14ac3 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -620,19 +620,26 @@ public enumPatternArmAst package: ref analysis.PackageAnalysis, sourceIndex: Int
+ # Pattern binding and exhaustiveness use the same source expression before
+ # a subject when. Same-span wrappers do not invent a second subject identity.
+ public subjectWhenValueAst package: ref analysis.PackageAnalysis, sourceIndex: Int, selectionAst: Int, resolvedByAst: ref [Int; ~] -> Int {
++    package -> indexContextualRecords => children
++    package -> subjectWhenValueAstIndexed(sourceIndex, selectionAst, resolvedByAst, children.firstChild, children.nextChild)
++}
++
++# C# retains the subject directly. Child links stay immutable while wrapper
++# resolution facts are read live at each query.
++public subjectWhenValueAstIndexed package: ref analysis.PackageAnalysis, sourceIndex: Int, selectionAst: Int, resolvedByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~] -> Int {
+     package.ranges[sourceIndex] => range
+     package.nodes[range.astStart + selectionAst] => selection
+     selection.kind != 56 or selection.parent < 0 -> if { -1 -> return }
+     -1 => subjectAst!
+     UIntSize(0) => subjectStart!
+-    0 => search!
+-    search! < range.astCount -> while {
+-        package.nodes[range.astStart + search!] => candidate
+-        candidate.parent == selection.parent and candidate.start < selection.start
++    firstChild[range.astStart + selection.parent] => search!
++    search! >= 0 -> while {
++        package.nodes[search!] => candidate
++        candidate.start < selection.start
+             and (subjectAst! < 0 or candidate.start >= subjectStart!)
+-            -> if { search! => subjectAst!
++            -> if { search! - range.astStart => subjectAst!
+                 candidate.start => subjectStart! }
+-        search! + 1 => search!
++        nextChild[search!] => search!
+     }
+     subjectAst! < 0 -> if { -1 -> return }
+     true => wrapped!
+@@ -642,20 +649,30 @@ public subjectWhenValueAst package: ref analysis.PackageAnalysis, sourceIndex: I
+         resolvedByAst[range.astStart + subjectAst!] < 0
+             and (wrapper.kind == 10 or wrapper.kind == 36 or wrapper.kind == 55)
+             -> if {
+-                0 => child!
+-                child! < range.astCount -> while {
+-                    package.nodes[range.astStart + child!] => candidate
+-                    candidate.parent == subjectAst! and candidate.start == wrapper.start and candidate.length == wrapper.length
+-                        -> if { child! => subjectAst!
+-                            true => wrapped! }
+-                    child! + 1 => child!
++                firstChild[range.astStart + subjectAst!] => child!
++                child! >= 0 -> while {
++                    package.nodes[child!] => candidate
++                    candidate.start == wrapper.start and candidate.length == wrapper.length
++                        -> if {
++                            child! => matchedChild
++                            matchedChild - range.astStart => subjectAst!
++                            true => wrapped!
++                            # Preserve the original ascending AST cursor inside
++                            # this pass, including wrappers with live type facts.
++                            firstChild[matchedChild] => child!
++                            child! >= 0 and child! <= matchedChild -> while {
++                                nextChild[child!] => child!
++                            }
++                        } else {
++                            nextChild[child!] => child!
++                        }
+                 }
+             }
+     }
+     subjectAst!
+ }
+ 
+-resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~] -> Bool {
++resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~] -> Bool {
+     false => changed!
+     0 => sourceIndex!
+     sourceIndex! < (prepared.package.ranges -> len)
+@@ -675,7 +692,7 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+                                     prepared.package.nodes[range.astStart + arm.parent] => selection
+                                     selection.kind == 56 and selection.parent >= 0
+                                         -> if {
+-                                            prepared.package -> subjectWhenValueAst(sourceIndex!, arm.parent, expressionIndexByAst) => subjectAst
++                                            prepared.package -> subjectWhenValueAstIndexed(sourceIndex!, arm.parent, expressionIndexByAst, firstChild, nextChild) => subjectAst
+                                             subjectAst >= 0 -> if {
+                                                 expressionIndexByAst[range.astStart + subjectAst] => subjectExpression
+                                                 subjectExpression >= 0 -> if {
+@@ -2281,7 +2298,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                     }
+                 homogeneousJoinSource! + 1 => homogeneousJoinSource!
+             }
+-        prepared -> resolvePatternPayloadTypes(types, expressions, expressionIndexByAst, patternBindingTypeBySymbol) => patternTypesChanged
++        prepared -> resolvePatternPayloadTypes(types, expressions, expressionIndexByAst, patternBindingTypeBySymbol, contextualRecords.firstChild, contextualRecords.nextChild) => patternTypesChanged
+         patternTypesChanged -> if { true => pathChanged! }
+         resolveDeclaredNumericReturnLiterals(prepared, types, references, expressions, expressionIndexByAst) => returnLiteralsChanged
+         returnLiteralsChanged -> if { true => pathChanged! }

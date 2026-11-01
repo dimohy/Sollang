@@ -33,6 +33,7 @@ public struct MissingEnumVariant {
 }
 
 public missingEnumVariants prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> [MissingEnumVariant; ~] {
+    prepared.package -> expressionTypeIds.indexContextualRecords => subjectChildren
     [Int; ~] => typeByAst!
     prepared.package.nodes -> each node { typeByAst! -> push(-1) }
     resolved.expressions -> each expression {
@@ -49,7 +50,7 @@ public missingEnumVariants prepared: ref semanticContext.SemanticSnapshot, resol
             prepared.package.nodes[range.astStart + selectionAst!] => selection
             selection.kind == 56 and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, selectionAst!))
                 -> if {
-                    prepared.package -> expressionTypeIds.subjectWhenValueAst(range.sourceModule, selectionAst!, typeByAst!) => subjectAst
+                    prepared.package -> expressionTypeIds.subjectWhenValueAstIndexed(range.sourceModule, selectionAst!, typeByAst!, subjectChildren.firstChild, subjectChildren.nextChild) => subjectAst
                     -1 => subjectType!
                     subjectAst >= 0 -> if { typeByAst![range.astStart + subjectAst] => subjectType! }
                     resolved.types -> typeIds.materializedReadTypeId(subjectType!) => enumTypeId
@@ -6005,7 +6006,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     continue
                 }
             logical.kind == 56 -> if {
-                package -> expressionTypeIds.subjectWhenValueAst(sourceIndex!, astIndex!, typeIdByAst!) => enumSubjectAst
+                package -> expressionTypeIds.subjectWhenValueAstIndexed(sourceIndex!, astIndex!, typeIdByAst!, firstChildByAst!, nextChildByAst!) => enumSubjectAst
                 enumSubjectAst >= 0 and enumSubjectAst < range.astCount
                     -> if {
                         typeIdByAst![range.astStart + enumSubjectAst] => enumSubjectTypeId
