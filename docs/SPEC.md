@@ -6321,6 +6321,11 @@ Current backend:
   names and type syntax while replacing bound input, return and additional
   parameter types and recording concrete specialization types. Generated names
   use the registered semantic argument identities, never IR offsets or ABI names.
+  Local function identities retain their unqualified source name, use the local
+  scope marker and embed the complete identity of their containing function.
+  Nested parents are captured before children; identical local names under
+  different parents remain distinct. Inferred local signatures use the same
+  resolved parameter and result facts as ordinary function emission.
   Integer value specializations retain the compiled `$v<value>` name component
   and optional `$t<element-id>` component, and encode the integer separately in
   the shared specialized-value field. Missing secondary or tertiary type slots

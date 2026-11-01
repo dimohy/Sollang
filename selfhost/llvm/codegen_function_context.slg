@@ -97,9 +97,25 @@ implementationContextFields context: ref TypeFieldContext, package: ref analysis
     }
 }
 
+public functionParentSymbol context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Int {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol].parent => parent!
+    parent! >= 0 -> while {
+        package.symbols[range.symbolStart + parent!] => owner
+        owner.kind == 7 or owner.kind == 31 -> if { parent! -> return }
+        owner.parent => parent!
+    }
+    -1
+}
+
 functionContextFields context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Result<FunctionContextFields, DeclarationFieldError> {
     package.ranges[context.sourceModule] => range
     package.symbols[range.symbolStart + context.ownerSymbol] => function
+    (context -> functionParentSymbol(package)) >= 0
+        -> if {
+            context -> typeTokenText(package, context.sourceModule, function.nameToken) -> textField => name
+            Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: textField(""), name: name, associated: [Field; ~] }) -> return
+        }
     function.kind != 31 -> if {
         context -> functionNameField(package) -> when {
             Ok(field) { Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: textField(""), name: field, associated: [Field; ~] }) -> return }

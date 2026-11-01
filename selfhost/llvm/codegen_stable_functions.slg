@@ -242,19 +242,16 @@ boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.S
 # Declaration signatures and resolved ordinary/specialized signatures share
 # the compiled C# field plan. Local, block and native facts have separate paths.
 # Callers must select a collector; this function never substitutes an identity.
-captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding -> Result<Field, TypeUniverseCaptureError> {
+captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding, parentIdentity: ref Field -> Result<Field, TypeUniverseCaptureError> {
     prepared.package.ranges[context.sourceModule] => range
     prepared.package.symbols[range.symbolStart + context.ownerSymbol] => function
     (function.kind != 7 and function.kind != 31) or (function.flags / 32 % 2 == 1 and not binding.active)
         or function.flags / 128 % 2 == 1 or function.blockTypeNode >= 0 or function.blockResultTypeNode >= 0
         -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    function.parent => parent!
-    parent! >= 0 -> while {
-        prepared.package.symbols[range.symbolStart + parent!] => ancestor
-        ancestor.kind == 7 or ancestor.kind == 31
-            -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-        ancestor.parent => parent!
-    }
+    (context -> functionParentSymbol(prepared.package)) >= 0 => local
+    (parentIdentity.bytes -> len) > 0 => hasParent
+    (local and not hasParent) or (hasParent and not local)
+        -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     function.kind == 31 -> if {
         0..<range.symbolCount -> each index {
             prepared.package.symbols[range.symbolStart + index] => member
@@ -291,10 +288,16 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
     [UInt8; ~] => bytes!
     plans.stableFunctionIdentity() => header
     header.parts -> each part {
-        context -> boundFunctionPart(prepared, semantic, signatureIds, inputAst!, binding, part) -> when {
-            Ok(field) { field -> appendStableFunctionField(bytes!) }
-            Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
-        }
+        (parentIdentity.bytes -> len) > 0 and (part -> plans.partIndex) == (plans.KeyPart.StableScope -> plans.partIndex)
+            -> if {
+                Result<Field, TypeUniverseCaptureError>.Ok(textField("local"))
+            } else { (parentIdentity.bytes -> len) > 0 and (part -> plans.partIndex) == (plans.KeyPart.StableParent -> plans.partIndex)
+                    -> if {
+                        Result<Field, TypeUniverseCaptureError>.Ok(parentIdentity -> copyFunctionField)
+                    } else { context -> boundFunctionPart(prepared, semantic, signatureIds, inputAst!, binding, part) } } -> when {
+                Ok(field) { field -> appendStableFunctionField(bytes!) }
+                Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
+            }
     }
     context -> functionDeclarationBindings(prepared.package) -> when {
         Ok(value) { value }
@@ -366,12 +369,20 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
 
 public captureExplicitFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
     unboundFunction() => binding
-    context -> captureFunctionIdentity(prepared, prepared.semantic, signatureIds, binding)
+    textField("") => parent
+    context -> captureFunctionIdentity(prepared, prepared.semantic, signatureIds, binding, parent)
 }
 
 public captureBoundFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding -> Result<Field, TypeUniverseCaptureError> {
     not binding.active or context.sourceModule != binding.sourceModule or context.ownerSymbol != binding.ownerSymbol
         or (binding.arguments -> len) != (binding.argumentIdentities -> len)
         -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    context -> captureFunctionIdentity(prepared, semantic, signatureIds, binding)
+    textField("") => parent
+    context -> captureFunctionIdentity(prepared, semantic, signatureIds, binding, parent)
+}
+
+public captureLocalFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding, parentIdentity: ref Field -> Result<Field, TypeUniverseCaptureError> {
+    (parentIdentity.bytes -> len) == 0 or (binding.active and (context.sourceModule != binding.sourceModule or context.ownerSymbol != binding.ownerSymbol or (binding.arguments -> len) != (binding.argumentIdentities -> len)))
+        -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    context -> captureFunctionIdentity(prepared, semantic, signatureIds, binding, parentIdentity)
 }

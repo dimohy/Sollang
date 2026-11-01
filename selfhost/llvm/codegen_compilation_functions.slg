@@ -32,9 +32,19 @@ userFunction prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, 
 }
 
 appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding, functions: mut [CompilationFunction; ~], failures: mut [FunctionCaptureFailure; ~] -> Unit {
-    binding.active -> if { context -> captureBoundFunctionIdentity(prepared, semantic, signatureIds, binding) } else {
-        context -> captureExplicitFunctionIdentity(prepared, signatureIds)
-    } -> when {
+    context -> functionParentSymbol(prepared.package) => parent
+    parent >= 0 -> if {
+        -1 => parentIndex!
+        0..<(functions -> len) -> each index {
+            functions[index].sourceModule == context.sourceModule and functions[index].ownerSymbol == parent and not functions[index].isSpecialization
+                -> if { index => parentIndex! }
+        }
+        parentIndex! < 0 -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) } else {
+            context -> captureLocalFunctionIdentity(prepared, semantic, signatureIds, binding, functions[parentIndex!].identity)
+        }
+    } else { binding.active -> if { context -> captureBoundFunctionIdentity(prepared, semantic, signatureIds, binding) } else {
+            context -> captureExplicitFunctionIdentity(prepared, signatureIds)
+    } } -> when {
         Err(_) { failures -> push(FunctionCaptureFailure { sourceModule: context.sourceModule, ownerSymbol: context.ownerSymbol, stage: 1 }) }
         Ok(identity) {
             context -> functionBindingName(prepared, binding) -> when {

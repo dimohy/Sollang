@@ -2,7 +2,6 @@ import sollang.compiler.llvm.codegen_type_registration as typeRegistration
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.semantic.expression_type_ids as expressionIds
-import sollang.compiler.llvm.codegen_ir_specializations as specializationCapture
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.reference_prepared_type_ids as referenceIds
 import sollang.compiler.semantic.type_fact_concreteness as concreteness
@@ -52,7 +51,6 @@ inspect: -> Unit uses Console, File, Process {
     concreteness.classify(prepared.semantic.types, prepared.semantic.fields) => states
     (prepared.package.ranges -> len) - 1 => fixtureModule
     fixtureModule => context!.sourceModule
-    prepared.package.ranges[fixtureModule] => fixtureRange
     prepared -> typedIr.lowerResolvedContext(resolved) => ir
     [typeIds.SemanticType; ~] => types!
     resolved.types -> each type { types! -> push(type) }
@@ -163,91 +161,31 @@ inspect: -> Unit uses Console, File, Process {
             }
             return
         }
-    (arguments -> len) > 3 and arguments[3] == "all-user-functions"
-        -> if {
-            context! -> keys.collectCompilationFunctions(prepared, semantic!, ir, plans, functionIdentities!, identities.ids) => collected
-            collected.functions -> each function {
+    (arguments -> len) > 3 and arguments[3] == "all-user-functions" => allFunctions
+    context! -> keys.collectCompilationFunctions(prepared, semantic!, ir, plans, functionIdentities!, identities.ids) => collected
+    collected.functions -> each function {
+        allFunctions or function.sourceModule == fixtureModule
+            -> if {
                 function.identity.bytes -> file.borrowBytes => bytes
                 bytes -> slice(0, bytes -> len) => identity
                 "function:$identity" -> println
             }
-            collected.failures -> each failure {
-                "function-capture-error:$(failure.sourceModule):$(failure.ownerSymbol):$(failure.stage)" -> println
-            }
-            context! -> keys.captureFunctionEmissions(prepared, collected) -> when {
-                Err(_) { "function-emission-error" -> println
-                    process.exit(6) -> return }
-                Ok(emissions) { emissions -> each emission {
-                        emission.identity.bytes -> file.borrowBytes => bytes
-                        bytes -> slice(0, bytes -> len) => identity
-                        "emission:$(emission.hash):$identity" -> println
-                } }
-            }
-            (collected.failures -> len) != 0 -> if { process.exit(6) }
-            return
-        }
-    0..<fixtureRange.symbolCount -> each index {
-        prepared.package.symbols[fixtureRange.symbolStart + index] => function
-        function.kind == 7 or function.kind == 31 -> if {
-            index => context!.ownerSymbol
-            false => generic!
-            0..<fixtureRange.symbolCount -> each child {
-                prepared.package.symbols[fixtureRange.symbolStart + child] => member
-                member.kind == 32 and member.parent == index -> if { true => generic! }
-            }
-            generic! -> if { context! -> keys.captureExplicitFunctionIdentity(prepared, identities.ids) } else {
-                -1 => functionNode!
-                0..<(ir -> len) -> each node {
-                    ir[node].kind == 0 and ir[node].sourceModule == fixtureModule and ir[node].symbol == index
-                        -> if { node => functionNode! }
-                }
-                ir -> specializationCapture.captureFunctionBinding(semantic!.types, functionNode!) -> when {
-                    Err(error) { Result<keys.Field, keys.TypeUniverseCaptureError>.Err(error) }
-                    Ok(binding) { context! -> keys.captureBoundFunctionIdentity(prepared, semantic!, identities.ids, binding) }
-                }
-            } -> when {
-                Err(_) { "function-error:$index" -> println
-                    process.exit(6) -> return }
-                Ok(field) {
-                    field.bytes -> file.borrowBytes => bytes
+    }
+    collected.failures -> each failure {
+        "function-capture-error:$(failure.sourceModule):$(failure.ownerSymbol):$(failure.stage)" -> println
+    }
+    (collected.failures -> len) != 0 -> if { process.exit(6) -> return }
+    allFunctions -> if {
+        context! -> keys.captureFunctionEmissions(prepared, collected) -> when {
+            Err(_) { "function-emission-error" -> println
+                process.exit(6) -> return }
+            Ok(emissions) { emissions -> each emission {
+                    emission.identity.bytes -> file.borrowBytes => bytes
                     bytes -> slice(0, bytes -> len) => identity
-                    "function:$identity" -> println
-                }
-            }
+                    "emission:$(emission.hash):$identity" -> println
+            } }
         }
-    }
-    [keys.Field; ~] => captured!
-    plans -> each plan {
-        plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
-            -> if {
-                prepared -> specializationCapture.capture(ir, semantic!.types, plan, functionIdentities!) -> when {
-                    Err(_) { "specialization-error:$(plan.templateNode):$(plan.status)" -> println
-                        process.exit(6) -> return }
-                    Ok(facts) {
-                        facts.sourceModule => context!.sourceModule
-                        facts.ownerSymbol => context!.ownerSymbol
-                        context! -> keys.captureBoundFunctionIdentity(prepared, semantic!, identities.ids, facts) -> when {
-                            Err(_) { "specialization-field-error:$(plan.templateNode)" -> println
-                                process.exit(6) -> return }
-                            Ok(field) {
-                                false => duplicate!
-                                captured! -> each old {
-                                    old.bytes -> file.borrowBytes => left
-                                    field.bytes -> file.borrowBytes => right
-                                    (left -> slice(0, left -> len)) == (right -> slice(0, right -> len))
-                                        -> if { true => duplicate! }
-                                }
-                                not duplicate! -> if { captured! -> push(field) }
-                            }
-                        }
-                    }
-                }
-            }
-    }
-    captured! -> each field {
-        field.bytes -> file.borrowBytes => bytes
-        bytes -> slice(0, bytes -> len) => identity
-        "function:$identity" -> println
+        return
     }
     0 => context!.sourceModule
     -1 => context!.ownerSymbol
