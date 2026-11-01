@@ -199,23 +199,34 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
         functions![index].functionNode >= 0 -> if { index => functionByNode![functions![index].functionNode] }
     }
     plans -> each plan {
-        plan.templateNode >= 0 and plan.templateNode < (ir -> len) and plan.callNode >= 0 and plan.callNode < (ir -> len)
+        plan.templateNode >= 0 and plan.templateNode < (ir -> len)
+            and ((plan.callNode >= 0 and plan.callNode < (ir -> len)) or plan.interpolationNode >= 0)
             -> if {
                 ir[plan.templateNode] => function
-                ir[plan.callNode] => call
+                plan.callNode >= 0 -> if { ir[plan.callNode] } else { function } => call
+                plan.callNode >= 0 -> if { bodies.functionsByCall[plan.callNode] } else {
+                    bodies -> typedIr.genericInterpolationFunction(plan.ownerFunction, plan.interpolationNode)
+                } => concreteNode
                 function.sourceModule >= 0 and function.symbol >= 0 and (prepared -> userFunction(function.sourceModule, function.symbol))
 
                     -> if {
                         function.sourceModule => context.sourceModule
                         function.symbol => context.ownerSymbol
-                        plan.callNode => caller!
+                        plan.callNode >= 0 -> if { plan.callNode } else { plan.ownerFunction } => caller!
                         caller! >= 0 and ir[caller!].kind != 0 and ir[caller!].kind != 11
                             -> while { ir[caller!].parent => caller! }
-                        caller! >= 0 and (not (prepared -> inGenericBody(genericByAst, call.sourceModule, call.astNode))
-                            or bodies.templatesByFunction[caller!] >= 0) -> if {
+                        (plan.callNode < 0 and concreteNode >= 0)
+                            or (caller! >= 0 and (not (prepared -> inGenericBody(genericByAst, call.sourceModule, call.astNode))
+                            or bodies.templatesByFunction[caller!] >= 0))
+                            -> if {
                                 context -> functionParentSymbol(prepared.package) => parentSymbol
-                                functionByNode![caller!] => parentIndex!
+                                caller! >= 0 -> if { functionByNode![caller!] } else { -1 } => parentIndex!
                                 parentSymbol >= 0 -> if {
+                                    plan.callNode < 0 and parentIndex! < 0 -> if {
+                                        prepared.package.ranges[function.sourceModule] => lexicalRange
+                                        functionNodes![lexicalRange.symbolStart + parentSymbol] => lexicalNode
+                                        lexicalNode >= 0 -> if { functionByNode![lexicalNode] => parentIndex! }
+                                    }
                                     parentIndex! >= 0 and functions![parentIndex!].ownerSymbol != parentSymbol
                                         -> while {
                                             functions![parentIndex!].parentIndex => parentIndex!
@@ -232,12 +243,11 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                                         -> if { true => ownGeneric! }
                                 }
                                 ownGeneric! -> if { prepared -> captureIrSpecialization(ir, semantic.types, plan, registeredIds) } else {
-                                    ir -> captureIrFunctionBinding(semantic.types, bodies.functionsByCall[plan.callNode])
+                                    ir -> captureIrFunctionBinding(semantic.types, concreteNode)
                                 } -> when {
                                     Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 3 }) }
                                     Ok(binding) {
                                         functions! -> len => before
-                                        bodies.functionsByCall[plan.callNode] => concreteNode
                                         context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, parentIndex!, concreteNode, functions!, failures!)
                                         context -> functionBindingName(prepared, binding) -> when {
                                             Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 2 }) }

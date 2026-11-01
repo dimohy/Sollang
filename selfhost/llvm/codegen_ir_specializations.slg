@@ -5,11 +5,14 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 
 public bindIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan -> Result<FunctionBinding, TypeUniverseCaptureError> {
-    plan.templateNode < 0 or plan.templateNode >= (ir -> len) or plan.callNode < 0 or plan.callNode >= (ir -> len)
+    plan.templateNode < 0 or plan.templateNode >= (ir -> len)
+        or (plan.callNode < 0 and plan.interpolationNode < 0) or plan.callNode >= (ir -> len)
         -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     ir[plan.templateNode] => function
     function.kind != 0 -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     function -> typedIr.genericIntegerParameterHash(prepared) => valueHash
+    valueHash != 0 and plan.callNode < 0
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     valueHash != 0 -> if { ir[plan.callNode] -> typedIr.explicitGenericValueIdentity(prepared) } else { -1 } => value
     [Int; ~] => additional!
     prepared.package.ranges[function.sourceModule] => range

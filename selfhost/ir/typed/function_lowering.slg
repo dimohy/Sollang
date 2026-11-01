@@ -453,12 +453,10 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
     progress! -> while {
         false => progress!
         (processed! -> len) < (nodes -> len) -> while { processed! -> push(false) }
-        nodes -> functionTemplatesBySymbol(prepared) => functionsBySymbol
-        nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functionsBySymbol) => plans!
-        nodes -> appendInterpolationGenericCalls(prepared, resolved, plans!, functionsBySymbol)
+        nodes -> planResolvedGenericCalls(prepared, resolved) => plans
         # A helper's result parameter belongs to its caller after substitution,
         # even while that caller is still a generic template.
-        plans! -> each plan {
+        plans -> each plan {
             plan.callNode >= 0 and plan.status == 0 and plan.resultType >= 0
                 and (not resolved.types[plan.resultType].containsParameter
                 or plan.resultType != nodes[plan.templateNode].typeId)
@@ -484,7 +482,7 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
         [Bool; ~] => selected!
         [Int; ~] => planValueArguments!
         [UInt64; ~] => planValueHashes!
-        plans! -> each plan {
+        plans -> each plan {
             -1 => planValue!
             plan.callNode >= 0 -> if {
                 nodes[plan.callNode] -> explicitGenericValueIdentity(prepared) => planValue!
@@ -558,10 +556,10 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
             planSlots! -> push(slot!)
             selected! -> push(materialize!)
         }
-        nodes -> materializeGenericProductFields(resolved.types, resolved.fields, plans!, selected!)
+        nodes -> materializeGenericProductFields(resolved.types, resolved.fields, plans, selected!)
         typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => payloadEdges
         prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds
-        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans!, selected!, planValueArguments!, planValueHashes!) => batch!
+        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans, selected!, planValueArguments!, planValueHashes!) => batch!
         0 => instanceIndex!
         instanceIndex! < (batch! -> len) -> while {
             batch![instanceIndex!] => instance!
@@ -920,7 +918,9 @@ public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticConte
 
 public planResolvedGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericCallPlan; ~] {
     nodes -> functionTemplatesBySymbol(prepared) => functions
-    nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functions)
+    nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functions) => plans!
+    nodes -> appendInterpolationGenericCalls(prepared, resolved, plans!, functions)
+    plans!
 }
 
 planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
