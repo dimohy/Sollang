@@ -1,0 +1,56 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.reference_prepared_type_ids as referenceIds
+import sollang.compiler.semantic.type_fact_concreteness as concreteness
+import sollang.compiler.semantic.modules as moduleNames
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.source_root as sourceRoot
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+inspect: -> Unit uses Console, File, Process {
+    keys.textField("가𐐀a") => unicode
+    unicode.bytes -> keys.stableUtf16Length => utf16
+    utf16 != 4 -> if { process.exit(4) -> return }
+    "utf16:$utf16" -> println
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
+    [file.SourceText; ~] => owners!
+    paths -> each current { current -> pathText -> file.mapText => owner
+        owners! -> push(owner) }
+    arguments[2] -> file.mapText => fixture
+    owners! -> push(fixture)
+    [Text; ~] => sources!
+    owners! -> each owner { owner -> slice(0, owner -> len) => source
+        sources! -> push(source) }
+    sources! -> semanticContext.prepare => prepared
+    prepared -> referenceIds.registerMetadataSignatures -> when {
+        Err(_) { process.exit(1) -> return }
+        Ok(value) { value }
+    } => identities
+    [moduleNames.ModuleIdentity; ~] => modules!
+    prepared.modules -> each module { modules! -> push(module) }
+    [moduleNames.ImportEdge; ~] => imports!
+    prepared.imports -> each edge { imports! -> push(edge) }
+    keys.TypeFieldContext { identities: modules!, imports: imports!, sourceModule: 0, ownerSymbol: -1 } => context!
+    concreteness.classify(prepared.semantic.types, prepared.semantic.fields) => states
+    0 => typeId!
+    prepared.semantic.types -> each type {
+        false => constraint!
+        type.kind == 1 and (type.origin == 0 or type.origin == 2) and type.module >= 0 and type.symbol >= 0
+            -> if { prepared.package.symbols[prepared.package.ranges[type.module].symbolStart + type.symbol].kind == 5 => constraint! }
+        not constraint! and type.kind != 11 and (states[typeId!] == 0 or (type.containsParameter and identities.ids[typeId!] >= 0))
+            -> if {
+                context! -> keys.resolvedStableTypeIdentityField(prepared.package, prepared.semantic, typeId!, identities.ids) -> when {
+                    Err(_) { "error:$(typeId!):$(type.kind):$(type.origin):$(type.first):$(type.second)" -> println }
+                    Ok(field) {
+                        field.bytes -> file.borrowBytes => bytes
+                        bytes -> slice(0, bytes -> len) => identity
+                        "stable:$(typeId!):$identity" -> println
+                    }
+                }
+            }
+        typeId! + 1 => typeId!
+    }
+}
+main { inspect() }

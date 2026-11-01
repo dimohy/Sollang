@@ -1,3 +1,4 @@
+using StableNames = Sollang.Compiler.Shared.TypeNamePolicy;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -235,83 +236,83 @@ internal static class SemanticStableIdentity
     {
         if (types.TryGetOptionValue(type, out var optionValue))
         {
-            return "Option<" + Type(types, optionValue) + ">";
+            return StableNames.StableOptionPrefix() + Type(types, optionValue) + ">";
         }
         if (types.TryGetResultTypes(type, out var result))
         {
-            return "Result<" + Type(types, result.Ok) + "," + Type(types, result.Error) + ">";
+            return StableNames.StableResultPrefix() + Type(types, result.Ok) + "," + Type(types, result.Error) + ">";
         }
         if (types.TryGetTaskValue(type, out var taskValue))
         {
-            return "Task<" + Type(types, taskValue) + ">";
+            return StableNames.StableTaskPrefix() + Type(types, taskValue) + ">";
         }
         if (types.TryGetStreamValue(type, out var streamValue))
         {
-            return "Stream<" + Type(types, streamValue) + ">";
+            return StableNames.StableStreamPrefix() + Type(types, streamValue) + ">";
         }
         if (types.TryGetEventStreamValue(type, out var eventStreamValue))
         {
-            return "EventStream<" + Type(types, eventStreamValue) + ">";
+            return StableNames.StableEventStreamPrefix() + Type(types, eventStreamValue) + ">";
         }
         if (types.IsStaticArray(type))
         {
             var definition = types.GetStaticArray(type);
             return definition.FixedLength is { } length
-                ? "FixedArray<" + Type(types, definition.ElementType) + "," + length + ">"
-                : "StaticArray<" + Type(types, definition.ElementType) + ">";
+                ? StableNames.StableFixedArrayPrefix() + Type(types, definition.ElementType) + "," + length + ">"
+                : StableNames.StableStaticArrayPrefix() + Type(types, definition.ElementType) + ">";
         }
         if (types.IsBinaryHeap(type))
         {
-            return "BinaryHeap<" + Type(types, types.GetBinaryHeapElement(type)) + ">";
+            return StableNames.StableBinaryHeapPrefix() + Type(types, types.GetBinaryHeapElement(type)) + ">";
         }
         if (types.IsDeque(type))
         {
-            return "Deque<" + Type(types, types.GetDequeElement(type)) + ">";
+            return StableNames.StableDequePrefix() + Type(types, types.GetDequeElement(type)) + ">";
         }
         if (types.IsSet(type))
         {
-            return "Set<" + Type(types, types.GetSetElement(type)) + ">";
+            return StableNames.StableSetPrefix() + Type(types, types.GetSetElement(type)) + ">";
         }
         if (types.IsDynamicArray(type))
         {
-            return "Array<" + Type(types, types.GetDynamicArray(type).ElementType) + ">";
+            return StableNames.StableArrayPrefix() + Type(types, types.GetDynamicArray(type).ElementType) + ">";
         }
         if (types.IsBoundedArray(type))
         {
             var bounded = types.GetBoundedArray(type);
-            return "BoundedArray<" + Type(types, bounded.ElementType) + "," + bounded.Capacity + ">";
+            return StableNames.StableBoundedArrayPrefix() + Type(types, bounded.ElementType) + "," + bounded.Capacity + ">";
         }
         if (types.IsBitSet(type))
         {
-            return "BitSet<" + types.GetBitSet(type).BitCount + ">";
+            return StableNames.StableBitSetPrefix() + types.GetBitSet(type).BitCount + ">";
         }
         if (types.IsDictionary(type))
         {
             if (types.IsBoundedDictionary(type))
             {
                 var bounded = types.GetBoundedDictionary(type);
-                return "BoundedDictionary<" + Type(types, bounded.KeyType) + ","
+                return StableNames.StableBoundedDictionaryPrefix() + Type(types, bounded.KeyType) + ","
                     + Type(types, bounded.ValueType) + "," + bounded.MaxEntries + ">";
             }
             var dictionary = types.GetDictionary(type);
-            return "Dictionary<" + Type(types, dictionary.KeyType) + ","
+            return StableNames.StableDictionaryPrefix() + Type(types, dictionary.KeyType) + ","
                 + Type(types, dictionary.ValueType) + ">";
         }
         if (types.IsBox(type))
         {
-            return "Box<" + Type(types, types.GetBox(type).ElementType) + ">";
+            return StableNames.StableBoxPrefix() + Type(types, types.GetBox(type).ElementType) + ">";
         }
         if (types.IsReference(type))
         {
-            return "Ref<" + Type(types, types.GetReference(type).ElementType) + ">";
+            return StableNames.StableReferencePrefix() + Type(types, types.GetReference(type).ElementType) + ">";
         }
         if (types.IsSlice(type))
         {
-            return "Slice<" + Type(types, types.GetSliceElement(type)) + ">";
+            return StableNames.StableSlicePrefix() + Type(types, types.GetSliceElement(type)) + ">";
         }
         if (types.IsDynTrait(type))
         {
-            return "Dyn<" + types.GetDynTrait(type).TraitName + ">";
+            return StableNames.StableDynTraitPrefix() + types.GetDynTrait(type).TraitName + ">";
         }
         if (types.IsStruct(type))
         {
@@ -319,22 +320,22 @@ internal static class SemanticStableIdentity
             {
                 var product = types.GetStruct(type);
                 var labels = types.GetProductLabels(type);
-                return "Product<" + string.Join(",", product.Fields.Select((field, index) =>
+                return StableNames.StableProductPrefix() + string.Join(",", product.Fields.Select((field, index) =>
                 {
                     var label = labels[index] ?? string.Empty;
                     return label.Length.ToString(CultureInfo.InvariantCulture) + ":" + label + ":"
                         + Type(types, field.Type);
                 })) + ">";
             }
-            return "struct:" + types.GetStruct(type).Name;
+            return StableNames.StableStructPrefix() + types.GetStruct(type).Name;
         }
         if (types.IsEnum(type))
         {
-            return "enum:" + types.GetEnum(type).Name;
+            return StableNames.StableEnumPrefix() + types.GetEnum(type).Name;
         }
         if ((int)type < (int)TypeId.FirstUserDefined)
         {
-            return "builtin:" + type;
+            return StableNames.StableBuiltinPrefix() + type;
         }
         throw new InvalidOperationException(
             $"type id '{(int)type}' has no stable structural identity");
@@ -716,7 +717,7 @@ internal static class SemanticStableIdentity
 
         public TypeId Parse()
         {
-            if (Take("Product<"))
+            if (Take(StableNames.StableProductPrefix()))
             {
                 var fields = new List<(string? Label, TypeId Type)>();
                 while (true)
@@ -743,17 +744,17 @@ internal static class SemanticStableIdentity
                     + types.DisplayTypeName(field.Type))) + ")";
                 return types.GetOrAddProduct(fields, displayName, 0, 0);
             }
-            if (Take("Option<"))
+            if (Take(StableNames.StableOptionPrefix()))
                 return Close(types.GetOrAddOption(Parse(), "Option"));
-            if (Take("Task<"))
+            if (Take(StableNames.StableTaskPrefix()))
                 return Close(types.GetOrAddTask(Parse()));
-            if (Take("Stream<"))
+            if (Take(StableNames.StableStreamPrefix()))
                 return Close(types.GetOrAddStream(Parse()));
-            if (Take("EventStream<"))
+            if (Take(StableNames.StableEventStreamPrefix()))
                 return Close(types.GetOrAddEventStream(Parse()));
-            if (Take("StaticArray<"))
+            if (Take(StableNames.StableStaticArrayPrefix()))
                 return Close(types.GetOrAddStaticArray(Parse()));
-            if (Take("FixedArray<"))
+            if (Take(StableNames.StableFixedArrayPrefix()))
             {
                 var element = Parse();
                 Expect(',');
@@ -761,9 +762,9 @@ internal static class SemanticStableIdentity
                 Expect('>');
                 return types.GetOrAddFixedStaticArray(element, length);
             }
-            if (Take("Array<"))
+            if (Take(StableNames.StableArrayPrefix()))
                 return Close(types.GetOrAddDynamicArray(Parse()));
-            if (Take("BoundedArray<"))
+            if (Take(StableNames.StableBoundedArrayPrefix()))
             {
                 var element = Parse();
                 Expect(',');
@@ -771,13 +772,13 @@ internal static class SemanticStableIdentity
                 Expect('>');
                 return types.GetOrAddBoundedArray(element, capacity);
             }
-            if (Take("BinaryHeap<"))
+            if (Take(StableNames.StableBinaryHeapPrefix()))
                 return Close(types.GetOrAddBinaryHeap(Parse()));
-            if (Take("Deque<"))
+            if (Take(StableNames.StableDequePrefix()))
                 return Close(types.GetOrAddDeque(Parse()));
-            if (Take("Set<"))
+            if (Take(StableNames.StableSetPrefix()))
                 return Close(types.GetOrAddSet(Parse()));
-            if (Take("BitSet<"))
+            if (Take(StableNames.StableBitSetPrefix()))
             {
                 var bitCount = ParseNumber();
                 Expect('>');
@@ -785,7 +786,7 @@ internal static class SemanticStableIdentity
                     throw Invalid("invalid BitSet size");
                 return types.GetOrAddBitSet(bitCount);
             }
-            if (Take("Box<"))
+            if (Take(StableNames.StableBoxPrefix()))
             {
                 var element = Parse();
                 Expect('>');
@@ -793,17 +794,17 @@ internal static class SemanticStableIdentity
                     return box.Id;
                 throw Invalid("unknown box type");
             }
-            if (Take("Ref<"))
+            if (Take(StableNames.StableReferencePrefix()))
                 return Close(types.GetOrAddReference(Parse()));
-            if (Take("Slice<"))
+            if (Take(StableNames.StableSlicePrefix()))
                 return Close(types.GetOrAddSlice(Parse()));
-            if (Take("Dyn<"))
+            if (Take(StableNames.StableDynTraitPrefix()))
             {
                 var traitName = Rest();
                 Expect('>');
                 return types.GetOrAddDynTrait(traitName);
             }
-            if (Take("Result<"))
+            if (Take(StableNames.StableResultPrefix()))
             {
                 var ok = Parse();
                 Expect(',');
@@ -811,7 +812,7 @@ internal static class SemanticStableIdentity
                 Expect('>');
                 return types.GetOrAddResult(ok, error, "Result");
             }
-            if (Take("Dictionary<"))
+            if (Take(StableNames.StableDictionaryPrefix()))
             {
                 var key = Parse();
                 Expect(',');
@@ -819,7 +820,7 @@ internal static class SemanticStableIdentity
                 Expect('>');
                 return types.GetOrAddDictionary(key, value);
             }
-            if (Take("BoundedDictionary<"))
+            if (Take(StableNames.StableBoundedDictionaryPrefix()))
             {
                 var key = Parse();
                 Expect(',');
@@ -829,7 +830,7 @@ internal static class SemanticStableIdentity
                 Expect('>');
                 return types.GetOrAddBoundedDictionary(key, value, capacity);
             }
-            if (Take("builtin:"))
+            if (Take(StableNames.StableBuiltinPrefix()))
             {
                 var name = Rest();
                 if (Enum.TryParse<TypeId>(name, out var builtin)
@@ -837,7 +838,7 @@ internal static class SemanticStableIdentity
                     return builtin;
                 throw Invalid("unknown builtin type");
             }
-            if (Take("struct:") || Take("enum:"))
+            if (Take(StableNames.StableStructPrefix()) || Take(StableNames.StableEnumPrefix()))
             {
                 var name = Rest();
                 if (types.TryResolve(name, out var nominal))

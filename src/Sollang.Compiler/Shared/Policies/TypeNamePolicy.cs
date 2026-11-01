@@ -21,6 +21,7 @@ internal static class TypeNamePolicy
 
     public static string OptionVariantNames() => "None|Some";
     public static string ResultVariantNames() => "Ok|Err";
+    public static string RuntimeResultAliasNames() => "sys.directory.RawResult|sys.directory.ReadResult";
 
     public static string PredeclaredFixedArrays() =>
         "FixedUInt8Array12:UInt8:12|FixedUInt8Array16:UInt8:16|FixedUInt8Array32:UInt8:32";
@@ -43,4 +44,29 @@ internal static class TypeNamePolicy
     public static bool CanRegisterBoxName(bool primitive, bool structure, bool enumeration,
         bool excludedStructure, bool excludedNominal) =>
         (primitive || structure && !excludedStructure || enumeration) && !excludedNominal;
+
+    // Structural identity spellings are shared by the encoder, parser and SLG.
+    public static string StableOptionPrefix() => "Option<";
+    public static string StableResultPrefix() => "Result<";
+    public static string StableTaskPrefix() => "Task<";
+    public static string StableStreamPrefix() => "Stream<";
+    public static string StableEventStreamPrefix() => "EventStream<";
+    public static string StableFixedArrayPrefix() => "FixedArray<";
+    public static string StableStaticArrayPrefix() => "StaticArray<";
+    public static string StableBinaryHeapPrefix() => "BinaryHeap<";
+    public static string StableDequePrefix() => "Deque<";
+    public static string StableSetPrefix() => "Set<";
+    public static string StableArrayPrefix() => "Array<";
+    public static string StableBoundedArrayPrefix() => "BoundedArray<";
+    public static string StableBitSetPrefix() => "BitSet<";
+    public static string StableDictionaryPrefix() => "Dictionary<";
+    public static string StableBoundedDictionaryPrefix() => "BoundedDictionary<";
+    public static string StableBoxPrefix() => "Box<";
+    public static string StableReferencePrefix() => "Ref<";
+    public static string StableSlicePrefix() => "Slice<";
+    public static string StableDynTraitPrefix() => "Dyn<";
+    public static string StableProductPrefix() => "Product<";
+    public static string StableStructPrefix() => "struct:";
+    public static string StableEnumPrefix() => "enum:";
+    public static string StableBuiltinPrefix() => "builtin:";
 }

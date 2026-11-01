@@ -1275,8 +1275,10 @@ internal sealed partial class TypeDefinitionTable
     internal string DisplayTypeName(TypeId type) =>
         _names.FirstOrDefault(item => item.Value == type).Key ?? ((int)type).ToString();
 
-    internal static bool IsRuntimeResultAlias(string name) =>
-        name is "sys.directory.RawResult" or "sys.directory.ReadResult";
+    private static readonly HashSet<string> RuntimeResultAliasNames = new(
+        Shared.TypeNamePolicy.RuntimeResultAliasNames().Split('|'), StringComparer.Ordinal);
+
+    internal static bool IsRuntimeResultAlias(string name) => RuntimeResultAliasNames.Contains(name);
 
     public TypeId GetOrAddOption(TypeId valueType, string displayName)
     {

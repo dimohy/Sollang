@@ -6265,6 +6265,13 @@ Current backend:
   their distinct rules. Emission facts are explicit inputs; source text does not
   replace unavailable function identities, and request construction alone does
   not establish cache lookup, fragment consumption or publication.
+  Stable semantic type identities use the compiled constructor spellings in both
+  the C# encoder/parser and SLG projection. They retain nominal struct/enum
+  identity, builtin enum spelling, exact product labels and recursively encoded
+  element types. Runtime Result aliases follow the compiled alias-name catalog
+  and their actual Ok/Err payload annotations. Label and function-frame lengths
+  count UTF-16 code units even though stored field bytes are UTF-8. Display names
+  and arena coordinates do not replace these structural identities.
   Parser builtin type-name classification uses one compiled C# catalog shared
   with parser source generation and the generated SLG policy. This classification
   preserves parser spelling and qualification decisions; it is distinct from

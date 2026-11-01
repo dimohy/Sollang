@@ -28,12 +28,17 @@ def main():
     parser.add_argument('--include-type-names', action='store_true')
     parser.add_argument('--include-codegen-request', action='store_true')
     parser.add_argument('--emission-only-projection', action='store_true')
+    parser.add_argument('--include-stable-identities', action='store_true')
+    parser.add_argument('--stable-candidate-file', type=Path)
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     assert not args.include_type_names or args.registered_sources, "type names require registered sources"
     assert not args.include_codegen_request or args.registered_sources, "codegen request requires registered sources"
     assert not (args.include_type_names and args.include_codegen_request), "select one observation mode"
     assert not args.emission_only_projection or args.include_codegen_request, "projection requires codegen request mode"
+    assert not args.include_stable_identities or args.registered_sources, "stable identities require registered sources"
+    assert not (args.include_stable_identities and (args.include_codegen_request or args.include_type_names)), "select one observation mode"
+    assert not args.stable_candidate_file or args.include_stable_identities, "candidate validation requires stable identity mode"
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -51,6 +56,10 @@ def main():
     if args.registered_sources:
         assert not args.emitter and not args.verify_source and not args.baseline_result
         inputs += sorted(args.registered_sources.glob('*.slg'))
+    if args.stable_candidate_file:
+        candidates = json.loads(args.stable_candidate_file.read_text(encoding='utf-8'))
+        assert isinstance(candidates, list) and candidates and all(isinstance(value, str) for value in candidates), "candidate file must contain identity strings"
+        inputs.append(args.stable_candidate_file)
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -74,6 +83,8 @@ def main():
                             'Metadata-only; no Native type-pool selection or cache reuse claim.')
         if args.include_codegen_request:
             result['scope'] = 'Actual CSharp Open request, source modules, emission hashes and complete keys; no SLG production cache claim.'
+        if args.include_stable_identities:
+            result['scope'] = 'Actual CSharp structural type identities and bound function identity fields; no SLG identity or production reuse claim.'
         execution = VerificationExecution(ROOT, output, result,
                                          lambda: all(sha(p) == h for p, h in fingerprints.items()), sha)
         error = None
@@ -113,12 +124,18 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      ('registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors'],
+                                      ('registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors',
+                                      *([str(args.stable_candidate_file.resolve())] if args.stable_candidate_file else [])],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
                 if args.registered_sources:
                     row = json.loads(done.stdout)
-                    if args.include_codegen_request:
+                    if args.include_stable_identities:
+                        assert row['types'] and row['functions'] and all(r['identity'] for r in row['functions'])
+                        if args.stable_candidate_file:
+                            assert len(row['candidateValidation']) == len(candidates)
+                            assert all(r['equal'] for r in row['candidateValidation']), 'STABLE_IDENTITY_CANONICAL_MISMATCH'
+                    elif args.include_codegen_request:
                         assert row['modules'] and row['emissions'] and isinstance(row['typeUniverseHash'], int)
                         names = [entry['name'] for entry in row['moduleKeys']]
                         assert len(names) == len(set(names))
@@ -131,7 +148,7 @@ def main():
                                                        'StaticArrays', 'DynamicArrays', 'Dictionaries'}
                         assert all(row['records'][name] for name in row['records']), 'missing registered category'
                     result.update(status='passed', completed=1,
-                                  cases=[dict(id='actual-codegen-request' if args.include_codegen_request else 'actual-registered-types', passed=True, observation=row)])
+                                  cases=[dict(id='actual-stable-identities' if args.include_stable_identities else 'actual-codegen-request' if args.include_codegen_request else 'actual-registered-types', passed=True, observation=row)])
                 else:
                     rows = [json.loads(line) for line in done.stdout.splitlines()]
                     assert len(rows) == 9

@@ -1,8 +1,9 @@
 using System.Reflection;
 using System.Text.Json;
 
-if (args.Length is not (2 or 3)
-    || args.Length == 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+if (args.Length is not (2 or 3 or 4)
+    || args.Length == 4 && args[2] != "registered-stable-identity-vectors"
+    || args.Length >= 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -15,7 +16,7 @@ var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache",
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
 
-if (args.Length == 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors")
+if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
@@ -28,6 +29,71 @@ if (args.Length == 3 && args[2] is "registered-type-universe-vectors" or "regist
         | BindingFlags.NonPublic, null, [program, 64], null)!;
     var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
     var types = bound.GetType().GetProperty("Types")!.GetValue(bound)!;
+    if (args[2] == "registered-stable-identity-vectors")
+    {
+        object? Property(object value, string name) => value.GetType().GetProperty(name)!.GetValue(value);
+        var stableType = assembly.GetType("Sollang.Compiler.Semantics.SemanticStableIdentity", true)!;
+        var typeMethod = stableType.GetMethod("Type")!;
+        var typeEnum = assembly.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+        var functions = (System.Collections.IDictionary)Property(bound, "StableFunctionIdentities")!;
+        var ids = new HashSet<int>();
+        void CollectIds(JsonElement element, string? name = null)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+                foreach (var member in element.EnumerateObject()) CollectIds(member.Value, member.Name);
+            else if (element.ValueKind == JsonValueKind.Array)
+                foreach (var item in element.EnumerateArray()) CollectIds(item);
+            else if (element.ValueKind == JsonValueKind.Number && name is "Id" or "Type" or "PayloadType" or "ElementType" or "KeyType" or "ValueType")
+                ids.Add(element.GetInt32());
+        }
+        foreach (var name in new[] { "Structs", "Enums", "Boxes", "References", "DynTraits", "StaticArrays", "DynamicArrays", "Dictionaries" })
+            CollectIds(JsonSerializer.SerializeToElement(Property(types, name)));
+        var properties = new[] { "Name", "ModuleName", "Kind", "InputType", "InputOwnership", "ReturnType",
+            "BlockInputType", "BlockResultType", "StreamElementType", "IsAsync", "GenericParameterName",
+            "SecondaryGenericParameterName", "TertiaryGenericParameterName", "GenericTraitBound",
+            "GenericAssociatedTypeName", "GenericAssociatedTypeConstraint", "SpecializedType",
+            "SpecializedSecondaryType", "SpecializedTertiaryType", "SpecializedValue", "InputTypeTemplate",
+            "ReturnTypeTemplate", "BlockInputTypeTemplate", "BlockResultTypeTemplate", "StreamElementTypeTemplate",
+            "NativeLibrary", "NativeSymbol", "NativeError", "NativeSuccessType", "AdditionalParameters",
+            "AdditionalBlockParameters", "ImplAssociatedTypes", "Effects", "Com" };
+        var rows = functions.Keys.Cast<object>().Select(function =>
+        {
+            var facts = properties.ToDictionary(name => name, name => Property(function, name), StringComparer.Ordinal);
+            foreach (var name in new[] { "InputType", "ReturnType", "BlockInputType", "BlockResultType", "StreamElementType",
+                "GenericAssociatedTypeConstraint", "SpecializedType", "SpecializedSecondaryType", "SpecializedTertiaryType", "NativeSuccessType" })
+                if (facts[name] is { } id) ids.Add(Convert.ToInt32(id));
+            CollectIds(JsonSerializer.SerializeToElement(facts));
+            return new { facts, identity = (string)functions[function]! };
+        }).OrderBy(row => (string?)row.facts["ModuleName"], StringComparer.Ordinal)
+          .ThenBy(row => (string?)row.facts["Name"], StringComparer.Ordinal).ToArray();
+        var format = semanticType.GetMethod("FormatType", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var candidates = args.Length == 4
+            ? JsonSerializer.Deserialize<string[]>(File.ReadAllText(args[3]))!
+            : [];
+        var resolve = stableType.GetMethod("ResolveType")!;
+        var validation = candidates.Select(identity =>
+        {
+            try
+            {
+                var resolved = resolve.Invoke(null, [types, identity])!;
+                var canonical = (string)typeMethod.Invoke(null, [types, resolved])!;
+                return new { identity, canonical = (string?)canonical, equal = canonical == identity, error = (string?)null };
+            }
+            catch (TargetInvocationException error)
+            {
+                return new { identity, canonical = (string?)null, equal = false, error = (string?)error.GetBaseException().Message };
+            }
+        }).ToArray();
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            candidateValidation = validation,
+            types = ids.Order().Select(id => new { id,
+                name = (string)format.Invoke(semantic, [Enum.ToObject(typeEnum, id)])!,
+                identity = (string)typeMethod.Invoke(null, [types, Enum.ToObject(typeEnum, id)])! }),
+            functions = rows
+        }));
+        return;
+    }
     if (args[2] is "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors")
     {
         object Property(object value, string name) => value.GetType().GetProperty(name)!.GetValue(value)!;
