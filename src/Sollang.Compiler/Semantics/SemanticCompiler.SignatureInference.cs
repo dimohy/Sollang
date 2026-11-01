@@ -287,6 +287,23 @@ internal sealed partial class SemanticCompiler
                 {
                     fieldOwnerName = fieldOwnerName[4..].Trim();
                 }
+                // Inferred product shapes need not have been interned yet. Read
+                // the same ordered labels (or positional field names) that
+                // GetOrAddProduct will bind, without mutating the type registry.
+                if (fieldOwnerName.Length >= 2 && fieldOwnerName[0] == '(' && fieldOwnerName[^1] == ')')
+                {
+                    var fields = SplitTopLevelTypeFields(fieldOwnerName[1..^1]);
+                    for (var index = 0; index < fields.Count; index++)
+                    {
+                        var separator = FindTopLevelTypeSeparator(fields[index], ':');
+                        var name = separator < 0 ? $"_{index}" : fields[index][..separator].Trim();
+                        if (string.Equals(name, field.FieldName, StringComparison.Ordinal))
+                        {
+                            return (separator < 0 ? fields[index] : fields[index][(separator + 1)..]).Trim();
+                        }
+                    }
+                    return null;
+                }
                 var fieldModule = caller?.Declaration.ModuleName ?? string.Join('.', _program.NamespacePath);
                 if (!_types.TryResolveInModule(fieldOwnerName, fieldModule, out var fieldOwner)
                     || !_types.IsStruct(fieldOwner))

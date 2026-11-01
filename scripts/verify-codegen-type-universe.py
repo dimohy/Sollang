@@ -31,6 +31,7 @@ def main():
     parser.add_argument('--include-stable-identities', action='store_true')
     parser.add_argument('--stable-candidate-file', type=Path)
     parser.add_argument('--stable-function-output', type=Path)
+    parser.add_argument('--stable-call-input-output', type=Path)
     parser.add_argument('--stable-function-module')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -42,7 +43,8 @@ def main():
     assert not (args.include_stable_identities and (args.include_codegen_request or args.include_type_names)), "select one observation mode"
     assert not args.stable_candidate_file or args.include_stable_identities, "candidate validation requires stable identity mode"
     assert not args.stable_function_output or (args.include_stable_identities and args.stable_function_module), 'function comparison requires stable identity mode and module'
-    assert not args.stable_function_module or args.stable_function_output, 'function module requires native output'
+    assert not args.stable_function_module or (args.stable_function_output or args.stable_call_input_output), 'function module requires native output'
+    assert not args.stable_call_input_output or (args.include_stable_identities and args.stable_function_module), 'call input comparison requires stable identity mode and module'
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -66,6 +68,8 @@ def main():
         inputs.append(args.stable_candidate_file)
     if args.stable_function_output:
         inputs.append(args.stable_function_output)
+    if args.stable_call_input_output:
+        inputs.append(args.stable_call_input_output)
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -145,6 +149,22 @@ def main():
                             expected = [entry['identity'] for entry in row['functions'] if entry['facts']['ModuleName'] == args.stable_function_module]
                             assert expected and sorted(actual) == sorted(expected), 'STABLE_FUNCTION_IDENTITY_MISMATCH'
                             result['functionComparison'] = dict(module=args.stable_function_module, completed=len(actual), total=len(expected), exact=True)
+                        if args.stable_call_input_output:
+                            native_lines = args.stable_call_input_output.read_text(encoding='utf-8-sig').splitlines()
+                            assert all(line == 'utf16:4' or line.startswith('argument:') for line in native_lines), 'NATIVE_CALL_INPUT_CAPTURE_ERROR'
+                            actual = {line[len('argument:'):] for line in native_lines if line.startswith('argument:')}
+                            type_identities = {entry['id']: entry['identity'] for entry in row['types']}
+                            expected = set()
+                            for entry in row['functions']:
+                                facts = entry['facts']
+                                if facts['ModuleName'] != args.stable_function_module or facts['SpecializedType'] is None:
+                                    continue
+                                if facts['InputType'] is not None:
+                                    expected.add(type_identities[facts['InputType']])
+                                expected.update(type_identities[parameter['Type']] for parameter in facts['AdditionalParameters'])
+                            assert expected and actual == expected, 'STABLE_CALL_INPUT_IDENTITY_MISMATCH'
+                            result['callInputComparison'] = dict(module=args.stable_function_module, completed=len(actual), total=len(expected), exact=True,
+                                scope='Concrete typed generic-call input identities only; specialization names and production cache integration are separate.')
                         if args.stable_candidate_file:
                             assert len(row['candidateValidation']) == len(candidates)
                             assert all(r['equal'] for r in row['candidateValidation']), 'STABLE_IDENTITY_CANONICAL_MISMATCH'

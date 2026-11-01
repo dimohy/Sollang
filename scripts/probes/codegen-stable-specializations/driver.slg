@@ -51,6 +51,28 @@ inspect: -> Unit uses Console, File, Process {
     [typeIds.SemanticType; ~] => types!
     resolved.types -> each type { types! -> push(type) }
     ir -> typedIr.planGenericCalls(prepared, types!) => plans
+    typeIds.SemanticTypeSet { types: types!, references: resolved.references, fields: resolved.fields } => semantic!
+    (arguments -> len) > 3 and arguments[3] == "call-input-types"
+        -> if {
+            plans -> each plan {
+                plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
+                    -> if {
+                        plan.status != 0 -> if { process.exit(6) -> return }
+                        plan.actualInputs -> each actual {
+                            context! -> keys.resolvedStableTypeIdentityField(prepared.package, semantic!, actual, identities.ids) -> when {
+                                Err(_) { "argument-error:$actual" -> println
+                                    process.exit(6) -> return }
+                                Ok(field) {
+                                    field.bytes -> file.borrowBytes => bytes
+                                    bytes -> slice(0, bytes -> len) => identity
+                                    "argument:$identity" -> println
+                                }
+                            }
+                        }
+                    }
+            }
+            return
+        }
     0..<fixtureRange.symbolCount -> each index {
         prepared.package.symbols[fixtureRange.symbolStart + index] => function
         function.kind == 7 or function.kind == 31 -> if {
@@ -66,9 +88,9 @@ inspect: -> Unit uses Console, File, Process {
                     ir[node].kind == 0 and ir[node].sourceModule == fixtureModule and ir[node].symbol == index
                         -> if { node => functionNode! }
                 }
-                ir -> specializationCapture.captureFunctionBinding(types!, functionNode!) -> when {
+                ir -> specializationCapture.captureFunctionBinding(semantic!.types, functionNode!) -> when {
                     Err(error) { Result<keys.Field, keys.TypeUniverseCaptureError>.Err(error) }
-                    Ok(binding) { context! -> keys.captureBoundFunctionIdentity(prepared, types!, identities.ids, binding) }
+                    Ok(binding) { context! -> keys.captureBoundFunctionIdentity(prepared, semantic!, identities.ids, binding) }
                 }
             } -> when {
                 Err(_) { "function-error:$index" -> println
@@ -85,13 +107,13 @@ inspect: -> Unit uses Console, File, Process {
     plans -> each plan {
         plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
             -> if {
-                prepared -> specializationCapture.capture(ir, types!, plan, declaredIdentities.ids) -> when {
+                prepared -> specializationCapture.capture(ir, semantic!.types, plan, declaredIdentities.ids) -> when {
                     Err(_) { "specialization-error:$(plan.templateNode):$(plan.status)" -> println
                         process.exit(6) -> return }
                     Ok(facts) {
                         facts.sourceModule => context!.sourceModule
                         facts.ownerSymbol => context!.ownerSymbol
-                        context! -> keys.captureBoundFunctionIdentity(prepared, types!, identities.ids, facts) -> when {
+                        context! -> keys.captureBoundFunctionIdentity(prepared, semantic!, identities.ids, facts) -> when {
                             Err(_) { "specialization-field-error:$(plan.templateNode)" -> println
                                 process.exit(6) -> return }
                             Ok(field) {

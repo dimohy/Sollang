@@ -1850,6 +1850,10 @@ All constraints must agree. Local functions lower to private LLVM functions
 with stable local symbols and explicit capture parameters.
 Stored field reads constrain an omitted signature through the receiver's
 canonical declared field type, including nested fields and readonly receivers.
+An inferred product receiver preserves its ordered field labels and positional
+field names through nested reads before that shape is interned. A product value
+constrains its enclosing product or function result only when its complete type
+is available; a typed operand does not stand in for that pending value.
 A method that calls an inferred private function is a consuming function scope;
 it participates in the same unique-consumer rule as an ordinary function.
 
@@ -6306,6 +6310,8 @@ Current backend:
   facts used by emission. Source inference markers do not replace bound types
   in the identity. Ordinary and specialized bindings use one signature model;
   only a specialization adds its ordered argument identities to the name.
+  The type nodes, references and ordered field facts belong to one resolved
+  type graph. Declaration fields must not be combined with later type nodes.
   Concrete function specializations derive their ordered argument environment
   from the actual typed call plan. Their identity retains the template's generic
   names and type syntax while replacing bound input, return and additional
