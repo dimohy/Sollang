@@ -1546,7 +1546,7 @@ interpolationCallOperandCount call: interpolation.InterpolationNode -> Int {
     call.argumentCount
 }
 
-resolveInterpolationMethod prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], lexicalTypes: ref [Int; ~], memberTypes: ref [Int; ~], indexedTypes: ref [Int; ~], literalTypes: ref [Int; ~], callTypes: ref [Int; ~], sourceModule: Int, nodeIndex: Int -> InterpolationMethodDecision {
+resolveInterpolationMethod prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], lexicalTypes: ref [Int; ~], memberTypes: ref [Int; ~], indexedTypes: ref [Int; ~], literalTypes: ref [Int; ~], callTypes: ref [Int; ~], sourceModule: Int, nodeIndex: Int, methodDeclarations: ref calls.TypedMethodDeclarationFacts -> InterpolationMethodDecision {
     emptyInterpolationMethodDecision() => result!
     prepared.interpolations[nodeIndex] => call
     call.operand0 < 0 or call.operand0 >= (prepared.interpolations -> len)
@@ -1576,7 +1576,7 @@ resolveInterpolationMethod prepared: ref semanticContext.SemanticSnapshot, types
                 qualifiedTarget.status => request!.qualifiedTargetStatus
             }
     }
-    request! -> calls.resolveTypedMethod(prepared.package, types, references, prepared.modules, prepared.imports, prepared.resolvedImports, prepared.qualified) => selected
+    request! -> calls.resolveTypedMethodWithDeclarations(prepared.package, types, references, prepared.modules, prepared.imports, prepared.resolvedImports, prepared.qualified, methodDeclarations) => selected
     selected.status < 0 -> if { result! -> return }
     selected.targetSourceModule => result!.sourceModule
     selected.functionSymbol => result!.symbol
@@ -1609,11 +1609,11 @@ preIrTextIndexArgument prepared: ref semanticContext.SemanticSnapshot, types: re
     argumentType.kind == 1 and argumentType.origin == 1 and argumentType.symbol == 13
 }
 
-resolveInterpolationCallReturnType prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], inferredReturnTypes: ref [Int; ~], lexicalTypes: ref [Int; ~], memberTypes: ref [Int; ~], indexedTypes: ref [Int; ~], literalTypes: mut [Int; ~], callTypes: ref [Int; ~], arrayFacts: mut [InterpolationArrayFact; ~], sourceModule: Int, nodeIndex: Int, targetSources: mut [Int; ~], targetSymbols: mut [Int; ~], methodDecisions: mut [InterpolationMethodDecision; ~], arguments: mut [ResolvedInterpolationCallArgument; ~] -> Int {
+resolveInterpolationCallReturnType prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], inferredReturnTypes: ref [Int; ~], lexicalTypes: ref [Int; ~], memberTypes: ref [Int; ~], indexedTypes: ref [Int; ~], literalTypes: mut [Int; ~], callTypes: ref [Int; ~], arrayFacts: mut [InterpolationArrayFact; ~], sourceModule: Int, nodeIndex: Int, targetSources: mut [Int; ~], targetSymbols: mut [Int; ~], methodDecisions: mut [InterpolationMethodDecision; ~], arguments: mut [ResolvedInterpolationCallArgument; ~], methodDeclarations: ref calls.TypedMethodDeclarationFacts -> Int {
     prepared.interpolations[nodeIndex] => call
     (call.kind != 6 and call.kind != 8 and call.kind != 10) or sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
         -> if { -1 -> return }
-    prepared -> resolveInterpolationMethod(types, references, referenceIndexByTypeAst, lexicalTypes, memberTypes, indexedTypes, literalTypes, callTypes, sourceModule, nodeIndex) => method
+    prepared -> resolveInterpolationMethod(types, references, referenceIndexByTypeAst, lexicalTypes, memberTypes, indexedTypes, literalTypes, callTypes, sourceModule, nodeIndex, methodDeclarations) => method
     method => methodDecisions[nodeIndex]
     method.status >= 0 -> if {
         method.sourceModule => targetSources[nodeIndex]
@@ -2530,6 +2530,11 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
 
     # Resolve each member or index after its receiver, matching recursive C# inference.
     # Inaccessible or unresolved fields remain for the later diagnostic path.
+    # Interpolated and ordinary calls share one declaration selection engine.
+    # Declarations and imports are immutable while receiver/type facts refine.
+    (prepared.interpolations -> len) > 0 -> if {
+        prepared.package -> calls.prepareTypedMethodDeclarationFacts(references!, prepared.modules, prepared.resolvedImports)
+    } else { calls.emptyTypedMethodDeclarationFacts() } => interpolationMethodDeclarations
     [Int; ~] => interpolationCallTypeByNode!
     [Int; ~] => interpolationCallSourceByNode!
     [Int; ~] => interpolationCallSymbolByNode!
@@ -2617,7 +2622,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
                             }
                         member.kind == 6 or member.kind == 8 or member.kind == 10
                             -> if {
-                                resolveInterpolationCallReturnType(prepared, types!, references!, referenceIndexByTypeAst!, interpolationInferredReturns, interpolationLexicalTypeByNode!, interpolationMemberTypeByNode!, interpolationIndexedTypeByNode!, interpolationContextualStructTypeByNode!, interpolationCallTypeByNode!, interpolationArrayByNode!, interpolationRange.sourceModule, memberNodeIndex!, interpolationCallSourceByNode!, interpolationCallSymbolByNode!, interpolationMethodByNode!, interpolationCallArguments!) => callType
+                                resolveInterpolationCallReturnType(prepared, types!, references!, referenceIndexByTypeAst!, interpolationInferredReturns, interpolationLexicalTypeByNode!, interpolationMemberTypeByNode!, interpolationIndexedTypeByNode!, interpolationContextualStructTypeByNode!, interpolationCallTypeByNode!, interpolationArrayByNode!, interpolationRange.sourceModule, memberNodeIndex!, interpolationCallSourceByNode!, interpolationCallSymbolByNode!, interpolationMethodByNode!, interpolationCallArguments!, interpolationMethodDeclarations) => callType
                                 callType >= 0 -> if { callType => interpolationCallTypeByNode![memberNodeIndex!] }
                             }
                         member.kind == 5 and member.operand0 >= 0

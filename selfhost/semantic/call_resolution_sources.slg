@@ -299,7 +299,7 @@ typedMethodPrimaryMatches package: ref analysis.PackageAnalysis, references: ref
 }
 
 # Immutable declaration facts; receiver selection and diagnostic ordering remain per call.
-struct TypedMethodDeclarationFacts {
+public struct TypedMethodDeclarationFacts {
     ownerTypes: [Int; ~]
     primaryMatches: [Bool; ~]
     traitAsts: [Int; ~]
@@ -312,7 +312,7 @@ struct TypedMethodDeclarationFacts {
     importReachability: [Bool; ~]
 }
 
-prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> TypedMethodDeclarationFacts {
+public prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> TypedMethodDeclarationFacts {
     package -> indexTypedMethodReferences(references) => referenceIndex
     [Int; ~] => ownerTypes!
     [Bool; ~] => primaryMatches!
@@ -396,7 +396,7 @@ prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, refere
     TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, openFunctionSymbols: openFunctionSymbols!, openFunctionStarts: openFunctionStarts!, openFunctionCounts: openFunctionCounts!, importReachability: importReachability! }
 }
 
-public resolveTypedMethod request: TypedMethodRequest, package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> TypedMethodResolution{
+public emptyTypedMethodDeclarationFacts: -> TypedMethodDeclarationFacts {
     [Int; ~] => ownerTypes
     [Bool; ~] => primaryMatches
     [Int; ~] => traitAsts
@@ -407,11 +407,15 @@ public resolveTypedMethod request: TypedMethodRequest, package: ref analysis.Pac
     [Int; ~] => openFunctionStarts
     [Int; ~] => openFunctionCounts
     [Bool; ~] => importReachability
-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability } => declarations
+    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability }
+}
+
+public resolveTypedMethod request: TypedMethodRequest, package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> TypedMethodResolution {
+    emptyTypedMethodDeclarationFacts() => declarations
     request -> resolveTypedMethodWithDeclarations(package, types, references, identities, imports, resolvedImports, qualifiedResults, declarations)
 }
 
-resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], declarations: ref TypedMethodDeclarationFacts -> TypedMethodResolution {
+public resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], declarations: ref TypedMethodDeclarationFacts -> TypedMethodResolution {
     TypedMethodResolution { targetModule: -1, targetSourceModule: -1, functionSymbol: -1, ownerTypeId: -1, traitModule: -1, traitSymbol: -1, status: -1 } => missing
     request.sourceModule < 0 or request.sourceModule >= (package.sources -> len)
         or request.sourceModule >= (identities -> len)
