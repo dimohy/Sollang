@@ -6789,10 +6789,179 @@ traitAssociatedBindingIssue source: Int, implementation: Int, traitIdentity: Int
     -1
 }
 
+traitImplementationBindingsDiffer source: Int, implementation: Int, previousSource: Int, previous: Int, context: ref emitterContext.EmitContext -> Bool {
+    context.ranges[source] => range
+    context.ranges[previousSource] => previousRange
+    0 => count!
+    0 => previousCount!
+    0 => index!
+    index! < previousRange.symbolCount -> while {
+        context.symbols[previousRange.symbolStart + index!] => binding
+        binding.kind == 30 and binding.parent == previous
+            -> if { previousCount! + 1 => previousCount! }
+        index! + 1 => index!
+    }
+    0 => index!
+    index! < range.symbolCount -> while {
+        context.symbols[range.symbolStart + index!] => binding
+        binding.kind == 30 and binding.parent == implementation
+            -> if {
+                count! + 1 => count!
+                false => same!
+                0 => search!
+                search! < previousRange.symbolCount and not same!
+                    -> while {
+                        context.symbols[previousRange.symbolStart + search!] => candidate
+                        candidate.kind == 30 and candidate.parent == previous
+                            and (source -> sourceTokensEqual(binding.nameToken, previousSource, candidate.nameToken, context))
+                            -> if {
+                                source -> signatureTypeId(binding.typeNode, context) => currentType
+                                previousSource -> signatureTypeId(candidate.typeNode, context) => previousType
+                                currentType >= 0 and currentType == previousType
+                                    -> if { true => same! }
+                            }
+                        search! + 1 => search!
+                    }
+                not same! -> if { true -> return }
+            }
+        index! + 1 => index!
+    }
+    count! != previousCount!
+}
+
+# DeclareTraitImplementations validates every declaration before method checks.
+# An impl with no methods still owns its associated-type contract.
+struct TraitImplementationRegistration {
+    traitIdentity: Int
+    receiverType: Int
+    sourceModule: Int
+    implementation: Int
+}
+
+traitImplementationDeclarationDiagnostics context: ref emitterContext.EmitContext, writeDiagnostics: Bool -> Int uses Console {
+    [TraitImplementationRegistration; ~] => registered!
+    context.ranges -> each range {
+        0 => implementation!
+        implementation! < range.symbolCount -> while {
+            context.symbols[range.symbolStart + implementation!] => declaration
+            declaration.kind == 6 -> if {
+                context.nodes -> typeIds.implTypePaths(range.astStart, range.astCount, declaration.astNode) => paths
+                0 => code!
+                -1 => related!
+                -1 => trait!
+                paths.traitAst < 0 -> if {
+                    0 => binding!
+                    binding! < range.symbolCount -> while {
+                        context.symbols[range.symbolStart + binding!] => candidate
+                        candidate.kind == 30 and candidate.parent == implementation!
+                            -> if { 1 => code! }
+                        binding! + 1 => binding!
+                    }
+                } else {
+                    range.sourceModule -> traitDeclarationForImpl(implementation!, context) => trait!
+                    trait! < 0 -> if { 2 => code! } else {
+                        context.ranges -> each traitRange {
+                            trait! >= traitRange.symbolStart and trait! < traitRange.symbolStart + traitRange.symbolCount
+                                and context.symbols[trait!].flags / 4 % 2 == 0
+                                and context.modules[traitRange.sourceModule].pathHash != context.modules[range.sourceModule].pathHash
+                                -> if { 6 => code!
+                                    traitRange.sourceModule => related! }
+                        }
+                        range.sourceModule -> signatureTypeId(paths.ownerAst, context) => receiver
+                        code! == 0 and receiver < 0 -> if { 7 => code!
+                            paths.ownerAst => related! }
+                        code! == 0 and receiver >= 0 -> if {
+                            context.types[receiver] => owner
+                            not ((owner.kind == 1 or owner.kind == 7) and (owner.origin == 0 or owner.origin == 2)
+                                or (owner.kind == 7 and owner.origin == 4 and (owner.symbol == 0 or owner.symbol == 1))
+                                or (owner -> typeIds.isBuiltinStruct)) -> if { 3 => code! }
+                        }
+                        code! == 0 -> if {
+                            0 => binding!
+                            binding! < range.symbolCount and code! == 0 -> while {
+                                context.symbols[range.symbolStart + binding!] => candidate
+                                candidate.kind == 30 and candidate.parent == implementation!
+                                    and (range.sourceModule -> signatureTypeId(candidate.typeNode, context)) < 0
+                                    -> if { 7 => code!
+                                        candidate.typeNode => related! }
+                                binding! + 1 => binding!
+                            }
+                        }
+                        code! == 0 -> if {
+                            range.sourceModule -> traitAssociatedBindingIssue(implementation!, trait!, context) => related!
+                            related! >= 0 -> if { 4 => code! }
+                        }
+                        code! == 0 -> if {
+                            false => repeated!
+                            registered! -> each previous {
+                                previous.traitIdentity == trait! and previous.receiverType == receiver
+                                    -> if {
+                                        true => repeated!
+                                        range.sourceModule -> traitImplementationBindingsDiffer(implementation!, previous.sourceModule, previous.implementation, context)
+                                            -> if { 5 => code! }
+                                    }
+                            }
+                            not repeated! -> if { registered! -> push(TraitImplementationRegistration { traitIdentity: trait!, receiverType: receiver, sourceModule: range.sourceModule, implementation: implementation! }) }
+                        }
+                    }
+                }
+                code! > 0 -> if {
+                    writeDiagnostics -> if {
+                        context -> emitInitializerSemanticPrefix(range.sourceModule, declaration.astNode)
+                        code! == 1 -> if { "associated type bindings require a trait impl" -> println }
+                        code! == 2 -> if {
+                            "unknown trait '" -> print
+                            context.nodes[range.astStart + paths.traitAst] => path
+                            context.sources[range.sourceModule] -> emitDeclaredTypeSpelling(context.tokens, range.tokenStart, path)
+                            "'" -> println
+                        }
+                        code! == 3 -> if { "trait methods require a user type self receiver" -> println }
+                        code! == 4 -> if {
+                            context.symbols[related!] => associated
+                            associated.kind == 30 -> if { "trait '" -> print } else { "impl " -> print }
+                            context -> emitNominalDeclarationName(trait!)
+                            associated.kind == 30 -> if { "' has no associated type '" -> print } else { " requires associated type '" -> print }
+                            context.ranges -> each associatedRange {
+                                related! >= associatedRange.symbolStart and related! < associatedRange.symbolStart + associatedRange.symbolCount
+                                    -> if {
+                                        context.tokens[associatedRange.tokenStart + associated.nameToken] => name
+                                        context.sources[associatedRange.sourceModule] -> slice(name.span.start, name.span.length) -> print
+                                    }
+                            }
+                            "'" -> println
+                        }
+                        code! == 5 -> if {
+                            "impl " -> print
+                            context -> emitNominalDeclarationName(trait!)
+                            " has conflicting associated type bindings" -> println
+                        }
+                        code! == 6 -> if {
+                            "trait '" -> print
+                            context -> emitNominalDeclarationName(trait!)
+                            context -> semanticDiagnosticModuleText(related!) => moduleName
+                            "' is internal to module '$moduleName'" -> println
+                        }
+                        code! == 7 -> if {
+                            "unknown type '" -> print
+                            context.nodes[range.astStart + related!] => annotation
+                            context.sources[range.sourceModule] -> emitDeclaredTypeSpelling(context.tokens, range.tokenStart, annotation)
+                            "'" -> println
+                        }
+                    }
+                    1 -> return
+                }
+            }
+            implementation! + 1 => implementation!
+        }
+    }
+    0
+}
+
 traitSignatureDiagnostics context: ref emitterContext.EmitContext, writeDiagnostics: Bool -> Int uses Console {
+    context -> traitImplementationDeclarationDiagnostics(writeDiagnostics) => declarationFailure
+    declarationFailure > 0 -> if { declarationFailure -> return }
     # Concrete methods are checked before any missing requirement, matching the
     # managed function traversal. The first diagnostic owns the source location.
-    -1 => checkedAssociatedImpl!
     context.ranges -> each range {
         0 => method!
         method! < range.symbolCount -> while {
@@ -6802,37 +6971,6 @@ traitSignatureDiagnostics context: ref emitterContext.EmitContext, writeDiagnost
                 -> if {
                     range.sourceModule -> traitDeclarationForImpl(actual.parent, context) => traitIdentity
                     traitIdentity >= 0 -> if {
-                        range.symbolStart + actual.parent => implementationIdentity
-                        implementationIdentity != checkedAssociatedImpl!
-                            -> if {
-                                range.sourceModule -> traitAssociatedBindingIssue(actual.parent, traitIdentity, context) => issue
-                                issue >= 0 -> if {
-                                    writeDiagnostics -> if {
-                                        context.tokens[range.tokenStart + actual.nameToken] => methodName
-                                        context -> emitInitializerSemanticPrefixAtOffset(range.sourceModule, actual.astNode, methodName.span.start)
-                                        context.symbols[issue] => associated
-                                        associated.kind == 30 -> if {
-                                            "trait '" -> print
-                                            context -> emitNominalDeclarationName(traitIdentity)
-                                            "' has no associated type '" -> print
-                                        } else {
-                                            "impl " -> print
-                                            context -> emitNominalDeclarationName(traitIdentity)
-                                            " requires associated type '" -> print
-                                        }
-                                        context.ranges -> each issueRange {
-                                            issue >= issueRange.symbolStart and issue < issueRange.symbolStart + issueRange.symbolCount
-                                                -> if {
-                                                    context.tokens[issueRange.tokenStart + associated.nameToken] => name
-                                                    context.sources[issueRange.sourceModule] -> slice(name.span.start, name.span.length) -> print
-                                                }
-                                        }
-                                        "'" -> println
-                                    }
-                                    1 -> return
-                                }
-                                implementationIdentity => checkedAssociatedImpl!
-                            }
                         range.sourceModule -> traitMethodDeclaration(method!, traitIdentity, context) => requirement
                         0 => mismatch!
                         requirement >= 0 -> if {
