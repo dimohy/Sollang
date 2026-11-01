@@ -174,7 +174,8 @@ internal static class SelfHostPolicyTests
 
     private static string WriteRuntimeProbe(Assembly compiler, string root, string directory)
     {
-        string[] names = ["BorrowedTextReturnPolicy", "FunctionTypeBindingPolicy", "TypeNamePolicy"];
+        string[] names = ["BorrowedTextReturnPolicy", "FunctionTypeBindingPolicy", "TypeNamePolicy",
+            "CodegenCachePolicy", "CodegenCacheKeyPolicy"];
         var source = new System.Text.StringBuilder();
         var expected = new System.Text.StringBuilder();
         var dependencies = new List<string>();
@@ -194,12 +195,39 @@ internal static class SelfHostPolicyTests
                 .OrderBy(method => method.Name, StringComparer.Ordinal))
             {
                 var parameters = method.GetParameters();
-                if (parameters.Length > 6 || parameters.Any(parameter => parameter.ParameterType != typeof(bool))
+                var call = "policy" + index + "." + char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
+                if (method.ReturnType.FullName == "Sollang.Compiler.Shared.CodegenKeyRule" && parameters.Length == 0)
+                {
+                    var rule = method.Invoke(null, null)!;
+                    var domain = (string)method.ReturnType.GetProperty("Domain")!.GetValue(rule)!;
+                    var parts = ((System.Collections.IEnumerable)method.ReturnType.GetProperty("Parts")!.GetValue(rule)!)
+                        .Cast<object>().Select(part => Convert.ToInt32(part, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+                    var label = names[index] + "." + method.Name;
+                    var binding = "rule" + method.Name;
+                    // Read both the declaration order and its exported partIndex at runtime.
+                    source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(call)
+                        .Append("() => ").Append(binding).Append('\n')
+                        .Append("    ").Append(binding).Append(".domain -> println\n    (").Append(binding).Append(".parts -> len) -> println\n")
+                        .Append("    ").Append(binding).Append(".parts -> each part { policy").Append(index).Append(".partIndex(part) -> println }\n");
+                    expected.Append(label).Append('\n').Append(domain).Append('\n').Append(parts.Length).Append('\n');
+                    foreach (var part in parts) expected.Append(part).Append('\n');
+                    continue;
+                }
+                if (parameters.Length > 6 || parameters.Any(parameter => parameter.ParameterType != typeof(bool) && parameter.ParameterType != typeof(ulong))
                     || (method.ReturnType != typeof(bool) && method.ReturnType != typeof(string) && method.ReturnType != typeof(ulong)))
                     throw new InvalidDataException("Unsupported runtime policy probe signature: " + method.Name);
-                for (var row = 0; row < 1 << parameters.Length; row++)
+                object[][] vectors = parameters.Select(parameter => parameter.ParameterType == typeof(bool)
+                    ? new object[] { false, true } : new object[] { 0UL, 1UL, 1UL << 63, ulong.MaxValue }).ToArray();
+                var rowCount = vectors.Aggregate(1, (count, vector) => checked(count * vector.Length));
+                for (var row = 0; row < rowCount; row++)
                 {
-                    var arguments = Enumerable.Range(0, parameters.Length).Select(bit => (object)((row & (1 << bit)) != 0)).ToArray();
+                    var remaining = row;
+                    var arguments = vectors.Select(vector =>
+                    {
+                        var argument = vector[remaining % vector.Length];
+                        remaining /= vector.Length;
+                        return argument;
+                    }).ToArray();
                     var value = method.Invoke(null, arguments);
                     var text = value switch
                     {
@@ -209,9 +237,9 @@ internal static class SelfHostPolicyTests
                         _ => throw new InvalidDataException("Unsupported runtime policy result: " + method.Name)
                     };
                     var label = names[index] + "." + method.Name + ":" + row;
-                    source.Append("    \"").Append(label).Append("\" -> println\n    policy").Append(index).Append('.')
-                        .Append(char.ToLowerInvariant(method.Name[0])).Append(method.Name.AsSpan(1)).Append('(')
-                        .AppendJoin(", ", arguments.Select(argument => (bool)argument ? "true" : "false"))
+                    source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(call).Append('(')
+                        .AppendJoin(", ", arguments.Select(argument => argument is bool boolean ? boolean ? "true" : "false"
+                            : ((ulong)argument).ToString(System.Globalization.CultureInfo.InvariantCulture)))
                         .Append(") -> println\n");
                     expected.Append(label).Append('\n').Append(text).Append('\n');
                 }
@@ -224,7 +252,7 @@ internal static class SelfHostPolicyTests
         File.WriteAllText(contractPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
-            scope = "Scalar generated policies against compiled CSharp method results; exhaustive boolean inputs",
+            scope = "Generated policies against compiled CSharp method results; exhaustive boolean inputs, UInt64 boundary products and every declared cache-key rule",
             cases = new[] { new { id = "shared-policy-runtime", source = sourcePath,
                 additionalSources = dependencies, exit = 0, stderr = "", stdout = expected.ToString().TrimEnd('\r', '\n') } }
         }, new JsonSerializerOptions { WriteIndented = true }));
