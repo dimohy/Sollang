@@ -6283,6 +6283,11 @@ Current backend:
   no hash-domain prefix. Ordinary explicit declarations and concrete impl methods
   derive their name, owner, resolved types, ownership and effects from current
   preparation, rather than accepting an externally supplied C# function string.
+  Generic declaration identities retain their ordered parameter names, trait
+  bound and associated-type equality facts. A deferred composite input has no
+  bound input type, whereas a deferred composite result or additional parameter
+  retains Unit plus its exact type template. These decisions follow the shared
+  function binding policy; template syntax never substitutes for a runtime layout.
   Missing collectors for other binding modes remain incomplete cache integration;
   source hashes and ABI-scoped names must never substitute for those facts.
   Parser builtin type-name classification uses one compiled C# catalog shared
