@@ -60,6 +60,13 @@ def validate_build_stdout(raw, binary_path, side):
             seen.add("kept")
             continue
         if side == "selfhost":
+            match = re.fullmatch(r"\[codegen-cache\] reused ([0-9]+)/([0-9]+) units; (.+)", line)
+            if match and "codegen" not in seen:
+                if int(match[1]) > int(match[2]):
+                    raise ValueError("BUILD_STDOUT_REUSE_COUNT")
+                cache(match[3], ".cgu")
+                seen.add("codegen")
+                continue
             match = re.fullmatch(r"\[semantic-cache\] load-status (?:0|50); reused [0-9]+/[0-9]+ sources; rejected 0; uncached [0-9]+; (.+)", line)
             if match and "semantic" not in seen:
                 cache(match[1], ".semantic")

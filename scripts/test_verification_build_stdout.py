@@ -36,6 +36,24 @@ class BuildStdoutTests(unittest.TestCase):
         self.validate([f"[semantic-cache] load-status 50; reused 0/145 sources; rejected 0; uncached 23; {self.prefix}.semantic",
             f"Kept {self.binary}.ll", f"Wrote {self.binary}"], "selfhost")
 
+    def test_native_codegen_cache_counts(self):
+        for reused, total in ((0, 12), (7, 12), (12, 12), (0, 0)):
+            with self.subTest(reused=reused, total=total):
+                self.validate([
+                    f"[semantic-cache] load-status 50; reused 0/155 sources; rejected 0; uncached 24; {self.prefix}.semantic",
+                    f"[codegen-cache] reused {reused}/{total} units; {self.prefix}.cgu",
+                    f"Kept {self.binary}.ll", f"Wrote {self.binary}"], "selfhost")
+
+    def test_native_codegen_cache_rejects_bad_counts_paths_and_duplicates(self):
+        line = f"[codegen-cache] reused 0/12 units; {self.prefix}.cgu"
+        semantic = f"[semantic-cache] load-status 50; reused 0/155 sources; rejected 0; uncached 24; {self.prefix}.semantic"
+        for middle in ([line, line], [line.replace("0/12", "13/12")],
+                       [line.replace("0/12", "-1/12")],
+                       [line.replace(str(self.prefix), str(self.prefix.parent / 'other.windows-x64'))],
+                       [line.replace(".cgu", ".semantic")], [line, "42"]):
+            with self.subTest(middle=middle), self.assertRaises(ValueError):
+                self.validate([semantic, *middle, f"Wrote {self.binary}"], "selfhost")
+
     def test_undeclared_output_and_warnings_are_errors(self):
         for extra in ("42", "warning: lowered ownership", "[new-cache] ok", " "):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
