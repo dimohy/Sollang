@@ -84,8 +84,10 @@ if ($callbackResultSource -cnotmatch 'block item: ref T -> Bool' -or $callbackRe
 }
 
 $selfhostResolution = Get-Content -LiteralPath $paths.selfhostResolution -Raw
-if ($selfhostResolution -cnotmatch 'localCallNode\.kind == 10\s+or localCallNode\.kind == 48\s+or dottedDirectReceiver!' -or
-    $selfhostResolution -cnotmatch 'localCallNode\.kind != 48\s+or receiverMethod\.blockNameToken >= 0' -or
+if ($selfhostResolution -cnotmatch 'blockMethod: localCallNode\.kind == 48' -or
+    $selfhostResolution -cnotmatch 'not request\.blockMethod or method\.blockNameToken >= 0' -or
+    $selfhostResolution -cnotmatch 'resolveTypedMethodWithDeclarations\(methodRequest, package, semantic\.types, semantic\.references, identities, imports, resolvedImports, qualifiedResults, declarations\) => methodSelection' -or
+    $selfhostResolution -cnotmatch 'typedMethodOwnerMatches\(receiverTypeId, ownerTypeId!, ownerPass! == 1\)' -or
     $selfhostResolution -cnotmatch 'qualifiedInherentBlockMethod! -> if \{' -or
     $selfhostResolution -cnotmatch 'resolvedFunctionSymbol! != qualifiedBlockTarget\.targetSymbol') {
     throw 'selfhost block calls must share exact nominal receiver lookup and reject non-block or wrong-owner methods'
@@ -119,8 +121,8 @@ foreach ($case in $cases) {
     $source = $paths["source:$($case.id)"]
     $expectedPath = $paths["expected:$($case.id)"]
     $executable = Join-Path $output "$($case.id).exe"
-    $irPath = [IO.Path]::ChangeExtension($executable, '.ll')
-    $bcPath = [IO.Path]::ChangeExtension($executable, '.bc')
+    $irPath = "$executable.ll"
+    $bcPath = "$executable.bc"
     if ($case.id -eq 'P1') {
         $actual = (& dotnet $compiler run $source --llvm $llvm -o $executable --keep-temps 2>&1) -join "`n"
         if ($LASTEXITCODE -ne 0 -or (Normalize $actual) -cne (Normalize (Get-Content -LiteralPath $expectedPath -Raw))) {
