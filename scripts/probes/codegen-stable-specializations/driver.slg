@@ -52,6 +52,40 @@ inspect: -> Unit uses Console, File, Process {
     resolved.types -> each type { types! -> push(type) }
     ir -> typedIr.planGenericCalls(prepared, types!) => plans
     typeIds.SemanticTypeSet { types: types!, references: resolved.references, fields: resolved.fields } => semantic!
+    (arguments -> len) > 3 and arguments[3] == "registry-type-uses"
+        -> if {
+            [Int; ~] => uses!
+            plans -> each plan {
+                plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
+                    -> if {
+                        plan.status != 0 -> if { process.exit(6) -> return }
+                        plan.actualInputs -> each actual {
+                            false => seen!
+                            uses! -> each previous { previous == actual -> if { true => seen! } }
+                            not seen! -> if { uses! -> push(actual) }
+                        }
+                    }
+            }
+            prepared -> referenceIds.registerDeclarations -> when {
+                Err(_) { process.exit(6) -> return }
+                Ok(value) { "declaration-next:$(value.nextTypeId)" -> println }
+            }
+            prepared -> referenceIds.registerResolvedTypeUses(semantic!, uses!) -> when {
+                Err(_) { process.exit(6) -> return }
+                Ok(value) { value }
+            } => registered
+            uses! -> each actual {
+                context! -> keys.resolvedStableTypeIdentityField(prepared.package, semantic!, actual, identities.ids) -> when {
+                    Err(_) { process.exit(6) -> return }
+                    Ok(field) {
+                        field.bytes -> file.borrowBytes => bytes
+                        bytes -> slice(0, bytes -> len) => identity
+                        "registered-use:$(registered.ids[actual]):$identity" -> println
+                    }
+                }
+            }
+            return
+        }
     (arguments -> len) > 3 and arguments[3] == "call-input-types"
         -> if {
             plans -> each plan {

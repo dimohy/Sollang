@@ -2,8 +2,9 @@ using System.Reflection;
 using System.Text.Json;
 
 if (args.Length is not (2 or 3 or 4)
-    || args.Length == 4 && args[2] != "registered-stable-identity-vectors"
-    || args.Length >= 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
+    || args.Length == 3 && args[2] == "registered-declaration-type-use-vectors"
+    || args.Length == 4 && args[2] is not ("registered-stable-identity-vectors" or "registered-declaration-type-use-vectors")
+    || args.Length >= 3 && args[2] is not ("declared-lengths" or "declared-records" or "context-records" or "hash-vectors" or "key-rule-vectors" or "module-source-vectors" or "module-interface-vectors" or "module-catalog-vectors" or "module-dependency-vectors" or "module-standard-dependency-vectors" or "type-universe-vectors" or "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors" or "registered-declaration-type-use-vectors" or "interface-vectors" or "loaded-interface-vectors" or "declaration-vectors" or "member-rule-vectors" or "function-tuple-rule-vectors" or "interface-rule-vectors" or "type-name-vectors"))
     throw new ArgumentException("compiler assembly, artifact directory, and optional probe mode required");
 var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
 var directory = Path.GetFullPath(args[1]);
@@ -16,7 +17,7 @@ var cacheType = assembly.GetType("Sollang.Compiler.Cli.IncrementalCodegenCache",
 var encode = cacheType.GetMethod("Encode", BindingFlags.NonPublic | BindingFlags.Static)!;
 var read = cacheType.GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static)!;
 
-if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors")
+if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "registered-type-universe-named-vectors" or "registered-codegen-request-vectors" or "registered-codegen-request-emission-only-vectors" or "registered-stable-identity-vectors" or "registered-declaration-type-use-vectors")
 {
     var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
     var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
@@ -27,6 +28,26 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
     var semanticType = assembly.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
     var semantic = Activator.CreateInstance(semanticType, BindingFlags.Instance | BindingFlags.Public
         | BindingFlags.NonPublic, null, [program, 64], null)!;
+    if (args[2] == "registered-declaration-type-use-vectors")
+    {
+        var inferred = semanticType.GetMethod("InferPrivateFunctionSignatures", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(semantic, [program]);
+        semanticType.GetField("_program", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(semantic, inferred);
+        semanticType.GetMethod("DeclareFunctions", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(semantic, []);
+        var declarationTypes = semanticType.GetField("_types", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(semantic)!;
+        var next = declarationTypes.GetType().GetField("_nextParametricTypeId", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var declarationNext = (int)next.GetValue(declarationTypes)!;
+        var identities = JsonSerializer.Deserialize<string[]>(File.ReadAllText(args[3]))!;
+        var stable = assembly.GetType("Sollang.Compiler.Semantics.SemanticStableIdentity", true)!;
+        var resolveType = stable.GetMethod("ResolveType")!;
+        var identityType = stable.GetMethod("Type")!;
+        var registrations = identities.Select(identity =>
+        {
+            var type = resolveType.Invoke(null, [declarationTypes, identity])!;
+            return new { identity, id = Convert.ToInt32(type), canonical = (string)identityType.Invoke(null, [declarationTypes, type])! };
+        }).ToArray();
+        Console.WriteLine(JsonSerializer.Serialize(new { declarationNextTypeId = declarationNext, nextAllocatedTypeId = (int)next.GetValue(declarationTypes)!, registrations }));
+        return;
+    }
     var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
     var types = bound.GetType().GetProperty("Types")!.GetValue(bound)!;
     if (args[2] == "registered-stable-identity-vectors")
@@ -48,6 +69,12 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
         }
         foreach (var name in new[] { "Structs", "Enums", "Boxes", "References", "DynTraits", "StaticArrays", "DynamicArrays", "Dictionaries" })
             CollectIds(JsonSerializer.SerializeToElement(Property(types, name)));
+        // Include internal allocations that are not exposed by those category
+        // collections (for example, body-created slice and wrapper types).
+        var firstAllocated = Convert.ToInt32(Enum.Parse(typeEnum, "FirstUserDefined"));
+        var nextAllocated = (int)types.GetType().GetField("_nextParametricTypeId", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(types)!;
+        foreach (var id in Enumerable.Range(firstAllocated, nextAllocated - firstAllocated))
+            ids.Add(id);
         var properties = new[] { "Name", "ModuleName", "Kind", "InputType", "InputOwnership", "ReturnType",
             "BlockInputType", "BlockResultType", "StreamElementType", "IsAsync", "GenericParameterName",
             "SecondaryGenericParameterName", "TertiaryGenericParameterName", "GenericTraitBound",
@@ -87,6 +114,7 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
         Console.WriteLine(JsonSerializer.Serialize(new
         {
             typeUniverseHash = (ulong)cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [types])!,
+            nextAllocatedTypeId = nextAllocated,
             declarationFingerprint = Convert.ToHexString((byte[])Property(bound, "StableDeclarationFingerprint")!),
             implementations = Property(program, "Implementations"),
             candidateValidation = validation,

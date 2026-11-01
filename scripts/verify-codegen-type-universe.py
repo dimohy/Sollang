@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--stable-candidate-file', type=Path)
     parser.add_argument('--stable-function-output', type=Path)
     parser.add_argument('--stable-call-input-output', type=Path)
+    parser.add_argument('--declaration-type-uses', action='store_true')
+    parser.add_argument('--stable-registration-output', type=Path)
     parser.add_argument('--stable-function-module')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -45,6 +47,9 @@ def main():
     assert not args.stable_function_output or (args.include_stable_identities and args.stable_function_module), 'function comparison requires stable identity mode and module'
     assert not args.stable_function_module or (args.stable_function_output or args.stable_call_input_output), 'function module requires native output'
     assert not args.stable_call_input_output or (args.include_stable_identities and args.stable_function_module), 'call input comparison requires stable identity mode and module'
+    assert not args.declaration_type_uses or (args.include_stable_identities and args.stable_candidate_file), 'declaration uses require stable identities and ordered type candidates'
+    assert not args.declaration_type_uses or not (args.verify_source or args.emitter), 'declaration uses require bound observation mode'
+    assert not args.stable_registration_output or args.declaration_type_uses, 'registration comparison requires declaration uses'
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -70,6 +75,8 @@ def main():
         inputs.append(args.stable_function_output)
     if args.stable_call_input_output:
         inputs.append(args.stable_call_input_output)
+    if args.stable_registration_output:
+        inputs.append(args.stable_registration_output)
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -95,6 +102,8 @@ def main():
             result['scope'] = 'Actual CSharp Open request, source modules, emission hashes and complete keys; no SLG production cache claim.'
         if args.include_stable_identities:
             result['scope'] = 'Actual CSharp structural type identities and bound function identity fields; no SLG identity or production reuse claim.'
+        if args.declaration_type_uses:
+            result['scope'] = 'Actual CSharp declaration registry followed by ordered concrete type uses; whole-compilation body traversal and production cache consumption are separate.'
         execution = VerificationExecution(ROOT, output, result,
                                          lambda: all(sha(p) == h for p, h in fingerprints.items()), sha)
         error = None
@@ -134,13 +143,24 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      ('registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors',
+                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors',
                                       *([str(args.stable_candidate_file.resolve())] if args.stable_candidate_file else [])],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
                 if args.registered_sources:
                     row = json.loads(done.stdout)
-                    if args.include_stable_identities:
+                    if args.declaration_type_uses:
+                        assert row['registrations'] and all(r['canonical'] == r['identity'] for r in row['registrations'])
+                        if args.stable_registration_output:
+                            lines = args.stable_registration_output.read_text(encoding='utf-8-sig').splitlines()
+                            assert all(line == 'utf16:4' or line.startswith(('registered-use:', 'declaration-next:')) for line in lines), 'NATIVE_REGISTRATION_CAPTURE_ERROR'
+                            actual = [(int(line.split(':', 2)[1]), line.split(':', 2)[2]) for line in lines if line.startswith('registered-use:')]
+                            expected = [(r['id'], r['identity']) for r in row['registrations']]
+                            assert actual == expected, 'ORDERED_TYPE_REGISTRATION_MISMATCH'
+                            assert [int(line.split(':')[1]) for line in lines if line.startswith('declaration-next:')] == [row['declarationNextTypeId']], 'DECLARATION_TYPE_REGISTRATION_MISMATCH'
+                            result['registrationComparison'] = dict(completed=len(actual), total=len(expected), exact=True,
+                                scope='Declaration registry followed by explicit ordered concrete type uses; whole-compilation body traversal is separate.')
+                    elif args.include_stable_identities:
                         assert row['types'] and row['functions'] and all(r['identity'] for r in row['functions'])
                         if args.stable_function_output:
                             native_lines = args.stable_function_output.read_text(encoding='utf-8').splitlines()

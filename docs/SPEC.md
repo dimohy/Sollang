@@ -6317,6 +6317,9 @@ Current backend:
   names and type syntax while replacing bound input, return and additional
   parameter types and recording concrete specialization types. Generated names
   use the registered semantic argument identities, never IR offsets or ABI names.
+  Concrete type uses extend the declaration registry in semantic binding order.
+  Ordered product field recipes preserve exact labels and field types without
+  allocating reference TypeIds for their internal field-list nodes.
   A repeated concrete call contributes the same function identity once.
   Generic declaration identities retain their ordered parameter names, trait
   bound and associated-type equality facts. A deferred composite input has no

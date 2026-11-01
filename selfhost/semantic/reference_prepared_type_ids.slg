@@ -119,15 +119,18 @@ genericIdentity prepared: ref semanticContext.SemanticSnapshot, module: Int, sym
     512 + ordinal!
 }
 
-productLabels prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
+productLabels prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet -> (components: [Int; ~], fields: [Int; ~]) {
     [Int; ~] => labels!
-    prepared.semantic.types -> each type { labels! -> push(0) }
+    semantic.types -> each type { labels! -> push(0) }
+    [Int; ~] => fieldLabels!
+    semantic.fields -> each field { fieldLabels! -> push(0) }
+    0 => fieldIndex!
     [Int; ~] => modules!
     [Int; ~] => tokens!
-    prepared.semantic.fields -> each field {
+    semantic.fields -> each field {
         field.fieldSymbol < 0 and field.ownerType >= 0 and field.labelToken >= 0
             -> if {
-                prepared.semantic.types[field.ownerType] => product
+                semantic.types[field.ownerType] => product
                 product.kind == 10 -> if {
                     prepared.package.ranges[field.sourceModule] => range
                     prepared.package.tokens[range.tokenStart + field.labelToken] => token
@@ -146,17 +149,19 @@ productLabels prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
                         tokens! -> push(field.labelToken)
                         modules! -> len => label!
                     }
+                    label! => fieldLabels![fieldIndex!]
                     product.first => component!
                     0 => ordinal!
                     ordinal! < field.ordinal and component! >= 0 -> while {
-                        prepared.semantic.types[component!].second => component!
+                        semantic.types[component!].second => component!
                         ordinal! + 1 => ordinal!
                     }
                     component! >= 0 -> if { label! => labels![component!] }
                 }
             }
+        fieldIndex! + 1 => fieldIndex!
     }
-    labels!
+    (components: labels!, fields: fieldLabels!)
 }
 
 # Modes mirror BindFunctionDeclaration: ordinary signatures defer composite
@@ -305,11 +310,34 @@ appendFunctionRoots prepared: ref semanticContext.SemanticSnapshot, references: 
     }
 }
 
-public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(false, false)
+public register prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> {
+    [Int; ~] => uses
+    prepared -> registerCurrent(prepared.semantic, false, false, uses)
+}
 
-public registerDeclarations prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(true, false)
+public registerDeclarations prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> {
+    [Int; ~] => uses
+    prepared -> registerCurrent(prepared.semantic, true, false, uses)
+}
 
-public registerMetadataSignatures prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> => prepared -> registerCurrent(true, true)
+public registerMetadataSignatures prepared: ref semanticContext.SemanticSnapshot -> Result<synthetic.Identities, Error> {
+    [Int; ~] => uses
+    prepared -> registerCurrent(prepared.semantic, true, true, uses)
+}
+
+# Type-use order belongs to the semantic caller. This extends the declaration
+# registry using the same resolved node/reference/field graph as code generation.
+public registerResolvedTypeUses prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, orderedUses: ref [Int; ~] -> Result<synthetic.Identities, Error> {
+    (semantic.types -> len) < (prepared.semantic.types -> len)
+        -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+    orderedUses -> each typeId {
+        typeId < 0 or typeId >= (semantic.types -> len)
+            -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+        semantic.types[typeId].status != 0 or semantic.types[typeId].containsParameter
+            -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+    }
+    prepared -> registerCurrent(semantic, true, false, orderedUses)
+}
 
 metadataSignatureRoots prepared: ref semanticContext.SemanticSnapshot, sourceRoots: ref [Int; ~] -> Result<[Int; ~], Error> {
     [Int; ~] => pending!
@@ -338,14 +366,18 @@ metadataSignatureRoots prepared: ref semanticContext.SemanticSnapshot, sourceRoo
     Result<[Int; ~], Error>.Ok(roots!)
 }
 
-registerRecipes recipes: ref [synthetic.Recipe; ~], seeds: ref [Int; ~], aliases: ref [synthetic.Shape; ~], roots: ref [Int; ~], nextTypeId: Int -> Result<synthetic.Identities, Error> {
+registerRecipes recipes: ref [synthetic.Recipe; ~], seeds: ref [Int; ~], aliases: ref [synthetic.Shape; ~], roots: ref [Int; ~], nextTypeId: Int, typeCount: Int -> Result<synthetic.Identities, Error> {
     recipes -> synthetic.register(seeds, aliases, roots, nextTypeId) -> when {
         Err(error) { Result<synthetic.Identities, Error>.Err(Error.Synthetic(error)) }
-        Ok(registered) { Result<synthetic.Identities, Error>.Ok(registered) }
+        Ok(registered) {
+            [Int; ~] => ids!
+            0..<typeCount -> each typeId { ids! -> push(registered.ids[typeId]) }
+            Result<synthetic.Identities, Error>.Ok(synthetic.Identities { ids: ids!, nextTypeId: registered.nextTypeId })
+        }
     }
 }
 
-registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarations: Bool, metadataOnly: Bool -> Result<synthetic.Identities, Error> {
+registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, includeDeclarations: Bool, metadataOnly: Bool, orderedUses: ref [Int; ~] -> Result<synthetic.Identities, Error> {
     [nominal.NominalDeclaration; ~] => declarations!
     [UInt8; ~] => strings!
     [Int; ~] => declarationBySymbol!
@@ -378,9 +410,9 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarati
     [0, 1, 2, 4, 5, 2, 6, 6, 7, 8, 9, 10, 11, 12, 13, 15, 14, 16, 17, 18, 18, 19, 19, 3, 31, 43] => builtins
     [Int; ~] => seeds!
     [synthetic.Recipe; ~] => recipes!
-    prepared -> productLabels => labels
+    prepared -> productLabels(semantic) => labels
     0 => typeIndex!
-    prepared.semantic.types -> each type {
+    semantic.types -> each type {
         -1 => seed!
         type.kind == 1 -> if {
             type.origin == 1 and type.symbol >= 0 and type.symbol < (builtins -> len)
@@ -427,10 +459,36 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarati
             second: (type.kind == 7 and type.origin == 4 and type.symbol == 1) or type.kind == 11
                 -> if { type.second } else { -1 }
             length: type.kind == 4 or type.kind == 10 -> if { type.length } else {
-                type.kind == 11 -> if { labels[typeIndex!] } else { 0 }
+                type.kind == 11 -> if { labels.components[typeIndex!] } else { 0 }
             }
         })
         typeIndex! + 1 => typeIndex!
+    }
+    # Body products carry their ordered fields in the resolved field table.
+    # Recipe-only field chains do not allocate semantic or reference TypeIds.
+    0..<(semantic.types -> len) -> each typeId {
+        semantic.types[typeId] => type
+        type.kind == 10 and type.first < 0 -> if {
+            recipes! -> len => firstField
+            0..<type.length -> each ordinal {
+                -1 => selected!
+                0 => matches!
+                0..<(semantic.fields -> len) -> each fieldIndex {
+                    semantic.fields[fieldIndex] => field
+                    field.ownerType == typeId and field.ordinal == ordinal
+                        -> if {
+                            fieldIndex => selected!
+                            matches! + 1 => matches!
+                        }
+                }
+                matches! != 1 -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+                semantic.fields[selected!].status != 0 -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+                recipes! -> push(synthetic.Recipe { kind: synthetic.Kind.ProductField, first: semantic.fields[selected!].fieldType, second: ordinal + 1 < type.length
+                        -> if { firstField + ordinal + 1 } else { -1 }, length: labels.fields[selected!] })
+                seeds! -> push(-1)
+            }
+            synthetic.Recipe { kind: synthetic.Kind.Product, first: firstField, second: -1, length: type.length } => recipes![typeId]
+        }
     }
     # These canonical runtime aliases are reserved by BuildTypeDefinitions
     # before all field roots, and share their IDs with Result annotations.
@@ -446,7 +504,7 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarati
     synthetic.Shape { kind: synthetic.Kind.Result, first: 40, second: 1, length: 0, identity: 42 }; ~] => aliases
     [Int; ~] => references!
     prepared.package.nodes -> each node { references! -> push(-1) }
-    prepared.semantic.references -> each reference {
+    semantic.references -> each reference {
         reference.typeAst >= 0 -> if {
             prepared.package.ranges[reference.sourceModule] => range
             reference.typeId => references![range.astStart + reference.typeAst]
@@ -470,11 +528,12 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, includeDeclarati
     prepared -> appendTraitRoots(roots!)
     prepared -> appendImplementationRoots(references!, roots!)
     includeDeclarations -> if { prepared -> appendFunctionRoots(references!, roots!) }
+    orderedUses -> each typeId { roots! -> push(typeId) }
     metadataOnly -> if {
         prepared -> metadataSignatureRoots(roots!) -> when {
             Err(error) { Result<synthetic.Identities, Error>.Err(error) -> return }
-            Ok(selected) { registerRecipes(recipes!, seeds!, aliases, selected, boxed.nextTypeId) -> return }
+            Ok(selected) { registerRecipes(recipes!, seeds!, aliases, selected, boxed.nextTypeId, semantic.types -> len) -> return }
         }
     }
-    registerRecipes(recipes!, seeds!, aliases, roots!, boxed.nextTypeId)
+    registerRecipes(recipes!, seeds!, aliases, roots!, boxed.nextTypeId, semantic.types -> len)
 }
