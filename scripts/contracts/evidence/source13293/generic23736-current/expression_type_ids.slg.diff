@@ -1,0 +1,41 @@
+diff --git a/selfhost/semantic/expression_type_ids.slg b/selfhost/semantic/expression_type_ids.slg
+index e2524d2ce..cd31fb30c 100644
+--- a/selfhost/semantic/expression_type_ids.slg
++++ b/selfhost/semantic/expression_type_ids.slg
+@@ -3213,6 +3213,19 @@ resolveSemanticCallArgumentBindings prepared: ref semanticContext.SemanticSnapsh
+ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds -> Unit {
+     seeds.arguments -> each argument { resolved.callArguments -> push(argument) }
+     prepared.package -> indexContextualRecords => contextualIndex
++    # Generic parameter ownership is declaration metadata, like C# BoundFunction.
++    # Refined argument/type facts do not change the owning declaration.
++    [Bool; ~] => genericParameterOwnerBySymbol!
++    prepared.package.symbols -> each symbol { genericParameterOwnerBySymbol! -> push(false) }
++    prepared.package.ranges -> each range {
++        0 => symbolIndex!
++        symbolIndex! < range.symbolCount -> while {
++            prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
++            symbol.kind == 32 and symbol.parent >= 0 and symbol.parent < range.symbolCount
++                -> if { true => genericParameterOwnerBySymbol![range.symbolStart + symbol.parent] }
++            symbolIndex! + 1 => symbolIndex!
++        }
++    }
+     [Int; ~] => expectedContextByAst!
+     prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
+     prepared -> indexExplicitFlowTypeByCallAst(resolved.references, resolved.referenceIndexByTypeAst) => explicitTypeByCallAst
+@@ -3250,14 +3263,8 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+         [Int; ~] => factIndexes!
+         false => genericCall!
+         prepared.package.ranges[firstBinding.targetSourceModule] => declarationRange
+-        0 => genericSymbol!
+-        genericSymbol! < declarationRange.symbolCount
+-            -> while {
+-                prepared.package.symbols[declarationRange.symbolStart + genericSymbol!] => symbol
+-                symbol.kind == 32 and symbol.parent == firstBinding.functionSymbol
+-                    -> if { true => genericCall! }
+-                genericSymbol! + 1 => genericSymbol!
+-            }
++        firstBinding.functionSymbol >= 0 and firstBinding.functionSymbol < declarationRange.symbolCount
++            -> if { genericParameterOwnerBySymbol![declarationRange.symbolStart + firstBinding.functionSymbol] => genericCall! }
+         seedIndexedExplicitFlowGenericArguments(prepared, resolved.types, firstBinding, explicitTypeByCallAst, templates!, actuals!)
+         bindingIndex! < callEnd! -> while {
+             bindings[bindingIndex!] => binding
