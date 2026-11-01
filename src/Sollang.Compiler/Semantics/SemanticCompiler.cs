@@ -21,6 +21,7 @@ internal sealed partial class SemanticCompiler
     private readonly Dictionary<object, ContainerIntrinsicKind> _containerIntrinsics =
         new(ReferenceEqualityComparer.Instance);
     private string? _currentFunctionName;
+    private (string Name, int Value)? _currentFunctionValueArgument;
     private string? _currentFunctionDeclarationName;
     private bool _currentFunctionIsMain;
     private readonly Dictionary<object, BoundDynTraitConversion> _dynTraitConversions = new(ReferenceEqualityComparer.Instance);
@@ -2505,6 +2506,10 @@ internal sealed partial class SemanticCompiler
         _expressionInferenceContext = null;
         var previousFunctionDeclarationName = _currentFunctionDeclarationName;
         _currentFunctionDeclarationName = function.DeclarationName ?? function.Name;
+        var previousValueArgument = _currentFunctionValueArgument;
+        _currentFunctionValueArgument = function.IsValueGeneric
+            && function.GenericParameterName is { } valueName && function.SpecializedValue is { } value
+                ? (valueName, value) : null;
         var previousFunctionIsMain = _currentFunctionIsMain;
         _currentFunctionIsMain = false;
         var previousRuntimeCallAuthority = _currentFunctionAllowsRuntimeCalls;
@@ -2535,6 +2540,7 @@ internal sealed partial class SemanticCompiler
             _currentFunctionTypeNameModule = previousTypeNameModule;
             _expressionInferenceContext = previousExpressionContext;
             _currentFunctionDeclarationName = previousFunctionDeclarationName;
+            _currentFunctionValueArgument = previousValueArgument;
             _currentFunctionIsMain = previousFunctionIsMain;
             _currentFunctionAllowsRuntimeCalls = previousRuntimeCallAuthority;
             _currentTransferableEnumPayloadNames = previousTransferablePayloadNames;
@@ -8879,7 +8885,7 @@ internal sealed partial class SemanticCompiler
                 $"unknown compile-time Int value parameter '{countParameterName}'");
         }
 
-        if (expression.Count is { } concreteCount)
+        if (ArrayRepeatCount(expression) is { } concreteCount)
         {
             return _types.GetOrAddFixedStaticArray(valueType, concreteCount);
         }
@@ -8887,6 +8893,13 @@ internal sealed partial class SemanticCompiler
         return valueType == BoundType.Int
             ? BoundType.StaticIntArray
             : _types.GetOrAddStaticArray(valueType);
+    }
+
+    private int? ArrayRepeatCount(ArrayRepeatExpression expression)
+    {
+        if (expression.Count is { } count) return count;
+        return _currentFunctionValueArgument is { } argument
+            && expression.CountParameterName == argument.Name ? argument.Value : null;
     }
 
     private BoundType InferTypedEmptyArrayExpression(TypedEmptyArrayExpression expression)
@@ -9453,7 +9466,7 @@ internal sealed partial class SemanticCompiler
             if (_types.IsStaticArray(expectedType)
                 && _types.GetStaticArray(expectedType).FixedLength is { } fixedLength)
             {
-                if (repeat.Count != fixedLength)
+                if (ArrayRepeatCount(repeat) != fixedLength)
                 {
                     throw Error(
                         repeat.Line,
@@ -9465,7 +9478,7 @@ internal sealed partial class SemanticCompiler
             if (_types.IsBoundedArray(expectedType))
             {
                 var capacity = _types.GetBoundedArray(expectedType).Capacity;
-                if (repeat.Count is { } count && count > capacity)
+                if (ArrayRepeatCount(repeat) is { } count && count > capacity)
                 {
                     throw Error(
                         repeat.Line,
@@ -14248,17 +14261,29 @@ internal sealed partial class SemanticCompiler
             throw new SollangException(
                 $"value-generic function '{template.Name}' requires an explicit compile-time Int argument");
         }
-        BoundType? fixedArrayElementType = null;
-        if (template.HasValueGenericFixedArrayInput)
+        var fixedArrayInputTemplate = template.InputTypeTemplate;
+        while (fixedArrayInputTemplate?.StartsWith("ref ", StringComparison.Ordinal) == true)
         {
-            fixedArrayElementType = FixedArrayElementType(actualType);
+            fixedArrayInputTemplate = fixedArrayInputTemplate[4..];
+        }
+        var hasFixedArrayInputTemplate = fixedArrayInputTemplate?.StartsWith('[', StringComparison.Ordinal) == true
+            && fixedArrayInputTemplate.EndsWith($"; {template.GenericParameterName}]", StringComparison.Ordinal);
+        BoundType? fixedArrayElementType = null;
+        if (hasFixedArrayInputTemplate)
+        {
+            var arrayType = actualType;
+            while (_types.IsReference(arrayType))
+            {
+                arrayType = _types.GetReference(arrayType).ElementType;
+            }
+            fixedArrayElementType = FixedArrayElementType(arrayType);
             if (fixedArrayElementType is null)
             {
                 throw new SollangException(
                     $"value-generic function '{template.Name}' requires a fixed array input");
             }
 
-            var elementTypeSyntax = FixedArrayElementTypeSyntax(template.InputTypeTemplate!);
+            var elementTypeSyntax = FixedArrayElementTypeSyntax(fixedArrayInputTemplate!);
             if (elementTypeSyntax == template.SecondaryGenericParameterName)
             {
                 // The fixed array itself is sufficient to infer the element type;
@@ -14279,12 +14304,6 @@ internal sealed partial class SemanticCompiler
                 }
             }
         }
-        if (!template.HasValueGenericFixedArrayInput
-            && !CanPassFunctionArgument(actualType, template.InputType!.Value))
-        {
-            throw new SollangException(
-                $"function '{template.Name}' expects {FormatType(template.InputType!.Value)} but received {FormatType(actualType)}");
-        }
         if (_boundFunctions is null)
         {
             throw new InvalidOperationException("generic specialization requires bound functions");
@@ -14298,21 +14317,35 @@ internal sealed partial class SemanticCompiler
             specializedName += "$t" + ((int)specializedElementType).ToString(
                 System.Globalization.CultureInfo.InvariantCulture);
         }
+        var secondaryType = template.SecondaryGenericParameterName is { } secondaryName
+            && hasFixedArrayInputTemplate && FixedArrayElementTypeSyntax(fixedArrayInputTemplate!) == secondaryName
+                ? fixedArrayElementType
+                : null;
+        var tertiaryType = template.TertiaryGenericParameterName is { } tertiaryName
+            && hasFixedArrayInputTemplate && FixedArrayElementTypeSyntax(fixedArrayInputTemplate!) == tertiaryName
+                ? fixedArrayElementType
+                : null;
+        var primaryType = fixedArrayElementType ?? BoundType.Int;
+        var inputType = template.HasValueGenericFixedArrayInput ? actualType
+            : template.InputTypeTemplate is { } inputSyntax
+                ? SpecializeValueGenericType(template, inputSyntax, valueArgument.Value, primaryType, secondaryType, tertiaryType)
+                : template.InputType;
+        if (inputType is not { } expectedInput)
+            throw new SollangException($"value-generic function '{template.Name}' does not accept an input");
+        if (!CanPassFunctionArgument(actualType, expectedInput))
+        {
+            throw new SollangException(
+                $"function '{template.Name}' expects {FormatType(expectedInput)} but received {FormatType(actualType)}");
+        }
         if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
         {
-            var secondaryType = template.SecondaryGenericParameterName is { } secondaryName
-                && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == secondaryName
-                    ? fixedArrayElementType
-                    : null;
-            var tertiaryType = template.TertiaryGenericParameterName is { } tertiaryName
-                && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == tertiaryName
-                    ? fixedArrayElementType
-                    : null;
             specialization = CloneGenericFunctionSyntax(template) with
             {
                 Name = specializedName,
-                InputType = template.HasValueGenericFixedArrayInput ? actualType : template.InputType,
-                ReturnType = SubstituteGenericType(
+                InputType = inputType,
+                ReturnType = template.ReturnTypeTemplate is { } returnSyntax
+                    ? SpecializeValueGenericType(template, returnSyntax, valueArgument.Value, primaryType, secondaryType, tertiaryType)
+                    : SubstituteGenericType(
                     template.ReturnType,
                     fixedArrayElementType ?? BoundType.Int,
                     secondaryType,
@@ -14322,7 +14355,7 @@ internal sealed partial class SemanticCompiler
                 SpecializedTertiaryType = tertiaryType,
                 SpecializedValue = valueArgument.Value,
                 AdditionalParameters = SpecializeValueGenericAdditionalParameters(
-                    template, valueArgument.Value)
+                    template, valueArgument.Value, primaryType, secondaryType, tertiaryType)
             };
             // A deferred value-generic declaration has no concrete input type.
             // Check its actual signature for cold binding and cache restoration,
@@ -14343,21 +14376,32 @@ internal sealed partial class SemanticCompiler
 
     private IReadOnlyList<BoundFunctionParameter> SpecializeValueGenericAdditionalParameters(
         BoundFunction template,
-        int value)
+        int value,
+        BoundType primaryType,
+        BoundType? secondaryType,
+        BoundType? tertiaryType)
     {
-        var valueText = value.ToString(CultureInfo.InvariantCulture);
         return (template.AdditionalParameters ?? []).Select(parameter =>
         {
             if (parameter.TypeTemplate is not { } typeTemplate
-                || template.GenericParameterName is not { } valueName)
+                || template.GenericParameterName is null)
             {
                 return parameter;
             }
-            var specializedSyntax = typeTemplate.Replace(
-                $"; {valueName}]", $"; {valueText}]", StringComparison.Ordinal);
-            var specializedType = ParseType(specializedSyntax, parameter.Line, parameter.Column);
+            var specializedType = SpecializeValueGenericType(template, typeTemplate, value, primaryType, secondaryType, tertiaryType);
             return parameter with { Type = specializedType, TypeTemplate = null };
         }).ToArray();
+    }
+
+    private BoundType SpecializeValueGenericType(
+        BoundFunction template, string syntax, int value, BoundType primaryType,
+        BoundType? secondaryType, BoundType? tertiaryType)
+    {
+        var specializedSyntax = syntax.Replace(
+            $"; {template.GenericParameterName}]", $"; {value.ToString(CultureInfo.InvariantCulture)}]", StringComparison.Ordinal);
+        return ParseSpecializedFunctionType(specializedSyntax, template.GenericParameterName, primaryType,
+            template.SecondaryGenericParameterName, secondaryType,
+            template.TertiaryGenericParameterName, tertiaryType, template.Line, template.Column);
     }
 
     private BoundType? FixedArrayElementType(BoundType type)

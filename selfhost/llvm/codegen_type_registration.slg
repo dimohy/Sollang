@@ -98,44 +98,16 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
                 ir[plan.callNode] => call
                 not (prepared -> inGenericBody(genericByAst!, call.sourceModule, call.astNode))
                     -> if {
-                        ir[plan.callNode] -> typedIr.explicitGenericValueIdentity(prepared) => valueArgument
-                        ir[plan.templateNode] -> typedIr.genericIntegerParameterHash(prepared) => valueHash
-                        valueArgument >= 0 and valueHash != 0 -> if {
-                            ir[plan.templateNode] => template
-                            prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
-                            template.operand1 => parameter!
-                            0 => ordinal!
-                            parameter! >= 0 and parameter! < (ir -> len) and ordinal! < (ir -> len)
-                                -> while {
-                                    types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, ir[parameter!].typeId, valueHash, valueArgument) => concrete
-                                    concrete.status == 0 and concrete.root >= 0 -> if {
-                                        signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: concrete.root, start: node.start, end: node.start + node.length, order: ordinal! })
-                                    } else { unresolved! + 1 => unresolved!
-                                        unresolvedNodes! -> push(plan.callNode) }
-                                    ordinal! == 0 -> if { template.nextOperand } else { ir[parameter!].nextOperand } => parameter!
-                                    ordinal! + 1 => ordinal!
-                                }
-                            types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, template.typeId, valueHash, valueArgument) => concreteResult
-                            concreteResult.status == 0 and concreteResult.root >= 0
-                                -> if {
-                                    signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: concreteResult.root, start: node.start, end: node.start + node.length, order: ordinal! })
-                                } else { unresolved! + 1 => unresolved!
-                                    unresolvedNodes! -> push(plan.callNode) }
-                            valueCalls! + 1 => valueCalls!
-                        } else {
-                            plan.status != 0 -> if { unresolved! + 1 => unresolved!
-                                unresolvedNodes! -> push(plan.callNode) } else {
-                                prepared -> specializations.bind(ir, types, plan) -> when {
-                                    Err(_) { unresolved! + 1 => unresolved!
-                                        unresolvedNodes! -> push(plan.callNode) }
-                                    Ok(binding) {
-                                        prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
-                                        binding.inputType >= 0 -> if { signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.inputType, start: node.start, end: node.start + node.length, order: 0 }) }
-                                        signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.returnType, start: node.start, end: node.start + node.length, order: 1 })
-                                        0..<(binding.additionalTypes -> len) -> each index {
-                                            signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.additionalTypes[index], start: node.start, end: node.start + node.length, order: index + 2 })
-                                        }
-                                    }
+                        prepared -> specializations.bind(ir, types, plan) -> when {
+                            Err(_) { unresolved! + 1 => unresolved!
+                                unresolvedNodes! -> push(plan.callNode) }
+                            Ok(binding) {
+                                binding.valueArgument >= 0 -> if { valueCalls! + 1 => valueCalls! }
+                                prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
+                                binding.inputType >= 0 -> if { signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.inputType, start: node.start, end: node.start + node.length, order: 0 }) }
+                                signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.returnType, start: node.start, end: node.start + node.length, order: 1 })
+                                0..<(binding.additionalTypes -> len) -> each index {
+                                    signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.additionalTypes[index], start: node.start, end: node.start + node.length, order: index + 2 })
                                 }
                             }
                         }

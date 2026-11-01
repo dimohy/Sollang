@@ -171,17 +171,26 @@ explicitFunctionPart context: mut TypeFieldContext, prepared: ref semanticContex
 boundFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], inputAst: Int, binding: ref FunctionBinding, part: plans.KeyPart -> Result<Field, TypeUniverseCaptureError> {
     not binding.active -> if { context -> explicitFunctionPart(prepared, signatureIds, inputAst, part) -> return }
     part -> plans.partIndex => selected
-    (binding.arguments -> len) > 0 and selected == (plans.KeyPart.StableName -> plans.partIndex)
+    binding.valueArgument >= 0 and selected == (plans.KeyPart.StableSpecializedValue -> plans.partIndex)
+        -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("$(binding.valueArgument)")) -> return }
+    ((binding.arguments -> len) > 0 or binding.valueArgument >= 0) and selected == (plans.KeyPart.StableName -> plans.partIndex)
         -> if {
             context -> functionContextFields(prepared.package) -> when {
                 Err(_) { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
                 Ok(fields) {
                     [UInt8; ~] => bytes!
                     fields.name.bytes -> each byte { bytes! -> push(byte) }
-                    bytes! -> push('$')
-                    0..<(binding.argumentIdentities -> len) -> each index {
-                        index > 0 -> if { bytes! -> push('_') }
-                        "$(binding.argumentIdentities[index])" -> appendTypeText(bytes!)
+                    binding.valueArgument >= 0 -> if {
+                        bytes! -> push('$')
+                        "v$(binding.valueArgument)" -> appendTypeText(bytes!)
+                        (binding.argumentIdentities -> len) > 0 -> if { bytes! -> push('$')
+                            "t$(binding.argumentIdentities[0])" -> appendTypeText(bytes!) }
+                    } else {
+                        bytes! -> push('$')
+                        0..<(binding.argumentIdentities -> len) -> each index {
+                            index > 0 -> if { bytes! -> push('_') }
+                            "$(binding.argumentIdentities[index])" -> appendTypeText(bytes!)
+                        }
                     }
                     Result<Field, TypeUniverseCaptureError>.Ok(Field { bytes: bytes! }) -> return
                 }
@@ -239,8 +248,6 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
             member.kind == 32 -> if {
                 genericCount! + 1 => genericCount!
                 genericToken! < 0 -> if { member.nameToken => genericToken! }
-                prepared.package -> analysis.declaresIntegerValueGeneric(context.sourceModule, function.astNode, member.nameToken)
-                    -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
             }
             member.kind == 35 and member.astNode == function.astNode
                 -> if {
@@ -293,7 +300,7 @@ captureFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticCon
                             parameterOrdinal! + 1 => parameterOrdinal!
                             unsignedDeclarationField(UInt64(member.flags % 4)) => ownership
                             ownership -> appendStableFunctionField(bytes!)
-                            context -> functionTemplateField(prepared, member.typeNode) -> when {
+                            binding.valueArgument >= 0 -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("")) } else { context -> functionTemplateField(prepared, member.typeNode) } -> when {
                                 Ok(template) { template -> appendStableFunctionField(bytes!) }
                                 Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
                             }

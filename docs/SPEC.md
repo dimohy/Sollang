@@ -1435,6 +1435,10 @@ An explicit integer value argument belongs to the concrete function's
 compile-time binding environment. Specialization substitutes that constant
 for resolved body names and symbolic fixed-array extents, including array
 repeat counts and names inside interpolation or control expressions.
+Deferred value-generic signatures, including `ref [T; N]`, bind the concrete
+integer and inferred element type before checking argument compatibility.
+Contextual fixed-array and bounded-array checks use the same resolved repeat
+count as array inference, with the value environment scoped to its function.
 Value parameters do not occupy runtime signature slots, and callers do not
 append their numeric generic arguments to the runtime argument list.
 Calls inside interpolation use the same target-owned value identity and
@@ -6317,6 +6321,11 @@ Current backend:
   names and type syntax while replacing bound input, return and additional
   parameter types and recording concrete specialization types. Generated names
   use the registered semantic argument identities, never IR offsets or ABI names.
+  Integer value specializations retain the compiled `$v<value>` name component
+  and optional `$t<element-id>` component, and encode the integer separately in
+  the shared specialized-value field. Missing secondary or tertiary type slots
+  remain absent. Compiler-only constant parameters do not become additional
+  runtime parameters; concretized additional parameters have no deferred template.
   Concrete type uses extend the declaration registry in semantic binding order.
   Standard library sources use ordinal UTF-16 relative-path order before binding.
   Array receiver lookup records its readonly slice owner after the receiver and

@@ -6,15 +6,24 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 
 public bind prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan -> Result<keys.FunctionBinding, keys.TypeUniverseCaptureError> {
-    plan.status != 0 or plan.templateNode < 0 or plan.templateNode >= (ir -> len)
+    plan.templateNode < 0 or plan.templateNode >= (ir -> len) or plan.callNode < 0 or plan.callNode >= (ir -> len)
         -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
     ir[plan.templateNode] => function
     function.kind != 0 -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    function -> typedIr.genericIntegerParameterHash(prepared) => valueHash
+    valueHash != 0 -> if { ir[plan.callNode] -> typedIr.explicitGenericValueIdentity(prepared) } else { -1 } => value
     [Int; ~] => additional!
+    prepared.package.ranges[function.sourceModule] => range
     function.nextOperand => parameter!
     parameter! >= 0 -> while {
         parameter! >= (ir -> len) -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
-        additional! -> push(ir[parameter!].typeId)
+        false => compileTime!
+        value >= 0 and ir[parameter!].symbol >= 0 and ir[parameter!].symbol < range.symbolCount
+            -> if {
+                prepared.package.symbols[range.symbolStart + ir[parameter!].symbol] => sourceParameter
+                sourceParameter.kind == 32 and sourceParameter.parent == function.symbol => compileTime!
+            }
+        not compileTime! -> if { additional! -> push(ir[parameter!].typeId) }
         ir[parameter!].nextOperand => parameter!
     }
     [Int; ~] => templates!
@@ -22,7 +31,8 @@ public bind prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.Typ
     [Int; ~] => actuals!
     plan.actualInputs -> each type { actuals! -> push(type) }
     function.operand1 >= 0 -> if { ir[function.operand1].typeId } else { -1 } => input
-    keys.FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: plan.resultType, status: plan.status } => request
+    value >= 0 -> if { function.typeId } else { plan.resultType } => result
+    keys.FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: result, status: plan.status, valueParameterHash: valueHash, valueArgument: value } => request
     prepared -> keys.bindFunctionSpecialization(types, request)
 }
 
@@ -62,5 +72,5 @@ public captureFunctionBinding ir: ref [typedIr.TypedIrNode; ~], types: ref [type
         ir[parameter!].nextOperand => parameter!
         count! + 1 => count!
     }
-    Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Ok(keys.FunctionBinding { active: true, sourceModule: function.sourceModule, ownerSymbol: function.symbol, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: input!, returnType: function.typeId, additionalTypes: additional! })
+    Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Ok(keys.FunctionBinding { active: true, valueArgument: -1, sourceModule: function.sourceModule, ownerSymbol: function.symbol, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: input!, returnType: function.typeId, additionalTypes: additional! })
 }
