@@ -188,6 +188,7 @@ internal static class SelfHostPolicyTests
                 .Append(" as policy").Append(index).Append('\n');
             dependencies.Add(Path.Combine(root, (string)attribute.ConstructorArguments[1].Value!));
         }
+        dependencies.Add(Path.Combine(root, "selfhost/semantic/type_name_policy.slg"));
         source.Append("\nmain {\n");
         for (var index = 0; index < types.Length; index++)
         {
@@ -244,6 +245,24 @@ internal static class SelfHostPolicyTests
                     expected.Append(label).Append('\n').Append(text).Append('\n');
                 }
             }
+        }
+        // Compare the authored SLG predicate with the real generated C# parser,
+        // including near misses; the shared name string alone is not execution proof.
+        var parserPredicate = compiler.GetTypes()
+            .Select(type => type.GetMethod("IsBuiltinTypeName", BindingFlags.NonPublic | BindingFlags.Static))
+            .Single(method => method is not null)!;
+        var builtinNames = ((string)types[2].GetMethod("BuiltinNames")!.Invoke(null, null)!).Split('|');
+        var spellings = builtinNames.Concat(builtinNames.Select(name => name + "Extra"))
+            .Concat(builtinNames.Select(name => name.ToLowerInvariant()))
+            .Concat(["", "Range", "module.Int", " Self", "Self "])
+            .Distinct(StringComparer.Ordinal);
+        foreach (var spelling in spellings)
+        {
+            var accepted = (bool)parserPredicate.Invoke(null, [spelling])!;
+            var label = "Parser.IsBuiltinTypeName:" + spelling;
+            source.Append("    \"").Append(label).Append("\" -> println\n    policy2.isBuiltin(\"")
+                .Append(spelling).Append("\") -> println\n");
+            expected.Append(label).Append('\n').Append(accepted ? "true" : "false").Append('\n');
         }
         source.Append("}\n");
         var sourcePath = Path.Combine(directory, "runtime-policy-probe.slg");
