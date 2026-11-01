@@ -17,6 +17,7 @@ internal static class SelfHostPolicyTests
         var render = exporter.GetMethod("RenderDecision", BindingFlags.NonPublic | BindingFlags.Static)!;
         var cases = new List<string>();
         string? failure = null;
+        string? runtimeProbeContract = null;
         void Check(string name, bool condition)
         {
             if (!condition) throw new InvalidDataException(name);
@@ -102,7 +103,11 @@ internal static class SelfHostPolicyTests
                 "module-implementation", 5, 4, 3, 2, 1, 0));
             Check("rule-domain-change-propagates", moduleRule != Rule("ModuleImplementation", "changed-domain", 0, 1, 2, 3, 4, 5));
             Check("rule-empty-parts-typed", Rule("Empty", "empty").Contains("[KeyPart; ~]", StringComparison.Ordinal));
-            Check("rule-unknown-part-rejected", RuleRejected("Unknown", "unknown", 100));
+            var declaredParts = Enum.GetValues(keyPart).Cast<object>()
+                .Select(value => Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture)).ToHashSet();
+            var unknownPart = Enumerable.Range(0, declaredParts.Count + 1)
+                .First(value => !declaredParts.Contains(value));
+            Check("rule-unknown-part-rejected", RuleRejected("Unknown", "unknown", unknownPart));
             Check("rule-unsafe-domain-rejected", RuleRejected("Unsafe", "bad\"domain", 0));
             Check("rule-empty-domain-rejected", RuleRejected("Empty", "", 0));
             Check("rule-oversize-parts-rejected", RuleRejected("Large", "large", new int[33]));
@@ -113,7 +118,14 @@ internal static class SelfHostPolicyTests
             Check("rule-enum-and-struct-schema-exported", Enum.GetNames(keyPart).All(name => ruleTypes.Contains(name, StringComparison.Ordinal))
                 && ruleTypes.Contains("public parts: [KeyPart; ~]", StringComparison.Ordinal));
             var rules = keyPolicies.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
-            Check("all-thirteen-key-rules-exported", rules.Length == 13 && rules.All(method => Emit(method).Contains("KeyRule {", StringComparison.Ordinal)));
+            var emittedRules = rules.Select(Emit).ToArray();
+            var exportedRuleNames = Regex.Matches(string.Concat(emittedRules), @"(?m)^public (\w+): -> KeyRule")
+                .Select(match => match.Groups[1].Value).ToArray();
+            var expectedRuleNames = rules.Select(method => char.ToLowerInvariant(method.Name[0]) + method.Name[1..])
+                .ToHashSet(StringComparer.Ordinal);
+            Check("all-current-key-rules-exported", rules.Length > 0
+                && emittedRules.All(text => text.Contains("KeyRule {", StringComparison.Ordinal))
+                && exportedRuleNames.Length == rules.Length && expectedRuleNames.SetEquals(exportedRuleNames));
 
             var root = FindRoot();
             var mirror = Path.Combine(directory, "policy-input");
@@ -151,12 +163,72 @@ internal static class SelfHostPolicyTests
             var drift = Sync(true);
             Check("edited-generated-source-rejected", drift.Exit != 0 && drift.Output.Contains("SELFHOST_POLICY_OUTPUT_DRIFT", StringComparison.Ordinal));
             Check("regenerate", Sync(false).Exit == 0 && Sync(true).Exit == 0);
+            runtimeProbeContract = WriteRuntimeProbe(compiler, root, directory);
         }
         catch (Exception error) { failure = error.ToString(); }
         finally { context.Unload(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new { status = failure is null ? "passed" : "failed",
-            completed = cases.Count, total = 50, cases, failure }, new JsonSerializerOptions { WriteIndented = true }));
+            completed = cases.Count, total = 50, cases, failure, runtimeProbeContract }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;
+    }
+
+    private static string WriteRuntimeProbe(Assembly compiler, string root, string directory)
+    {
+        string[] names = ["BorrowedTextReturnPolicy", "FunctionTypeBindingPolicy", "TypeNamePolicy"];
+        var source = new System.Text.StringBuilder();
+        var expected = new System.Text.StringBuilder();
+        var dependencies = new List<string>();
+        var types = names.Select(name => compiler.GetType("Sollang.Compiler.Shared." + name, true)!).ToArray();
+        for (var index = 0; index < types.Length; index++)
+        {
+            var attribute = types[index].GetCustomAttributesData().Single(item =>
+                item.AttributeType.FullName == "Sollang.Compiler.Shared.SelfHostPolicyAttribute");
+            source.Append("import ").Append(attribute.ConstructorArguments[0].Value)
+                .Append(" as policy").Append(index).Append('\n');
+            dependencies.Add(Path.Combine(root, (string)attribute.ConstructorArguments[1].Value!));
+        }
+        source.Append("\nmain {\n");
+        for (var index = 0; index < types.Length; index++)
+        {
+            foreach (var method in types[index].GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                .OrderBy(method => method.Name, StringComparer.Ordinal))
+            {
+                var parameters = method.GetParameters();
+                if (parameters.Length > 6 || parameters.Any(parameter => parameter.ParameterType != typeof(bool))
+                    || (method.ReturnType != typeof(bool) && method.ReturnType != typeof(string) && method.ReturnType != typeof(ulong)))
+                    throw new InvalidDataException("Unsupported runtime policy probe signature: " + method.Name);
+                for (var row = 0; row < 1 << parameters.Length; row++)
+                {
+                    var arguments = Enumerable.Range(0, parameters.Length).Select(bit => (object)((row & (1 << bit)) != 0)).ToArray();
+                    var value = method.Invoke(null, arguments);
+                    var text = value switch
+                    {
+                        bool boolean => boolean ? "true" : "false",
+                        string literal => literal,
+                        ulong number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        _ => throw new InvalidDataException("Unsupported runtime policy result: " + method.Name)
+                    };
+                    var label = names[index] + "." + method.Name + ":" + row;
+                    source.Append("    \"").Append(label).Append("\" -> println\n    policy").Append(index).Append('.')
+                        .Append(char.ToLowerInvariant(method.Name[0])).Append(method.Name.AsSpan(1)).Append('(')
+                        .AppendJoin(", ", arguments.Select(argument => (bool)argument ? "true" : "false"))
+                        .Append(") -> println\n");
+                    expected.Append(label).Append('\n').Append(text).Append('\n');
+                }
+            }
+        }
+        source.Append("}\n");
+        var sourcePath = Path.Combine(directory, "runtime-policy-probe.slg");
+        File.WriteAllText(sourcePath, source.ToString());
+        var contractPath = Path.Combine(directory, "runtime-policy-contract.json");
+        File.WriteAllText(contractPath, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            scope = "Scalar generated policies against compiled CSharp method results; exhaustive boolean inputs",
+            cases = new[] { new { id = "shared-policy-runtime", source = sourcePath,
+                additionalSources = dependencies, exit = 0, stderr = "", stdout = expected.ToString().TrimEnd('\r', '\n') } }
+        }, new JsonSerializerOptions { WriteIndented = true }));
+        return contractPath;
     }
 
     private static string FindRoot()

@@ -1,0 +1,191 @@
+--- 7bc7b9c981417942492115ee99dcc97eb62114ea/selfhost/semantic/expression_type_ids.slg
++++ selfhost/semantic/expression_type_ids.slg
+@@ -29,6 +29,26 @@
+     public astNode: Int
+     public typeId: Int
+     public status: Int
++}
++
++public struct ResolvedUserBlockContract {
++    public sourceModule: Int
++    public callAst: Int
++    public targetSourceModule: Int
++    public functionSymbol: Int
++    public resultAst: Int
++    public expectedInputTypeId: Int
++    public expectedResultTypeId: Int
++    public actualResultTypeId: Int
++}
++
++public struct ResolvedUserBlockYieldInput {
++    public sourceModule: Int
++    public valueAst: Int
++    public expectedTypeId: Int
++    public actualTypeId: Int
++    public callerSourceModule: Int
++    public callerCallAst: Int
+ }
+ 
+ public struct ResolvedCallArgument {
+@@ -183,6 +203,7 @@
+ # 15 dependent nested failure (the original nested diagnostic remains authoritative).
+ # diagnosticNode/contextNode are global interpolation indices; valueAst is source-local.
+ public struct InterpolationArrayFact {
++    public sourceModule: Int
+     public typeId: Int
+     public elementTypeId: Int
+     public valueAst: Int
+@@ -203,9 +224,12 @@
+     public references: [typeIds.TypeReference; ~]
+     public fields: [typeIds.NominalField; ~]
+     public expressions: [ExpressionTypeId; ~]
++    public arrayBackingFacts: [ExpressionTypeId; ~]
+     # Current validated external call facts; never cache-restored source owners.
+     public externalCallResults: [ExpressionTypeId; ~]
+     public callArguments: [ResolvedCallArgument; ~]
++    public userBlockContracts: [ResolvedUserBlockContract; ~]
++    public userBlockYieldInputs: [ResolvedUserBlockYieldInput; ~]
+     public enumConstructorArguments: [ResolvedEnumConstructorArgument; ~]
+     public enumConstructorIndexByAst: [Int; ~]
+     public enumConstructorIndexByInterpolationNode: [Int; ~]
+@@ -1169,7 +1193,7 @@
+ # The parser retains the constructor type AST and exact variant span. Its
+ # canonical TypeReference is resolved with ordinary source types, before this pass.
+ emptyInterpolationArrayFact: -> InterpolationArrayFact {
+-    InterpolationArrayFact { typeId: -1, elementTypeId: -1, valueAst: -1,
++    InterpolationArrayFact { sourceModule: -1, typeId: -1, elementTypeId: -1, valueAst: -1,
+         dynamic: false, bounded: false, storageLength: -1, elementCount: 0,
+         status: 1, diagnosticNode: -1, diagnosticContext: 0, contextNode: -1, expectedTypeId: -1, actualTypeId: -1 }
+ }
+@@ -1196,6 +1220,7 @@
+     prepared.package.ranges[sourceModule] => range
+     array.kind != 16 or array.valueAst < 0 or array.valueAst >= range.astCount
+         -> if { result! -> return }
++    sourceModule => result!.sourceModule
+     array.valueAst => result!.valueAst
+     nodeIndex => result!.diagnosticNode
+     expectedTypeId => result!.expectedTypeId
+@@ -2153,6 +2178,9 @@
+ 
+     resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule!, sourceTextSymbol!, seeds.ownerBySource)
+     resolveContextualDictionaryStructValues(prepared, types!, expressions!, expressionIndexByAst!)
++    # Register literal backing storage with the declared element contract.
++    # Readonly array returns keep their own extent and independent values.
++    resolveDeclaredNumericReturnLiterals(prepared, types!, references!, expressions!, expressionIndexByAst!) => initialReturnLiteralsChanged
+     resolveCompositeLiteralTypes(prepared, types!, expressions!, expressionIndexByAst!)
+     resolveStructuralProductTypes(prepared, types!, fields!, expressions!, expressionIndexByAst!, productSources!, productAsts!) => initialProductTypesChanged
+     resolveFlowCallTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, seeds.ownerBySource) => flowTargetTokenByAst
+@@ -2851,13 +2879,17 @@
+     [ExpressionTypeId; ~] => externalCallResults!
+     externalResults -> each value { externalCallResults! -> push(value) }
+ 
++    resolveUserBlockContracts(prepared, types!, references!, referenceIndexByTypeAst!, expressions!, expressionIndexByAst!, blockAndFlowArgumentBindings) => userBlockContracts
+     ExpressionTypeIdSet {
+         types: types!
+         references: references!
+         fields: fields!
+         expressions: expressions!
++        arrayBackingFacts: [ExpressionTypeId; ~]
+         externalCallResults: externalCallResults!
+         callArguments: [ResolvedCallArgument; ~]
++        userBlockContracts: userBlockContracts
++        userBlockYieldInputs: [ResolvedUserBlockYieldInput; ~]
+         enumConstructorArguments: interpolationEnumConstructorArguments!
+         enumConstructorIndexByAst: [Int; ~]
+         enumConstructorIndexByInterpolationNode: interpolationEnumConstructorIndex!
+@@ -3377,6 +3409,62 @@
+ completeCallAndEnumFacts prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet -> Unit {
+     resolveSemanticCallArguments(prepared, resolved)
+     resolveEnumConstructorArguments(prepared, resolved)
++    completeArrayBackingFacts(prepared, resolved)
++}
++
++completeArrayBackingFacts prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet -> Unit {
++    [Int; ~] => expressionByAst!
++    prepared.package.nodes -> each _ { expressionByAst! -> push(-1) }
++    0 => expressionIndex!
++    resolved.expressions -> each expression {
++        prepared.package.ranges[expression.sourceModule] => range
++        expressionIndex! => expressionByAst![range.astStart + expression.astNode]
++        expressionIndex! + 1 => expressionIndex!
++    }
++    prepared.package -> indexContextualRecords => context
++    [Int; ~] => expectedByAst!
++    prepared.package.nodes -> each _ { expectedByAst! -> push(-1) }
++    prepared.package -> declaredNumericReturnContextByAst(resolved.types, resolved.references) => returns
++    prepared.package.ranges -> each range {
++        0 => astNode!
++        astNode! < range.astCount -> while {
++            returns[range.astStart + astNode!] => expected
++            contextualizeEmptyArrayValue(prepared, resolved, expressionByAst!, context, expectedByAst!, range.sourceModule, astNode!, expected) => returnChanged
++            astNode! + 1 => astNode!
++        }
++    }
++    0 => argumentIndex!
++    argumentIndex! < (resolved.enumConstructorArguments -> len)
++        -> while {
++            resolved.enumConstructorArguments[argumentIndex!] => argument!
++            contextualizeEmptyArrayValue(prepared, resolved, expressionByAst!, context, expectedByAst!, argument!.sourceModule, argument!.argumentAst, argument!.expectedTypeId)
++                -> if {
++                    prepared.package.ranges[argument!.sourceModule] => range
++                    resolved.expressions[expressionByAst![range.astStart + argument!.argumentAst]].typeId => argument!.actualTypeId
++                    replaceEnumConstructorFact(resolved.enumConstructorArguments, argumentIndex!, argument!)
++                }
++            argumentIndex! + 1 => argumentIndex!
++        }
++    prepared -> registerArrayBackingFacts(resolved.types, resolved.expressions, expressionByAst!) => facts
++    facts => resolved.arrayBackingFacts
++}
++
++replaceEnumConstructorFact arguments: mut [ResolvedEnumConstructorArgument; ~], index: Int, fact: ResolvedEnumConstructorArgument -> Unit {
++    fact => arguments[index]
++}
++
++contextualizeEmptyArrayValue prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], source: Int, astNode: Int, expected: Int -> Bool {
++    source < 0 or source >= (prepared.package.ranges -> len) or expected < 0 or expected >= (resolved.types -> len)
++        -> if { false -> return }
++    prepared.package.ranges[source] => range
++    astNode < 0 or astNode >= range.astCount
++        -> if { false -> return }
++    prepared.package.nodes[range.astStart + astNode] => node
++    node.kind != 37 or node.tokenCount != 2
++        -> if { false -> return }
++    resolved.types[expected].kind != 2 and resolved.types[expected].kind != 3
++        -> if { false -> return }
++    contextualizeArrayCallArgument(prepared, resolved, expressionByAst, index, expectedByAst, source, astNode, expected)
+ }
+ 
+ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTypeIdSet {
+@@ -3389,9 +3477,14 @@
+ # Keep final core, contextual/generic call facts and enum facts in the same order.
+ resolveContextWithCallArgumentBindings prepared: semanticContext.SemanticSnapshot, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ExpressionTypeIdSet {
+     prepared -> resolveContextCoreWithCallArgumentBindings(bindings, seeds, externalResults) => resolved!
+-    resolveSemanticCallArgumentBindingsSeeded(prepared, resolved!, bindings, seeds)
+-    resolveEnumConstructorArguments(prepared, resolved!)
++    completeCallAndEnumFactsSeeded(prepared, resolved!, bindings, seeds)
+     resolved!
++}
++
++completeCallAndEnumFactsSeeded prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds -> Unit {
++    resolveSemanticCallArgumentBindingsSeeded(prepared, resolved, bindings, seeds)
++    resolveEnumConstructorArguments(prepared, resolved)
++    completeArrayBackingFacts(prepared, resolved)
+ }
+ 
+ # This verifies table boundaries, not generation provenance. Callers must first
+@@ -3624,6 +3717,15 @@
+     # identical indexes and running the full type core again.
+     committedTypes and not decisionsChanged -> if {
+         ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
++    }
++    # Unchanged targets retain every input used by the initial core. Complete
++    # that owned result before the normal committed refinement; initial facts
++    # alone never escape as a completed call context.
++    not decisionsChanged -> if {
++        initialPrepared.package -> semanticContext.resolveCallArgumentBindings(initialPrepared.calls) => bindings
++        initialTypes => resolved!
++        completeCallAndEnumFactsSeeded(initialPrepared, resolved!, bindings, seeds)
++        initialPrepared -> refineResolvedCallContext(resolved!, seeds, externalResults, true) -> return
+     }
+     initialPrepared => prepared!
+     resolvedCalls => prepared!.calls
