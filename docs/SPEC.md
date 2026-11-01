@@ -6073,6 +6073,9 @@ hexadecimal preserves word boundaries and avoids hash-only identity. Function
 definitions, calls, runtime wrappers and specialization base names must use the
 same prepared key. This does not replace the independent naming rules for SSA
 values, type layouts, private globals or specialization arguments.
+The emission inventory contains each canonical non-local function or generic
+specialization once, even when distinct call-site type views resolve to the
+same concrete identity. Lexical local functions retain their own instances.
 Self-host specialization arguments use a complete ordered concrete type recipe
 and the exact numeric generic value, with an explicit marker for absence.
 Recipe dependencies follow ordered roots rather than source type-table slots;
@@ -6505,6 +6508,10 @@ Current backend:
   element recipe, and reserves array slots in saved ID order. A saved slot is
   an allocation coordinate, never a replacement for structural type identity.
   Other types use the first unreserved vacant slot before extending the table.
+  A reservation may reuse an already occupied slot only when that slot is a
+  resolved array with the same element and length. A conflicting occupied slot
+  or an identical shape registered at another ID rejects the saved plan; a
+  failed reservation must not be reported as a successful restoration.
   Restoration is transactional; rejected metadata leaves the current table
   unchanged. The SLG owner container writes version 2 with this plan and still
   reads version 1. The plan accepts at most one million saved type slots,

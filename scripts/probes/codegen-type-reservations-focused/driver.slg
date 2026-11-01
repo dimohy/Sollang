@@ -1,0 +1,52 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.type_ids as types
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+import sollang.compiler.semantic.semantic_static_arrays as arrays
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+report label: Text, result: move Result<types.SemanticTypeSet, Int> -> Unit uses Console {
+    result -> when {
+        Ok(_) { "$label:accepted" -> println }
+        Err(code) { "$label:$code" -> println }
+    }
+}
+
+run: -> Unit uses Console {
+    ["main {}",; ~] -> context.prepare => prepared
+    prepared.package -> interfaces.declarationIdentitiesAnalyzed(prepared.modules) => declarations
+    prepared -> fingerprints.capture => fingerprint
+    prepared.semantic => current!
+    current!.types -> types.builtinTypeId(types.builtinSymbolByName("Int")) => integer
+    (current!.types -> len) + 2 => target
+    current!.types -> types.reserveStaticArrayType(target, integer, 9) => reserved
+    not reserved -> if { "setup:initial" -> println
+        return }
+    prepared.package -> artifacts.captureTypeDetailsAnalyzed(current!.types, current!.references, current!.fields) => details
+    generations.CompilationIdentity { compiler: 1, target: 0, configuration: 1 } => identity
+    current!.types -> arrays.capture(details, declarations, identity, fingerprint.bytes) -> when {
+        Ok(words) { words }
+        Err(code) { "capture:$code" -> println
+            return }
+    } => words
+    ["main {}",; ~] -> context.prepare => fresh
+    "fresh" -> report(words -> arrays.restore(prepared.package, fresh.semantic, identity, fingerprint.bytes))
+    "same" -> report(words -> arrays.restore(prepared.package, current!, identity, fingerprint.bytes))
+    fresh.semantic => collision!
+    collision!.types -> types.reserveStaticArrayType(target, integer, 11) => occupied
+    not occupied -> if { "setup:collision" -> println
+        return }
+    "collision" -> report(words -> arrays.restore(prepared.package, collision!, identity, fingerprint.bytes))
+    collision!.types[target].length != 11 -> if { "collision-input-mutated" -> println }
+    ["main {}",; ~] -> context.prepare => other
+    other.semantic => duplicate!
+    duplicate!.types -> types.reserveStaticArrayType(target + 1, integer, 9) => aliased
+    not aliased -> if { "setup:duplicate" -> println
+        return }
+    "duplicate" -> report(words -> arrays.restore(prepared.package, duplicate!, identity, fingerprint.bytes))
+    not (duplicate!.types[target] -> types.vacantSemanticTypeSlot)
+        or duplicate!.types[target + 1].length != 9 -> if { "duplicate-input-mutated" -> println }
+}
+
+main { run() }

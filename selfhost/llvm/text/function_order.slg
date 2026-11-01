@@ -35,6 +35,34 @@ codegenFunctionOrder left: Int, right: Int, context: ref emitterContext.EmitCont
 }
 
 # Sort emission metadata only. planFunctions keeps its supplied-order contract.
+codegenFunctionIsLocal functionIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    context.ir[functionIndex] => function
+    context.ranges[function.sourceModule] => range
+    context.symbols[range.symbolStart + function.symbol].parent => owner!
+    owner! >= 0 -> while {
+        context.symbols[range.symbolStart + owner!] => declaration
+        declaration.kind == 7 or declaration.kind == 31
+            -> if { true -> return }
+        declaration.parent => owner!
+    }
+    false
+}
+
+# Like GetEmittableUserFunctions, coalesce canonical non-local declarations.
+# Per-call typed instances and lexical local functions remain separate.
+uniqueCodegenFunctions functions: ref [codegenUnits.ModuleFunction; ~], context: ref emitterContext.EmitContext -> [codegenUnits.ModuleFunction; ~] {
+    [codegenUnits.ModuleFunction; ~] => unique!
+    -1 => previous!
+    functions -> each function {
+        previous! < 0 or (function.functionIndex -> codegenFunctionIsLocal(context))
+            or (previous! -> codegenFunctionIsLocal(context))
+            or (previous! -> codegenFunctionOrder(function.functionIndex, context)) != 0
+            -> if { unique! -> push(function)
+                function.functionIndex => previous! }
+    }
+    unique!
+}
+
 sortCodegenFunctions functions: mut [codegenUnits.ModuleFunction; ~], context: ref emitterContext.EmitContext -> Unit {
     functions -> len => count
     count < 2 -> if { return }
