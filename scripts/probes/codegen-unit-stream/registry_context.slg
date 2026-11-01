@@ -8,6 +8,7 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import sys.file as file
+import sys.process as process
 
 preparedRegistrySemantic context: ref emitterContext.EmitContext -> typeIds.SemanticTypeSet {
     [typeIds.SemanticType; ~] => types!
@@ -137,11 +138,33 @@ inspectPreparedRegistryContext context: ref emitterContext.EmitContext, package:
     0
 }
 
-public inspectPreparedRegistry sources: move [Text; ~], standardCount: Int, universe: Bool -> Int uses Console {
+public inspectPreparedRegistry sources: move [Text; ~], standardCount: Int, universe: Bool -> Int uses Console, Process {
     sources -> analysis.analyze => package
     llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
     request -> prepare => context
+    process.arguments() => arguments
+    arguments[1] == "registry-emissions-windows" -> if {
+        context.codegenFunctionEmissions -> when {
+            Err(error) {
+                error -> when {
+                    keys.FunctionEmissionError.FunctionCapture(failure) { "function-emission-error:capture:$(failure.sourceModule):$(failure.ownerSymbol):$(failure.stage)" -> println }
+                    keys.FunctionEmissionError.SourceModule { "function-emission-error:module" -> println }
+                    keys.FunctionEmissionError.TypeRegistration { "function-emission-error:registration" -> println }
+                    keys.FunctionEmissionError.SignatureRegistration { "function-emission-error:signature" -> println }
+                }
+                17 -> return
+            }
+            Ok(emissions) {
+                emissions -> each emission {
+                    emission.identity.bytes -> file.borrowBytes => owner
+                    owner -> slice(0, owner -> len) => identity
+                    "emission:$(emission.hash):$identity" -> println
+                }
+                0 -> return
+            }
+        }
+    }
     universe -> if { context -> inspectPreparedUniverseContext(package) } else {
         context -> inspectPreparedRegistryContext(package, standardCount)
     }

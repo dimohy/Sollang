@@ -1,0 +1,55 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.reference_prepared_type_ids as reference
+import sollang.compiler.semantic.modules as moduleNames
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sys.process as process
+import sys.file as file
+
+verify prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, identities: ref [Int; ~], parameter: Int, expected: Bool, caseId: Int -> Unit uses Process {
+    keys.TypeFieldContext { identities: [moduleNames.ModuleIdentity; ~], imports: [moduleNames.ImportEdge; ~], sourceModule: 0, ownerSymbol: -1 } => names!
+    names! -> keys.resolvedStableTypeIdentityField(prepared.package, semantic, parameter, identities) -> when {
+        Err(_) { false }
+        Ok(field) { field.bytes -> file.borrowBytes => owner
+            (owner -> slice(0, owner -> len)) == "builtin:GenericParameter" }
+    } => actual
+    (semantic.types -> keys.metadataSignatureIdentity(identities, parameter)) >= 0 => mapped
+    expected and (not actual or not mapped) or not expected and (actual or mapped)
+        -> if { process.exit(caseId) }
+}
+
+run: -> Unit uses Console, Process {
+    ["identity<T> value: T -> T { value }",; ~] -> semanticContext.prepare => prepared
+    prepared -> reference.registerMetadataSignatures -> when {
+        Err(_) { process.exit(10)
+            return }
+        Ok(value) { value }
+    } => registered
+    -1 => parameter!
+    0..<(prepared.semantic.types -> len) -> each index {
+        prepared.semantic.types[index].kind == 1 and prepared.semantic.types[index].origin == 3
+            -> if { index => parameter! }
+    }
+    parameter! < 0 -> if { process.exit(11)
+        return }
+    prepared -> verify(prepared.semantic, registered.ids, parameter!, true, 1)
+    [Int; ~] => padded!
+    registered.ids -> each identity { padded! -> push(identity) }
+    padded! -> push(-1)
+    prepared -> verify(prepared.semantic, padded!, parameter!, true, 2)
+    [typeIds.SemanticType; ~] => types!
+    prepared.semantic.types -> each type { types! -> push(type) }
+    types! -> push(prepared.semantic.types[0])
+    typeIds.SemanticTypeSet { types: types!, references: [typeIds.TypeReference; ~], fields: [typeIds.NominalField; ~] } => extended
+    prepared -> verify(extended, registered.ids, parameter!, true, 3)
+    [Int; ~] => missing!
+    0..<parameter! -> each index { missing! -> push(registered.ids[index]) }
+    prepared -> verify(prepared.semantic, missing!, parameter!, false, 4)
+    [Int; ~] => wrong!
+    registered.ids -> each identity { wrong! -> push(identity) }
+    515 => wrong![parameter!]
+    prepared -> verify(prepared.semantic, wrong!, parameter!, false, 5)
+    "signature-prefix:5/5" -> println
+}
+
+main { run() }

@@ -6,6 +6,9 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_registration as registration
 import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
 import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.expression_type_ids as expressionIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.codegen_type_registration as functionTypes
 
 # Capture while the authoritative snapshot is still available. The private
 # metadata view borrows its facts by copying plain descriptors; backend arena
@@ -17,13 +20,7 @@ capturePreparedCodegenTypeHash prepared: ref semanticContext.SemanticSnapshot, t
             signatures -> when {
                 Err(_) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
                 Ok(ids) {
-                    [typeIds.SemanticType; ~] => copiedTypes!
-                    types -> each type { copiedTypes! -> push(type) }
-                    [typeIds.TypeReference; ~] => copiedReferences!
-                    references -> each reference { copiedReferences! -> push(reference) }
-                    [typeIds.NominalField; ~] => copiedFields!
-                    fields -> each field { copiedFields! -> push(field) }
-                    typeIds.SemanticTypeSet { types: copiedTypes!, references: copiedReferences!, fields: copiedFields! } => semantic
+                    types -> copyPreparedCodegenSemantic(references, fields) => semantic
                     [Int; ~] => copiedSizes!
                     sizes -> each size { copiedSizes! -> push(size) }
                     [Int; ~] => copiedAligns!
@@ -31,11 +28,7 @@ capturePreparedCodegenTypeHash prepared: ref semanticContext.SemanticSnapshot, t
                     [Int; ~] => copiedStatuses!
                     statuses -> each status { copiedStatuses! -> push(status) }
                     TypeLayouts { sizes: copiedSizes!, aligns: copiedAligns!, statuses: copiedStatuses! } => layouts
-                    [modules.ModuleIdentity; ~] => identities!
-                    prepared.modules -> each module { identities! -> push(module) }
-                    [modules.ImportEdge; ~] => imports!
-                    prepared.imports -> each edge { imports! -> push(edge) }
-                    keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: 0, ownerSymbol: -1 } => context!
+                    prepared -> preparedCodegenNames => context!
                     context! -> captureCompilationTypeUniverseWithSignatures(prepared.package, semantic, layouts, seeds, ids) -> when {
                         Err(error) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(error) -> return }
                         Ok(records) {
@@ -47,6 +40,48 @@ capturePreparedCodegenTypeHash prepared: ref semanticContext.SemanticSnapshot, t
                     }
                 }
             }
+        }
+    }
+}
+
+copyPreparedCodegenSemantic types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], fields: ref [typeIds.NominalField; ~] -> typeIds.SemanticTypeSet {
+    [typeIds.SemanticType; ~] => copiedTypes!
+    types -> each type { copiedTypes! -> push(type) }
+    [typeIds.TypeReference; ~] => copiedReferences!
+    references -> each reference { copiedReferences! -> push(reference) }
+    [typeIds.NominalField; ~] => copiedFields!
+    fields -> each field { copiedFields! -> push(field) }
+    typeIds.SemanticTypeSet { types: copiedTypes!, references: copiedReferences!, fields: copiedFields! }
+}
+
+preparedCodegenNames prepared: ref semanticContext.SemanticSnapshot -> keys.TypeFieldContext {
+    [modules.ModuleIdentity; ~] => identities!
+    prepared.modules -> each module { identities! -> push(module) }
+    [modules.ImportEdge; ~] => imports!
+    prepared.imports -> each edge { imports! -> push(edge) }
+    keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: 0, ownerSymbol: -1 }
+}
+
+capturePreparedFunctionEmissions prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionIds.ExpressionTypeIdSet, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], fields: ref [typeIds.NominalField; ~], ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], bodies: ref typedIr.GenericBodyBindings, signatures: ref Result<[Int; ~], signatureIds.Error> -> Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError> {
+    signatures -> when {
+        Err(_) { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.SignatureRegistration) -> return }
+        Ok(ids) {
+            types -> copyPreparedCodegenSemantic(references, fields) => semantic!
+            prepared -> signatureIds.registerDeclarations -> when {
+                Err(_) { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
+                Ok(value) { value }
+            } => declarations
+            prepared -> functionTypes.collect(resolved, ir, semantic!.types, plans, declarations.ids) => uses
+            uses.unresolvedCalls != 0 -> if { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
+            [Int; ~] => roots!
+            uses.uses -> each use { roots! -> push(use.typeId) }
+            prepared -> signatureIds.registerResolvedTypeUses(semantic!, roots!) -> when {
+                Err(_) { Result<[keys.ModuleEmission; ~], keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
+                Ok(value) { value }
+            } => registered
+            prepared -> preparedCodegenNames => context!
+            context! -> keys.collectCompilationFunctions(prepared, semantic!, ir, plans, registered.ids, ids, bodies) => functions
+            context! -> keys.captureFunctionEmissions(prepared, functions)
         }
     }
 }

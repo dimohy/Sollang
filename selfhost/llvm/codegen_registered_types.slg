@@ -18,13 +18,20 @@ public captureRecordError error: TypeUniverseError -> TypeUniverseCaptureError =
 # replace either the reference identity or its registered element identity.
 # Signature records use an identity space beyond concrete arena coordinates.
 # Generic role aliases are shared across declarations; concrete identities stay intact.
+# Signature maps describe stable source entries. Runtime preparation may extend
+# either view with unrelated entries; every referenced mapping must still exist.
+metadataSignatureEntry signatureIds: ref [Int; ~], typeId: Int -> Int {
+    typeId < 0 or typeId >= (signatureIds -> len)
+        -> if { -1 -> return }
+    signatureIds[typeId]
+}
+
 public metadataSignatureIdentity types: ref [typeIds.SemanticType; ~], signatureIds: ref [Int; ~], typeId: Int -> Int {
     typeId < 0 -> if { -1 -> return }
     typeId >= (types -> len) -> if { -2 -> return }
     not types[typeId].containsParameter -> if { typeId -> return }
-    (signatureIds -> len) != (types -> len) or signatureIds[typeId] < 0
-        -> if { -2 -> return }
-    signatureIds[typeId] => signature
+    signatureIds -> metadataSignatureEntry(typeId) => signature
+    signature < 0 -> if { -2 -> return }
     types[typeId].kind == 1 and types[typeId].origin == 3
         -> if {
             signature < 512 or signature > 514 -> if { -2 -> return }

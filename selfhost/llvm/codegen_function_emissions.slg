@@ -5,7 +5,7 @@ import sollang.compiler.semantic.calls as calls
 import sollang.compiler.llvm.codegen_cache_policy as arithmetic
 import sys.file as file
 
-public enum FunctionEmissionError { FunctionCapture, SourceModule }
+public enum FunctionEmissionError { FunctionCapture(FunctionCaptureFailure), SourceModule, TypeRegistration, SignatureRegistration }
 
 appendFunctionEmissionHash function: ref CompilationFunction, hash: UInt64, prepared: ref semanticContext.SemanticSnapshot, source: Text, moduleName: Text -> UInt64 {
     hash -> hashBytes(function.identity.bytes) => result!
@@ -26,7 +26,7 @@ appendFunctionEmissionHash function: ref CompilationFunction, hash: UInt64, prep
 # The C# emission key hashes complete User identities ordered by function name.
 # Several source files may contribute to the same logical module.
 public captureFunctionEmissions context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, captured: ref CompilationFunctions -> Result<[ModuleEmission; ~], FunctionEmissionError> {
-    (captured.failures -> len) != 0 -> if { Result<[ModuleEmission; ~], FunctionEmissionError>.Err(FunctionEmissionError.FunctionCapture) -> return }
+    (captured.failures -> len) != 0 -> if { Result<[ModuleEmission; ~], FunctionEmissionError>.Err(FunctionEmissionError.FunctionCapture(captured.failures[0])) -> return }
     [Int; ~] => moduleBySource!
     [Text; ~] => sourceViews!
     prepared.package.sources -> each source { source -> slice(0, source -> len) => view
