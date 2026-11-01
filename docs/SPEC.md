@@ -979,6 +979,9 @@ source form without changing semantics:
   The same rule applies when a named owner is transferred into an indexed
   array or dictionary element whose declared value type requires a growable
   array. The stored value must still satisfy that exact element type.
+  This includes a value transferred by `push` into a growable or bounded
+  array: the receiver's declared element type is a required value contract,
+  even when the intrinsic has no ordinary function parameter declaration.
   A declared growable function or method result likewise suppresses the
   warning for its returned owner, including an explicit return and the named
   tail value of a source block-function body. Synthetic

@@ -12547,6 +12547,7 @@ internal sealed partial class SemanticCompiler
                         target.Arguments[0].Column,
                         $"push expects {FormatType(expectedPushedType)}, got {FormatType(pushedType)}");
                 }
+                MarkFixedLengthCandidateRequiresGrowable(pushedArgument, expectedPushedType, pushedType);
                 if (_types.ContainsOwnedStorage(expectedPushedType))
                 {
                     RejectBorrowedOwnedStorageTransfers(

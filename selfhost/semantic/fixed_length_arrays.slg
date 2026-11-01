@@ -2,6 +2,7 @@ namespace sollang.compiler.semantic.fixed_length_arrays
 
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.expression_type_ids as expressionTypes
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.diagnostics as semanticDiagnostics
@@ -84,6 +85,54 @@ operationCode package: ref analysis.PackageAnalysis, sourceModule: Int, tokenInd
     0
 }
 
+# Intrinsic push has an element contract even without an ordinary parameter.
+# Use the same call/argument identities as semantic inference, including fields
+# and parameter receivers that are not themselves warning candidates.
+pushedGrowableOwner prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypes.ExpressionTypeIdSet, sourceModule: Int, flowAst: Int, flowSources: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], symbolByAst: ref [Int; ~], typeByAst: ref [Int; ~] -> Int {
+    prepared.package.ranges[sourceModule] => range
+    range.astStart + flowAst => globalFlow
+    flowSources[globalFlow] => receiver
+    receiver < 0 -> if { -1 -> return }
+    resolved.types -> typeIds.materializedReadTypeId(typeByAst[receiver]) => receiverType
+    receiverType < 0 -> if { -1 -> return }
+    resolved.types[receiverType] => arrayType
+    arrayType.kind != 3 and arrayType.kind != 12 -> if { -1 -> return }
+    not (resolved.types -> isGrowableType(arrayType.first))
+        -> if { -1 -> return }
+    -1 => targetPath!
+    firstChild[globalFlow] => child!
+    child! >= 0 -> while {
+        child! != receiver -> if {
+            prepared.package.nodes[child!] => candidate
+            candidate.kind == 16 -> if { child! => targetPath! }
+            candidate.kind == 11 -> if {
+                firstChild[child!] => nested!
+                nested! >= 0 -> while {
+                    prepared.package.nodes[nested!] => path
+                    path.kind == 16 and path.start == candidate.start
+                        -> if { nested! => targetPath! }
+                    nextChild[nested!] => nested!
+                }
+            }
+        }
+        nextChild[child!] => child!
+    }
+    targetPath! < 0 -> if { -1 -> return }
+    prepared.package.nodes[targetPath!] => target
+    target.tokenCount != 1 or (prepared.package -> operationCode(sourceModule, target.payloadToken)) != 1
+        -> if { -1 -> return }
+    calls.ModuleCallResolution { sourceModule: sourceModule, callAst: flowAst, origin: 0, targetModule: -1, targetSourceModule: -1, functionSymbol: -1, status: 0 } => intrinsic
+    prepared.package -> semanticContext.indexedCallArgumentAsts(intrinsic, flowSources, firstChild, nextChild) => arguments
+    (arguments -> len) != 2 -> if { -1 -> return }
+    arguments[1] => value
+    prepared.package.nodes[value].kind != 15 -> if { -1 -> return }
+    typeByAst[value] => actualType
+    actualType < 0 -> if { -1 -> return }
+    resolved.types[actualType].kind != 3 and resolved.types[actualType].kind != 12
+        -> if { -1 -> return }
+    symbolByAst[value]
+}
+
 # Commit warnings from the semantic package and its resolved type/name facts.
 public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypes.ExpressionTypeIdSet, interpolations: ref [interpolation.InterpolationNode; ~], interpolationRanges: ref [interpolation.InterpolationSourceRange; ~] -> [FixedLengthArrayWarning; ~] {
     [Candidate; ~] => candidates!
@@ -110,6 +159,7 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
             }
     }
     prepared.package -> semanticDiagnostics.nominalFieldExpectedTypeIds(resolved, typeByAst!) => fieldExpectedTypes
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     prepared.package.ranges -> each range {
         0 => localAst!
         localAst! < range.astCount -> while {
@@ -169,6 +219,10 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
             prepared.package.nodes[globalAst] => node
             node.kind == 10 and not (prepared -> semanticContext.hasDeclaredCallTarget(globalAst))
                 -> if {
+                    prepared -> pushedGrowableOwner(resolved, range.sourceModule, localAst!, flowSources, firstChild!, nextChild!, symbolByAst!, typeByAst!) => pushedOwner
+                    pushedOwner >= 0 -> if {
+                        candidates![pushedOwner] -> withGrowableRequirement => candidates![pushedOwner]
+                    }
                     firstChild![globalAst] => receiver
                     receiver >= 0 and symbolByAst![receiver] >= 0
                         -> if {

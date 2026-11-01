@@ -954,27 +954,68 @@ resolveResultPropagationPayloadTypes prepared: ref semanticContext.SemanticSnaps
 }
 
 struct InitialTypeReferenceIndex {
-    firstBySource: [Int; ~]
+    firstByAst: [Int; ~]
+    references: [Int; ~]
     next: [Int; ~]
+    firstPathByArrayAst: [Int; ~]
 }
 
 # Group identities only. Type/status decisions remain live at their original
 # query point, and ascending reference order preserves the last-match rule.
 indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> InitialTypeReferenceIndex {
     [Int; ~] => first!
+    [Int; ~] => indexedReferences!
     [Int; ~] => next!
-    package.ranges -> each range { first! -> push(-1) }
-    references -> each reference { next! -> push(-1) }
+    [Int; ~] => firstPath!
+    package.nodes -> each node {
+        first! -> push(-1)
+        firstPath! -> push(-1)
+    }
     Int(references -> len) => index!
     index! > 0 -> while {
         index! - 1 => index!
-        references[index!].sourceModule => source
-        source >= 0 and source < (first! -> len) -> if {
-            first![source] => next![index!]
-            index! => first![source]
+        references[index!] => reference
+        reference.sourceModule >= 0 and reference.sourceModule < (package.ranges -> len)
+            -> if {
+                package.ranges[reference.sourceModule] => range
+                reference.typeAst >= 0 and reference.typeAst < range.astCount
+                    -> if {
+                        range.astStart + reference.typeAst => owner!
+                        0 => relation!
+                        relation! < 2 and owner! >= range.astStart and owner! < range.astStart + range.astCount
+                            -> while {
+                                Int(indexedReferences! -> len) => entry
+                                indexedReferences! -> push(index!)
+                                next! -> push(first![owner!])
+                                entry => first![owner!]
+                                package.nodes[owner!].parent => parent
+                                parent >= 0 -> if { range.astStart + parent => owner! } else { -1 => owner! }
+                                relation! + 1 => relation!
+                            }
+                    }
+            }
+    }
+    # Preserve the fallback's first AST ordinal descendant, rather than the
+    # nearest path or a traversal-dependent first child.
+    package.ranges -> each range {
+        0 => localAst!
+        localAst! < range.astCount -> while {
+            package.nodes[range.astStart + localAst!] => node
+            node.kind == 12 or node.kind == 16 -> if {
+                node.parent => ancestor!
+                ancestor! >= 0 and ancestor! < range.astCount
+                    -> while {
+                        range.astStart + ancestor! => globalAncestor
+                        package.nodes[globalAncestor] => parent
+                        parent.kind == 37 and firstPath![globalAncestor] < 0
+                            -> if { localAst! => firstPath![globalAncestor] }
+                        parent.parent => ancestor!
+                    }
+            }
+            localAst! + 1 => localAst!
         }
     }
-    InitialTypeReferenceIndex { firstBySource: first!, next: next! }
+    InitialTypeReferenceIndex { firstByAst: first!, references: indexedReferences!, next: next!, firstPathByArrayAst: firstPath! }
 }
 
 resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
@@ -1086,10 +1127,10 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                     # remain available to bottom-up value inference below.
                 }
                 node.kind == 37 and typedArrayTypeSyntax! -> if {
-                    sourceReferences.firstBySource[sourceIndex!] => arrayReferenceSearch!
+                    sourceReferences.firstByAst[sourceRange.astStart + astIndex!] => arrayReferenceSearch!
                     arrayReferenceSearch! >= 0
                         -> while {
-                            references[arrayReferenceSearch!] => arrayReference
+                            references[sourceReferences.references[arrayReferenceSearch!]] => arrayReference
                             arrayReference.status == 0 and arrayReference.sourceModule == sourceIndex! and (types[arrayReference.typeId].kind == 3 or types[arrayReference.typeId].kind == 12)
                                 -> if {
                                     arrayReference.typeAst == astIndex! or prepared.package.nodes[sourceRange.astStart + arrayReference.typeAst].parent == astIndex!
@@ -1100,22 +1141,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                             sourceReferences.next[arrayReferenceSearch!] => arrayReferenceSearch!
                         }
                     builtinTypeId! < 0 -> if {
-                        -1 => typedArrayPathAst!
-                        0 => typedArrayChildSearch!
-                        typedArrayChildSearch! < sourceRange.astCount
-                            -> while {
-                                prepared.package.nodes[sourceRange.astStart + typedArrayChildSearch!] => typedArrayChild
-                                (typedArrayChild.kind == 12 or typedArrayChild.kind == 16) and typedArrayPathAst! < 0
-                                    -> if {
-                                        typedArrayChild.parent => typedArrayPathAncestor!
-                                        typedArrayPathAncestor! >= 0 and typedArrayPathAncestor! != astIndex!
-                                            -> while {
-                                                prepared.package.nodes[sourceRange.astStart + typedArrayPathAncestor!].parent => typedArrayPathAncestor!
-                                            }
-                                        typedArrayPathAncestor! == astIndex! -> if { typedArrayChildSearch! => typedArrayPathAst! }
-                                    }
-                                typedArrayChildSearch! + 1 => typedArrayChildSearch!
-                            }
+                        sourceReferences.firstPathByArrayAst[sourceRange.astStart + astIndex!] => typedArrayPathAst
                         -1 => typedArrayElementType!
                         -1 => typedArrayNameToken!
                         false => typedArrayBounded!
@@ -1286,7 +1312,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                             typedArrayQualifiedSearch! < (prepared.qualified -> len)
                                 -> while {
                                     prepared.qualified[typedArrayQualifiedSearch!] => typedArrayQualifiedCandidate
-                                    typedArrayQualifiedCandidate.sourceModule == sourceIndex! and typedArrayQualifiedCandidate.pathAst == typedArrayPathAst! and typedArrayQualifiedCandidate.status == 0
+                                    typedArrayQualifiedCandidate.sourceModule == sourceIndex! and typedArrayQualifiedCandidate.pathAst == typedArrayPathAst and typedArrayQualifiedCandidate.status == 0
                                         -> if { typedArrayQualifiedSearch! => typedArrayQualifiedIndex! }
                                     typedArrayQualifiedSearch! + 1 => typedArrayQualifiedSearch!
                                 }
