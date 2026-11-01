@@ -34,6 +34,25 @@ inspect: -> Unit uses Console, File, Process {
     prepared.imports -> each edge { imports! -> push(edge) }
     keys.TypeFieldContext { identities: modules!, imports: imports!, sourceModule: 0, ownerSymbol: -1 } => context!
     concreteness.classify(prepared.semantic.types, prepared.semantic.fields) => states
+    (prepared.package.ranges -> len) - 1 => fixtureModule
+    fixtureModule => context!.sourceModule
+    prepared.package.ranges[fixtureModule] => fixtureRange
+    0..<fixtureRange.symbolCount -> each index {
+        prepared.package.symbols[fixtureRange.symbolStart + index] => function
+        function.kind == 7 or function.kind == 31 -> if {
+            index => context!.ownerSymbol
+            context! -> keys.captureExplicitFunctionIdentity(prepared, identities.ids) -> when {
+                Err(_) { "function-error:$index" -> println }
+                Ok(field) {
+                    field.bytes -> file.borrowBytes => bytes
+                    bytes -> slice(0, bytes -> len) => identity
+                    "function:$identity" -> println
+                }
+            }
+        }
+    }
+    0 => context!.sourceModule
+    -1 => context!.ownerSymbol
     0 => typeId!
     prepared.semantic.types -> each type {
         false => constraint!

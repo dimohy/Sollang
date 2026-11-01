@@ -30,6 +30,8 @@ def main():
     parser.add_argument('--emission-only-projection', action='store_true')
     parser.add_argument('--include-stable-identities', action='store_true')
     parser.add_argument('--stable-candidate-file', type=Path)
+    parser.add_argument('--stable-function-output', type=Path)
+    parser.add_argument('--stable-function-module')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     assert not args.include_type_names or args.registered_sources, "type names require registered sources"
@@ -39,6 +41,8 @@ def main():
     assert not args.include_stable_identities or args.registered_sources, "stable identities require registered sources"
     assert not (args.include_stable_identities and (args.include_codegen_request or args.include_type_names)), "select one observation mode"
     assert not args.stable_candidate_file or args.include_stable_identities, "candidate validation requires stable identity mode"
+    assert not args.stable_function_output or (args.include_stable_identities and args.stable_function_module), 'function comparison requires stable identity mode and module'
+    assert not args.stable_function_module or args.stable_function_output, 'function module requires native output'
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -60,6 +64,8 @@ def main():
         candidates = json.loads(args.stable_candidate_file.read_text(encoding='utf-8'))
         assert isinstance(candidates, list) and candidates and all(isinstance(value, str) for value in candidates), "candidate file must contain identity strings"
         inputs.append(args.stable_candidate_file)
+    if args.stable_function_output:
+        inputs.append(args.stable_function_output)
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -132,6 +138,13 @@ def main():
                     row = json.loads(done.stdout)
                     if args.include_stable_identities:
                         assert row['types'] and row['functions'] and all(r['identity'] for r in row['functions'])
+                        if args.stable_function_output:
+                            native_lines = args.stable_function_output.read_text(encoding='utf-8').splitlines()
+                            assert not any(value.startswith(('function-error:', 'error:')) for value in native_lines), 'NATIVE_FUNCTION_CAPTURE_ERROR'
+                            actual = [value[len('function:'):] for value in native_lines if value.startswith('function:')]
+                            expected = [entry['identity'] for entry in row['functions'] if entry['facts']['ModuleName'] == args.stable_function_module]
+                            assert expected and sorted(actual) == sorted(expected), 'STABLE_FUNCTION_IDENTITY_MISMATCH'
+                            result['functionComparison'] = dict(module=args.stable_function_module, completed=len(actual), total=len(expected), exact=True)
                         if args.stable_candidate_file:
                             assert len(row['candidateValidation']) == len(candidates)
                             assert all(r['equal'] for r in row['candidateValidation']), 'STABLE_IDENTITY_CANONICAL_MISMATCH'

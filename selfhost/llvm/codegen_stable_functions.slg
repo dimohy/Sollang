@@ -1,0 +1,185 @@
+namespace sollang.compiler.llvm.codegen_cache_keys
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.llvm.codegen_cache_key_policy as plans
+
+# Framing is .NET String.Length: UTF16 code units, followed by UTF8 text.
+appendStableFunctionField field: ref Field, bytes: mut [UInt8; ~] -> Unit {
+    "$(field.bytes -> stableUtf16Length):" -> appendTypeText(bytes)
+    field.bytes -> each byte { bytes -> push(byte) }
+}
+
+stableAnnotation context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, annotation: Int, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
+    annotation < 0 -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("-")) -> return }
+    -1 => resolved!
+    prepared.semantic.references -> each reference {
+        reference.sourceModule == context.sourceModule and reference.typeAst == annotation and reference.status == 0
+            -> if { reference.typeId => resolved! }
+    }
+    resolved! < 0 or prepared.semantic.types[resolved!].containsParameter
+        -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    context -> resolvedStableTypeIdentityField(prepared.package, prepared.semantic, resolved!, signatureIds)
+}
+
+explicitFunctionPart context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, signatureIds: ref [Int; ~], inputAst: Int, part: plans.KeyPart -> Result<Field, TypeUniverseCaptureError> {
+    prepared.package.ranges[context.sourceModule] => range
+    prepared.package.symbols[range.symbolStart + context.ownerSymbol] => function
+    part -> plans.partIndex => selected
+    selected == (plans.KeyPart.StableScope -> plans.partIndex)
+        -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("function")) -> return }
+    selected == (plans.KeyPart.StableModule -> plans.partIndex)
+        -> if {
+            [UInt8; ~] => bytes!
+            context -> appendTypeNamespace(prepared.package, context.sourceModule, context.identities[context.sourceModule], bytes!)
+            Result<Field, TypeUniverseCaptureError>.Ok(Field { bytes: bytes! }) -> return
+        }
+    selected == (plans.KeyPart.StableName -> plans.partIndex)
+        -> if {
+            context -> functionContextFields(prepared.package) -> when {
+                Ok(fields) { Result<Field, TypeUniverseCaptureError>.Ok(fields.name) -> return }
+                Err(_) { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            }
+        }
+    selected == (plans.KeyPart.StableKind -> plans.partIndex)
+        -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("0")) -> return }
+    selected == (plans.KeyPart.StableInputOwnership -> plans.partIndex)
+        -> if {
+            Result<Field, TypeUniverseCaptureError>.Ok(unsignedDeclarationField(UInt64(function.flags % 4))) -> return
+        }
+    selected == (plans.KeyPart.StableInput -> plans.partIndex)
+        -> if { context -> stableAnnotation(prepared, inputAst, signatureIds) -> return }
+    selected == (plans.KeyPart.StableReturn -> plans.partIndex)
+        -> if {
+            function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => resultAst
+            resultAst < 0 -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            context -> stableAnnotation(prepared, resultAst, signatureIds) -> return
+        }
+    selected == (plans.KeyPart.StableAsync -> plans.partIndex)
+        -> if {
+            function.flags / 8 % 2 == 1 -> if { "async" } else { "sync" } -> textField => field
+            Result<Field, TypeUniverseCaptureError>.Ok(field) -> return
+        }
+    selected == (plans.KeyPart.StableNativeSymbol -> plans.partIndex)
+        -> if {
+            Result<Field, TypeUniverseCaptureError>.Ok(context -> typeTokenText(prepared.package, context.sourceModule, function.nameToken) -> textField) -> return
+        }
+    selected == (plans.KeyPart.StableNativeError -> plans.partIndex)
+        -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("0")) -> return }
+    selected == (plans.KeyPart.StableBlockInput -> plans.partIndex)
+        or selected == (plans.KeyPart.StableBlockResult -> plans.partIndex)
+        or selected == (plans.KeyPart.StableStream -> plans.partIndex)
+        or selected == (plans.KeyPart.StableGenericAssociatedType -> plans.partIndex)
+        or selected == (plans.KeyPart.StableSpecializedPrimary -> plans.partIndex)
+        or selected == (plans.KeyPart.StableSpecializedSecondary -> plans.partIndex)
+        or selected == (plans.KeyPart.StableSpecializedTertiary -> plans.partIndex)
+        or selected == (plans.KeyPart.StableSpecializedValue -> plans.partIndex)
+        or selected == (plans.KeyPart.StableNativeSuccess -> plans.partIndex)
+        -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("-")) -> return }
+    selected == (plans.KeyPart.StableParent -> plans.partIndex)
+        or selected == (plans.KeyPart.StableGenericPrimary -> plans.partIndex)
+        or selected == (plans.KeyPart.StableGenericSecondary -> plans.partIndex)
+        or selected == (plans.KeyPart.StableGenericTertiary -> plans.partIndex)
+        or selected == (plans.KeyPart.StableGenericTraitBound -> plans.partIndex)
+        or selected == (plans.KeyPart.StableGenericAssociatedName -> plans.partIndex)
+        or selected == (plans.KeyPart.StableInputTemplate -> plans.partIndex)
+        or selected == (plans.KeyPart.StableReturnTemplate -> plans.partIndex)
+        or selected == (plans.KeyPart.StableBlockInputTemplate -> plans.partIndex)
+        or selected == (plans.KeyPart.StableBlockResultTemplate -> plans.partIndex)
+        or selected == (plans.KeyPart.StableStreamTemplate -> plans.partIndex)
+        or selected == (plans.KeyPart.StableNativeLibrary -> plans.partIndex)
+        -> if { Result<Field, TypeUniverseCaptureError>.Ok(textField("")) -> return }
+    Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType)
+}
+
+# This collector handles explicit ordinary declarations. Generic, inferred,
+# local, block and native collectors still need their bound facts.
+# Callers must select a collector; this function never substitutes an identity.
+public captureExplicitFunctionIdentity context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
+    prepared.package.ranges[context.sourceModule] => range
+    prepared.package.symbols[range.symbolStart + context.ownerSymbol] => function
+    (function.kind != 7 and function.kind != 31) or function.flags / 32 % 2 == 1 or function.flags / 64 % 2 == 1
+        or function.flags / 128 % 2 == 1 or function.blockTypeNode >= 0 or function.blockResultTypeNode >= 0
+        -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    function.parent => parent!
+    parent! >= 0 -> while {
+        prepared.package.symbols[range.symbolStart + parent!] => ancestor
+        ancestor.kind == 7 or ancestor.kind == 31
+            -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        ancestor.parent => parent!
+    }
+    function.kind == 31 -> if {
+        0..<range.symbolCount -> each index {
+            prepared.package.symbols[range.symbolStart + index] => member
+            member.parent == function.parent and (member.kind == 30 or member.kind == 32)
+                -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+        }
+    }
+    -1 => inputAst!
+    0..<range.symbolCount -> each index {
+        prepared.package.symbols[range.symbolStart + index] => member
+        member.parent == context.ownerSymbol -> if {
+            member.kind == 32 -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+            member.kind == 35 and member.astNode == function.astNode
+                -> if {
+                    member.typeNode => inputAst!
+                    inputAst! < 0 and function.kind == 31 and function.parent >= 0
+                        -> if {
+                            prepared.package.symbols[range.symbolStart + function.parent] => implementation
+                            prepared.package -> typeIds.implOwnerTypeAst(context.sourceModule, implementation.astNode) => inputAst!
+                        }
+                }
+        }
+    }
+    [UInt8; ~] => bytes!
+    plans.stableFunctionIdentity() => header
+    header.parts -> each part {
+        context -> explicitFunctionPart(prepared, signatureIds, inputAst!, part) -> when {
+            Ok(field) { field -> appendStableFunctionField(bytes!) }
+            Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
+        }
+    }
+    context -> functionDeclarationBindings(prepared.package) -> when {
+        Ok(value) { value }
+        Err(_) { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    } => sourceFields
+    plans.stableFunctionIdentityTail() => tail
+    tail.parts -> each part {
+        part -> plans.partIndex => selected
+        selected == (plans.KeyPart.StableParameters -> plans.partIndex)
+            -> if {
+                0..<range.symbolCount -> each index {
+                    prepared.package.symbols[range.symbolStart + index] => member
+                    member.parent == context.ownerSymbol and member.kind == 35 and member.astNode != function.astNode
+                        -> if {
+                            context -> typeTokenText(prepared.package, context.sourceModule, member.nameToken) -> textField => name
+                            name -> appendStableFunctionField(bytes!)
+                            context -> stableAnnotation(prepared, member.typeNode, signatureIds) -> when {
+                                Ok(field) { field -> appendStableFunctionField(bytes!) }
+                                Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
+                            }
+                            unsignedDeclarationField(UInt64(member.flags % 4)) => ownership
+                            ownership -> appendStableFunctionField(bytes!)
+                            textField("") => template
+                            template -> appendStableFunctionField(bytes!)
+                        }
+                }
+            } else {
+                selected == (plans.KeyPart.StableEffects -> plans.partIndex)
+                    -> if {
+                        sourceFields -> each binding {
+                            (binding.part -> plans.partIndex) == (plans.KeyPart.FunctionEffects -> plans.partIndex)
+                                -> if {
+                                    binding.fields -> each field { field -> appendStableFunctionField(bytes!) }
+                                }
+                        }
+                    } else {
+                        selected != (plans.KeyPart.StableCom -> plans.partIndex)
+                            and selected != (plans.KeyPart.StableBlockParameters -> plans.partIndex)
+                            and selected != (plans.KeyPart.StableAssociated -> plans.partIndex)
+                            -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+                    }
+            }
+    }
+    Result<Field, TypeUniverseCaptureError>.Ok(Field { bytes: bytes! })
+}

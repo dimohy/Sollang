@@ -11817,9 +11817,7 @@ internal sealed partial class SemanticCompiler
         var separator = path.LastIndexOf('.');
         var requestedTrait = separator < 0 ? "" : path[..separator];
         var methodName = separator < 0 ? path : path[(separator + 1)..];
-        if (requestedTrait.Length > 0
-            && requestedTrait != trait.Name
-            && requestedTrait != CanonicalTraitName(trait))
+        if (requestedTrait.Length > 0 && !IsExplicitDynTraitDispatchTarget(dynType, path))
         {
             throw Error(target.Line, target.Column,
                 $"dyn {definition.TraitName} cannot dispatch '{path}'");
@@ -11881,7 +11879,12 @@ internal sealed partial class SemanticCompiler
     }
 
     private static string CanonicalTraitName(BoundTraitDefinition trait) =>
-        trait.ModuleName.Length == 0 ? trait.Name : trait.ModuleName + "." + trait.Name;
+        CanonicalTraitName(trait.Name, trait.ModuleName);
+
+    private static string CanonicalTraitName(string name, string moduleName) =>
+        moduleName.Length == 0 || name.StartsWith(moduleName + ".", StringComparison.Ordinal)
+            ? name
+            : moduleName + "." + name;
 
     private bool TryInferContainerFlowTarget(
         FlowExpression expression,
@@ -16097,8 +16100,7 @@ internal sealed partial class SemanticCompiler
             var requestedName = typeName[4..].Trim();
             var declarations = _program.Traits
                 .Where(trait => trait.Name == requestedName
-                    || (trait.ModuleName.Length > 0
-                        && trait.ModuleName + "." + trait.Name == requestedName))
+                    || CanonicalTraitName(trait.Name, trait.ModuleName) == requestedName)
                 .ToArray();
             if (declarations.Length == 0)
             {
@@ -16114,9 +16116,7 @@ internal sealed partial class SemanticCompiler
                 throw Error(line, column,
                     $"trait '{declaration.Name}' is internal to module '{declaration.ModuleName}'");
             }
-            var canonicalName = declaration.ModuleName.Length == 0
-                ? declaration.Name
-                : declaration.ModuleName + "." + declaration.Name;
+            var canonicalName = CanonicalTraitName(declaration.Name, declaration.ModuleName);
             return _types.GetOrAddDynTrait(canonicalName);
         }
         if (typeName.StartsWith("ref ", StringComparison.Ordinal))
@@ -19305,8 +19305,7 @@ internal sealed partial class SemanticCompiler
             var traitName = _types.GetDynTrait(type).TraitName;
             var trait = _traits.Values.FirstOrDefault(candidate =>
                 candidate.Name == traitName
-                || (candidate.ModuleName.Length > 0
-                    && candidate.ModuleName + "." + candidate.Name == traitName));
+                || CanonicalTraitName(candidate) == traitName);
             if (trait is not null)
             {
                 EnsureTraitVisible(trait, line, column);

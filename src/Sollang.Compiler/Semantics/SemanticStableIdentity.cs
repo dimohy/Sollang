@@ -148,86 +148,167 @@ internal static class SemanticStableIdentity
         string? parentIdentity = null)
     {
         var builder = new StringBuilder(256);
-        Append(builder, parentIdentity is null ? "function" : "local");
-        Append(builder, parentIdentity ?? "");
-        Append(builder, function.ModuleName);
-        Append(builder, function.Name);
-        Append(builder, ((int)function.Kind).ToString(CultureInfo.InvariantCulture));
-        Append(builder, function.InputType is { } input ? Type(types, input) : "-");
-        Append(builder, ((int)function.InputOwnership).ToString(CultureInfo.InvariantCulture));
-        Append(builder, Type(types, function.ReturnType));
-        Append(builder, function.BlockInputType is { } blockInput ? Type(types, blockInput) : "-");
-        Append(builder, function.BlockResultType is { } blockResult ? Type(types, blockResult) : "-");
-        Append(builder, function.StreamElementType is { } streamElement ? Type(types, streamElement) : "-");
-        Append(builder, function.IsAsync ? "async" : "sync");
-        Append(builder, function.GenericParameterName ?? "");
-        Append(builder, function.SecondaryGenericParameterName ?? "");
-        Append(builder, function.TertiaryGenericParameterName ?? "");
-        Append(builder, function.GenericTraitBound ?? "");
-        Append(builder, function.GenericAssociatedTypeName ?? "");
-        Append(builder, function.GenericAssociatedTypeConstraint is { } constraint
-            ? Type(types, constraint)
-            : "-");
-        Append(builder, function.SpecializedType is { } specialized
-            ? Type(types, specialized)
-            : "-");
-        Append(builder, function.SpecializedSecondaryType is { } secondary
-            ? Type(types, secondary)
-            : "-");
-        Append(builder, function.SpecializedTertiaryType is { } tertiary
-            ? Type(types, tertiary)
-            : "-");
-        Append(builder, function.SpecializedValue?.ToString(CultureInfo.InvariantCulture) ?? "-");
-        Append(builder, function.InputTypeTemplate ?? "");
-        Append(builder, function.ReturnTypeTemplate ?? "");
-        Append(builder, function.BlockInputTypeTemplate ?? "");
-        Append(builder, function.BlockResultTypeTemplate ?? "");
-        Append(builder, function.StreamElementTypeTemplate ?? "");
-        Append(builder, function.NativeLibrary ?? "");
-        Append(builder, function.NativeSymbol ?? "");
-        Append(
-            builder,
-            ((int)function.NativeError).ToString(CultureInfo.InvariantCulture));
-        Append(
-            builder,
-            function.NativeSuccessType is { } nativeSuccess
-                ? Type(types, nativeSuccess)
-                : "-");
-        if (function.Com is { } com)
+        foreach (var part in Sollang.Compiler.Shared.CodegenCacheKeyPolicy.StableFunctionIdentity().Parts
+                     .Concat(Sollang.Compiler.Shared.CodegenCacheKeyPolicy.StableFunctionIdentityTail().Parts))
         {
-            Append(builder, ((int)com.Operation).ToString(CultureInfo.InvariantCulture));
-            Append(builder, com.InterfaceType);
-            Append(builder, com.ClassId);
-            Append(builder, com.InterfaceId);
-            Append(builder, com.Server ?? "");
-            Append(builder, ((int)com.Apartment).ToString(CultureInfo.InvariantCulture));
-            Append(builder, com.VtableSlot.ToString(CultureInfo.InvariantCulture));
-            Append(builder, com.ReceiverInterfaceType ?? "");
-        }
-        foreach (var parameter in function.AdditionalParameters ?? [])
-        {
-            Append(builder, parameter.Name);
-            Append(builder, Type(types, parameter.Type));
-            Append(builder, ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture));
-            Append(builder, parameter.TypeTemplate ?? "");
-        }
-        foreach (var parameter in function.AdditionalBlockParameters ?? [])
-        {
-            Append(builder, parameter.Name);
-            Append(builder, Type(types, parameter.Type));
-            Append(builder, parameter.TypeTemplate ?? "");
-        }
-        foreach (var associated in (function.ImplAssociatedTypes
-                     ?? new Dictionary<string, TypeId>(StringComparer.Ordinal))
-                 .OrderBy(static pair => pair.Key, StringComparer.Ordinal))
-        {
-            Append(builder, associated.Key);
-            Append(builder, Type(types, associated.Value));
-        }
-        foreach (var effect in (function.Effects ?? new HashSet<string>(StringComparer.Ordinal))
-                     .Order(StringComparer.Ordinal))
-        {
-            Append(builder, effect);
+            switch (part)
+            {
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableScope:
+                    Append(builder, parentIdentity is null ? "function" : "local");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableParent:
+                    Append(builder, parentIdentity ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableModule:
+                    Append(builder, function.ModuleName);
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableName:
+                    Append(builder, function.Name);
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableKind:
+                    Append(builder, ((int)function.Kind).ToString(CultureInfo.InvariantCulture));
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableInput:
+                    Append(builder, function.InputType is { } input ? Type(types, input) : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableInputOwnership:
+                    Append(builder, ((int)function.InputOwnership).ToString(CultureInfo.InvariantCulture));
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableReturn:
+                    Append(builder, Type(types, function.ReturnType));
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableBlockInput:
+                    Append(builder, function.BlockInputType is { } blockInput ? Type(types, blockInput) : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableBlockResult:
+                    Append(builder, function.BlockResultType is { } blockResult ? Type(types, blockResult) : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableStream:
+                    Append(builder, function.StreamElementType is { } streamElement ? Type(types, streamElement) : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableAsync:
+                    Append(builder, function.IsAsync ? "async" : "sync");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableGenericPrimary:
+                    Append(builder, function.GenericParameterName ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableGenericSecondary:
+                    Append(builder, function.SecondaryGenericParameterName ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableGenericTertiary:
+                    Append(builder, function.TertiaryGenericParameterName ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableGenericTraitBound:
+                    Append(builder, function.GenericTraitBound ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableGenericAssociatedName:
+                    Append(builder, function.GenericAssociatedTypeName ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableGenericAssociatedType:
+                    Append(builder, function.GenericAssociatedTypeConstraint is { } constraint
+                        ? Type(types, constraint)
+                        : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableSpecializedPrimary:
+                    Append(builder, function.SpecializedType is { } specialized
+                        ? Type(types, specialized)
+                        : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableSpecializedSecondary:
+                    Append(builder, function.SpecializedSecondaryType is { } secondary
+                        ? Type(types, secondary)
+                        : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableSpecializedTertiary:
+                    Append(builder, function.SpecializedTertiaryType is { } tertiary
+                        ? Type(types, tertiary)
+                        : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableSpecializedValue:
+                    Append(builder, function.SpecializedValue?.ToString(CultureInfo.InvariantCulture) ?? "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableInputTemplate:
+                    Append(builder, function.InputTypeTemplate ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableReturnTemplate:
+                    Append(builder, function.ReturnTypeTemplate ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableBlockInputTemplate:
+                    Append(builder, function.BlockInputTypeTemplate ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableBlockResultTemplate:
+                    Append(builder, function.BlockResultTypeTemplate ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableStreamTemplate:
+                    Append(builder, function.StreamElementTypeTemplate ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableNativeLibrary:
+                    Append(builder, function.NativeLibrary ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableNativeSymbol:
+                    Append(builder, function.NativeSymbol ?? "");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableNativeError:
+                    Append(
+                        builder,
+                        ((int)function.NativeError).ToString(CultureInfo.InvariantCulture));
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableNativeSuccess:
+                    Append(
+                        builder,
+                        function.NativeSuccessType is { } nativeSuccess
+                            ? Type(types, nativeSuccess)
+                            : "-");
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableCom:
+                    if (function.Com is { } com)
+                    {
+                        Append(builder, ((int)com.Operation).ToString(CultureInfo.InvariantCulture));
+                        Append(builder, com.InterfaceType);
+                        Append(builder, com.ClassId);
+                        Append(builder, com.InterfaceId);
+                        Append(builder, com.Server ?? "");
+                        Append(builder, ((int)com.Apartment).ToString(CultureInfo.InvariantCulture));
+                        Append(builder, com.VtableSlot.ToString(CultureInfo.InvariantCulture));
+                        Append(builder, com.ReceiverInterfaceType ?? "");
+                    }
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableParameters:
+                    foreach (var parameter in function.AdditionalParameters ?? [])
+                    {
+                        Append(builder, parameter.Name);
+                        Append(builder, Type(types, parameter.Type));
+                        Append(builder, ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture));
+                        Append(builder, parameter.TypeTemplate ?? "");
+                    }
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableBlockParameters:
+                    foreach (var parameter in function.AdditionalBlockParameters ?? [])
+                    {
+                        Append(builder, parameter.Name);
+                        Append(builder, Type(types, parameter.Type));
+                        Append(builder, parameter.TypeTemplate ?? "");
+                    }
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableAssociated:
+                    foreach (var associated in (function.ImplAssociatedTypes
+                                 ?? new Dictionary<string, TypeId>(StringComparer.Ordinal))
+                             .OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+                    {
+                        Append(builder, associated.Key);
+                        Append(builder, Type(types, associated.Value));
+                    }
+                    break;
+                case Sollang.Compiler.Shared.CodegenKeyPart.StableEffects:
+                    foreach (var effect in (function.Effects ?? new HashSet<string>(StringComparer.Ordinal))
+                                 .Order(StringComparer.Ordinal))
+                    {
+                        Append(builder, effect);
+                    }
+                    break;
+                default:
+                    throw new InvalidOperationException($"unsupported stable function identity part: {part}");
+            }
         }
         return builder.ToString();
     }

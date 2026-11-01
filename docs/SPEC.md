@@ -2054,6 +2054,10 @@ Cat { value: 1 } -> dyn<Speak> => speaker!
 speaker! -> Speak.sound => value
 ```
 
+Namespaced trait declarations retain one canonical qualified name in dynamic
+type metadata and stable identities. Both the short trait qualifier and its
+canonical qualified name select the same dynamic dispatch target.
+
 `dyn<Trait>` is an affine two-pointer value containing an erased data pointer
 and a vtable pointer. Slot 0 is the erased drop function. Subsequent slots are
 trait methods in declaration order. Conversion allocates storage for the
@@ -6272,6 +6276,15 @@ Current backend:
   and their actual Ok/Err payload annotations. Label and function-frame lengths
   count UTF-16 code units even though stored field bytes are UTF-8. Display names
   and arena coordinates do not replace these structural identities.
+  Bound function identity framing follows the compiled header and tail part
+  plans shared by C# and SLG. The header contains the complete fixed signature
+  facts; the tail retains COM metadata, ordered additional parameters and block
+  parameters, ordinal associated types and ordinal effects. These streams have
+  no hash-domain prefix. Ordinary explicit declarations and concrete impl methods
+  derive their name, owner, resolved types, ownership and effects from current
+  preparation, rather than accepting an externally supplied C# function string.
+  Missing collectors for other binding modes remain incomplete cache integration;
+  source hashes and ABI-scoped names must never substitute for those facts.
   Parser builtin type-name classification uses one compiled C# catalog shared
   with parser source generation and the generated SLG policy. This classification
   preserves parser spelling and qualification decisions; it is distinct from
