@@ -1984,6 +1984,9 @@ with the same spelling retain their declared input and callback contracts.
 Binding the canonical intrinsic declaration does not turn its callback into
 an ordinary value argument: later call normalization preserves the separate
 source and callback operands, including inside conditional regions.
+Each intrinsic callback invocation retains its own concrete generic binding.
+Materializing a user-defined block call must not replace or discard bindings
+belonging to intrinsic callback declarations.
 
 A result-producing `parallel` or `tryParallel` call derives its result element
 from the concrete terminal producer in the callback body. A direct resolved

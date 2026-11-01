@@ -63,6 +63,10 @@ def main():
     inputs = {str(path.resolve()): sha(path) for path in paths}
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
+    product = output / ('compiler.exe' if args.cli else 'emitter.exe')
+    def fingerprint(hashes):
+        data = dict(inputs=hashes, optimization='O2', jobs=24, target='windows-x64')
+        return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest().upper()
     with VerificationContractLease(list(map(Path, inputs))):
         result = dict(schemaVersion=1, status='running', completed=0, total=1,
                       inputHashes=inputs, claimsGoalComplete=False,
@@ -72,10 +76,18 @@ def main():
         error = None
         try:
             done = execution.run([str(compiler), 'build', str(wrapper), *map(str, support), *map(str, sources),
-                                  '-o', str(output / 'emitter.exe'), '--target', 'windows-x64',
+                                  '-o', str(product), '--target', 'windows-x64',
                                   '--llvm', str(llvm), '--jobs', '24', '-O2'],
                                  output / 'build', timeout=budget['timeoutSeconds'])
             assert done.returncode == 0 and not done.stderr, done.stdout[-2000:] + done.stderr
+            if args.cli:
+                final_inputs = {path: sha(Path(path)) for path in inputs}
+                assert final_inputs == inputs, 'COMPILER_SOURCE_INPUT_CHANGED'
+                result.update(compilerSha256=sha(product), inputHashesStart=inputs,
+                              inputHashesEnd=final_inputs, inputFingerprint=fingerprint(inputs),
+                              finalInputFingerprint=fingerprint(final_inputs),
+                              inputFingerprintKind='sha256-canonical-input-json-v1',
+                              compilerProduct=str(product))
             result.update(status='passed', completed=1,
                           cases=[dict(id='current-source-emitter-build', passed=True)])
         except BaseException as exc:
