@@ -1609,7 +1609,7 @@ preIrTextIndexArgument prepared: ref semanticContext.SemanticSnapshot, types: re
     argumentType.kind == 1 and argumentType.origin == 1 and argumentType.symbol == 13
 }
 
-resolveInterpolationCallReturnType prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], lexicalTypes: ref [Int; ~], memberTypes: ref [Int; ~], indexedTypes: ref [Int; ~], literalTypes: mut [Int; ~], callTypes: ref [Int; ~], arrayFacts: mut [InterpolationArrayFact; ~], sourceModule: Int, nodeIndex: Int, targetSources: mut [Int; ~], targetSymbols: mut [Int; ~], methodDecisions: mut [InterpolationMethodDecision; ~], arguments: mut [ResolvedInterpolationCallArgument; ~] -> Int {
+resolveInterpolationCallReturnType prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], inferredReturnTypes: ref [Int; ~], lexicalTypes: ref [Int; ~], memberTypes: ref [Int; ~], indexedTypes: ref [Int; ~], literalTypes: mut [Int; ~], callTypes: ref [Int; ~], arrayFacts: mut [InterpolationArrayFact; ~], sourceModule: Int, nodeIndex: Int, targetSources: mut [Int; ~], targetSymbols: mut [Int; ~], methodDecisions: mut [InterpolationMethodDecision; ~], arguments: mut [ResolvedInterpolationCallArgument; ~] -> Int {
     prepared.interpolations[nodeIndex] => call
     (call.kind != 6 and call.kind != 8 and call.kind != 10) or sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
         -> if { -1 -> return }
@@ -1678,12 +1678,17 @@ resolveInterpolationCallReturnType prepared: ref semanticContext.SemanticSnapsho
         -> if { function.typeNode => returnTypeAst! }
     returnTypeAst! < 0 and (parameterTypes! -> len) == 0
         -> if { function.typeNode => returnTypeAst! }
-    returnTypeAst! < 0 or returnTypeAst! >= range.astCount
-        -> if { -1 -> return }
-    referenceIndexByTypeAst[range.astStart + returnTypeAst!] => returnReference
-    returnReference < 0 or references[returnReference].status != 0
-        -> if { -1 -> return }
-    references[returnReference].typeId => returnType
+    -1 => returnType!
+    returnTypeAst! < 0 -> if {
+        inferredReturnTypes[range.symbolStart + target.symbol] => returnType!
+    } else {
+        returnTypeAst! >= range.astCount -> if { -1 -> return }
+        referenceIndexByTypeAst[range.astStart + returnTypeAst!] => returnReference
+        returnReference < 0 or references[returnReference].status != 0
+            -> if { -1 -> return }
+        references[returnReference].typeId => returnType!
+    }
+    returnType! => returnType
     returnType < 0 or returnType >= (types -> len)
         -> if { -1 -> return }
     [Int; ~] => actualTypes!
@@ -2489,6 +2494,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
             eachRoleSource! + 1 => eachRoleSource!
         }
 
+    publishInferredFunctionReturnTypes(prepared, types!, expressions!, expressionIndexByAst!) => interpolationInferredReturns
     # Commit each interpolation name to the same materialized lexical type
     # used by ordinary name inference before Typed IR is lowered.
     [Int; ~] => interpolationLexicalTypeByNode!
@@ -2611,7 +2617,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
                             }
                         member.kind == 6 or member.kind == 8 or member.kind == 10
                             -> if {
-                                resolveInterpolationCallReturnType(prepared, types!, references!, referenceIndexByTypeAst!, interpolationLexicalTypeByNode!, interpolationMemberTypeByNode!, interpolationIndexedTypeByNode!, interpolationContextualStructTypeByNode!, interpolationCallTypeByNode!, interpolationArrayByNode!, interpolationRange.sourceModule, memberNodeIndex!, interpolationCallSourceByNode!, interpolationCallSymbolByNode!, interpolationMethodByNode!, interpolationCallArguments!) => callType
+                                resolveInterpolationCallReturnType(prepared, types!, references!, referenceIndexByTypeAst!, interpolationInferredReturns, interpolationLexicalTypeByNode!, interpolationMemberTypeByNode!, interpolationIndexedTypeByNode!, interpolationContextualStructTypeByNode!, interpolationCallTypeByNode!, interpolationArrayByNode!, interpolationRange.sourceModule, memberNodeIndex!, interpolationCallSourceByNode!, interpolationCallSymbolByNode!, interpolationMethodByNode!, interpolationCallArguments!) => callType
                                 callType >= 0 -> if { callType => interpolationCallTypeByNode![memberNodeIndex!] }
                             }
                         member.kind == 5 and member.operand0 >= 0

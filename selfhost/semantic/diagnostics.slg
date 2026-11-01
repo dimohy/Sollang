@@ -985,6 +985,7 @@ public firstBindingDeclarationDiagnostic prepared: ref semanticContext.SemanticS
     # identity with inference, including expression bodies and empty Unit.
     prepared -> expressionTypeIds.indexInferredFunctionBodyValues => inferredBodyValues
     prepared.package -> expressionTypeIds.continuationFlags => signatureContinuationByAst
+    prepared.package -> expressionTypeIds.indexContextualRecords => signatureChildren
     [Int; ~] => signatureExpressionIndexByAst!
     prepared.package.nodes -> each node { signatureExpressionIndexByAst! -> push(-1) }
     0 => signatureExpression!
@@ -1011,7 +1012,7 @@ public firstBindingDeclarationDiagnostic prepared: ref semanticContext.SemanticS
                             typeByAst![signatureRange.astStart + inferredFunction.astNode] < 0 => unresolved!
                             prepared.package -> expressionTypeIds.terminalWhenAst(signatureRange.sourceModule, bodyAst) => choiceAst
                             choiceAst >= 0 -> if {
-                                prepared.package -> expressionTypeIds.whenResultContract(resolved.expressions, signatureExpressionIndexByAst!, signatureContinuationByAst, resolved.types -> typeIds.builtinTypeId(0), signatureRange.sourceModule, choiceAst) => choice
+                                prepared.package -> expressionTypeIds.whenResultContract(resolved.expressions, signatureExpressionIndexByAst!, signatureChildren, signatureContinuationByAst, resolved.types -> typeIds.builtinTypeId(0), signatureRange.sourceModule, choiceAst) => choice
                                 choice.continuingArms > 0 and not choice.complete
                                     -> if { true => unresolved! }
                             }
@@ -1356,7 +1357,7 @@ mutableInputTypeAdmitted prepared: ref semanticContext.SemanticSnapshot, typeId:
 # Inferred top-level signatures belong to one external consuming scope. Calls
 # from the function itself do not count; repeated calls by one owner count once.
 # Local signatures are constrained in their lexical scope instead.
-public firstInferredFunctionConsumerDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+public firstInferredFunctionConsumerDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> SignatureTypeDiagnostic {
     prepared.package.ranges -> each range {
         0 => functionIndex!
         functionIndex! < range.symbolCount -> while {
@@ -1391,6 +1392,31 @@ public firstInferredFunctionConsumerDiagnostic prepared: ref semanticContext.Sem
                                 }
                             callIndex! + 1 => callIndex!
                         }
+                    prepared.interpolationRanges -> each fragments {
+                        fragments.nodeStart => fragment!
+                        fragment! < fragments.nodeStart + fragments.nodeCount and not multipleOwners!
+                            -> while {
+                                resolved.interpolationCallSourceByNode[fragment!] == range.sourceModule
+                                    and resolved.interpolationCallSymbolByNode[fragment!] == functionIndex!
+                                    -> if {
+                                        prepared.package.ranges[fragments.sourceModule] => callerRange
+                                        prepared.package.nodes -> interpolationStringAst(callerRange, prepared.interpolations, fragment!) => ownerAst!
+                                        false => ownerFound!
+                                        ownerAst! >= 0 and not ownerFound! -> while {
+                                            prepared.package.nodes[callerRange.astStart + ownerAst!] => owner
+                                            owner.kind == 7 or owner.kind == 31 -> if { true => ownerFound! } else { owner.parent => ownerAst! }
+                                        }
+                                        not (fragments.sourceModule == range.sourceModule and ownerAst! == function.astNode)
+                                            -> if {
+                                                ownerAst! < 0 -> if { -1 } else { callerRange.astStart + ownerAst! } => ownerIdentity
+                                                firstOwner! == -2 -> if { ownerIdentity => firstOwner! } else {
+                                                    firstOwner! != ownerIdentity -> if { true => multipleOwners! }
+                                                }
+                                            }
+                                    }
+                                fragment! + 1 => fragment!
+                            }
+                    }
                     firstOwner! == -2 or multipleOwners! -> if {
                         multipleOwners! -> if { 7 } else { 6 } => code
                         SignatureTypeDiagnostic { code: code, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: -1, nameToken: function.nameToken, genericToken: -1 } -> return

@@ -1,0 +1,147 @@
+--- before/selfhost/semantic/expression_type_ids_paths.slg
++++ after/selfhost/semantic/expression_type_ids_paths.slg
+@@ -63,6 +63,44 @@
+         }
+     }
+     values!
++}
++
++# Declaration inference precedes the choice of ordinary or interpolated call
++# syntax. Reuse completed declarations; otherwise publish the complete body
++# contract. Consumer admission remains a separate signature diagnostic.
++publishInferredFunctionReturnTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> [Int; ~] {
++    prepared -> indexInferredFunctionBodyValues => bodies
++    [Int; ~] => results!
++    prepared.package.symbols -> each symbol { results! -> push(-1) }
++    prepared.package.ranges -> each range {
++        0..<range.symbolCount -> each symbolIndex {
++            prepared.package.symbols[range.symbolStart + symbolIndex] => function
++            function.kind == 7 and function.astNode >= 0
++                and function.flags / 32 % 2 == 1 and function.flags / 4 % 2 == 0
++                -> if {
++                    range.astStart + function.astNode => declaration
++                    expressionIndexByAst[declaration] => existing!
++                    -1 => result!
++                    existing! >= 0 -> if {
++                        expressions[existing!].status == 0 -> if { expressions[existing!].typeId => result! }
++                    }
++                    result! < 0 and bodies[declaration] >= 0 -> if {
++                        inferredSignatureContractTypeId(prepared, types, expressions, expressionIndexByAst, range.sourceModule, bodies[declaration]) => result!
++                        result! >= 0 and not types[result!].containsParameter
++                            -> if {
++                                ExpressionTypeId { sourceModule: range.sourceModule, astNode: function.astNode, typeId: result!, status: 0 } => fact
++                                existing! < 0 -> if {
++                                    expressions -> len => existing!
++                                    expressions -> push(fact)
++                                    existing! => expressionIndexByAst[declaration]
++                                } else { fact => expressions[existing!] }
++                            } else { -1 => result! }
++                    }
++                    result! => results![range.symbolStart + symbolIndex]
++                }
++        }
++    }
++    results!
+ }
+ 
+ # Resolve member, index, stream, branch, and late container paths as one
+@@ -272,44 +310,43 @@
+ 
+ # One result contract serves both value publication and private signature
+ # admission. Provisional expression types never establish arm agreement.
+-public whenResultContract package: ref analysis.PackageAnalysis, expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], continuationByAst: ref [Bool; ~], unitTypeId: Int, sourceIndex: Int, whenAst: Int -> WhenResultContract {
++public whenResultContract package: ref analysis.PackageAnalysis, expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], index: ref ContextualRecordIndex, continuationByAst: ref [Bool; ~], unitTypeId: Int, sourceIndex: Int, whenAst: Int -> WhenResultContract {
+     package.ranges[sourceIndex] => range
+     -1 => joinedType!
+     0 => continuingArms!
+     0 => armCount!
+     true => allArmsTyped!
+-    0 => armAst!
+-    armAst! < range.astCount -> while {
+-        package.nodes[range.astStart + armAst!] => arm
+-        (arm.kind == 58 or arm.kind == 43) and arm.parent == whenAst
++    index.firstChild[range.astStart + whenAst] => globalArm!
++    globalArm! >= 0 -> while {
++        globalArm! - range.astStart => armAst
++        package.nodes[globalArm!] => arm
++        arm.kind == 58 or arm.kind == 43
+             -> if {
+                 armCount! + 1 => armCount!
+-                arm.kind == 43 -> if { armAst! } else { -1 } => bodyAst!
+-                0 => bodySearch!
+-                bodySearch! < range.astCount -> while {
+-                    package.nodes[range.astStart + bodySearch!] => candidateBody
++                arm.kind == 43 -> if { armAst } else { -1 } => bodyAst!
++                index.firstChild[globalArm!] => bodySearch!
++                bodySearch! >= 0 -> while {
++                    package.nodes[bodySearch!] => candidateBody
+                     candidateBody.kind == 43
+-                        and candidateBody.parent == armAst!
+                         -> if {
+-                            bodySearch! => bodyAst!
++                            bodySearch! - range.astStart => bodyAst!
+                         }
+-                    bodySearch! + 1 => bodySearch!
++                    index.nextChild[bodySearch!] => bodySearch!
+                 }
+                 # Expression arms store their result directly under the
+                 # arm, alongside the pattern. Block arms own a body node.
+-                bodyAst! < 0 -> if { armAst! => bodyAst! }
++                bodyAst! < 0 -> if { armAst => bodyAst! }
+                 -1 => valueAst!
+                 UIntSize(0) => valueStart!
+-                0 => valueSearch!
+-                valueSearch! < range.astCount -> while {
+-                    package.nodes[range.astStart + valueSearch!] => candidateValue
+-                    candidateValue.parent == bodyAst!
+-                        and (valueAst! < 0 or candidateValue.start >= valueStart!)
++                index.firstChild[range.astStart + bodyAst!] => valueSearch!
++                valueSearch! >= 0 -> while {
++                    package.nodes[valueSearch!] => candidateValue
++                    valueAst! < 0 or candidateValue.start >= valueStart!
+                         -> if {
+-                            valueSearch! => valueAst!
++                            valueSearch! - range.astStart => valueAst!
+                             candidateValue.start => valueStart!
+                         }
+-                    valueSearch! + 1 => valueSearch!
++                    index.nextChild[valueSearch!] => valueSearch!
+                 }
+                 bodyAst! < 0 -> if { false => allArmsTyped! } else {
+                     continuationByAst[range.astStart + bodyAst!] -> if {
+@@ -335,7 +372,7 @@
+                     }
+                 }
+             }
+-        armAst! + 1 => armAst!
++        index.nextChild[globalArm!] => globalArm!
+     }
+     WhenResultContract { typeId: joinedType!, continuingArms: continuingArms!, complete: armCount! > 0 and allArmsTyped! and joinedType! >= 0 }
+ }
+@@ -366,7 +403,7 @@
+     -1
+ }
+ 
+-resolveWhenResultTypes package: ref analysis.PackageAnalysis, expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], continuationByAst: ref [Bool; ~], unitTypeId: Int -> Bool {
++resolveWhenResultTypes package: ref analysis.PackageAnalysis, expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], index: ref ContextualRecordIndex, continuationByAst: ref [Bool; ~], unitTypeId: Int -> Bool {
+     false => changed!
+     0 => sourceIndex!
+     sourceIndex! < (package.ranges -> len) -> while {
+@@ -375,7 +412,7 @@
+         whenAst! < range.astCount -> while {
+             package.nodes[range.astStart + whenAst!] => selection
+             selection.kind == 56 or selection.kind == 57 -> if {
+-                package -> whenResultContract(expressions, expressionIndexByAst, continuationByAst, unitTypeId, sourceIndex!, whenAst!) => contract
++                package -> whenResultContract(expressions, expressionIndexByAst, index, continuationByAst, unitTypeId, sourceIndex!, whenAst!) => contract
+                 contract.typeId => joinedType
+                 contract.complete
+                     -> if {
+@@ -2253,7 +2290,7 @@
+         patternTypesChanged -> if { true => pathChanged! }
+         resolveDeclaredNumericReturnLiterals(prepared, types, references, expressions, expressionIndexByAst) => returnLiteralsChanged
+         returnLiteralsChanged -> if { true => pathChanged! }
+-        prepared.package -> resolveWhenResultTypes(expressions, expressionIndexByAst, continuationByAst, types -> typeIds.builtinTypeId(0)) => whenResultsChanged
++        prepared.package -> resolveWhenResultTypes(expressions, expressionIndexByAst, contextualRecords, continuationByAst, types -> typeIds.builtinTypeId(0)) => whenResultsChanged
+         whenResultsChanged -> if { true => pathChanged! }
+         resolveMutableRebindNumericTypes(prepared, types, mutableOwners, bindingValues, expressions, expressionIndexByAst, contextualRecords, expectedContextByAst) => mutableRebindChanged
+         resolveContextualNumericLiteralTypesWithExpectedContext(prepared, types, expressions, expressionIndexByAst, expectedContextByAst) => contextualNumericChanged
