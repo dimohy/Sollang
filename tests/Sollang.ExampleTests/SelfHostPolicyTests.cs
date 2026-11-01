@@ -264,6 +264,28 @@ internal static class SelfHostPolicyTests
                 .Append(spelling).Append("\") -> println\n");
             expected.Append(label).Append('\n').Append(accepted ? "true" : "false").Append('\n');
         }
+        var boxPredicate = compiler.GetType("Sollang.Compiler.Semantics.SemanticTypeRegistrationNames", true)!
+            .GetMethod("BoxName", BindingFlags.Public | BindingFlags.Static)!;
+        var primitiveBoxes = ((string)types[2].GetMethod("PrimitiveBoxNames")!.Invoke(null, null)!).Split('|');
+        var declarations = new[] { "BoxExcludedStructNames", "BoxExcludedNominalNames" }
+            .SelectMany(name => ((string)types[2].GetMethod(name)!.Invoke(null, null)!).Split('|'))
+            .Concat(["Local", "", "sys.file.FileExtra", "SYS.FILE.FILE"]);
+        foreach (var declaration in declarations)
+        foreach (var name in new[] { "Int", "Local" })
+        foreach (var structure in new[] { false, true })
+        foreach (var enumeration in new[] { false, true })
+            AppendBoxCase(name, structure, enumeration, declaration);
+        foreach (var name in primitiveBoxes)
+            AppendBoxCase(name, false, false, "");
+        void AppendBoxCase(string name, bool structure, bool enumeration, string declaration)
+        {
+            var accepted = (bool)boxPredicate.Invoke(null, [name, structure, enumeration, declaration])!;
+            var flags = (structure ? "true" : "false") + ", " + (enumeration ? "true" : "false");
+            var label = "SemanticTypeRegistrationNames.BoxName:" + name + ":" + flags + ":" + declaration;
+            source.Append("    \"").Append(label).Append("\" -> println\n    policy2.boxName(\"")
+                .Append(name).Append("\", ").Append(flags).Append(", \"").Append(declaration).Append("\") -> println\n");
+            expected.Append(label).Append('\n').Append(accepted ? "true" : "false").Append('\n');
+        }
         source.Append("}\n");
         var sourcePath = Path.Combine(directory, "runtime-policy-probe.slg");
         File.WriteAllText(sourcePath, source.ToString());

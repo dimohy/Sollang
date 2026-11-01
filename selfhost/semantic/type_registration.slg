@@ -10,21 +10,6 @@ import sys.file as file
 public enum BoxRegistrationError { PrimitiveName, MissingDeclaration, InvalidType }
 public struct RegisteredBoxes { public ids: [Int; ~] }
 
-containsPolicyName table: Text, name: Text -> Bool {
-    UIntSize(0) => start!
-    UIntSize(0) => cursor!
-    cursor! <= (table -> len) -> while {
-        cursor! == (table -> len) or (table -> byte(cursor!)) == '|'
-            -> if {
-                (table -> slice(start!, cursor! - start!)) == name
-                    -> if { true -> return }
-                cursor! + 1 => start!
-            }
-        cursor! + 1 => cursor!
-    }
-    false
-}
-
 appendRegisteredBox types: mut [typeIds.SemanticType; ~], ids: mut [Int; ~], available: mut [Int; ~], next: ref [Int; ~], element: Int -> Unit {
     available[element] => identity!
     identity! >= 0 -> if {
@@ -73,7 +58,7 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
                 symbol < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.PrimitiveName) -> return }
                 types -> typeIds.builtinTypeId(symbol) => element
                 element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.InvalidType) -> return }
-                policy.canRegisterBoxName(true, false, false, false, false)
+                policy.boxName(primitives -> slice(start!, cursor! - start!), false, false, "")
                     -> if {
                         types -> appendRegisteredBox(ids!, available!, next!, element)
                     }
@@ -108,9 +93,7 @@ public registerNamedBoxes package: ref analysis.PackageAnalysis, types: mut [typ
                         modules.appendDeclarationNameBytes(text, identities[source!], range, package.tokens, package.symbols, symbol!, name!)
                         name! -> file.borrowBytes => bytes
                         bytes -> slice(0, bytes -> len) => qualified
-                        policy.boxExcludedStructNames() -> containsPolicyName(qualified) => excludedStructure
-                        policy.boxExcludedNominalNames() -> containsPolicyName(qualified) => excludedNominal
-                        policy.canRegisterBoxName(false, kind == 3, kind == 4, excludedStructure, excludedNominal)
+                        policy.boxName(qualified, kind == 3, kind == 4, qualified)
                             -> if {
                                 declared![range.symbolStart + symbol!] => element
                                 element < 0 -> if { Result<RegisteredBoxes, BoxRegistrationError>.Err(BoxRegistrationError.MissingDeclaration) -> return }
