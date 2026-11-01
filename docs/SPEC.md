@@ -6318,6 +6318,11 @@ Current backend:
   parameter types and recording concrete specialization types. Generated names
   use the registered semantic argument identities, never IR offsets or ABI names.
   Concrete type uses extend the declaration registry in semantic binding order.
+  Standard library sources use ordinal UTF-16 relative-path order before binding.
+  Array receiver lookup records its readonly slice owner after the receiver and
+  before additional arguments; async calls record the corresponding Task type.
+  Integer value generic calls specialize signature types with their actual value
+  through the same typed specialization rules used by function lowering.
   Ordered product field recipes preserve exact labels and field types without
   allocating reference TypeIds for their internal field-list nodes.
   A repeated concrete call contributes the same function identity once.

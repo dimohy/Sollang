@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--stable-call-input-output', type=Path)
     parser.add_argument('--declaration-type-uses', action='store_true')
     parser.add_argument('--stable-registration-output', type=Path)
+    parser.add_argument('--stable-body-registration-output', type=Path)
     parser.add_argument('--stable-function-module')
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
@@ -50,6 +51,7 @@ def main():
     assert not args.declaration_type_uses or (args.include_stable_identities and args.stable_candidate_file), 'declaration uses require stable identities and ordered type candidates'
     assert not args.declaration_type_uses or not (args.verify_source or args.emitter), 'declaration uses require bound observation mode'
     assert not args.stable_registration_output or args.declaration_type_uses, 'registration comparison requires declaration uses'
+    assert not args.stable_body_registration_output or (args.include_stable_identities and not args.declaration_type_uses), 'body registration comparison requires whole-program stable identities'
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -77,6 +79,8 @@ def main():
         inputs.append(args.stable_call_input_output)
     if args.stable_registration_output:
         inputs.append(args.stable_registration_output)
+    if args.stable_body_registration_output:
+        inputs.append(args.stable_body_registration_output)
     sources = []
     if args.emitter or args.verify_source:
         assert baseline, 'paired format proof requires the frozen CSharp reference'
@@ -162,6 +166,17 @@ def main():
                                 scope='Declaration registry followed by explicit ordered concrete type uses; whole-compilation body traversal is separate.')
                     elif args.include_stable_identities:
                         assert row['types'] and row['functions'] and all(r['identity'] for r in row['functions'])
+                        if args.stable_body_registration_output:
+                            lines = args.stable_body_registration_output.read_text(encoding='utf-8-sig').splitlines()
+                            assert all(line == 'utf16:4' or line.startswith(('registered-body:', 'declaration-next:', 'unresolved-plans:', 'value-calls:', 'use:')) for line in lines), 'NATIVE_BODY_REGISTRATION_CAPTURE_ERROR'
+                            assert [int(line.split(':')[1]) for line in lines if line.startswith('unresolved-plans:')] == [0], 'UNRESOLVED_BODY_TYPE_USES'
+                            assert [int(line.split(':')[1]) for line in lines if line.startswith('declaration-next:')] == [row['declarationNextTypeId']], 'DECLARATION_TYPE_REGISTRATION_MISMATCH'
+                            actual = [(int(line.split(':', 2)[1]), line.split(':', 2)[2]) for line in lines if line.startswith('registered-body:')]
+                            expected = [(entry['id'], entry['identity']) for entry in row['types'] if entry['id'] >= row['declarationNextTypeId']]
+                            assert actual == expected, 'WHOLE_BODY_TYPE_REGISTRATION_MISMATCH'
+                            assert [type_id for type_id, _ in actual] == list(range(row['declarationNextTypeId'], row['nextAllocatedTypeId'])), 'INCOMPLETE_BODY_TYPE_REGISTRATION'
+                            result['bodyRegistrationComparison'] = dict(completed=len(actual), total=len(expected), exact=True,
+                                scope='All newly allocated body type identities and numeric IDs for the fixture and its loaded standard library.')
                         if args.stable_function_output:
                             native_lines = args.stable_function_output.read_text(encoding='utf-8').splitlines()
                             assert not any(value.startswith(('function-error:', 'error:', 'specialization-error:', 'specialization-field-error:')) for value in native_lines), 'NATIVE_FUNCTION_CAPTURE_ERROR'

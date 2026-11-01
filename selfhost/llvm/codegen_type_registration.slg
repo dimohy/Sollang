@@ -1,0 +1,219 @@
+namespace sollang.compiler.llvm.codegen_type_registration
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionIds
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.codegen_ir_specializations as specializations
+
+public struct Use {
+    public sourceModule: Int
+    public astNode: Int
+    public typeId: Int
+    public start: UIntSize
+    public end: UIntSize
+    public order: Int
+}
+
+public struct Plan {
+    public uses: [Use; ~]
+    public unresolvedCalls: Int
+    public unresolvedNodes: [Int; ~]
+    public valueCalls: Int
+}
+
+earlier left: Use, right: Use -> Bool {
+    left.sourceModule != right.sourceModule -> if { left.sourceModule < right.sourceModule -> return }
+    left.end != right.end -> if { left.end < right.end -> return }
+    left.start != right.start -> if { left.start > right.start -> return }
+    left.order < right.order
+}
+
+inGenericBody prepared: ref semanticContext.SemanticSnapshot, genericByAst: ref [Bool; ~], sourceModule: Int, astNode: Int -> Bool {
+    prepared.package.ranges[sourceModule] => range
+    astNode => current!
+    current! >= 0 -> while {
+        prepared.package.nodes[range.astStart + current!] => node
+        node.kind == 7 or node.kind == 29 or node.kind == 31
+            -> if { genericByAst[range.astStart + current!] -> return }
+        node.parent => current!
+    }
+    false
+}
+
+addUseAt types: ref [typeIds.SemanticType; ~], declaredIds: ref [Int; ~], uses: mut [Use; ~], firstByType: mut [Int; ~], use: Use -> Unit {
+    use.typeId < 0 or use.typeId >= (types -> len)
+        -> if { return }
+    use.typeId < (declaredIds -> len) and declaredIds[use.typeId] >= 0
+        -> if { return }
+    types[use.typeId].status != 0 or types[use.typeId].containsParameter or types[use.typeId].kind == 11
+        -> if { return }
+    firstByType[use.typeId] => previous
+    previous < 0 -> if {
+        uses -> len => firstByType[use.typeId]
+        uses -> push(use)
+    } else { use -> earlier(uses[previous]) -> if { use => uses[previous] } }
+}
+
+addUse prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], declaredIds: ref [Int; ~], uses: mut [Use; ~], firstByType: mut [Int; ~], sourceModule: Int, astNode: Int, typeId: Int, order: Int -> Unit {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len) or astNode < 0
+        -> if { return }
+    prepared.package.ranges[sourceModule] => range
+    astNode >= range.astCount -> if { return }
+    prepared.package.nodes[range.astStart + astNode] => node
+    types -> addUseAt(declaredIds, uses, firstByType, Use { sourceModule: sourceModule, astNode: astNode, typeId: typeId, start: node.start, end: node.start + node.length, order: order })
+}
+
+wrapperType types: mut [typeIds.SemanticType; ~], kind: Int, first: Int -> Int {
+    0..<(types -> len) -> each index {
+        types[index] => type
+        type.kind == kind and type.first == first and (kind != 7 or (type.origin == 4 and type.symbol == 2))
+            -> if { index -> return }
+    }
+    types -> len => identity
+    types -> push(typeIds.SemanticType { kind: kind, origin: kind == 7 -> if { 4 } else { -1 }, module: -1, symbol: kind == 7 -> if { 2 } else { -1 }, first: first, second: -1, length: -1, lengthHash: 0, containsParameter: types[first].containsParameter, status: 0 })
+    identity
+}
+
+public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plans: ref [typedIr.GenericCallPlan; ~], declaredIds: ref [Int; ~] -> Plan {
+    [Bool; ~] => genericByAst!
+    prepared.package.nodes -> each node { genericByAst! -> push(false) }
+    prepared.package.ranges -> each range {
+        0..<range.symbolCount -> each symbol {
+            prepared.package.symbols[range.symbolStart + symbol] => parameter
+            parameter.kind == 32 and parameter.parent >= 0
+                -> if {
+                    prepared.package.symbols[range.symbolStart + parameter.parent] => owner
+                    owner.kind == 7 or owner.kind == 31 -> if { true => genericByAst![range.astStart + owner.astNode] }
+                }
+        }
+    }
+    [Use; ~] => signatureUses!
+    0 => unresolved!
+    0 => valueCalls!
+    [Int; ~] => unresolvedNodes!
+    plans -> each plan {
+        plan.callNode >= 0 and plan.callNode < (ir -> len)
+            -> if {
+                ir[plan.callNode] => call
+                not (prepared -> inGenericBody(genericByAst!, call.sourceModule, call.astNode))
+                    -> if {
+                        ir[plan.callNode] -> typedIr.explicitGenericValueIdentity(prepared) => valueArgument
+                        ir[plan.templateNode] -> typedIr.genericIntegerParameterHash(prepared) => valueHash
+                        valueArgument >= 0 and valueHash != 0 -> if {
+                            ir[plan.templateNode] => template
+                            prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
+                            template.operand1 => parameter!
+                            0 => ordinal!
+                            parameter! >= 0 and parameter! < (ir -> len) and ordinal! < (ir -> len)
+                                -> while {
+                                    types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, ir[parameter!].typeId, valueHash, valueArgument) => concrete
+                                    concrete.status == 0 and concrete.root >= 0 -> if {
+                                        signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: concrete.root, start: node.start, end: node.start + node.length, order: ordinal! })
+                                    } else { unresolved! + 1 => unresolved!
+                                        unresolvedNodes! -> push(plan.callNode) }
+                                    ordinal! == 0 -> if { template.nextOperand } else { ir[parameter!].nextOperand } => parameter!
+                                    ordinal! + 1 => ordinal!
+                                }
+                            types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, template.typeId, valueHash, valueArgument) => concreteResult
+                            concreteResult.status == 0 and concreteResult.root >= 0
+                                -> if {
+                                    signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: concreteResult.root, start: node.start, end: node.start + node.length, order: ordinal! })
+                                } else { unresolved! + 1 => unresolved!
+                                    unresolvedNodes! -> push(plan.callNode) }
+                            valueCalls! + 1 => valueCalls!
+                        } else {
+                            plan.status != 0 -> if { unresolved! + 1 => unresolved!
+                                unresolvedNodes! -> push(plan.callNode) } else {
+                                prepared -> specializations.bind(ir, types, plan) -> when {
+                                    Err(_) { unresolved! + 1 => unresolved!
+                                        unresolvedNodes! -> push(plan.callNode) }
+                                    Ok(binding) {
+                                        prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
+                                        binding.inputType >= 0 -> if { signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.inputType, start: node.start, end: node.start + node.length, order: 0 }) }
+                                        signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.returnType, start: node.start, end: node.start + node.length, order: 1 })
+                                        0..<(binding.additionalTypes -> len) -> each index {
+                                            signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: binding.additionalTypes[index], start: node.start, end: node.start + node.length, order: index + 2 })
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+            }
+    }
+    # InherentReceiverOwners eagerly probes the readonly slice owner of an
+    # array receiver. Native IR keeps the backing type, so retain that use here.
+    ir -> each call {
+        (call.kind == 6 or call.kind == 9) and call.sourceModule >= 0 and call.astNode >= 0
+            and not (prepared -> inGenericBody(genericByAst!, call.sourceModule, call.astNode))
+            -> if {
+                call.operand0 >= 0 and call.operand0 < (ir -> len)
+                    -> if {
+                        types -> typeIds.materializedReadTypeId(ir[call.operand0].typeId) => receiver
+                        receiver >= 0 and receiver < (types -> len) -> if {
+                            types[receiver] => type
+                            (type.kind == 3 or type.kind == 4 or type.kind == 12) and type.first >= 0
+                                -> if {
+                                    types -> wrapperType(2, type.first) => slice
+                                    prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
+                                    # Receiver lookup happens after its value but before additional arguments.
+                                    node.start => receiverStart!
+                                    node.start => receiverEnd!
+                                    ir[call.operand0].astNode => receiverAst
+                                    receiverAst >= 0 and receiverAst < prepared.package.ranges[call.sourceModule].astCount
+                                        -> if {
+                                            prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + receiverAst] => valueNode
+                                            valueNode.start >= node.start and valueNode.start + valueNode.length <= node.start + node.length
+                                                -> if {
+                                                    valueNode.start => receiverStart!
+                                                    valueNode.start + valueNode.length => receiverEnd!
+                                                }
+                                        }
+                                    signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: slice, start: receiverStart!, end: receiverEnd!, order: 1001 })
+                                }
+                        }
+                    }
+                call.targetModule >= 0 and call.targetModule < (prepared.package.ranges -> len) and call.symbol >= 0
+                    and call.symbol < prepared.package.ranges[call.targetModule].symbolCount
+                    -> if {
+                        prepared.package.symbols[prepared.package.ranges[call.targetModule].symbolStart + call.symbol] => target
+                        target.flags / 8 % 2 == 1 and call.typeId >= 0 and call.typeId < (types -> len)
+                            -> if {
+                                types -> wrapperType(7, call.typeId) => task
+                                prepared.package.nodes[prepared.package.ranges[call.sourceModule].astStart + call.astNode] => node
+                                signatureUses! -> push(Use { sourceModule: call.sourceModule, astNode: call.astNode, typeId: task, start: node.start, end: node.start + node.length, order: 999 })
+                            }
+                    }
+            }
+    }
+    [Int; ~] => firstByType!
+    types -> each type { firstByType! -> push(-1) }
+    [Use; ~] => uses!
+    resolved.expressions -> each expression {
+        expression.status == 0 and not (prepared -> inGenericBody(genericByAst!, expression.sourceModule, expression.astNode))
+            -> if {
+                prepared -> addUse(types, declaredIds, uses!, firstByType!, expression.sourceModule, expression.astNode, expression.typeId, 1000)
+            }
+    }
+    resolved.arrayBackingFacts -> each expression {
+        expression.status == 0 and not (prepared -> inGenericBody(genericByAst!, expression.sourceModule, expression.astNode))
+            -> if {
+                prepared -> addUse(types, declaredIds, uses!, firstByType!, expression.sourceModule, expression.astNode, expression.typeId, -1)
+            }
+    }
+    signatureUses! -> each use { types -> addUseAt(declaredIds, uses!, firstByType!, use) }
+    # Only the earliest use of each new semantic type is sorted, rather than
+    # sorting every expression in the compilation.
+    1..<(uses! -> len) -> each index {
+        uses![index] => value
+        index => position!
+        position! > 0 and (value -> earlier(uses![position! - 1]))
+            -> while {
+                uses![position! - 1] => uses![position!]
+                position! - 1 => position!
+            }
+        value => uses![position!]
+    }
+    Plan { uses: uses!, unresolvedCalls: unresolved!, unresolvedNodes: unresolvedNodes!, valueCalls: valueCalls! }
+}

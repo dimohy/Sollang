@@ -28,12 +28,16 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
     var semanticType = assembly.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
     var semantic = Activator.CreateInstance(semanticType, BindingFlags.Instance | BindingFlags.Public
         | BindingFlags.NonPublic, null, [program, 64], null)!;
+    object DeclarationTypes(object compiler)
+    {
+        var inferred = semanticType.GetMethod("InferPrivateFunctionSignatures", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(compiler, [program]);
+        semanticType.GetField("_program", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(compiler, inferred);
+        semanticType.GetMethod("DeclareFunctions", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(compiler, []);
+        return semanticType.GetField("_types", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(compiler)!;
+    }
     if (args[2] == "registered-declaration-type-use-vectors")
     {
-        var inferred = semanticType.GetMethod("InferPrivateFunctionSignatures", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(semantic, [program]);
-        semanticType.GetField("_program", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(semantic, inferred);
-        semanticType.GetMethod("DeclareFunctions", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(semantic, []);
-        var declarationTypes = semanticType.GetField("_types", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(semantic)!;
+        var declarationTypes = DeclarationTypes(semantic);
         var next = declarationTypes.GetType().GetField("_nextParametricTypeId", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var declarationNext = (int)next.GetValue(declarationTypes)!;
         var identities = JsonSerializer.Deserialize<string[]>(File.ReadAllText(args[3]))!;
@@ -47,6 +51,14 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
         }).ToArray();
         Console.WriteLine(JsonSerializer.Serialize(new { declarationNextTypeId = declarationNext, nextAllocatedTypeId = (int)next.GetValue(declarationTypes)!, registrations }));
         return;
+    }
+    int? declarationNextTypeId = null;
+    if (args[2] == "registered-stable-identity-vectors")
+    {
+        var declarationCompiler = Activator.CreateInstance(semanticType, BindingFlags.Instance | BindingFlags.Public
+            | BindingFlags.NonPublic, null, [program, 64], null)!;
+        var declarationTypes = DeclarationTypes(declarationCompiler);
+        declarationNextTypeId = (int)declarationTypes.GetType().GetField("_nextParametricTypeId", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(declarationTypes)!;
     }
     var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
     var types = bound.GetType().GetProperty("Types")!.GetValue(bound)!;
@@ -115,6 +127,7 @@ if (args.Length >= 3 && args[2] is "registered-type-universe-vectors" or "regist
         {
             typeUniverseHash = (ulong)cacheType.GetMethod("BuildTypeUniverseHash", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [types])!,
             nextAllocatedTypeId = nextAllocated,
+            declarationNextTypeId,
             declarationFingerprint = Convert.ToHexString((byte[])Property(bound, "StableDeclarationFingerprint")!),
             implementations = Property(program, "Implementations"),
             candidateValidation = validation,

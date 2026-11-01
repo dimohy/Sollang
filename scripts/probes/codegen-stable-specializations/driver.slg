@@ -1,3 +1,4 @@
+import sollang.compiler.llvm.codegen_type_registration as typeRegistration
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.semantic.expression_type_ids as expressionIds
@@ -16,11 +17,16 @@ inspect: -> Unit uses Console, File, Process {
     keys.textField("가𐐀a") => unicode
     unicode.bytes -> keys.stableUtf16Length => utf16
     utf16 != 4 -> if { process.exit(4) -> return }
+    [path.Path; ~] => orderControl!
+    orderControl! -> push(path.fromText(".slg", path.nativeStyle()))
+    orderControl! -> push(path.fromText("𐀀.slg", path.nativeStyle()))
+    orderControl! -> sourceRoot.referenceOrder => ordered
+    ordered[0] != 1 or ordered[1] != 0 -> if { process.exit(4) -> return }
     "utf16:$utf16" -> println
     process.arguments() => arguments
     arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
     [file.SourceText; ~] => owners!
-    paths -> each current { current -> pathText -> file.mapText => owner
+    paths -> sourceRoot.referenceOrder -> each index { paths[index] -> pathText -> file.mapText => owner
         owners! -> push(owner) }
     arguments[2] -> file.mapText => fixture
     owners! -> push(fixture)
@@ -52,6 +58,55 @@ inspect: -> Unit uses Console, File, Process {
     resolved.types -> each type { types! -> push(type) }
     ir -> typedIr.planGenericCalls(prepared, types!) => plans
     typeIds.SemanticTypeSet { types: types!, references: resolved.references, fields: resolved.fields } => semantic!
+    [Int; ~] => functionIdentities!
+    (arguments -> len) == 3 or ((arguments -> len) > 3 and arguments[3] == "whole-type-uses")
+        -> if {
+            prepared -> referenceIds.registerDeclarations -> when {
+                Err(_) { process.exit(6) -> return }
+                Ok(value) { value }
+            } => declarations
+            prepared -> typeRegistration.collect(resolved, ir, semantic!.types, plans, declarations.ids) => bodyUses
+            [Int; ~] => roots!
+            bodyUses.uses -> each use { roots! -> push(use.typeId) }
+            prepared -> referenceIds.registerResolvedTypeUses(semantic!, roots!) -> when {
+                Err(_) { "registration-error" -> println
+                    process.exit(6) -> return }
+                Ok(value) { value }
+            } => registered
+            bodyUses.unresolvedCalls != 0 -> if { process.exit(6) -> return }
+            registered.ids -> each identity { functionIdentities! -> push(identity) }
+            (arguments -> len) > 3 -> if {
+                "declaration-next:$(declarations.nextTypeId)" -> println
+                "unresolved-plans:$(bodyUses.unresolvedCalls)" -> println
+                "value-calls:$(bodyUses.valueCalls)" -> println
+                bodyUses.unresolvedNodes -> each node {
+                    "unresolved-call:$(ir[node].sourceModule):$(ir[node].astNode):$(ir[node].targetModule):$(ir[node].symbol)" -> println
+                }
+                [Int; ~] => typeByIdentity!
+                0..<(registered.nextTypeId - declarations.nextTypeId) -> each index { typeByIdentity! -> push(-1) }
+                0..<(semantic!.types -> len) -> each typeId {
+                    registered.ids[typeId] >= declarations.nextTypeId and semantic!.types[typeId].kind != 11
+                        -> if {
+                            typeId => typeByIdentity![registered.ids[typeId] - declarations.nextTypeId]
+                        }
+                }
+                0..<(typeByIdentity! -> len) -> each index {
+                    typeByIdentity![index] < 0 -> if { process.exit(6) -> return }
+                    context! -> keys.resolvedStableTypeIdentityField(prepared.package, semantic!, typeByIdentity![index], identities.ids) -> when {
+                        Err(_) { process.exit(6) -> return }
+                        Ok(field) {
+                            field.bytes -> file.borrowBytes => bytes
+                            bytes -> slice(0, bytes -> len) => identity
+                            "registered-body:$(declarations.nextTypeId + index):$identity" -> println
+                        }
+                    }
+                }
+                bodyUses.uses -> each use {
+                    "use:$(use.sourceModule):$(use.astNode):$(use.start):$(use.end):$(use.order):$(registered.ids[use.typeId])" -> println
+                }
+                return
+            }
+        }
     (arguments -> len) > 3 and arguments[3] == "registry-type-uses"
         -> if {
             [Int; ~] => uses!
@@ -141,7 +196,7 @@ inspect: -> Unit uses Console, File, Process {
     plans -> each plan {
         plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
             -> if {
-                prepared -> specializationCapture.capture(ir, semantic!.types, plan, declaredIdentities.ids) -> when {
+                prepared -> specializationCapture.capture(ir, semantic!.types, plan, functionIdentities!) -> when {
                     Err(_) { "specialization-error:$(plan.templateNode):$(plan.status)" -> println
                         process.exit(6) -> return }
                     Ok(facts) {

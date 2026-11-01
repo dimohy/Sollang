@@ -7,6 +7,44 @@ sourceError message: Text -> Result<[path.Path; ~], Text> {
     Result<[path.Path; ~], Text>.Err(message)
 }
 
+# C# DiscoverStandardLibraryPaths orders the complete relative paths, rather
+# than directory traversal batches. Return indices so owned Paths are borrowed.
+referenceByteEarlier left: UInt8, right: UInt8 -> Bool {
+    # UTF16 surrogate pairs sort before BMP scalars U+E000..U+FFFF.
+    left >= 240 and (right == 238 or right == 239)
+        -> if { true -> return }
+    right >= 240 and (left == 238 or left == 239)
+        -> if { false -> return }
+    left < right
+}
+
+public referenceOrder paths: ref [path.Path; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    0..<(paths -> len) -> each index { order! -> push(index) }
+    1..<(order! -> len) -> each index {
+        order![index] => selected
+        paths[selected] -> pathText => left
+        index => position!
+        true => moving!
+        position! > 0 and moving! -> while {
+            paths[order![position! - 1]] -> pathText => right
+            UIntSize(0) => byteIndex!
+            byteIndex! < (left -> len) and byteIndex! < (right -> len)
+                and (left -> byte(byteIndex!)) == (right -> byte(byteIndex!))
+                -> while { byteIndex! + 1 => byteIndex! }
+            byteIndex! == (left -> len) -> if { (left -> len) < (right -> len) } else {
+                byteIndex! < (right -> len) and ((left -> byte(byteIndex!)) -> referenceByteEarlier(right -> byte(byteIndex!)))
+            } => before
+            before -> if {
+                order![position! - 1] => order![position!]
+                position! - 1 => position!
+            } else { false => moving! }
+        }
+        selected => order![position!]
+    }
+    order!
+}
+
 # A source root is a confined source set. Each directory snapshot is already
 # raw-UTF-8 sorted; the work queue composes those snapshots in deterministic
 # breadth-first order. Symlinks and non-source files are never traversed.
