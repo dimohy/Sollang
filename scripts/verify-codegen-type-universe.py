@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import shutil
+from collections import Counter
 
 from verification_execution import VerificationExecution
 from verification_contract_lease import VerificationContractLease
@@ -17,6 +18,121 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
 
 
+def compare_registered_universe(observation, text):
+    """Compare committed layouts using their own type graphs, never arena IDs.
+
+    Nominal declaration names/modules come from registry records. Display names
+    are used only for primitive/generic leaves, not to identify registered types.
+    """
+    managed, native, aliases, names = {}, {}, {}, {}
+    categories = {'Structs': 'struct', 'Enums': 'enum', 'Boxes': 'box',
+                  'References': 'reference', 'DynTraits': 'dyn',
+                  'StaticArrays': 'static-array', 'DynamicArrays': 'dynamic-array',
+                  'Dictionaries': 'dictionary'}
+    for category, rows in observation['records'].items():
+        for row in rows:
+            kind, identity = categories[category], row['Id']
+            assert identity not in managed, 'DUPLICATE_MANAGED_REGISTRATION'
+            if kind == 'struct':
+                parts = [row['Name'], row['ModuleName']]
+                members = [(f['Index'], f['Name'], f['Type']) for f in row['Fields']]
+            elif kind == 'enum':
+                parts = [row['Name'], row['ModuleName'], row['PayloadWords']]
+                members = [(v['Tag'], v['Name'], -1 if v['PayloadType'] is None else v['PayloadType'])
+                           for v in row['Variants']]
+            else:
+                keys = {'box': ['ElementType', 'Size', 'Alignment'], 'reference': ['ElementType'],
+                        'dyn': ['TraitName'],
+                        'static-array': ['ElementType', 'ElementSize', 'ElementAlignment', 'FixedLength'],
+                        'dynamic-array': ['ElementType', 'ElementSize', 'ElementAlignment'],
+                        'dictionary': ['KeyType', 'ValueType', 'KeySize', 'KeyAlignment', 'ValueOffset',
+                                       'ValueSize', 'ValueAlignment', 'EntryStride']}
+                parts, members = [row[k] for k in keys[kind]], []
+            managed[identity] = (kind, parts, members)
+    current = None
+    headers = []
+    for line in text.splitlines():
+        if line.startswith('name:'):
+            _, identity, name = line.split(':', 2)
+            assert int(identity) not in names, 'DUPLICATE_NATIVE_TYPE_NAME'
+            names[int(identity)] = name
+        elif line.startswith('alias:'):
+            _, source, target = line.split(':')
+            assert int(source) not in aliases, 'DUPLICATE_NATIVE_ALIAS'
+            aliases[int(source)] = int(target)
+        elif line.startswith('record:'):
+            _, kind, tail = line.split(':', 2)
+            if kind in ('field', 'variant'):
+                ordinal, name, member_type = tail.split(':')
+                assert current is not None and native[current][0] == ('struct' if kind == 'field' else 'enum'), 'ORPHAN_NATIVE_MEMBER'
+                native[current][2].append((int(ordinal), name, int(member_type)))
+                continue
+            identity, tail = tail.split(':', 1)
+            identity = int(identity)
+            assert identity not in native, 'DUPLICATE_NATIVE_REGISTRATION'
+            if kind == 'struct':
+                parts = tail.rsplit(':', 1)
+            elif kind == 'enum':
+                name, module, words = tail.rsplit(':', 2)
+                parts = [name, module, int(words)]
+            elif kind == 'dyn':
+                parts = [tail]
+            else:
+                assert kind in categories.values(), 'UNKNOWN_NATIVE_REGISTRATION_KIND'
+                parts = list(map(int, tail.split(':')))
+            native[identity] = (kind, parts, [])
+            current = identity
+        else:
+            headers.append(line)
+    assert sum(x.startswith('universe-hash:') for x in headers) == 1, 'NATIVE_UNIVERSE_HASH_REQUIRED'
+    assert sum(x.startswith('universe:') for x in headers) == 1, 'NATIVE_UNIVERSE_COUNT_REQUIRED'
+    assert int(next(x.split(':')[1] for x in headers if x.startswith('universe:'))) == len(native), 'NATIVE_UNIVERSE_COUNT_MISMATCH'
+    # A name-error may describe an unselected arena fact; it cannot satisfy a
+    # selected layout reference, whose identity must resolve below.
+    assert all(x.startswith(('universe-hash:', 'universe:', 'name-error:'))
+               for x in headers), 'NATIVE_REGISTRATION_CAPTURE_ERROR'
+
+    def normalize(definitions, leaves, redirects):
+        def identity(value, visiting=()):
+            if value == -1:
+                return ('none',)
+            assert value not in visiting, 'CYCLIC_STRUCTURAL_REGISTRATION'
+            if value not in definitions:
+                if value in redirects and redirects[value] != value:
+                    return identity(redirects[value], (*visiting, value))
+                assert value in leaves, f'UNRESOLVED_REGISTERED_TYPE:{value}'
+                return ('leaf', leaves[value])
+            kind, parts, _ = definitions[value]
+            if kind in ('struct', 'enum'):
+                return (kind, parts[1], parts[0])
+            if kind == 'dyn':
+                return (kind, parts[0])
+            count = 2 if kind == 'dictionary' else 1
+            return (kind, *(identity(t, (*visiting, value)) for t in parts[:count]),
+                    *(parts[-1:] if kind == 'static-array' else []))
+        records = []
+        for value, (kind, parts, members) in definitions.items():
+            key = identity(value)
+            if kind in ('struct', 'enum'):
+                data = (tuple((ordinal, name, identity(t)) for ordinal, name, t in members),
+                        *(parts[2:] if kind == 'enum' else []))
+            elif kind == 'dyn':
+                data = ()
+            else:
+                count = 2 if kind == 'dictionary' else 1
+                data = (*map(identity, parts[:count]), *parts[count:])
+            records.append((key, data))
+        return Counter(records)
+
+    expected = normalize(managed, {int(k): v for k, v in observation['typeNames'].items()}, {})
+    actual = normalize(native, names, aliases)
+    return dict(equal=actual == expected, managedTotal=len(managed), nativeTotal=len(native),
+                categories=dict(Counter(v[0] for v in native.values())),
+                comparisonMethod='canonical registered layout graph with nominal declaration identities',
+                unselectedNameErrors=[int(x.split(':')[1]) for x in headers if x.startswith('name-error:')],
+                missing=list((expected - actual).items()), extra=list((actual - expected).items()))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
@@ -26,6 +142,7 @@ def main():
     parser.add_argument('--verify-source', action='store_true')
     parser.add_argument('--registered-sources', type=Path)
     parser.add_argument('--include-type-names', action='store_true')
+    parser.add_argument('--registered-observation-result', type=Path)
     parser.add_argument('--allocation-controls', action='store_true')
     parser.add_argument('--builtin-display-controls', action='store_true')
     parser.add_argument('--include-codegen-request', action='store_true')
@@ -43,6 +160,7 @@ def main():
     parser.add_argument('--reusable-directory', type=Path, action='append', required=True)
     args = parser.parse_args()
     assert not args.include_type_names or args.registered_sources, "type names require registered sources"
+    assert not args.registered_observation_result or args.include_type_names, 'registered comparison requires type names'
     assert not args.include_codegen_request or args.registered_sources, "codegen request requires registered sources"
     assert not (args.include_type_names and args.include_codegen_request), "select one observation mode"
     assert not args.emission_only_projection or args.include_codegen_request, "projection requires codegen request mode"
@@ -107,6 +225,16 @@ def main():
             assert producer['status'] == 'passed' and producer['inputsStable'] and producer['processesStopped']
             assert all(sha(p) == digest for p, digest in producer['inputHashes'].items())
             inputs += [args.emitter, producer_path, *map(Path, producer['inputHashes'])]
+    if args.registered_observation_result:
+        producer_path = args.registered_observation_result.resolve()
+        producer = json.loads(producer_path.read_text(encoding='utf-8-sig'))
+        assert producer['status'] == 'passed' and producer['inputsStable'] and producer['processesStopped']
+        assert all(sha(p) == digest for p, digest in producer['inputHashes'].items()), 'NATIVE_REGISTRY_INPUT_DRIFT'
+        assert all(producer['inputHashes'].get(str(p.resolve())) == sha(p)
+                   for p in args.registered_sources.glob('*.slg')), 'NATIVE_REGISTRY_SOURCE_MISMATCH'
+        captured = producer_path.parent / 'observe.stdout'
+        assert sha(captured) == producer['outputHash'], 'NATIVE_REGISTRY_OUTPUT_DRIFT'
+        inputs += [producer_path, captured, *map(Path, producer['inputHashes'])]
     fingerprints = {str(p.resolve()): sha(p) for p in inputs}
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
@@ -257,6 +385,11 @@ def main():
                         assert set(row['records']) == {'Structs', 'Enums', 'Boxes', 'References', 'DynTraits',
                                                        'StaticArrays', 'DynamicArrays', 'Dictionaries'}
                         assert all(row['records'][name] for name in row['records']), 'missing registered category'
+                        if args.registered_observation_result:
+                            comparison = compare_registered_universe(row, captured.read_text(encoding='utf-8-sig'))
+                            result['registeredComparison'] = comparison
+                            execution.save()
+                            assert comparison['equal'], 'REGISTERED_TYPE_UNIVERSE_STRUCTURAL_MISMATCH'
                     result.update(status='passed', completed=1,
                                   cases=[dict(id='actual-stable-identities' if args.include_stable_identities else 'actual-codegen-request' if args.include_codegen_request else 'actual-registered-types', passed=True, observation=row)])
                 else:
