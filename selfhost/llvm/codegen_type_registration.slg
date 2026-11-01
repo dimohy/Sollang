@@ -4,7 +4,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.expression_type_ids as expressionIds
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
-import sollang.compiler.llvm.codegen_ir_specializations as specializations
+import sollang.compiler.llvm.codegen_cache_keys as keys
 
 public struct Use {
     public sourceModule: Int
@@ -27,18 +27,6 @@ earlier left: Use, right: Use -> Bool {
     left.end != right.end -> if { left.end < right.end -> return }
     left.start != right.start -> if { left.start > right.start -> return }
     left.order < right.order
-}
-
-public inGenericBody prepared: ref semanticContext.SemanticSnapshot, genericByAst: ref [Bool; ~], sourceModule: Int, astNode: Int -> Bool {
-    prepared.package.ranges[sourceModule] => range
-    astNode => current!
-    current! >= 0 -> while {
-        prepared.package.nodes[range.astStart + current!] => node
-        node.kind == 7 or node.kind == 29 or node.kind == 31
-            -> if { genericByAst[range.astStart + current!] -> if { true -> return } }
-        node.parent => current!
-    }
-    false
 }
 
 addUseAt types: ref [typeIds.SemanticType; ~], declaredIds: ref [Int; ~], uses: mut [Use; ~], firstByType: mut [Int; ~], use: Use -> Unit {
@@ -75,24 +63,8 @@ wrapperType types: mut [typeIds.SemanticType; ~], kind: Int, first: Int -> Int {
     identity
 }
 
-public genericBodyMask prepared: ref semanticContext.SemanticSnapshot -> [Bool; ~] {
-    [Bool; ~] => genericByAst!
-    prepared.package.nodes -> each node { genericByAst! -> push(false) }
-    prepared.package.ranges -> each range {
-        0..<range.symbolCount -> each symbol {
-            prepared.package.symbols[range.symbolStart + symbol] => parameter
-            parameter.kind == 32 and parameter.parent >= 0
-                -> if {
-                    prepared.package.symbols[range.symbolStart + parameter.parent] => owner
-                    owner.kind == 7 or owner.kind == 31 -> if { true => genericByAst![range.astStart + owner.astNode] }
-                }
-        }
-    }
-    genericByAst!
-}
-
 public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plans: ref [typedIr.GenericCallPlan; ~], declaredIds: ref [Int; ~] -> Plan {
-    prepared -> genericBodyMask => genericByAst
+    prepared -> keys.genericBodyMask => genericByAst
     [Use; ~] => signatureUses!
     0 => unresolved!
     0 => valueCalls!
@@ -101,9 +73,9 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
         plan.callNode >= 0 and plan.callNode < (ir -> len)
             -> if {
                 ir[plan.callNode] => call
-                not (prepared -> inGenericBody(genericByAst, call.sourceModule, call.astNode))
+                not (prepared -> keys.inGenericBody(genericByAst, call.sourceModule, call.astNode))
                     -> if {
-                        prepared -> specializations.bind(ir, types, plan) -> when {
+                        prepared -> keys.bindIrSpecialization(ir, types, plan) -> when {
                             Err(_) { unresolved! + 1 => unresolved!
                                 unresolvedNodes! -> push(plan.callNode) }
                             Ok(binding) {
@@ -123,7 +95,7 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
     # array receiver. Native IR keeps the backing type, so retain that use here.
     ir -> each call {
         (call.kind == 6 or call.kind == 9) and call.sourceModule >= 0 and call.astNode >= 0
-            and not (prepared -> inGenericBody(genericByAst, call.sourceModule, call.astNode))
+            and not (prepared -> keys.inGenericBody(genericByAst, call.sourceModule, call.astNode))
             -> if {
                 call.operand0 >= 0 and call.operand0 < (ir -> len)
                     -> if {
@@ -168,13 +140,13 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
     types -> each type { firstByType! -> push(-1) }
     [Use; ~] => uses!
     resolved.expressions -> each expression {
-        expression.status == 0 and not (prepared -> inGenericBody(genericByAst, expression.sourceModule, expression.astNode))
+        expression.status == 0 and not (prepared -> keys.inGenericBody(genericByAst, expression.sourceModule, expression.astNode))
             -> if {
                 prepared -> addUse(types, declaredIds, uses!, firstByType!, expression.sourceModule, expression.astNode, expression.typeId, 1000)
             }
     }
     resolved.arrayBackingFacts -> each expression {
-        expression.status == 0 and not (prepared -> inGenericBody(genericByAst, expression.sourceModule, expression.astNode))
+        expression.status == 0 and not (prepared -> keys.inGenericBody(genericByAst, expression.sourceModule, expression.astNode))
             -> if {
                 prepared -> addUse(types, declaredIds, uses!, firstByType!, expression.sourceModule, expression.astNode, expression.typeId, -1)
             }

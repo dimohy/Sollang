@@ -3,8 +3,6 @@ namespace sollang.compiler.llvm.codegen_cache_keys
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
-import sollang.compiler.llvm.codegen_ir_specializations as specializations
-import sollang.compiler.llvm.codegen_type_registration as typeRegistration
 
 public struct CompilationFunction {
     public sourceModule: Int
@@ -174,7 +172,7 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                     -> if { index => functionNodes![range.symbolStart + node.symbol] }
             }
     }
-    prepared -> typeRegistration.genericBodyMask => genericByAst
+    prepared -> genericBodyMask => genericByAst
     [CompilationFunction; ~] => functions!
     [FunctionCaptureFailure; ~] => failures!
     0..<(prepared.package.ranges -> len) -> each sourceModule {
@@ -185,10 +183,10 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                 -> if {
                     symbol => context.ownerSymbol
                     prepared.package.symbols[range.symbolStart + symbol] => function
-                    prepared -> typeRegistration.inGenericBody(genericByAst, sourceModule, function.astNode)
+                    prepared -> inGenericBody(genericByAst, sourceModule, function.astNode)
                         -> if {
                             Result<FunctionBinding, TypeUniverseCaptureError>.Ok(unboundFunction())
-                        } else { ir -> specializations.captureFunctionBinding(semantic.types, functionNodes![range.symbolStart + symbol]) } -> when {
+                        } else { ir -> captureIrFunctionBinding(semantic.types, functionNodes![range.symbolStart + symbol]) } -> when {
                             Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: sourceModule, ownerSymbol: symbol, stage: 0 }) }
                             Ok(binding) { context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, -1, functionNodes![range.symbolStart + symbol], functions!, failures!) }
                         }
@@ -213,7 +211,7 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                         plan.callNode => caller!
                         caller! >= 0 and ir[caller!].kind != 0 and ir[caller!].kind != 11
                             -> while { ir[caller!].parent => caller! }
-                        caller! >= 0 and (not (prepared -> typeRegistration.inGenericBody(genericByAst, call.sourceModule, call.astNode))
+                        caller! >= 0 and (not (prepared -> inGenericBody(genericByAst, call.sourceModule, call.astNode))
                             or bodies.templatesByFunction[caller!] >= 0) -> if {
                                 context -> functionParentSymbol(prepared.package) => parentSymbol
                                 functionByNode![caller!] => parentIndex!
@@ -233,8 +231,8 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                                     member.kind == 32 and member.parent == function.symbol
                                         -> if { true => ownGeneric! }
                                 }
-                                ownGeneric! -> if { prepared -> specializations.capture(ir, semantic.types, plan, registeredIds) } else {
-                                    ir -> specializations.captureFunctionBinding(semantic.types, bodies.functionsByCall[plan.callNode])
+                                ownGeneric! -> if { prepared -> captureIrSpecialization(ir, semantic.types, plan, registeredIds) } else {
+                                    ir -> captureIrFunctionBinding(semantic.types, bodies.functionsByCall[plan.callNode])
                                 } -> when {
                                     Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 3 }) }
                                     Ok(binding) {

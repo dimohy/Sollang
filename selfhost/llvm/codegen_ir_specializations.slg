@@ -1,22 +1,21 @@
-namespace sollang.compiler.llvm.codegen_ir_specializations
+namespace sollang.compiler.llvm.codegen_cache_keys
 
-import sollang.compiler.llvm.codegen_cache_keys as keys
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 
-public bind prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan -> Result<keys.FunctionBinding, keys.TypeUniverseCaptureError> {
+public bindIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan -> Result<FunctionBinding, TypeUniverseCaptureError> {
     plan.templateNode < 0 or plan.templateNode >= (ir -> len) or plan.callNode < 0 or plan.callNode >= (ir -> len)
-        -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     ir[plan.templateNode] => function
-    function.kind != 0 -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    function.kind != 0 -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     function -> typedIr.genericIntegerParameterHash(prepared) => valueHash
     valueHash != 0 -> if { ir[plan.callNode] -> typedIr.explicitGenericValueIdentity(prepared) } else { -1 } => value
     [Int; ~] => additional!
     prepared.package.ranges[function.sourceModule] => range
     function.nextOperand => parameter!
     parameter! >= 0 -> while {
-        parameter! >= (ir -> len) -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        parameter! >= (ir -> len) -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         false => compileTime!
         value >= 0 and ir[parameter!].symbol >= 0 and ir[parameter!].symbol < range.symbolCount
             -> if {
@@ -32,45 +31,73 @@ public bind prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.Typ
     plan.actualInputs -> each type { actuals! -> push(type) }
     function.operand1 >= 0 -> if { ir[function.operand1].typeId } else { -1 } => input
     value >= 0 -> if { function.typeId } else { plan.resultType } => result
-    keys.FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: result, status: plan.status, valueParameterHash: valueHash, valueArgument: value } => request
-    prepared -> keys.bindFunctionSpecialization(types, request)
+    FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: result, status: plan.status, valueParameterHash: valueHash, valueArgument: value } => request
+    prepared -> bindFunctionSpecialization(types, request)
 }
 
-public capture prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<keys.FunctionBinding, keys.TypeUniverseCaptureError> {
-    prepared -> bind(ir, types, plan) -> when {
-        Err(error) { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(error) }
-        Ok(binding) { binding -> keys.attachFunctionBindingIdentities(declaredIds) }
+public captureIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<FunctionBinding, TypeUniverseCaptureError> {
+    prepared -> bindIrSpecialization(ir, types, plan) -> when {
+        Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) }
+        Ok(binding) { binding -> attachFunctionBindingIdentities(declaredIds) }
     }
 }
 
 # Ordinary function signatures consume the same lowered parameter/result facts
 # as code generation, including signatures inferred from their unique caller.
-public captureFunctionBinding ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], functionNode: Int -> Result<keys.FunctionBinding, keys.TypeUniverseCaptureError> {
+public captureIrFunctionBinding ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], functionNode: Int -> Result<FunctionBinding, TypeUniverseCaptureError> {
     functionNode < 0 or functionNode >= (ir -> len)
-        -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     ir[functionNode] => function
     function.kind != 0 or function.typeId < 0 or function.typeId >= (types -> len) or types[function.typeId].containsParameter
-        -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     -1 => input!
     function.operand1 >= 0 -> if {
         function.operand1 >= (ir -> len)
-            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+            -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         ir[function.operand1].typeId => input!
         input! < 0 or input! >= (types -> len) or types[input!].containsParameter
-            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+            -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     }
     [Int; ~] => additional!
     function.nextOperand => parameter!
     0 => count!
     parameter! >= 0 -> while {
         parameter! >= (ir -> len) or count! >= (ir -> len)
-            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+            -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         ir[parameter!].typeId => type
         type < 0 or type >= (types -> len) or types[type].containsParameter
-            -> if { Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+            -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         additional! -> push(type)
         ir[parameter!].nextOperand => parameter!
         count! + 1 => count!
     }
-    Result<keys.FunctionBinding, keys.TypeUniverseCaptureError>.Ok(keys.FunctionBinding { active: true, valueArgument: -1, sourceModule: function.sourceModule, ownerSymbol: function.symbol, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: input!, returnType: function.typeId, additionalTypes: additional! })
+    Result<FunctionBinding, TypeUniverseCaptureError>.Ok(FunctionBinding { active: true, valueArgument: -1, sourceModule: function.sourceModule, ownerSymbol: function.symbol, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: input!, returnType: function.typeId, additionalTypes: additional! })
+}
+
+public inGenericBody prepared: ref semanticContext.SemanticSnapshot, genericByAst: ref [Bool; ~], sourceModule: Int, astNode: Int -> Bool {
+    prepared.package.ranges[sourceModule] => range
+    astNode => current!
+    current! >= 0 -> while {
+        prepared.package.nodes[range.astStart + current!] => node
+        node.kind == 7 or node.kind == 29 or node.kind == 31
+            -> if { genericByAst[range.astStart + current!] -> if { true -> return } }
+        node.parent => current!
+    }
+    false
+}
+
+public genericBodyMask prepared: ref semanticContext.SemanticSnapshot -> [Bool; ~] {
+    [Bool; ~] => genericByAst!
+    prepared.package.nodes -> each node { genericByAst! -> push(false) }
+    prepared.package.ranges -> each range {
+        0..<range.symbolCount -> each symbol {
+            prepared.package.symbols[range.symbolStart + symbol] => parameter
+            parameter.kind == 32 and parameter.parent >= 0
+                -> if {
+                    prepared.package.symbols[range.symbolStart + parameter.parent] => owner
+                    owner.kind == 7 or owner.kind == 31 -> if { true => genericByAst![range.astStart + owner.astNode] }
+                }
+        }
+    }
+    genericByAst!
 }
