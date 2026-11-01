@@ -51,6 +51,20 @@ if (args.Length == 3 && args[2] == "type-allocation-vectors")
     return;
 }
 
+if (args.Length == 3 && args[2] == "builtin-display-vectors")
+{
+    var compiler = Assembly.LoadFrom(Path.GetFullPath(args[0]));
+    var idType = compiler.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+    var names = compiler.GetType("Sollang.Compiler.Semantics.SemanticTypeDisplayNames", true)!
+        .GetMethod("Builtin", BindingFlags.Public | BindingFlags.Static)!;
+    Console.WriteLine(JsonSerializer.Serialize(Enum.GetNames(idType).Select(name => new
+    {
+        name,
+        display = (string)names.Invoke(null, [Enum.Parse(idType, name)])!
+    }).ToArray()));
+    return;
+}
+
 if (args.Length is not (2 or 3 or 4)
     || args.Length == 3 && args[2] == "registered-declaration-type-use-vectors"
     || args.Length == 4 && args[2] is not ("registered-stable-identity-vectors" or "registered-declaration-type-use-vectors")

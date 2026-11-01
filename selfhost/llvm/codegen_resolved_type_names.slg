@@ -5,9 +5,9 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_name_policy as names
 
 appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => spellings
     symbol -> typeIds.canonicalBuiltinSymbol => canonical
-    canonical < 0 or canonical >= (spellings -> len)
+    symbol -> typeIds.builtinEnumName => spelling
+    spelling == ""
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     canonical == 25 -> if {
         names.rangeDefinition() => schema
@@ -19,33 +19,8 @@ appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, Typ
         schema -> slice(0, end!) -> appendTypeText(bytes)
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
     }
-    spellings[canonical] => spelling
-    spelling -> appendResolvedDisplayOverride(bytes)
-        -> if { Result<Unit, TypeUniverseCaptureError>.Ok -> return }
-    spelling -> appendTypeText(bytes)
+    spelling -> names.builtinDisplayName -> appendTypeText(bytes)
     Result<Unit, TypeUniverseCaptureError>.Ok
-}
-
-appendResolvedDisplayOverride spelling: Text, bytes: mut [UInt8; ~] -> Bool {
-    names.builtinDisplayOverrides() => table
-    UIntSize(0) => start!
-    UIntSize(0) => cursor!
-    cursor! <= (table -> len) -> while {
-        cursor! == (table -> len) or (table -> byte(cursor!)) == '|'
-            -> if {
-                start! => equal!
-                equal! < cursor! and (table -> byte(equal!)) != '='
-                    -> while { equal! + 1 => equal! }
-                equal! < cursor! and (table -> slice(start!, equal! - start!)) == spelling
-                    -> if {
-                        table -> slice(equal! + 1, cursor! - equal! - 1) -> appendTypeText(bytes)
-                        true -> return
-                    }
-                cursor! + 1 => start!
-            }
-        cursor! + 1 => cursor!
-    }
-    false
 }
 
 appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, visiting: mut [Bool; ~], bytes: mut [UInt8; ~], signatureIds: ref [Int; ~] -> Result<Unit, TypeUniverseCaptureError> {
@@ -56,8 +31,7 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
         signatureIds[typeId] - 512 => role
         role < 0 or role > 2 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         ["GenericParameter", "SecondaryGenericParameter", "TertiaryGenericParameter"] => roles
-        not (roles[role] -> appendResolvedDisplayOverride(bytes))
-            -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidPart) -> return }
+        roles[role] -> names.builtinDisplayName -> appendTypeText(bytes)
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
     }
     type.kind == 1 or type.kind == 9 -> if {

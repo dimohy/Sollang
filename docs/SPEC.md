@@ -1130,6 +1130,9 @@ Bare trait identities used as constraints are not value-type definitions;
 resolved `dyn` values retain their separate trait-object metadata records.
 Product metadata names use the canonical ordered field labels and types,
 including products synthesized in function bodies without a linked type list.
+Builtin display names apply the shared override table to canonical `TypeId`
+enum spellings, then retain that spelling when no override exists. Selected
+generic signature roles use the same override/default decision after role validation.
 Missing, duplicate, invalid, or extra canonical fields reject the capture.
 Type-universe capture consumes the committed registry and its retained source
 declaration identities. It validates selected identities and source membership

@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--registered-sources', type=Path)
     parser.add_argument('--include-type-names', action='store_true')
     parser.add_argument('--allocation-controls', action='store_true')
+    parser.add_argument('--builtin-display-controls', action='store_true')
     parser.add_argument('--include-codegen-request', action='store_true')
     parser.add_argument('--emission-only-projection', action='store_true')
     parser.add_argument('--include-stable-identities', action='store_true')
@@ -59,12 +60,16 @@ def main():
     assert not args.stable_registration_output or args.declaration_type_uses, 'registration comparison requires declaration uses'
     assert not args.stable_body_registration_output or (args.include_stable_identities and not args.declaration_type_uses), 'body registration comparison requires whole-program stable identities'
     assert not args.allocation_controls or not (args.registered_sources or args.emitter or args.verify_source or args.baseline_result), 'allocation controls are an independent CSharp factory observation'
+    assert not args.builtin_display_controls or not (args.allocation_controls or args.registered_sources or args.emitter or args.verify_source or args.baseline_result), 'builtin display controls are an independent CSharp observation'
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
     vectors = ROOT / 'scripts/probes/codegen-type-universe/vectors.json'
     inputs = [Path(__file__), compiler, *managed_runtime_inputs(compiler), harness,
               harness.with_name('Limits.cs'), vectors, ROOT / 'Directory.Build.props', ROOT / 'global.json']
+    if args.builtin_display_controls:
+        inputs += [ROOT / 'src/Sollang.Compiler/Semantics/SemanticTypeDisplayNames.cs',
+                   ROOT / 'src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs']
     baseline = None
     if args.baseline_result:
         baseline = json.loads(args.baseline_result.read_text(encoding='utf-8'))
@@ -114,6 +119,9 @@ def main():
         if args.allocation_controls:
             result['total'] = 1
             result['scope'] = 'Actual CSharp deferred fixed-array reservation, occupied identities and relative allocation trajectory; semantic arena coordinates and canonical metadata IDs remain distinct.'
+        if args.builtin_display_controls:
+            result['total'] = 1
+            result['scope'] = 'Actual SemanticTypeDisplayNames.Builtin for every declared TypeId; override and default spellings. No SLG consumer equivalence claimed.'
         if args.include_codegen_request:
             result['scope'] = 'Actual CSharp Open request, source modules, emission hashes and complete keys; no SLG production cache claim.'
         if args.include_stable_identities:
@@ -159,11 +167,19 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-allocation-vectors' if args.allocation_controls else 'type-universe-vectors',
+                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'builtin-display-vectors' if args.builtin_display_controls else 'type-allocation-vectors' if args.allocation_controls else 'type-universe-vectors',
                                       *([str(args.stable_candidate_file.resolve())] if args.stable_candidate_file else [])],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
-                if args.allocation_controls:
+                if args.builtin_display_controls:
+                    rows = json.loads(done.stdout)
+                    names = {row['name']: row['display'] for row in rows}
+                    assert len(names) == len(rows) and all(names.values()), 'CSHARP_BUILTIN_DISPLAY_ROWS_INVALID'
+                    assert all(names[name] == expected for name, expected in
+                               {'Int64': 'Long', 'Float32': 'Float', 'Float64': 'Double', 'Bool': 'Bool', 'Range': 'Range'}.items()), 'CSHARP_BUILTIN_DISPLAY_CONTRACT_MISMATCH'
+                    result['cases'].append(dict(id='builtin-type-display', passed=True, actual=rows))
+                    result.update(completed=1, status='passed')
+                elif args.allocation_controls:
                     row = json.loads(done.stdout)
                     assert row == dict(first=2, reservation=True, duplicateShape=False, occupied=False,
                                        allocated=[3, 4, 5, 7], reserved=6, repeated=6), 'CSHARP_DEFERRED_RESERVATION_TRAJECTORY_MISMATCH'
