@@ -12,6 +12,10 @@ public struct CompilationFunction {
     public name: Field
     public identity: Field
     public isSpecialization: Bool
+    public parentIndex: Int
+    public functionNode: Int
+    public typeParameters: [Int; ~]
+    public typeArguments: [Int; ~]
 }
 
 public struct FunctionCaptureFailure {
@@ -31,14 +35,21 @@ userFunction prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, 
         and function.blockTypeNode < 0 and function.blockResultTypeNode < 0
 }
 
-appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding, functions: mut [CompilationFunction; ~], failures: mut [FunctionCaptureFailure; ~] -> Unit {
+appendLexicalArguments parent: ref CompilationFunction, parameters: mut [Int; ~], actuals: mut [Int; ~] -> Unit {
+    parent.typeParameters -> each type { parameters -> push(type) }
+    parent.typeArguments -> each type { actuals -> push(type) }
+}
+
+appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], binding: ref FunctionBinding, selectedParent: Int, functionNode: Int, functions: mut [CompilationFunction; ~], failures: mut [FunctionCaptureFailure; ~] -> Unit {
+    selectedParent => lexicalParent!
     context -> functionParentSymbol(prepared.package) => parent
     parent >= 0 -> if {
-        -1 => parentIndex!
+        selectedParent => parentIndex!
         0..<(functions -> len) -> each index {
-            functions[index].sourceModule == context.sourceModule and functions[index].ownerSymbol == parent and not functions[index].isSpecialization
+            selectedParent < 0 and functions[index].sourceModule == context.sourceModule and functions[index].ownerSymbol == parent and not functions[index].isSpecialization
                 -> if { index => parentIndex! }
         }
+        parentIndex! => lexicalParent!
         parentIndex! < 0 -> if { Result<Field, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) } else {
             context -> captureLocalFunctionIdentity(prepared, semantic, signatureIds, binding, functions[parentIndex!].identity)
         }
@@ -57,7 +68,31 @@ appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticC
                             -> if { true => duplicate! }
                     }
                     not duplicate! -> if {
-                        functions -> push(CompilationFunction { sourceModule: context.sourceModule, ownerSymbol: context.ownerSymbol, name: name, identity: identity, isSpecialization: (binding.arguments -> len) > 0 or binding.valueArgument >= 0 })
+                        [Int; ~] => parameters!
+                        [Int; ~] => actuals!
+                        lexicalParent! >= 0 -> if {
+                            functions[lexicalParent!] -> appendLexicalArguments(parameters!, actuals!)
+                        }
+                        0 => ordinal!
+                        prepared.package.ranges[context.sourceModule] => range
+                        0..<range.symbolCount -> each symbol {
+                            prepared.package.symbols[range.symbolStart + symbol] => member
+                            member.kind == 32 and member.parent == context.ownerSymbol
+                                -> if {
+                                    ordinal! < (binding.arguments -> len) -> if {
+                                        0..<(semantic.types -> len) -> each typeId {
+                                            semantic.types[typeId] => type
+                                            type.kind == 1 and type.origin == 3 and type.module == context.sourceModule and type.symbol == symbol
+                                                -> if {
+                                                    parameters! -> push(typeId)
+                                                    actuals! -> push(binding.arguments[ordinal!])
+                                                }
+                                        }
+                                    }
+                                    ordinal! + 1 => ordinal!
+                                }
+                        }
+                        functions -> push(CompilationFunction { sourceModule: context.sourceModule, ownerSymbol: context.ownerSymbol, name: name, identity: identity, isSpecialization: (binding.arguments -> len) > 0 or binding.valueArgument >= 0, parentIndex: lexicalParent!, functionNode: functionNode, typeParameters: parameters!, typeArguments: actuals! })
                     }
                 }
             }
@@ -65,10 +100,67 @@ appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticC
     }
 }
 
+
+lexicalSignatureType context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: mut typeIds.SemanticTypeSet, annotation: Int, parent: ref CompilationFunction -> Result<Int, TypeUniverseCaptureError> {
+    context -> functionAnnotationType(prepared, annotation) => source
+    source < 0 -> if { Result<Int, TypeUniverseCaptureError>.Ok(-2) -> return }
+    semantic.types -> typeIds.specializeManyInto(parent.typeParameters, parent.typeArguments, source) => specialized
+    specialized.status != 0 or specialized.root < 0
+        -> if { Result<Int, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    semantic.types[specialized.root].containsParameter
+        -> if { -2 } else { specialized.root } => type
+    Result<Int, TypeUniverseCaptureError>.Ok(type)
+}
+
+appendLexicalChildren context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: mut typeIds.SemanticTypeSet, signatureIds: ref [Int; ~], parentIndex: Int, resolve: Bool, functions: mut [CompilationFunction; ~], failures: mut [FunctionCaptureFailure; ~] -> Unit {
+    functions[parentIndex].sourceModule => sourceModule
+    prepared.package.ranges[sourceModule] => range
+    0..<range.symbolCount -> each symbol {
+        prepared -> userFunction(sourceModule, symbol)
+            -> if {
+                sourceModule => context.sourceModule
+                symbol => context.ownerSymbol
+                (context -> functionParentSymbol(prepared.package)) == functions[parentIndex].ownerSymbol
+                    -> if {
+                        prepared.package.symbols[range.symbolStart + symbol] => declaration
+                        -2 => input!
+                        [Int; ~] => additional!
+                        false => generic!
+                        0..<range.symbolCount -> each memberIndex {
+                            prepared.package.symbols[range.symbolStart + memberIndex] => member
+                            member.parent == symbol -> if {
+                                member.kind == 32 -> if { true => generic! }
+                                member.kind == 35 -> if {
+                                    resolve -> if { context -> lexicalSignatureType(prepared, semantic, member.typeNode, functions[parentIndex]) } else { Result<Int, TypeUniverseCaptureError>.Ok(-2) } -> when {
+                                        Ok(value) { value }
+                                        Err(_) { failures -> push(FunctionCaptureFailure { sourceModule: sourceModule, ownerSymbol: symbol, stage: 5 })
+                                            return }
+                                    } => type
+                                    member.astNode == declaration.astNode -> if { type => input! } else { additional! -> push(type) }
+                                }
+                            }
+                        }
+                        declaration.secondaryTypeNode >= 0 -> if { declaration.secondaryTypeNode } else { declaration.typeNode } => resultAst
+                        resolve -> if { context -> lexicalSignatureType(prepared, semantic, resultAst, functions[parentIndex]) } else { Result<Int, TypeUniverseCaptureError>.Ok(-2) } -> when {
+                            Ok(value) { value }
+                            Err(_) { failures -> push(FunctionCaptureFailure { sourceModule: sourceModule, ownerSymbol: symbol, stage: 5 })
+                                return }
+                        } => result
+                        FunctionBinding { active: true, valueArgument: -1, sourceModule: sourceModule, ownerSymbol: symbol, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: input!, returnType: result, additionalTypes: additional! } => binding
+                        functions -> len => before
+                        context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, parentIndex, -1, functions, failures)
+                        (functions -> len) > before -> if {
+                            context -> appendLexicalChildren(prepared, semantic, signatureIds, before, resolve and not generic!, functions, failures)
+                        }
+                    }
+            }
+    }
+}
+
 # The C# emission inventory enumerates source functions and local descendants,
 # then selects BoundFunctionKind.User. Native ABI and block declarations do not
 # contribute emissions. Capture failures must reject request construction.
-public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: mut typeIds.SemanticTypeSet, ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], registeredIds: ref [Int; ~], signatureIds: ref [Int; ~] -> CompilationFunctions {
+public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: mut typeIds.SemanticTypeSet, ir: ref [typedIr.TypedIrNode; ~], plans: ref [typedIr.GenericCallPlan; ~], registeredIds: ref [Int; ~], signatureIds: ref [Int; ~], bodies: ref typedIr.GenericBodyBindings -> CompilationFunctions {
     [Int; ~] => functionNodes!
     prepared.package.symbols -> each symbol { functionNodes! -> push(-1) }
     0..<(ir -> len) -> each index {
@@ -77,6 +169,7 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
             -> if {
                 prepared.package.ranges[node.sourceModule] => range
                 node.symbol >= 0 and node.symbol < range.symbolCount
+                    and functionNodes![range.symbolStart + node.symbol] < 0
                     -> if { index => functionNodes![range.symbolStart + node.symbol] }
             }
     }
@@ -96,10 +189,15 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                             Result<FunctionBinding, TypeUniverseCaptureError>.Ok(unboundFunction())
                         } else { ir -> specializations.captureFunctionBinding(semantic.types, functionNodes![range.symbolStart + symbol]) } -> when {
                             Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: sourceModule, ownerSymbol: symbol, stage: 0 }) }
-                            Ok(binding) { context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, functions!, failures!) }
+                            Ok(binding) { context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, -1, functionNodes![range.symbolStart + symbol], functions!, failures!) }
                         }
                 }
         }
+    }
+    [Int; ~] => functionByNode!
+    0..<(ir -> len) -> each _ { functionByNode! -> push(-1) }
+    0..<(functions! -> len) -> each index {
+        functions![index].functionNode >= 0 -> if { index => functionByNode![functions![index].functionNode] }
     }
     plans -> each plan {
         plan.templateNode >= 0 and plan.templateNode < (ir -> len) and plan.callNode >= 0 and plan.callNode < (ir -> len)
@@ -107,14 +205,59 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                 ir[plan.templateNode] => function
                 ir[plan.callNode] => call
                 function.sourceModule >= 0 and function.symbol >= 0 and (prepared -> userFunction(function.sourceModule, function.symbol))
-                    and not (prepared -> typeRegistration.inGenericBody(genericByAst, call.sourceModule, call.astNode))
+
                     -> if {
                         function.sourceModule => context.sourceModule
                         function.symbol => context.ownerSymbol
-                        prepared -> specializations.capture(ir, semantic.types, plan, registeredIds) -> when {
-                            Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 3 }) }
-                            Ok(binding) { context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, functions!, failures!) }
-                        }
+                        plan.callNode => caller!
+                        caller! >= 0 and ir[caller!].kind != 0 and ir[caller!].kind != 11
+                            -> while { ir[caller!].parent => caller! }
+                        caller! >= 0 and (not (prepared -> typeRegistration.inGenericBody(genericByAst, call.sourceModule, call.astNode))
+                            or bodies.templatesByFunction[caller!] >= 0) -> if {
+                                context -> functionParentSymbol(prepared.package) => parentSymbol
+                                functionByNode![caller!] => parentIndex!
+                                parentSymbol >= 0 -> if {
+                                    parentIndex! >= 0 and functions![parentIndex!].ownerSymbol != parentSymbol
+                                        -> while {
+                                            functions![parentIndex!].parentIndex => parentIndex!
+                                        }
+                                    parentIndex! < 0 -> if {
+                                        failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 4 })
+                                    }
+                                } else { -1 => parentIndex! }
+                                false => ownGeneric!
+                                prepared.package.ranges[function.sourceModule] => sourceRange
+                                0..<sourceRange.symbolCount -> each symbol {
+                                    prepared.package.symbols[sourceRange.symbolStart + symbol] => member
+                                    member.kind == 32 and member.parent == function.symbol
+                                        -> if { true => ownGeneric! }
+                                }
+                                ownGeneric! -> if { prepared -> specializations.capture(ir, semantic.types, plan, registeredIds) } else {
+                                    ir -> specializations.captureFunctionBinding(semantic.types, bodies.functionsByCall[plan.callNode])
+                                } -> when {
+                                    Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 3 }) }
+                                    Ok(binding) {
+                                        functions! -> len => before
+                                        bodies.functionsByCall[plan.callNode] => concreteNode
+                                        context -> appendCompilationFunction(prepared, semantic, signatureIds, binding, parentIndex!, concreteNode, functions!, failures!)
+                                        context -> functionBindingName(prepared, binding) -> when {
+                                            Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 2 }) }
+                                            Ok(name) {
+                                                concreteNode >= 0 -> if {
+                                                    0..<(functions! -> len) -> each index {
+                                                        functions![index].sourceModule == function.sourceModule and functions![index].ownerSymbol == function.symbol
+                                                            and functions![index].parentIndex == parentIndex! and (functions![index].name -> compareFieldText(name)) == 0
+                                                            -> if { index => functionByNode![concreteNode] }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        (functions! -> len) > before -> if {
+                                            context -> appendLexicalChildren(prepared, semantic, signatureIds, before, true, functions!, failures!)
+                                        }
+                                    }
+                                }
+                            }
                     }
             }
     }

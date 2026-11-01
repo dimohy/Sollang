@@ -34,7 +34,7 @@ inspect: -> Unit uses Console, File, Process {
         sources! -> push(source) }
     sources! -> semanticContext.prepare -> expressionIds.resolveCallContext => callContext
     callContext.prepared => prepared
-    callContext.types => resolved
+    callContext.types => resolved!
     prepared -> referenceIds.registerMetadataSignatures -> when {
         Err(_) { process.exit(1) -> return }
         Ok(value) { value }
@@ -51,11 +51,12 @@ inspect: -> Unit uses Console, File, Process {
     concreteness.classify(prepared.semantic.types, prepared.semantic.fields) => states
     (prepared.package.ranges -> len) - 1 => fixtureModule
     fixtureModule => context!.sourceModule
-    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    prepared -> typedIr.lowerResolvedContext(resolved!) => ir!
+    ir! -> typedIr.materializeGenericClosure(prepared, resolved!) => instances
     [typeIds.SemanticType; ~] => types!
-    resolved.types -> each type { types! -> push(type) }
-    ir -> typedIr.planGenericCalls(prepared, types!) => plans
-    typeIds.SemanticTypeSet { types: types!, references: resolved.references, fields: resolved.fields } => semantic!
+    resolved!.types -> each type { types! -> push(type) }
+    ir! -> typedIr.planResolvedGenericCalls(prepared, resolved!) => plans
+    typeIds.SemanticTypeSet { types: types!, references: resolved!.references, fields: resolved!.fields } => semantic!
     [Int; ~] => functionIdentities!
     (arguments -> len) == 3 or ((arguments -> len) > 3 and (arguments[3] == "whole-type-uses" or arguments[3] == "all-user-functions"))
         -> if {
@@ -63,7 +64,7 @@ inspect: -> Unit uses Console, File, Process {
                 Err(_) { process.exit(6) -> return }
                 Ok(value) { value }
             } => declarations
-            prepared -> typeRegistration.collect(resolved, ir, semantic!.types, plans, declarations.ids) => bodyUses
+            prepared -> typeRegistration.collect(resolved!, ir!, semantic!.types, plans, declarations.ids) => bodyUses
             [Int; ~] => roots!
             bodyUses.uses -> each use { roots! -> push(use.typeId) }
             prepared -> referenceIds.registerResolvedTypeUses(semantic!, roots!) -> when {
@@ -79,7 +80,7 @@ inspect: -> Unit uses Console, File, Process {
                     "unresolved-plans:$(bodyUses.unresolvedCalls)" -> println
                     "value-calls:$(bodyUses.valueCalls)" -> println
                     bodyUses.unresolvedNodes -> each node {
-                        "unresolved-call:$(ir[node].sourceModule):$(ir[node].astNode):$(ir[node].targetModule):$(ir[node].symbol)" -> println
+                        "unresolved-call:$(ir![node].sourceModule):$(ir![node].astNode):$(ir![node].targetModule):$(ir![node].symbol)" -> println
                     }
                     [Int; ~] => typeByIdentity!
                     0..<(registered.nextTypeId - declarations.nextTypeId) -> each index { typeByIdentity! -> push(-1) }
@@ -110,7 +111,7 @@ inspect: -> Unit uses Console, File, Process {
         -> if {
             [Int; ~] => uses!
             plans -> each plan {
-                plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
+                plan.templateNode >= 0 and plan.templateNode < (ir! -> len) and ir![plan.templateNode].sourceModule == fixtureModule
                     -> if {
                         plan.status != 0 -> if { process.exit(6) -> return }
                         plan.actualInputs -> each actual {
@@ -143,7 +144,7 @@ inspect: -> Unit uses Console, File, Process {
     (arguments -> len) > 3 and arguments[3] == "call-input-types"
         -> if {
             plans -> each plan {
-                plan.templateNode >= 0 and plan.templateNode < (ir -> len) and ir[plan.templateNode].sourceModule == fixtureModule
+                plan.templateNode >= 0 and plan.templateNode < (ir! -> len) and ir![plan.templateNode].sourceModule == fixtureModule
                     -> if {
                         plan.status != 0 -> if { process.exit(6) -> return }
                         plan.actualInputs -> each actual {
@@ -162,7 +163,14 @@ inspect: -> Unit uses Console, File, Process {
             return
         }
     (arguments -> len) > 3 and arguments[3] == "all-user-functions" => allFunctions
-    context! -> keys.collectCompilationFunctions(prepared, semantic!, ir, plans, functionIdentities!, identities.ids) => collected
+    ir! -> typedIr.bindGenericBodies(instances, prepared.interpolations -> len) => bodies
+    instances -> each instance {
+        ir![instance.templateNode].sourceModule == fixtureModule
+            -> if {
+                "materialized:$(instance.functionNode):$(instance.templateNode):$(instance.ownerFunction):$(instance.status)" -> println
+            }
+    }
+    context! -> keys.collectCompilationFunctions(prepared, semantic!, ir!, plans, functionIdentities!, identities.ids, bodies) => collected
     collected.functions -> each function {
         allFunctions or function.sourceModule == fixtureModule
             -> if {
