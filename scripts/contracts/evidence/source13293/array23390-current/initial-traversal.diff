@@ -1,0 +1,104 @@
+--- before/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ after/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -923,8 +923,34 @@
+     changed!
+ }
+ 
++struct InitialTypeReferenceIndex {
++    firstBySource: [Int; ~]
++    next: [Int; ~]
++}
++
++# Group identities only. Type/status decisions remain live at their original
++# query point, and ascending reference order preserves the last-match rule.
++indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> InitialTypeReferenceIndex {
++    [Int; ~] => first!
++    [Int; ~] => next!
++    package.ranges -> each range { first! -> push(-1) }
++    references -> each reference { next! -> push(-1) }
++    Int(references -> len) => index!
++    index! > 0 -> while {
++        index! - 1 => index!
++        references[index!].sourceModule => source
++        source >= 0 and source < (first! -> len) -> if {
++            first![source] => next![index!]
++            index! => first![source]
++        }
++    }
++    InitialTypeReferenceIndex { firstBySource: first!, next: next! }
++}
++
+ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~] -> Unit {
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValueAsts
++    prepared.package -> indexContextualRecords => syntaxChildren
++    prepared.package -> indexInitialTypeReferences(references) => sourceReferences
+     # Expression slots keep their AST identity while their type/status may change.
+     # Index ancestry once, but read the current slot when resolving each binding.
+     [Int; ~] => inferredBindingHeads!
+@@ -992,19 +1018,19 @@
+                     mapOpcode == -307 -> if { 18 => builtinTypeId! }
+                 }
+                 node.kind == 55 -> if {
+-                    0 => constructorTypeSearch!
+-                    constructorTypeSearch! < sourceRange.astCount
++                    syntaxChildren.firstChild[sourceRange.astStart + astIndex!] => constructorTypeSearch!
++                    constructorTypeSearch! >= 0
+                         -> while {
+-                            prepared.package.nodes[sourceRange.astStart + constructorTypeSearch!] => constructorTypeNode
+-                            constructorTypeNode.kind == 12 and constructorTypeNode.parent == astIndex!
++                            prepared.package.nodes[constructorTypeSearch!] => constructorTypeNode
++                            constructorTypeNode.kind == 12
+                                 -> if {
+-                                    referenceIndexByTypeAst[sourceRange.astStart + constructorTypeSearch!] => constructorReference
++                                    referenceIndexByTypeAst[constructorTypeSearch!] => constructorReference
+                                     constructorReference >= 0 -> if {
+                                         references[constructorReference] => constructorTypeReference
+                                         constructorTypeReference.status == 0 -> if { constructorTypeReference.typeId => builtinTypeId! }
+                                     }
+                                 }
+-                            constructorTypeSearch! + 1 => constructorTypeSearch!
++                            syntaxChildren.nextChild[constructorTypeSearch!] => constructorTypeSearch!
+                         }
+                 }
+                 # A typed empty dynamic-array expression, such as
+@@ -1014,15 +1040,15 @@
+                 # shallow element module/symbol projection.
+                 false => typedArrayTypeSyntax!
+                 node.kind == 37 -> if {
+-                    0 => typedArraySyntaxChildSearch!
+-                    typedArraySyntaxChildSearch! < sourceRange.astCount
++                    syntaxChildren.firstChild[sourceRange.astStart + astIndex!] => typedArraySyntaxChildSearch!
++                    typedArraySyntaxChildSearch! >= 0
+                         -> while {
+-                            prepared.package.nodes[sourceRange.astStart + typedArraySyntaxChildSearch!] => typedArraySyntaxChild
+-                            (typedArraySyntaxChild.kind == 12 or typedArraySyntaxChild.kind == 16) and typedArraySyntaxChild.parent == astIndex!
++                            prepared.package.nodes[typedArraySyntaxChildSearch!] => typedArraySyntaxChild
++                            typedArraySyntaxChild.kind == 12 or typedArraySyntaxChild.kind == 16
+                                 -> if {
+                                     true => typedArrayTypeSyntax!
+                                 }
+-                            typedArraySyntaxChildSearch! + 1 => typedArraySyntaxChildSearch!
++                            syntaxChildren.nextChild[typedArraySyntaxChildSearch!] => typedArraySyntaxChildSearch!
+                         }
+                     # `~` and `<=` describe the storage shape in both type syntax
+                     # and value literals. Only a direct type-path child proves
+@@ -1030,8 +1056,8 @@
+                     # remain available to bottom-up value inference below.
+                 }
+                 node.kind == 37 and typedArrayTypeSyntax! -> if {
+-                    0 => arrayReferenceSearch!
+-                    arrayReferenceSearch! < (references -> len)
++                    sourceReferences.firstBySource[sourceIndex!] => arrayReferenceSearch!
++                    arrayReferenceSearch! >= 0
+                         -> while {
+                             references[arrayReferenceSearch!] => arrayReference
+                             arrayReference.status == 0 and arrayReference.sourceModule == sourceIndex! and (types[arrayReference.typeId].kind == 3 or types[arrayReference.typeId].kind == 12)
+@@ -1041,7 +1067,7 @@
+                                             arrayReference.typeId => builtinTypeId!
+                                         }
+                                 }
+-                            arrayReferenceSearch! + 1 => arrayReferenceSearch!
++                            sourceReferences.next[arrayReferenceSearch!] => arrayReferenceSearch!
+                         }
+                     builtinTypeId! < 0 -> if {
+                         -1 => typedArrayPathAst!
