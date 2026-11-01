@@ -9,6 +9,9 @@ def native_universe(lines):
     groups = {'box': 'Boxes', 'reference': 'References', 'static-array': 'StaticArrays',
               'dynamic-array': 'DynamicArrays', 'dictionary': 'Dictionaries'}
     for line in lines:
+        if line.startswith('universe-hash:'):
+            int(line.split(':')[1])
+            continue
         if line.startswith('universe:'):
             count = int(line.split(':')[1])
         elif line.startswith('name:'):

@@ -1,0 +1,52 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_registration as registration
+import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
+import sollang.compiler.semantic.modules as modules
+
+# Capture while the authoritative snapshot is still available. The private
+# metadata view borrows its facts by copying plain descriptors; backend arena
+# coordinates and finalized runtime layouts remain owned by emission.
+capturePreparedCodegenTypeHash prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], fields: ref [typeIds.NominalField; ~], sizes: ref [Int; ~], aligns: ref [Int; ~], statuses: ref [Int; ~], registry: ref Result<registration.RegisteredTypeSeeds, registration.TypeRegistryError>, signatures: ref Result<[Int; ~], signatureIds.Error> -> Result<UInt64, keys.TypeUniverseCaptureError> {
+    registry -> when {
+        Err(_) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        Ok(seeds) {
+            signatures -> when {
+                Err(_) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+                Ok(ids) {
+                    [typeIds.SemanticType; ~] => copiedTypes!
+                    types -> each type { copiedTypes! -> push(type) }
+                    [typeIds.TypeReference; ~] => copiedReferences!
+                    references -> each reference { copiedReferences! -> push(reference) }
+                    [typeIds.NominalField; ~] => copiedFields!
+                    fields -> each field { copiedFields! -> push(field) }
+                    typeIds.SemanticTypeSet { types: copiedTypes!, references: copiedReferences!, fields: copiedFields! } => semantic
+                    [Int; ~] => copiedSizes!
+                    sizes -> each size { copiedSizes! -> push(size) }
+                    [Int; ~] => copiedAligns!
+                    aligns -> each align { copiedAligns! -> push(align) }
+                    [Int; ~] => copiedStatuses!
+                    statuses -> each status { copiedStatuses! -> push(status) }
+                    TypeLayouts { sizes: copiedSizes!, aligns: copiedAligns!, statuses: copiedStatuses! } => layouts
+                    [modules.ModuleIdentity; ~] => identities!
+                    prepared.modules -> each module { identities! -> push(module) }
+                    [modules.ImportEdge; ~] => imports!
+                    prepared.imports -> each edge { imports! -> push(edge) }
+                    keys.TypeFieldContext { identities: identities!, imports: imports!, sourceModule: 0, ownerSymbol: -1 } => context!
+                    context! -> captureCompilationTypeUniverseWithSignatures(prepared.package, semantic, layouts, seeds, ids) -> when {
+                        Err(error) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(error) -> return }
+                        Ok(records) {
+                            records -> keys.typeUniverseHash -> when {
+                                Err(error) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.Record(error)) -> return }
+                                Ok(hash) { Result<UInt64, keys.TypeUniverseCaptureError>.Ok(hash) -> return }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
