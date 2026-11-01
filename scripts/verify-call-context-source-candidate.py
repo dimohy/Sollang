@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from completed_artifact_plan import initialize_output
+from completed_artifact_plan import initialize_output, cleanup_output
 from verification_contract_lease import VerificationContractLease
 from verification_execution import VerificationExecution
 from verification_fingerprints import managed_runtime_inputs
@@ -46,6 +46,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--llvm', type=Path, required=True)
+    parser.add_argument('--reusable-directory', type=Path, action='append',
+                        help='Explicit reusable compiler roots for artifact retention')
     args = parser.parse_args()
     plan_path, output, compiler, llvm = [p.resolve() for p in (
         args.plan, args.output, args.compiler, args.llvm)]
@@ -152,7 +154,7 @@ def main():
         '(Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory'], text=True).strip())
     if free_kib < 2 * 1024 * 1024 or shutil.disk_usage(output.parent).free < 512 * 1024 * 1024:
         raise ValueError('CALL_CONTEXT_CANDIDATE_RESOURCE_PREFLIGHT')
-    initialize_output(ROOT, output)
+    initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir(exist_ok=False)
     with VerificationContractLease(inputs):
         pins = {str(p): sha(p) for p in inputs}
@@ -222,7 +224,9 @@ def main():
         except BaseException as caught:
             error = caught
         finally:
-            execution.finalize(error, cleanup=error is None)
+            execution.finalize(error, cleanup=False)
+        if error is None:
+            cleanup_output(ROOT, output, reusable_directories=args.reusable_directory)
         print(json.dumps({k: record.get(k) for k in ('status', 'completed', 'total',
             'timings', 'promotionSupported', 'inputsStable', 'processesStopped')}))
         if error:

@@ -3477,10 +3477,14 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
 # Keep final core, contextual/generic call facts and enum facts in the same order.
 resolveContextWithCallArgumentBindings prepared: semanticContext.SemanticSnapshot, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ExpressionTypeIdSet {
     prepared -> resolveContextCoreWithCallArgumentBindings(bindings, seeds, externalResults) => resolved!
-    resolveSemanticCallArgumentBindingsSeeded(prepared, resolved!, bindings, seeds)
-    resolveEnumConstructorArguments(prepared, resolved!)
-    completeArrayBackingFacts(prepared, resolved!)
+    completeCallAndEnumFactsSeeded(prepared, resolved!, bindings, seeds)
     resolved!
+}
+
+completeCallAndEnumFactsSeeded prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds -> Unit {
+    resolveSemanticCallArgumentBindingsSeeded(prepared, resolved, bindings, seeds)
+    resolveEnumConstructorArguments(prepared, resolved)
+    completeArrayBackingFacts(prepared, resolved)
 }
 
 # This verifies table boundaries, not generation provenance. Callers must first
@@ -3713,6 +3717,15 @@ refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContex
     # identical indexes and running the full type core again.
     committedTypes and not decisionsChanged -> if {
         ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
+    }
+    # Unchanged targets retain every input used by the initial core. Complete
+    # that owned result before the normal committed refinement; initial facts
+    # alone never escape as a completed call context.
+    not decisionsChanged -> if {
+        initialPrepared.package -> semanticContext.resolveCallArgumentBindings(initialPrepared.calls) => bindings
+        initialTypes => resolved!
+        completeCallAndEnumFactsSeeded(initialPrepared, resolved!, bindings, seeds)
+        initialPrepared -> refineResolvedCallContext(resolved!, seeds, externalResults, true) -> return
     }
     initialPrepared => prepared!
     resolvedCalls => prepared!.calls
