@@ -69,6 +69,18 @@ functionNameField context: ref TypeFieldContext, package: ref analysis.PackageAn
     Result<Field, DeclarationFieldError>.Ok(Field { bytes: bytes! })
 }
 
+functionLeafNameField context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Field {
+    package.ranges[context.sourceModule] => range
+    package.symbols[range.symbolStart + context.ownerSymbol].nameToken => name!
+    context -> nextFunctionToken(package, name! + 1) => next!
+    next! < range.tokenCount and package.tokens[range.tokenStart + next!].kind == grammar.tokenIdDot()
+        -> while {
+            context -> nextFunctionToken(package, next! + 1) => name!
+            context -> nextFunctionToken(package, name! + 1) => next!
+        }
+    context -> typeTokenText(package, context.sourceModule, name!) -> textField
+}
+
 functionSignatureArrow context: ref TypeFieldContext, package: ref analysis.PackageAnalysis -> Int {
     package.ranges[context.sourceModule] => range
     package.symbols[range.symbolStart + context.ownerSymbol] => declaration

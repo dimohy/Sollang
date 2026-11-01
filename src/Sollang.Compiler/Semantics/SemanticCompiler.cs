@@ -1475,11 +1475,6 @@ internal sealed partial class SemanticCompiler
             }
         }
 
-        if (isLocal && function.Name.Contains('.', StringComparison.Ordinal))
-        {
-            throw Error(function.Line, function.Column, "local function names cannot be path-qualified");
-        }
-
         if (IsReservedName(function.Name))
         {
             throw Error(function.Line, function.Column, $"function name '{function.Name}' is reserved");

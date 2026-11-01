@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.codegen_cache_keys
 
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.llvm.codegen_cache_key_policy as plans
 import sollang.compiler.llvm.codegen_units as units
 import syntax.generated.slg as grammar
@@ -113,7 +114,13 @@ functionContextFields context: ref TypeFieldContext, package: ref analysis.Packa
     package.symbols[range.symbolStart + context.ownerSymbol] => function
     (context -> functionParentSymbol(package)) >= 0
         -> if {
-            context -> typeTokenText(package, context.sourceModule, function.nameToken) -> textField => name
+            symbols.hasQualifiedFunctionName(function, package.tokens, range.tokenStart, range.tokenCount)
+                -> if {
+                    context -> functionNameField(package) -> when {
+                        Err(error) { Result<FunctionContextFields, DeclarationFieldError>.Err(error) -> return }
+                        Ok(field) { field }
+                    }
+                } else { context -> typeTokenText(package, context.sourceModule, function.nameToken) -> textField } => name
             Result<FunctionContextFields, DeclarationFieldError>.Ok(FunctionContextFields { owner: textField(""), name: name, associated: [Field; ~] }) -> return
         }
     function.kind != 31 -> if {

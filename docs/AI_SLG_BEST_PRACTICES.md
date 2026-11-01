@@ -499,6 +499,8 @@ A bare function name is not interpolated as a value: call a zero-input
 function with `()` and use call or flow syntax for a function with an input.
 A local function name is recognized only in its lexical function scope. A
 visible binding with the same name is read as the binding.
+Qualified local names such as `internal.step` retain their complete path in
+both direct and fluent calls; the path does not extend their lexical visibility.
 Inside `$(expression)`, `receiver -> method` uses the same receiver-first
 method lookup as an ordinary flow, including public methods on imported types.
 The semantic analyzer resolves the target before LLVM emission; an unknown
