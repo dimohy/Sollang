@@ -8,7 +8,7 @@ import shutil
 from verification_execution import VerificationExecution
 from verification_contract_lease import VerificationContractLease
 from verification_fingerprints import managed_runtime_inputs
-from completed_artifact_plan import initialize_output
+from completed_artifact_plan import initialize_output, cleanup_output
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--verify-source', action='store_true')
     parser.add_argument('--registered-sources', type=Path)
     parser.add_argument('--include-type-names', action='store_true')
+    parser.add_argument('--allocation-controls', action='store_true')
     parser.add_argument('--include-codegen-request', action='store_true')
     parser.add_argument('--emission-only-projection', action='store_true')
     parser.add_argument('--include-stable-identities', action='store_true')
@@ -57,6 +58,7 @@ def main():
     assert not args.declaration_type_uses or not (args.verify_source or args.emitter), 'declaration uses require bound observation mode'
     assert not args.stable_registration_output or args.declaration_type_uses, 'registration comparison requires declaration uses'
     assert not args.stable_body_registration_output or (args.include_stable_identities and not args.declaration_type_uses), 'body registration comparison requires whole-program stable identities'
+    assert not args.allocation_controls or not (args.registered_sources or args.emitter or args.verify_source or args.baseline_result), 'allocation controls are an independent CSharp factory observation'
     compiler = args.compiler.resolve()
     output = args.output.resolve()
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
@@ -109,6 +111,9 @@ def main():
                       scope='Actual BuildTypeUniverseHash and table records: eight registered layout categories, '
                             'field/variant/type order, null fixed length, Unicode and category mutations. '
                             'Metadata-only; no Native type-pool selection or cache reuse claim.')
+        if args.allocation_controls:
+            result['total'] = 1
+            result['scope'] = 'Actual CSharp deferred fixed-array reservation, occupied identities and relative allocation trajectory; semantic arena coordinates and canonical metadata IDs remain distinct.'
         if args.include_codegen_request:
             result['scope'] = 'Actual CSharp Open request, source modules, emission hashes and complete keys; no SLG production cache claim.'
         if args.include_stable_identities:
@@ -154,11 +159,18 @@ def main():
                 assert built.returncode == 0, built.stdout + built.stderr
                 done = execution.run(['dotnet', str(output / 'harness/CodegenLimits.dll'),
                                       str(compiler.with_suffix('.dll')), str(args.registered_sources.resolve() if args.registered_sources else output),
-                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-universe-vectors',
+                                      ('registered-declaration-type-use-vectors' if args.declaration_type_uses else 'registered-stable-identity-vectors' if args.include_stable_identities else 'registered-codegen-request-emission-only-vectors' if args.emission_only_projection else 'registered-codegen-request-vectors' if args.include_codegen_request else 'registered-type-universe-named-vectors' if args.include_type_names else 'registered-type-universe-vectors') if args.registered_sources else 'type-allocation-vectors' if args.allocation_controls else 'type-universe-vectors',
                                       *([str(args.stable_candidate_file.resolve())] if args.stable_candidate_file else [])],
                                      output / 'run', timeout=180)
                 assert done.returncode == 0 and not done.stderr, done.stdout + done.stderr
-                if args.registered_sources:
+                if args.allocation_controls:
+                    row = json.loads(done.stdout)
+                    assert row == dict(first=2, reservation=True, duplicateShape=False, occupied=False,
+                                       allocated=[3, 4, 5, 7], reserved=6, repeated=6), 'CSHARP_DEFERRED_RESERVATION_TRAJECTORY_MISMATCH'
+                    result['cases'].append(dict(id='deferred-static-array-allocation', passed=True, actual=row))
+                    result['completed'] = 1
+                    result['status'] = 'passed'
+                elif args.registered_sources:
                     row = json.loads(done.stdout)
                     if args.declaration_type_uses:
                         assert row['registrations'] and all(r['canonical'] == r['identity'] for r in row['registrations'])
@@ -245,6 +257,8 @@ def main():
         if error:
             raise error
     print(json.dumps({k: result.get(k) for k in ['status', 'completed', 'total', 'inputsStable', 'processesStopped']}))
+    if args.allocation_controls and result['status'] == 'passed':
+        cleanup_output(ROOT, output, reusable_directories=args.reusable_directory)
 
 
 if __name__ == '__main__':

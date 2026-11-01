@@ -25,6 +25,32 @@ if (args.Length == 3 && args[2] == "emission-set-vectors")
     return;
 }
 
+if (args.Length == 3 && args[2] == "type-allocation-vectors")
+{
+    var compiler = Assembly.LoadFrom(Path.GetFullPath(args[0]));
+    var tableType = compiler.GetType("Sollang.Compiler.Semantics.TypeDefinitionTable", true)!;
+    var idType = compiler.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+    var constructor = tableType.GetConstructors().Single();
+    var table = constructor.Invoke(constructor.GetParameters().Select(parameter =>
+        parameter.HasDefaultValue ? parameter.DefaultValue
+        : parameter.ParameterType == typeof(int) ? (object)8
+        : Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(parameter.ParameterType.GetGenericArguments()))).ToArray());
+    object Id(int value) => Enum.ToObject(idType, value);
+    object Builtin(string name) => Enum.Parse(idType, name);
+    object Call(string name, params object?[] values) => tableType.GetMethod(name)!.Invoke(table, values)!;
+    var first = Convert.ToInt32(Call("GetOrAddReference", Builtin("Unit")));
+    int Relative(object value) => Convert.ToInt32(value) - first + 2;
+    var reservation = (bool)Call("TryReserveStaticArray", Id(first + 4), Builtin("Unit"), 4);
+    var duplicateShape = (bool)Call("TryReserveStaticArray", Id(first + 5), Builtin("Unit"), 4);
+    var occupied = (bool)Call("TryReserveStaticArray", Id(first), Builtin("Unit"), 8);
+    var allocated = new[] { "Text", "Bool", "UInt8", "UInt16" }
+        .Select(name => Relative(Call("GetOrAddReference", Builtin(name)))).ToArray();
+    var reserved = Relative(Call("GetOrAddFixedStaticArray", Builtin("Unit"), 4));
+    var repeated = Relative(Call("GetOrAddFixedStaticArray", Builtin("Unit"), 4));
+    Console.WriteLine(JsonSerializer.Serialize(new { first = 2, reservation, duplicateShape, occupied, allocated, reserved, repeated }));
+    return;
+}
+
 if (args.Length is not (2 or 3 or 4)
     || args.Length == 3 && args[2] == "registered-declaration-type-use-vectors"
     || args.Length == 4 && args[2] is not ("registered-stable-identity-vectors" or "registered-declaration-type-use-vectors")
