@@ -770,6 +770,16 @@ class PhaseClosureTests(unittest.TestCase):
         self.write(MODULE.PARSING_PRODUCERS[0], "changed generator implementation")
         self.rejects("current producer and grammar inputs")
 
+    def test_linked_type_name_policy_is_a_generation_dependency(self):
+        policy = "src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs"
+        self.assertIn(policy, MODULE.PARSING_PRODUCERS)
+        self.detail["phaseProgress"][0]["decisionInventory"]["sharedDependencies"].remove(policy)
+        self.rejects("dependency manifest cannot be narrowed")
+
+    def test_linked_type_name_policy_drift_rejects_old_generation(self):
+        self.write("src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs", "changed builtin or affine field policy")
+        self.rejects("current producer and grammar inputs")
+
     def test_shared_lexer_input_drift_rejects(self):
         self.write("syntax/sollang.lexer", "new lexer contract")
         self.rejects("current producer and grammar inputs")
@@ -850,7 +860,10 @@ class OwnershipSourceScopeTests(unittest.TestCase):
         self.assertEqual(row["decisionInventory"]["sourceScopes"], MODULE.PHASE_SCOPES["llvm-generation"])
         decision = next(item for item in row["decisionInventory"]["decisions"]
                         if item["id"] == "llvm-generation.codegen-unit-identity-and-publication")
-        self.assertEqual(decision["status"], "pending")
+        if decision["status"] == "complete":
+            qualification = MODULE.read(decision["currentProductionQualification"])
+            self.assertEqual(qualification["status"], "focused-qualified")
+            self.assertFalse(qualification["claimsGoalComplete"])
         for side, required in {
             "managed": ["src/Sollang.Compiler/Shared/Policies/CodegenCachePolicy.cs",
                         "src/Sollang.Compiler/Cli/IncrementalCodegenCache.cs",

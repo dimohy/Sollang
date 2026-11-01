@@ -55,6 +55,8 @@ PARSING_PRODUCERS = [
     "src/Sollang.Compiler/Cli/GrammarCompiler.cs",
     "src/Sollang.Compiler/Sollang.Compiler.csproj",
     "src/Sollang.Compiler.Generators/Sollang.Compiler.Generators.csproj",
+    # Linked into the generator project and consumed while emitting parser code.
+    "src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs",
 ]
 PARSING_DERIVED = {
     "src/Sollang.Compiler/obj/generated/Sollang.Compiler.Generators/Sollang.Compiler.Generators.ParserSourceGenerator/GeneratedParser.g.cs": PARSING_PRODUCERS[0],
