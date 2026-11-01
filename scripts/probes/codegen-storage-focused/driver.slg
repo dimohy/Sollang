@@ -1,0 +1,60 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as types
+import sollang.compiler.semantic.storage_registration as storage
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+
+run: -> Unit uses Console, File, Process {
+    ["main {}",; ~] -> analysis.analyze => missingPackage
+    missingPackage -> types.resolveAnalyzed => missing!
+    missing!.types -> len => originalCount
+    storage.registerPredeclaredStorageTypes(missingPackage, missing!.types) -> when {
+        Ok(_) { process.exit(1)
+            return }
+        Err(_) {}
+    }
+    (missing!.types -> len) != originalCount -> if { process.exit(2)
+        return }
+    "missing:atomic" -> println
+    "stdlib/sys/directory.slg" -> file.mapText => directorySource
+    "stdlib/sys/path.slg" -> file.mapText => pathSource
+    "stdlib/sys/directory/kind.slg" -> file.mapText => kindSource
+    [directorySource, pathSource, kindSource; ~] -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> types.resolveAnalyzed => semantic!
+    package -> modules.identitiesAnalyzed => identities
+    storage.registerPredeclaredStorageTypes(package, semantic!.types) -> when {
+        Ok(registered) { registered }
+        Err(_) { process.exit(3)
+            return }
+    } => registered
+    registered.ids -> each identity {
+        semantic!.types[identity] => type
+        semantic!.types[type.first] => element
+        "$(type.kind):" -> print
+        element.module >= 0 -> if {
+            package.ranges[element.module] => range
+            package.sources[element.module] -> slice(0, package.sources[element.module] -> len) => source
+            [UInt8; ~] => name!
+            modules.appendDeclarationNameBytes(source, identities[element.module], range, package.tokens, package.symbols, element.symbol, name!)
+            name! -> file.borrowBytes => owner
+            owner -> slice(0, owner -> len) -> print
+        } else { element.symbol -> types.builtinTypeName -> print }
+        ":$(type.length)" -> println
+    }
+    semantic!.types -> len => beforeRepeat
+    storage.registerPredeclaredStorageTypes(package, semantic!.types) -> when {
+        Ok(repeated) {
+            (repeated.ids -> len) != (registered.ids -> len)
+                -> if { process.exit(4) }
+            0..<(registered.ids -> len) -> each index {
+                repeated.ids[index] != registered.ids[index] -> if { process.exit(5) }
+            }
+        }
+        Err(_) { process.exit(6) }
+    }
+    (semantic!.types -> len) != beforeRepeat -> if { process.exit(7) }
+    "reuse:stable" -> println
+}
+
+main { run() }
