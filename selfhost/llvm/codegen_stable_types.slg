@@ -32,7 +32,7 @@ stableRuntimeResultAlias name: ref Field -> Bool {
     false
 }
 
-appendStableRuntimeResult context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, type: typeIds.SemanticType, signatureIds: ref [Int; ~], visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+appendStableRuntimeResult context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, types: ref [typeIds.SemanticType; ~], type: typeIds.SemanticType, signatureIds: ref [Int; ~], visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
     package.ranges[type.module] => range
     names.stableResultPrefix() -> appendTypeText(bytes)
     0..<2 -> each ordinal {
@@ -58,7 +58,7 @@ appendStableRuntimeResult context: mut TypeFieldContext, package: ref analysis.P
         }
         count! != 1 or payload! < 0 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         ordinal > 0 -> if { bytes -> push(',') }
-        context -> appendStableType(package, semantic, payload!, signatureIds, visiting, bytes) -> when {
+        context -> appendStableType(package, semantic, types, payload!, signatureIds, visiting, bytes) -> when {
             Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
             Ok {}
         }
@@ -82,11 +82,11 @@ stableBuiltin symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCap
     Result<Unit, TypeUniverseCaptureError>.Ok
 }
 
-stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, signatureIds: ref [Int; ~], visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
-    semantic.types[typeId] => type
+stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, types: ref [typeIds.SemanticType; ~], typeId: Int, signatureIds: ref [Int; ~], visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    types[typeId] => type
     type.kind == 1 and type.origin == 1 -> if { type.symbol -> stableBuiltin(bytes) -> return }
     type.kind == 1 and type.origin == 3 -> if {
-        (signatureIds -> len) != (semantic.types -> len)
+        (signatureIds -> len) != (types -> len)
             -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
         signatureIds[typeId] - 512 => role
         role < 0 or role > 2 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
@@ -125,7 +125,7 @@ stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnaly
             Ok(field) { field }
         } => name
         declarationKind == 4 and (name -> stableRuntimeResultAlias)
-            -> if { context -> appendStableRuntimeResult(package, semantic, type, signatureIds, visiting, bytes) -> return }
+            -> if { context -> appendStableRuntimeResult(package, semantic, types, type, signatureIds, visiting, bytes) -> return }
         declarationKind == 4 -> if { names.stableEnumPrefix() } else { names.stableStructPrefix() } -> appendTypeText(bytes)
         name.bytes -> each byte { bytes -> push(byte) }
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
@@ -155,7 +155,7 @@ stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnaly
             bytes -> push(':')
             label! -> each byte { bytes -> push(byte) }
             bytes -> push(':')
-            context -> appendStableType(package, semantic, fieldType!, signatureIds, visiting, bytes) -> when {
+            context -> appendStableType(package, semantic, types, fieldType!, signatureIds, visiting, bytes) -> when {
                 Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                 Ok {}
             }
@@ -165,7 +165,7 @@ stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnaly
         Result<Unit, TypeUniverseCaptureError>.Ok -> return
     }
     type.kind == 3 and type.first >= 0 -> if {
-        semantic.types[type.first] => element
+        types[type.first] => element
         element.kind == 1 and element.origin == 1 and (element.symbol -> typeIds.canonicalBuiltinSymbol) == 2
             -> if {
                 names.stableBuiltinPrefix() -> appendTypeText(bytes)
@@ -198,14 +198,14 @@ stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnaly
         }
         else { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     } -> appendTypeText(bytes)
-    context -> appendStableType(package, semantic, type.first, signatureIds, visiting, bytes) -> when {
+    context -> appendStableType(package, semantic, types, type.first, signatureIds, visiting, bytes) -> when {
         Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
         Ok {}
     }
     type.kind == 5 or type.kind == 13 or (type.kind == 7 and type.symbol == 1)
         -> if {
             bytes -> push(',')
-            context -> appendStableType(package, semantic, type.second, signatureIds, visiting, bytes) -> when {
+            context -> appendStableType(package, semantic, types, type.second, signatureIds, visiting, bytes) -> when {
                 Err(error) { Result<Unit, TypeUniverseCaptureError>.Err(error) -> return }
                 Ok {}
             }
@@ -220,13 +220,13 @@ stableTypeCore context: mut TypeFieldContext, package: ref analysis.PackageAnaly
     Result<Unit, TypeUniverseCaptureError>.Ok
 }
 
-appendStableType context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, signatureIds: ref [Int; ~], visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
-    typeId < 0 or typeId >= (semantic.types -> len)
+appendStableType context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, types: ref [typeIds.SemanticType; ~], typeId: Int, signatureIds: ref [Int; ~], visiting: mut [Bool; ~], bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    typeId < 0 or typeId >= (types -> len)
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-    visiting[typeId] or semantic.types[typeId].status != 0
+    visiting[typeId] or types[typeId].status != 0
         -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     true => visiting[typeId]
-    context -> stableTypeCore(package, semantic, typeId, signatureIds, visiting, bytes) => result
+    context -> stableTypeCore(package, semantic, types, typeId, signatureIds, visiting, bytes) => result
     false => visiting[typeId]
     result
 }
@@ -243,13 +243,15 @@ public stableUtf16Length bytes: ref [UInt8; ~] -> Int {
     length!
 }
 
-public resolvedStableTypeIdentityField context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
+public resolvedStableTypeIdentityFieldWithTypes context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, types: ref [typeIds.SemanticType; ~], typeId: Int, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> {
     [Bool; ~] => visiting!
-    semantic.types -> each _ { visiting! -> push(false) }
+    types -> each _ { visiting! -> push(false) }
     [UInt8; ~] => bytes!
-    context -> appendStableType(package, semantic, typeId, signatureIds, visiting!, bytes!) -> when {
+    context -> appendStableType(package, semantic, types, typeId, signatureIds, visiting!, bytes!) -> when {
         Err(error) { Result<Field, TypeUniverseCaptureError>.Err(error) -> return }
         Ok {}
     }
     Result<Field, TypeUniverseCaptureError>.Ok(Field { bytes: bytes! })
 }
+
+public resolvedStableTypeIdentityField context: mut TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, typeId: Int, signatureIds: ref [Int; ~] -> Result<Field, TypeUniverseCaptureError> => context -> resolvedStableTypeIdentityFieldWithTypes(package, semantic, semantic.types, typeId, signatureIds)

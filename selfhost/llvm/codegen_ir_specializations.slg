@@ -1,0 +1,27 @@
+namespace sollang.compiler.llvm.codegen_ir_specializations
+
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+
+public capture prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError> {
+    plan.status != 0 or plan.templateNode < 0 or plan.templateNode >= (ir -> len)
+        -> if { Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    ir[plan.templateNode] => function
+    function.kind != 0 -> if { Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+    [Int; ~] => additional!
+    function.nextOperand => parameter!
+    parameter! >= 0 -> while {
+        parameter! >= (ir -> len) -> if { Result<keys.FunctionSpecialization, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        additional! -> push(ir[parameter!].typeId)
+        ir[parameter!].nextOperand => parameter!
+    }
+    [Int; ~] => templates!
+    plan.inputTemplates -> each type { templates! -> push(type) }
+    [Int; ~] => actuals!
+    plan.actualInputs -> each type { actuals! -> push(type) }
+    function.operand1 >= 0 -> if { ir[function.operand1].typeId } else { -1 } => input
+    keys.FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: plan.resultType, status: plan.status } => request
+    prepared -> keys.captureFunctionSpecialization(types, request, declaredIds)
+}

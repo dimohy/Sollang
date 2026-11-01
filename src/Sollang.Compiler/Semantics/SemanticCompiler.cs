@@ -14536,15 +14536,8 @@ internal sealed partial class SemanticCompiler
             return false;
         }
         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
-        if (!_types.TryResolveInModule(typeName, _currentModuleName, out type))
-        {
-            if (!typeName.StartsWith("Option<", StringComparison.Ordinal)
-                && !typeName.StartsWith("Result<", StringComparison.Ordinal))
-            {
-                return false;
-            }
-            type = ParseType(typeName, expression.Line, expression.Column);
-        }
+        if (!TryResolveConstructorType(typeName, expression.Line, expression.Column, out type))
+            return false;
         if (!_types.IsEnum(type))
         {
             return false;
@@ -18461,7 +18454,7 @@ internal sealed partial class SemanticCompiler
         if (expression.Path.Count < 2 || expression.Arguments.Count != 1)
             return [];
         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
-        if (!_types.TryResolveInModule(typeName, _currentModuleName, out var type) || !_types.IsEnum(type))
+        if (!TryResolveConstructorType(typeName, expression.Line, expression.Column, out var type) || !_types.IsEnum(type))
             return [];
         var variant = _types.GetEnum(type).Variants
             .FirstOrDefault(candidate => candidate.Name == expression.Path[^1]);

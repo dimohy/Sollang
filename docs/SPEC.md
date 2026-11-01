@@ -1999,6 +1999,12 @@ fail-closed: an unknown or cyclic provenance path is never treated as borrowed.
 
 ## Static Trait Method Contracts
 
+Structural enum constructor type syntax such as `Option<T>` and `Result<T, E>`
+is resolved in the active generic owner environment before consulting global
+aliases. Constructor admission and owned-payload transfer use the same type
+resolution, so abstract or sibling-owner aliases cannot replace the concrete
+payload contract during specialization or semantic reuse.
+
 An `impl` is a declaration independently of its methods. An empty marker-trait
 implementation and an implementation containing only associated-type bindings
 remain available to generic trait and associated-type equality constraints.
@@ -6295,6 +6301,12 @@ Current backend:
   no hash-domain prefix. Ordinary explicit declarations and concrete impl methods
   derive their name, owner, resolved types, ownership and effects from current
   preparation, rather than accepting an externally supplied C# function string.
+  Concrete function specializations derive their ordered argument environment
+  from the actual typed call plan. Their identity retains the template's generic
+  names and type syntax while replacing bound input, return and additional
+  parameter types and recording concrete specialization types. Generated names
+  use the registered semantic argument identities, never IR offsets or ABI names.
+  A repeated concrete call contributes the same function identity once.
   Generic declaration identities retain their ordered parameter names, trait
   bound and associated-type equality facts. A deferred composite input has no
   bound input type, whereas a deferred composite result or additional parameter

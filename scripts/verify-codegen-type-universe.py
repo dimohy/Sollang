@@ -140,7 +140,7 @@ def main():
                         assert row['types'] and row['functions'] and all(r['identity'] for r in row['functions'])
                         if args.stable_function_output:
                             native_lines = args.stable_function_output.read_text(encoding='utf-8').splitlines()
-                            assert not any(value.startswith(('function-error:', 'error:')) for value in native_lines), 'NATIVE_FUNCTION_CAPTURE_ERROR'
+                            assert not any(value.startswith(('function-error:', 'error:', 'specialization-error:', 'specialization-field-error:')) for value in native_lines), 'NATIVE_FUNCTION_CAPTURE_ERROR'
                             actual = [value[len('function:'):] for value in native_lines if value.startswith('function:')]
                             expected = [entry['identity'] for entry in row['functions'] if entry['facts']['ModuleName'] == args.stable_function_module]
                             assert expected and sorted(actual) == sorted(expected), 'STABLE_FUNCTION_IDENTITY_MISMATCH'
