@@ -1,0 +1,16 @@
+import sollang.compiler.toolchain as toolchain
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    Arena(0) => clangStorage!
+    arguments[2] -> toolchain.executablePath("clang", 0, clangStorage!) => clang
+    arguments[1] == "wasm" -> if {
+        Arena(0) => wasmLdStorage!
+        arguments[2] -> toolchain.executablePath("wasm-ld", 0, wasmLdStorage!) => wasmLd
+        clang -> toolchain.linkWasmBrowser(wasmLd, arguments[3], arguments[4], arguments[5], "-O1") -> process.exit
+    } else { arguments[1] == "linux" -> if {
+            clang -> toolchain.linkLinux(arguments[3], arguments[4], arguments[5], "-O1", 0, false) -> process.exit
+        } else { process.exit(2) }
+    }
+}

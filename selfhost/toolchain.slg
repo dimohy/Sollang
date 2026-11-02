@@ -2,6 +2,114 @@ namespace sollang.compiler.toolchain
 
 import sys.process as process
 import sys.file as file
+import sys.path as paths
+import sys.runtime as runtime
+
+public executablePath home: Text, name: Text, hostTarget: Int, storage: mut Arena -> Text {
+    (home -> len) == 0 -> if { name -> return }
+    hostTarget == 0 -> if {
+        "$home\\bin\\$name.exe" -> materialize(storage)
+    } else { "$home/bin/$name" -> materialize(storage) }
+}
+
+runLinker arguments: [Text; ~] -> Int uses Console, Process {
+    process.Command {
+        argv: arguments, workingDirectoryValue: "", hasWorkingDirectory: false
+        environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true
+        standardInput: process.Input.Inherit
+        standardOutput: process.Output.Inherit, standardError: process.Output.Inherit
+    } -> run -> when {
+        Ok(code) { code }
+        Err(error) { "sollang: cannot run linker: $error" -> runtime.eprintln
+            -1 }
+    }
+}
+
+# Keep the two stages and their argument decisions aligned with
+# WasmBrowserLinker.LinkLlvmIr, including the exported browser ABI.
+public linkWasmBrowser clang: Text, wasmLd: Text, llvmPath: Text, objectPath: Text, output: Text, optimization: Text -> Int uses Console, Process {
+    [clang, "-target", "wasm32-unknown-unknown-wasm", optimization, "-g", "-fno-addrsig", "-c", llvmPath, "-o", objectPath; ~]
+        -> runLinker => compileCode
+    compileCode != 0 -> if { compileCode -> return }
+    [wasmLd, "--no-entry", "--export=sollang_start", "--export=sollang_alloc",
+    "--export-memory", "--allow-undefined", "--gc-sections", objectPath, "-o", output; ~]
+        -> runLinker
+}
+
+# WslLinuxLinker.ToWslPath resolves a full Windows path before converting it.
+# Keep the owned path alive until the converted Text is copied to caller storage.
+toWslPath value: Text, storage: mut Arena -> Result<Text, Text> uses File {
+    value -> paths.fromText(paths.Style.Windows) -> absolute -> when {
+        Ok(full) { full }
+        Err(error) { Result<Text, Text>.Err(error) -> return }
+    } => full
+    full -> pathText => absolute
+    (absolute -> len) >= 3 and (absolute -> byte(1)) == ':'
+        and ((absolute -> byte(2)) == '/' or (absolute -> byte(2)) == '\\')
+        -> unless {
+            "cannot convert path to WSL path: $absolute" -> materialize(storage) => error
+            Result<Text, Text>.Err(error) -> return
+        }
+    [UInt8; ~] => bytes!
+    "/mnt/" => prefix
+    UIntSize(0) => prefixIndex!
+    prefixIndex! < (prefix -> len) -> while {
+        bytes! -> push(prefix -> byte(prefixIndex!))
+        prefixIndex! + 1 => prefixIndex!
+    }
+    absolute -> byte(0) => drive!
+    drive! >= 'A' and drive! <= 'Z' -> if { drive! + 32 => drive! }
+    bytes! -> push(drive!)
+    UIntSize(2) => index!
+    index! < (absolute -> len) -> while {
+        absolute -> byte(index!) => current
+        current == '\\' -> if { UInt8('/') } else { current } => converted
+        bytes! -> push(converted)
+        index! + 1 => index!
+    }
+    bytes! -> file.borrowBytes => owner
+    owner -> slice(0, owner -> len) -> materialize(storage) => converted
+    Result<Text, Text>.Ok(converted)
+}
+
+# Match WslLinuxLinker: compile a target object, link on the Linux host, then
+# grant execute permission only for an executable product.
+public linkLinux clang: Text, llvmPath: Text, objectPath: Text, output: Text, optimization: Text, hostTarget: Int, sharedLibrary: Bool -> Int uses Console, File, Process {
+    [clang, "-target", "x86_64-unknown-linux-gnu", optimization, "-fno-addrsig"; ~] => compile!
+    sharedLibrary -> if { compile! -> push("-fPIC") }
+    ["-c", llvmPath, "-o", objectPath] -> each argument { compile! -> push(argument) }
+    compile! -> runLinker => compileCode
+    compileCode != 0 -> if { compileCode -> return }
+    [Text; ~] => link!
+    Arena(0) => objectStorage!
+    Arena(0) => outputStorage!
+    hostTarget == 0 -> if {
+        objectPath -> toWslPath(objectStorage!) -> when {
+            Ok(value) { value }
+            Err(error) { "sollang: $error" -> runtime.eprintln
+                -1 -> return }
+        }
+    } else { objectPath } => linuxObject
+    hostTarget == 0 -> if {
+        output -> toWslPath(outputStorage!) -> when {
+            Ok(value) { value }
+            Err(error) { "sollang: $error" -> runtime.eprintln
+                -1 -> return }
+        }
+    } else { output } => linuxOutput
+    hostTarget == 0 -> if {
+        ["wsl.exe", "--exec", "cc"] -> each argument { link! -> push(argument) }
+    } else { link! -> push("cc") }
+    sharedLibrary -> if { link! -> push("-shared") }
+    [linuxObject, "-ldl", "-Wl,--gc-sections", "-s", "-o", linuxOutput]
+        -> each argument { link! -> push(argument) }
+    link! -> runLinker => linkCode
+    linkCode != 0 -> if { linkCode -> return }
+    hostTarget == 0 and not sharedLibrary -> if {
+        ["wsl.exe", "--exec", "chmod", "+x", linuxOutput; ~] -> runLinker -> return
+    }
+    0
+}
 
 # The caller claims the definition/library stage names. Match WindowsLinker's
 # explicit llvm-lib import generation instead of relying on CRT startup objects

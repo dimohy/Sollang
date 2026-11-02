@@ -1203,25 +1203,32 @@ emitPreparedLinuxContextWithUnitStream context: ref emitterContext.EmitContext, 
 }
 
 emitPreparedWasmContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
-    context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
-    context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
-    context -> diagnostics.usesStandardError => usesStandardError
-    context -> usesReachableOwnedFileRuntime(state) => needsOwnedFileRuntime
-    context -> diagnostics.usesTextRuntime
-        -> if { usesStandardError -> textOutputRuntime.emitWasmTextRuntime }
-    context -> diagnostics.usesIntMaterialization
-        -> if { numberFormat.emitIntFormatRuntime() }
-    (context -> diagnostics.usesIntInterpolation) or (context -> usesDeferredScalarCapture(state, 0)) => usesIntOutput
-    (context -> diagnostics.usesBoolInterpolation) or (context -> usesDeferredScalarCapture(state, 23)) => usesBoolOutput
-    usesIntOutput -> if { numberFormat.emitIntTextRuntime() }
-    usesBoolOutput -> if { numberFormat.emitBoolTextRuntime() }
-    usesStandardError and usesIntOutput
-        -> if { numberFormat.emitIntStandardErrorRuntime() }
-    usesStandardError and usesBoolOutput
-        -> if { numberFormat.emitBoolStandardErrorRuntime() }
-    "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)" -> println
-    context -> emitCore(state)
-    needsOwnedFileRuntime -> if { llvmRuntime.emitWasmOwnedFile() }
+    context -> emitPreparedWasmContextWithUnitStream(state, true, false)
+}
+
+emitPreparedWasmContextWithUnitStream context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, streamed: Bool -> Unit uses Console, Process {
+    not (context -> preparedCodegenBoundaryReused(0))
+        -> if {
+            context.expectedPathStyle -> textOutputRuntime.emitMemoryPrimitives(context.pointerBitWidth)
+            context -> usesReachableResizeRuntime(state) -> if { textOutputRuntime.emitResizePrimitive() }
+            context -> diagnostics.usesStandardError => usesStandardError
+            context -> diagnostics.usesTextRuntime
+                -> if { usesStandardError -> textOutputRuntime.emitWasmTextRuntime }
+            context -> diagnostics.usesIntMaterialization
+                -> if { numberFormat.emitIntFormatRuntime() }
+            (context -> diagnostics.usesIntInterpolation) or (context -> usesDeferredScalarCapture(state, 0)) => usesIntOutput
+            (context -> diagnostics.usesBoolInterpolation) or (context -> usesDeferredScalarCapture(state, 23)) => usesBoolOutput
+            usesIntOutput -> if { numberFormat.emitIntTextRuntime() }
+            usesBoolOutput -> if { numberFormat.emitBoolTextRuntime() }
+            usesStandardError and usesIntOutput
+                -> if { numberFormat.emitIntStandardErrorRuntime() }
+            usesStandardError and usesBoolOutput
+                -> if { numberFormat.emitBoolStandardErrorRuntime() }
+            "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)" -> println
+        }
+    context -> emitCoreWithUnitStream(state, emitEntry, streamed)
+    not (context -> preparedCodegenBoundaryReused(2)) and (context -> usesReachableOwnedFileRuntime(state))
+        -> if { llvmRuntime.emitWasmOwnedFile() }
 }
 
 emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console, Process {

@@ -389,11 +389,63 @@ public emitCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~], use
 }
 
 public emitCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    NativeEmissionProduct { windows: true, sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
-    sources -> emitCheckedNativeProduct(diagnosticPaths, paths, userSourceStart, cache, product)
+    EmissionProduct { target: llvmTarget.windowsX64(), sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
+    sources -> emitCheckedProduct(diagnosticPaths, paths, userSourceStart, cache, product)
 }
 
-emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request, product: NativeEmissionProduct -> Int uses Console, File, Process {
+struct ProductTargetRejections {
+    count: Int
+    mouseEvents: Bool
+    concurrentJoins: Bool
+    parallel: Bool
+    sockets: Bool
+    dns: Bool
+    nativeInterop: Bool
+    comInterop: Bool
+}
+
+collectProductTargetRejections product: EmissionProduct, context: ref emitterContext.EmitContext -> ProductTargetRejections {
+    ProductTargetRejections {
+        count: 0, mouseEvents: false, concurrentJoins: false, parallel: false
+        sockets: false, dns: false, nativeInterop: false, comInterop: false
+    } => rejected!
+    product.target.objectFormat == 3 -> if {
+        context -> diagnostics.usesMouseEventsRuntime => rejected!.mouseEvents
+        context.usesConcurrentStreamJoins => rejected!.concurrentJoins
+        context -> diagnostics.usesParallelBranches => rejected!.parallel
+        context -> diagnostics.usesDnsRuntime => rejected!.dns
+        (context -> diagnostics.usesSocketRuntime) and not rejected!.dns => rejected!.sockets
+        (context -> diagnostics.nativeInteropFunctionCount) > 0 => rejected!.nativeInterop
+    }
+    product.target.objectFormat != 1 -> if {
+        (context -> diagnostics.comInteropFunctionCount) > 0 => rejected!.comInterop
+    }
+    [rejected!.mouseEvents, rejected!.concurrentJoins, rejected!.parallel,
+    rejected!.sockets, rejected!.dns, rejected!.nativeInterop, rejected!.comInterop]
+        -> each blocked { blocked -> if { rejected!.count + 1 => rejected!.count } }
+    rejected!
+}
+
+emitProductTargetRejections rejected: ProductTargetRejections, product: EmissionProduct -> Unit uses Console {
+    rejected.mouseEvents -> if {
+        "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
+    }
+    rejected.concurrentJoins -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
+    rejected.parallel -> if { diagnostics.emitWasmParallelDiagnostic() }
+    rejected.sockets -> if {
+        "; sollang semantic error: network sockets are unavailable on wasm32-browser; use a host-provided networking adapter" -> println
+    }
+    rejected.dns -> if {
+        "; sollang semantic error: system name resolution is unavailable on wasm32-browser; use an explicit host-provided resolver" -> println
+    }
+    rejected.nativeInterop -> if { diagnostics.emitWasmNativeInteropDiagnostic() }
+    rejected.comInterop -> if {
+        product.target.objectFormat == 3 -> if { "wasm32-browser" } else { "Linux" }
+            -> diagnostics.emitComTargetDiagnostic
+    }
+}
+
+emitCheckedProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request, product: EmissionProduct -> Int uses Console, File, Process {
     userSourceStart < 0 or userSourceStart > (sources -> len)
         -> if {
             "; sollang source root error: invalid standard-library source prefix" -> println
@@ -418,10 +470,10 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
         Ok(value) { value }
     } => parsedPackage
     sources -> emitSourceStyleNotes
-    product.windows -> if { llvmTarget.windowsX64() } else { llvmTarget.linuxX64() } => target
-    product.windows -> if { "windows-x64" } else { "linux-x64" } => targetName
-    product.windows -> if { 1 } else { 0 } => expectedPathStyle
-    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: expectedPathStyle } => prepareRequest
+    product.target => target
+    target.objectFormat == 1 -> if { "windows-x64" } else { target.objectFormat == 2 -> if { "linux-x64" } else { "wasm32-browser" } } => targetName
+    target.objectFormat == 1 -> if { 1 } else { 0 } => expectedPathStyle
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: target.objectFormat != 3, expectedPathStyle: expectedPathStyle } => prepareRequest
     parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
     cache.enabled -> if {
         prepared -> capturePreparedCodegenModules(paths, userSourceStart) -> Option<Result<codegenKeys.CompilationModules, codegenKeys.CompilationModuleError>>.Some
@@ -457,8 +509,8 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
         Ready(context) { context }
     } => context!
     context! -> checkedContextDiagnosticCount => diagnosticCount!
-    product.windows -> if { 0 } else { context! -> diagnostics.comInteropFunctionCount } => comInteropCount
-    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    product -> collectProductTargetRejections(context!) => targetRejections
+    diagnosticCount! + targetRejections.count => diagnosticCount!
     diagnosticCount! == 0 -> if {
         cache.enabled -> if {
             context! -> capturePreparedCodegenRequest(codegenCatalog) -> when {
@@ -499,18 +551,22 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
                     target.dataLayoutLine -> println
                     target.tripleLine -> println
                 }
-            product.windows -> if {
+            product.target.objectFormat == 1 -> if {
                 context! -> emitPreparedWindowsContextWithUnitStream(scheduledState, false, cache.enabled)
             } else {
                 context! -> emitPreparedLinuxContextWithUnitStream(scheduledState, false, cache.enabled)
             }
             not (context! -> preparedCodegenBoundaryReused(2))
-                -> if { plan -> emitLibraryExports(context!, scheduledState, product.windows) }
+                -> if { plan -> emitLibraryExports(context!, scheduledState, (product.target.objectFormat == 1)) }
             cache.enabled -> if { codegenUnits.endStreamedUnits() }
         } else {
             context! -> prepareScheduledCoreEmitterState => scheduledState
             context! -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
             preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+            product.target.objectFormat == 3 -> if {
+                context! -> emitWasmRuntimeTargetDiagnostics(scheduledState) => runtimeDiagnostics
+                runtimeDiagnostics > 0 -> if { runtimeDiagnostics -> return }
+            }
             pendingWords -> stagePreparedSemanticCache(cache)
                 -> unless { 1 -> return }
             cache.enabled -> if { context! -> beginPreparedCodegenBoundary(0) }
@@ -519,11 +575,13 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
                     target.dataLayoutLine -> println
                     target.tripleLine -> println
                 }
-            product.windows -> if {
+            product.target.objectFormat == 1 -> if {
                 context! -> emitPreparedWindowsContextWithUnitStream(scheduledState, true, cache.enabled)
-            } else {
-                context! -> emitPreparedLinuxContextWithUnitStream(scheduledState, true, cache.enabled)
-            }
+            } else { product.target.objectFormat == 2 -> if {
+                    context! -> emitPreparedLinuxContextWithUnitStream(scheduledState, true, cache.enabled)
+                } else {
+                    context! -> emitPreparedWasmContextWithUnitStream(scheduledState, true, cache.enabled)
+            } }
             cache.enabled -> if { codegenUnits.endStreamedUnits() }
         }
     } else {
@@ -532,7 +590,7 @@ emitCheckedNativeProduct sources: move [Text; ~], diagnosticPaths: [Text; ~], pa
         emittedSemanticCount == 0 -> if {
             context! -> emitIrInvariantDiagnostics
         }
-        comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+        targetRejections -> emitProductTargetRejections(product)
     }
     diagnosticCount!
 }
@@ -552,100 +610,23 @@ public emitLinuxCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~]
 }
 
 public emitLinuxCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    NativeEmissionProduct { windows: false, sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
-    sources -> emitCheckedNativeProduct(diagnosticPaths, paths, userSourceStart, cache, product)
+    EmissionProduct { target: llvmTarget.linuxX64(), sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
+    sources -> emitCheckedProduct(diagnosticPaths, paths, userSourceStart, cache, product)
 }
 
-public emitWasmChecked sources: move [Text; ~] -> Int uses Console, Process {
+public emitWasmChecked sources: move [Text; ~] -> Int uses Console, File, Process {
     [Text; ~] => paths
     sources -> emitWasmCheckedWithPaths(paths, 0)
 }
 
-public emitWasmCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, Process {
-    userSourceStart < 0 or userSourceStart > (sources -> len)
-        -> if {
-            "; sollang source root error: invalid standard-library source prefix" -> println
-            1 -> return
-        }
-    sources -> syntaxDiagnosticCount => syntaxCount
-    syntaxCount > 0 -> if {
-        sources -> emitFileSyntaxDiagnostics(paths)
-        syntaxCount -> return
-    }
-    sources -> emitSourceStyleNotes
-    llvmTarget.wasm32Browser() => target
-    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest
-    prepareRequest.sources -> semanticContext.prepareWithStandardLibrarySources(prepareRequest.standardLibrarySourceCount) => basePrepared
-    prepareRequest -> prepareCheckedSnapshot(basePrepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~]) -> when {
-        DeclarationRejected(rejection) {
-            rejection -> emitFunctionDeclarationRejection(paths)
-            1 -> return
-        }
-        Rejected(rejection) {
-            rejection -> emitSignatureRejection(paths)
-            1 -> return
-        }
-        ImportRejected(rejection) {
-            rejection -> emitInterpolationImportRejection(paths)
-            1 -> return
-        }
-        Ready(context) { context }
-    } => context
-    context -> checkedContextDiagnosticCount => diagnosticCount!
-    false => usesUnsupportedMouseEvents!
-    false => usesUnsupportedConcurrentStreamJoins!
-    false => usesUnsupportedParallel!
-    false => usesUnsupportedSockets!
-    false => usesUnsupportedDns!
-    0 => unsupportedNativeInteropCount!
-    0 => unsupportedComInteropCount!
-    context -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents!
-    usesUnsupportedMouseEvents! -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins!
-    usesUnsupportedConcurrentStreamJoins! -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context -> diagnostics.usesParallelBranches => usesUnsupportedParallel!
-    usesUnsupportedParallel! -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context -> diagnostics.usesDnsRuntime => usesUnsupportedDns!
-    context -> diagnostics.usesSocketRuntime => usesUnsupportedSockets!
-    usesUnsupportedDns! -> if { false => usesUnsupportedSockets! }
-    usesUnsupportedSockets! -> if { diagnosticCount! + 1 => diagnosticCount! }
-    usesUnsupportedDns! -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount!
-    unsupportedNativeInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount!
-    unsupportedComInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
-    diagnosticCount! == 0 -> if {
-        context -> emitInterpolationSemanticWarnings
-        context -> emitOrdinaryNumericWarnings(userSourceStart)
-        context -> prepareScheduledCoreEmitterState => scheduledState
-        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
-        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
-        context -> emitWasmRuntimeTargetDiagnostics(scheduledState) => asyncDiagnostics
-        asyncDiagnostics > 0 -> if { asyncDiagnostics -> return }
-        target.dataLayoutLine -> println
-        target.tripleLine -> println
-        context -> emitPreparedWasmContext(scheduledState)
-    } else {
-        context -> diagnostics.emitBlockingDiagnostics
-        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
-        emittedSemanticCount == 0 -> if {
-            context -> emitIrInvariantDiagnostics
-        }
-        usesUnsupportedMouseEvents! -> if {
-            "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
-        }
-        usesUnsupportedConcurrentStreamJoins! -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
-        usesUnsupportedParallel! -> if { diagnostics.emitWasmParallelDiagnostic() }
-        usesUnsupportedSockets! -> if { "; sollang semantic error: network sockets are unavailable on wasm32-browser; use a host-provided networking adapter" -> println }
-        usesUnsupportedDns! -> if { "; sollang semantic error: system name resolution is unavailable on wasm32-browser; use an explicit host-provided resolver" -> println }
-        unsupportedNativeInteropCount! > 0 -> if {
-            diagnostics.emitWasmNativeInteropDiagnostic()
-        }
-        unsupportedComInteropCount! > 0 -> if {
-            "wasm32-browser" -> diagnostics.emitComTargetDiagnostic
-        }
-    }
-    diagnosticCount!
+public emitWasmCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, File, Process {
+    semanticCache.disabled() => cache
+    sources -> emitWasmCheckedWithSourcePathsCached(paths, paths, userSourceStart, cache)
+}
+
+public emitWasmCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    EmissionProduct { target: llvmTarget.wasm32Browser(), sharedLibrary: false, libraryFile: "", interfaceStage: "" } => product
+    sources -> emitCheckedProduct(diagnosticPaths, paths, userSourceStart, cache, product)
 }
 
 emitImportFunctionChoice prepared: ref semanticContext.SemanticSnapshot, candidate: calls.SourceFunctionCandidate -> Unit uses Console {
@@ -1384,6 +1365,7 @@ public emitWasmCheckedFiles paths: move [Text; ~] -> Int uses Console, File, Pro
 }
 
 public emitLibraryCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request, windows: Bool, libraryFile: Text, interfaceStage: Text -> Int uses Console, File, Process {
-    NativeEmissionProduct { windows: windows, sharedLibrary: true, libraryFile: libraryFile, interfaceStage: interfaceStage } => product
-    sources -> emitCheckedNativeProduct(diagnosticPaths, paths, userSourceStart, cache, product)
+    windows -> if { llvmTarget.windowsX64() } else { llvmTarget.linuxX64() } => target
+    EmissionProduct { target: target, sharedLibrary: true, libraryFile: libraryFile, interfaceStage: interfaceStage } => product
+    sources -> emitCheckedProduct(diagnosticPaths, paths, userSourceStart, cache, product)
 }

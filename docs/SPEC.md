@@ -850,6 +850,18 @@ Notes:
 - A manifest build without `-o` writes to `build/<product>` with the target's
   `.exe` or `.wasm` suffix where applicable. Explicit CLI options override only
   build settings, not manifest identity or root ownership.
+- Target selection applies to the emitted product independently of the host's
+  path syntax. A Windows host builds `linux-x64` by compiling a Linux object
+  and linking it with WSL `cc`; a Linux host uses its local `cc`. Executable
+  products linked through WSL receive execute permission; shared libraries
+  retain their shared-link contract.
+  `wasm32-browser` compiles a WebAssembly object and links it with `wasm-ld`,
+  exporting `sollang_start`, `sollang_alloc`, and memory without a native entry
+  point. All three targets use common checked preparation and target-keyed
+  semantic and codegen cache admission. A target-specific linker does not
+  replace source, interface, type, diagnostic, or cache validation.
+  `run` requires the current native host target before build work begins;
+  cross-target build support does not imply cross-target process execution.
 - `--jobs <n>` accepts a positive `Int` decimal value and bounds compiler
   workers. Zero, signs, non-digits, missing values, and values above
   `2147483647` are rejected before generation. The C# Windows linker bounds
@@ -874,8 +886,12 @@ Notes:
   It exclusively claims two short sibling staging paths
   for LLVM and the linked executable. A later build skips an occupied pair
   left by a crashed process rather than deleting paths it does not own; after
-  256 occupied pairs it fails explicitly. A failed frontend or link removes its
-  claimed stages before returning and does not publish a new final product.
+  256 occupied pairs it fails explicitly. A known frontend diagnostic removes
+  its claimed stages before returning. Unexpected frontend or link failures
+  retain their diagnostic stages and do not publish a new final product.
+  Object stages belong to the claimed LLVM stage; an occupied object-stage
+  name also prevents reuse of that staging ordinal. A successful link releases
+  its private object after publication; a failed link preserves it for diagnosis.
   Successful stages are published with `sys.file.atomicReplace`; publication
   is per file, not an atomic transaction across the LLVM and executable pair.
   A staging claim, cleanup, or publication failure is reported explicitly.

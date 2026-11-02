@@ -239,10 +239,10 @@ replaceMappedPath paths: mut [Text; ~], index: Int, value: Text -> Unit {
 }
 
 emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    paths -> emitDiscoveredAndExplicitNativeProduct(explicitPaths, cache, true, false, "", "")
+    paths -> emitDiscoveredAndExplicitProduct(explicitPaths, cache, 0, false, "", "")
 }
 
-emitDiscoveredAndExplicitNativeProduct paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request, windows: Bool, sharedLibrary: Bool, libraryFile: Text, interfaceStage: Text -> Int uses Console, File, Process {
+emitDiscoveredAndExplicitProduct paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request, target: Int, sharedLibrary: Bool, libraryFile: Text, interfaceStage: Text -> Int uses Console, File, Process {
     (paths -> len) == 0 -> if {
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
@@ -277,6 +277,10 @@ emitDiscoveredAndExplicitNativeProduct paths: move [path.Path; ~], explicitPaths
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
+        target == 0 => windows
+        target == 2 -> if {
+            sources! -> llvm.emitWasmCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache) -> return
+        }
         sharedLibrary -> if {
             sources! -> llvm.emitLibraryCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache, windows, libraryFile, interfaceStage)
         } else {
@@ -290,35 +294,11 @@ emitDiscoveredAndExplicitNativeProduct paths: move [path.Path; ~], explicitPaths
 }
 
 emitDiscoveredAndExplicitLinuxChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    paths -> emitDiscoveredAndExplicitNativeProduct(explicitPaths, cache, false, false, "", "")
+    paths -> emitDiscoveredAndExplicitProduct(explicitPaths, cache, 1, false, "", "")
 }
 
-emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File, Process {
-    (paths -> len) == 0 -> if {
-        "; sollang source root error: source root contains no readable .slg files" -> println
-        1
-    } else {
-        [Text; ~] => mappedPaths!
-        paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
-            Ok(value) { value }
-            Err(error) {
-                "; sollang source path error: $error" -> println
-                1 -> return
-            }
-        } => batch
-        [Text; ~] => diagnosticPaths!
-        batch.displayPaths -> appendPathViews(diagnosticPaths!)
-        batch.standardLibrarySourceCount => userSourceStart
-        batch.owners => owners
-        [Text; ~] => sources!
-        0 => sourceIndex!
-        sourceIndex! < (owners -> len) -> while {
-            owners[sourceIndex!] -> sourceDecoding.utf8Text => source
-            sources! -> push(source)
-            sourceIndex! + 1 => sourceIndex!
-        }
-        sources! -> llvm.emitWasmCheckedWithPaths(diagnosticPaths!, userSourceStart)
-    }
+emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    paths -> emitDiscoveredAndExplicitProduct(explicitPaths, cache, 2, false, "", "")
 }
 
 sourceRootExitFailure: -> Unit uses Process {
@@ -344,7 +324,7 @@ public emitCheckedRoot root: move path.Path, explicitStart: UIntSize, target: In
 }
 
 public emitCachedCheckedRoot root: move path.Path, explicitStart: UIntSize, target: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
-    cache.enabled and target != 0 and target != 1
+    target < 0 or target > 2
         -> if {
             "; sollang semantic cache target is unsupported" -> println
             1 -> return
@@ -358,7 +338,7 @@ public emitCachedCheckedRoot root: move path.Path, explicitStart: UIntSize, targ
             root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitLinuxChecked(explicitPaths, cache)
         } else {
             explicitStart -> collectExplicitPaths => explicitPaths
-            root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitWasmChecked(explicitPaths)
+            root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitWasmChecked(explicitPaths, cache)
         }
     }
 }
@@ -393,5 +373,5 @@ public emitCachedLibraryCheckedRoot root: move path.Path, explicitStart: UIntSiz
         1 -> return
     }
     explicitStart -> collectExplicitPaths => explicitPaths
-    root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitNativeProduct(explicitPaths, cache, target == 0, true, libraryFile, interfaceStage)
+    root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitProduct(explicitPaths, cache, target, true, libraryFile, interfaceStage)
 }

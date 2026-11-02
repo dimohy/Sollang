@@ -953,27 +953,11 @@ defaultNativeOutput source: Text, target: Int, storage: mut Arena -> Text {
 }
 
 nativeClangPath llvmHome: Text, hostTarget: Int, storage: mut Arena -> Text {
-    (llvmHome -> len) == 0 -> if {
-        "clang"
-    } else {
-        hostTarget == 0 -> if {
-            llvmHome -> windowsClangPath(storage)
-        } else {
-            llvmHome -> posixClangPath(storage)
-        }
-    }
+    llvmHome -> toolchain.executablePath("clang", hostTarget, storage)
 }
 
-windowsClangPath llvmHome: Text, storage: mut Arena -> Text {
-    "$llvmHome\\bin\\clang.exe" -> materialize(storage)
-}
-
-posixClangPath llvmHome: Text, storage: mut Arena -> Text {
-    "$llvmHome/bin/clang" -> materialize(storage)
-}
-
-nativeLlvmLibPath llvmHome: Text, storage: mut Arena -> Text {
-    (llvmHome -> len) == 0 -> if { "llvm-lib" } else { "$llvmHome\\bin\\llvm-lib.exe" -> materialize(storage) }
+nativeLlvmLibPath llvmHome: Text, hostTarget: Int, storage: mut Arena -> Text {
+    llvmHome -> toolchain.executablePath("llvm-lib", hostTarget, storage)
 }
 
 appendWindowsNativeLibraries llvmPath: Text, argv: mut [Text; ~] -> Bool uses Console, File {
@@ -1050,6 +1034,7 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
     Arena(0) => executableStageStorage!
     Arena(0) => cacheStageNameStorage!
     Arena(0) => codegenStageNameStorage!
+    Arena(0) => objectStageNameStorage!
     Arena(0) => interfaceStageNameStorage!
     Arena(0) => definitionStageNameStorage!
     Arena(0) => importStageNameStorage!
@@ -1057,13 +1042,14 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
     ordinal! < 256 -> while {
         ".l$(ordinal!).ll.semantic" -> materialize(cacheStageNameStorage!) => cacheStageName
         ".l$(ordinal!).ll.cgu" -> materialize(codegenStageNameStorage!) => codegenStageName
+        ".l$(ordinal!).ll.o" -> materialize(objectStageNameStorage!) => objectStageName
         ".l$(ordinal!).ll.slglib.json" -> materialize(interfaceStageNameStorage!) => interfaceStageName
         ".l$(ordinal!).ll.ucrt.def" -> materialize(definitionStageNameStorage!) => definitionStageName
         ".l$(ordinal!).ll.ucrt.lib" -> materialize(importStageNameStorage!) => importStageName
         false => existingCacheStage!
         existingEntries -> each entry {
             entry.name -> pathText => name
-            name == cacheStageName or name == codegenStageName or name == interfaceStageName or name == definitionStageName or name == importStageName
+            name == cacheStageName or name == codegenStageName or name == objectStageName or name == interfaceStageName or name == definitionStageName or name == importStageName
                 -> if { true => existingCacheStage! }
         }
         existingCacheStage! -> if {
@@ -1365,14 +1351,6 @@ validateNativeCodegenStage stage: Text -> Bool uses Console, File {
 }
 
 executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
-    target == 2 -> if {
-        "sollang: native CLI wasm linking is not implemented yet" -> println
-        -1 -> return
-    }
-    target != hostTarget -> if {
-        "sollang: native CLI cross-target linking is not implemented yet; requested $(target -> nativeTargetName)" -> println
-        -1 -> return
-    }
 
     process.arguments() => arguments
     arguments[0] -> executableDirectory => compilerDirectory
@@ -1422,7 +1400,7 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     Arena(0) => importStageStorage!
     "$llvmStage.ucrt.lib" -> materialize(importStageStorage!) => importStage
     Arena(0) => importToolStorage!
-    llvmHome -> nativeLlvmLibPath(importToolStorage!) => importTool
+    llvmHome -> nativeLlvmLibPath(hostTarget, importToolStorage!) => importTool
     sharedLibrary and target == 0 and (llvmHome -> len) > 0
         -> if {
             importTool -> path.fromText(path.nativeStyle()) => importToolPath
@@ -1439,7 +1417,9 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
         sharedLibrary -> if {
             target == 0 -> if { "windows-library-stdlib-cache" } else { "linux-library-stdlib-cache" }
         } else {
-            target == 0 -> if { "windows-stdlib-cache" } else { "linux-stdlib-cache" }
+            target == 0 -> if { "windows-stdlib-cache" } else {
+                target == 1 -> if { "linux-stdlib-cache" } else { "wasm-stdlib-cache" }
+            }
         } => cachedMode
         emitArgv! -> push(cachedMode)
         emitArgv! -> push(cacheDestination)
@@ -1478,31 +1458,38 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     }
     Arena(0) => clangPathStorage!
     llvmHome -> nativeClangPath(hostTarget, clangPathStorage!) => clangPath
-    [clangPath, llvmStage, optimization, "-Wno-override-module", "-o", executableStage; ~] => clangArgv!
-    sharedLibrary -> if { clangArgv! -> push("-shared") }
-    target == 0 -> if {
-        clangArgv! -> push("-Xlinker")
-        sharedLibrary -> if { "/noentry" } else { "/subsystem:console" } => entryOption
-        clangArgv! -> push(entryOption)
-        sharedLibrary -> if {
-            "LIBRARY ucrtbase.dll\nEXPORTS\n_wspawnvp\nmemcpy\nstrlen\ngetchar\n" => specification
-            importTool -> toolchain.createImportLibrary(definitionStage, importStage, specification) => importCode
-            importCode != 0 -> if {
-                llvmStage -> reportNativeBuildFailureStages(executableStage)
-                importCode -> return
+    Arena(0) => objectStageStorage!
+    "$llvmStage.o" -> materialize(objectStageStorage!) => objectStage
+    target == 2 -> if {
+        Arena(0) => wasmLdStorage!
+        llvmHome -> toolchain.executablePath("wasm-ld", hostTarget, wasmLdStorage!) => wasmLd
+        clangPath -> toolchain.linkWasmBrowser(wasmLd, llvmStage, objectStage, executableStage, optimization)
+    } else { target == 1 -> if {
+            clangPath -> toolchain.linkLinux(llvmStage, objectStage, executableStage, optimization, hostTarget, sharedLibrary)
+        } else {
+            [clangPath, "-target", "x86_64-pc-windows-msvc", llvmStage, optimization, "-Wno-override-module", "-o", executableStage; ~] => clangArgv!
+            sharedLibrary -> if { clangArgv! -> push("-shared") }
+            clangArgv! -> push("-Xlinker")
+            sharedLibrary -> if { "/noentry" } else { "/subsystem:console" } => entryOption
+            clangArgv! -> push(entryOption)
+            sharedLibrary -> if {
+                "LIBRARY ucrtbase.dll\nEXPORTS\n_wspawnvp\nmemcpy\nstrlen\ngetchar\n" => specification
+                importTool -> toolchain.createImportLibrary(definitionStage, importStage, specification) => importCode
+                importCode != 0 -> if {
+                    llvmStage -> reportNativeBuildFailureStages(executableStage)
+                    importCode -> return
+                }
+                clangArgv! -> push("-lkernel32")
+                clangArgv! -> push(importStage)
             }
-            clangArgv! -> push("-lkernel32")
-            clangArgv! -> push(importStage)
-        }
-        llvmStage -> appendWindowsNativeLibraries(clangArgv!)
-            -> unless {
-                llvmStage -> reportNativeBuildFailureStages(executableStage)
-                -1 -> return
-            }
-    }
-    sharedLibrary and target == 1 -> if { clangArgv! -> push("-fPIC") }
-    process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
-    clangCommand -> run -> processCode => clangCode
+            llvmStage -> appendWindowsNativeLibraries(clangArgv!)
+                -> unless {
+                    llvmStage -> reportNativeBuildFailureStages(executableStage)
+                    -1 -> return
+                }
+            process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
+            clangCommand -> run -> processCode
+    } } => clangCode
     clangCode != 0 -> if {
         "sollang: native linker failed with exit code $clangCode" -> println
         llvmStage -> reportNativeBuildFailureStages(executableStage)
@@ -1572,6 +1559,9 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
             definitionStage -> removeNativeBuildStages(importStage)
                 -> unless { -1 -> return }
         }
+    target != 0 -> if {
+        objectStage -> removeNativeBuildStage -> unless { -1 -> return }
+    }
     keepTemps and not quiet -> if { "Kept $llvmPath" -> println }
     not quiet -> if { "Wrote $output" -> println }
     0
@@ -2197,6 +2187,10 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         }
         1 -> return
     }
+    runAfterBuild and target! != hostTarget -> if {
+        "sollang: run target must match the current host ($(hostTarget -> nativeTargetName)); received $(target! -> nativeTargetName)" -> runtime.eprintln
+        1 -> return
+    }
     llvmHome! -> toolchain.llvmHome => llvmHome!
     (projectOption! -> len) > 0 and (workspaceOption! -> len) > 0
         -> if {
@@ -2607,6 +2601,7 @@ main {
         or (arguments[1] -> textEquals("test-linux"))
         -> if { 4 => optionStart! }
     (arguments[1] -> textEquals("windows-stdlib-cache")) or (arguments[1] -> textEquals("linux-stdlib-cache"))
+        or (arguments[1] -> textEquals("wasm-stdlib-cache"))
         -> if { 6 => optionStart! }
     optionStart! -> requestedWorkerLimit => workers!
     workers! < 0 -> if {
@@ -2653,6 +2648,11 @@ main {
     arguments[1] -> textEquals("linux-stdlib-cache")
         -> if {
             emitCachedRootAndFiles(1)
+            process.exit(0)
+        }
+    arguments[1] -> textEquals("wasm-stdlib-cache")
+        -> if {
+            emitCachedRootAndFiles(2)
             process.exit(0)
         }
     arguments[1] -> textEquals("windows-stdlib")

@@ -99,6 +99,49 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     true -> if { emitProcessRuntimeCommon() }
     """
     declare i64 @_get_osfhandle(i32)
+    define internal i1 @sollang_process_windows_arg_needs_quotes(ptr %source, i32 %chars) {
+    entry:
+      %empty = icmp eq i32 %chars, 0
+      br i1 %empty, label %quoted, label %scan
+    scan:
+      %index = phi i32 [ 0, %entry ], [ %next, %advance ]
+      %character_ptr = getelementptr i16, ptr %source, i32 %index
+      %character = load i16, ptr %character_ptr, align 2
+      %quote = icmp eq i16 %character, 34
+      %space = icmp eq i16 %character, 32
+      %ascii_offset = sub i16 %character, 9
+      %ascii_space = icmp ule i16 %ascii_offset, 4
+      %next_line = icmp eq i16 %character, 133
+      %no_break = icmp eq i16 %character, 160
+      %ogham = icmp eq i16 %character, 5760
+      %unicode_offset = sub i16 %character, 8192
+      %unicode_space = icmp ule i16 %unicode_offset, 10
+      %separator_offset = sub i16 %character, 8232
+      %separator = icmp ule i16 %separator_offset, 1
+      %narrow_no_break = icmp eq i16 %character, 8239
+      %medium_space = icmp eq i16 %character, 8287
+      %ideographic_space = icmp eq i16 %character, 12288
+      %needs0 = or i1 %quote, %space
+      %needs1 = or i1 %needs0, %ascii_space
+      %needs2 = or i1 %needs1, %next_line
+      %needs3 = or i1 %needs2, %no_break
+      %needs4 = or i1 %needs3, %ogham
+      %needs5 = or i1 %needs4, %unicode_space
+      %needs6 = or i1 %needs5, %separator
+      %needs7 = or i1 %needs6, %narrow_no_break
+      %needs8 = or i1 %needs7, %medium_space
+      %needs = or i1 %needs8, %ideographic_space
+      br i1 %needs, label %quoted, label %advance
+    advance:
+      %next = add i32 %index, 1
+      %done = icmp eq i32 %next, %chars
+      br i1 %done, label %plain, label %scan
+    quoted:
+      ret i1 true
+    plain:
+      ret i1 false
+    }
+
     define internal ptr @sollang_process_quote_windows_arg(ptr %source, i32 %chars) {
     entry:
       %chars64 = zext i32 %chars to i64
@@ -109,6 +152,15 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       %allocated = icmp ne ptr %output, null
       br i1 %allocated, label %initialize, label %fail
     initialize:
+      %needs_quotes = call i1 @sollang_process_windows_arg_needs_quotes(ptr %source, i32 %chars)
+      br i1 %needs_quotes, label %quote_initialize, label %plain_copy
+    plain_copy:
+      %plain_bytes = mul i64 %chars64, 2
+      call void @llvm.memcpy.p0.p0.i64(ptr %output, ptr %source, i64 %plain_bytes, i1 false)
+      %plain_null = getelementptr i16, ptr %output, i64 %chars64
+      store i16 0, ptr %plain_null, align 2
+      ret ptr %output
+    quote_initialize:
       store i16 34, ptr %output, align 2
       %index_slot = alloca i32, align 4
       %output_slot = alloca i64, align 8
@@ -817,6 +869,33 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     fail:
       ret ptr null
     }
+    define internal i1 @sollang_process_windows_explicit_application(ptr %program) {
+    entry:
+      br label %scan
+    scan:
+      %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+      %character_ptr = getelementptr i16, ptr %program, i64 %index
+      %character = load i16, ptr %character_ptr, align 2
+      %slash = icmp eq i16 %character, 47
+      %backslash = icmp eq i16 %character, 92
+      %colon = icmp eq i16 %character, 58
+      %quote = icmp eq i16 %character, 34
+      %separator = or i1 %slash, %backslash
+      %qualified = or i1 %colon, %quote
+      %explicit = or i1 %separator, %qualified
+      br i1 %explicit, label %explicit_application, label %check_end
+    check_end:
+      %end = icmp eq i16 %character, 0
+      br i1 %end, label %search_application, label %advance
+    advance:
+      %next = add i64 %index, 1
+      br label %scan
+    explicit_application:
+      ret i1 true
+    search_application:
+      ret i1 false
+    }
+
     define internal i64 @sollang_process_spawn_windows(ptr %program, ptr %argv, i64 %count, ptr %working_directory, ptr %environment, ptr %stdin_override, ptr %stdout_override, ptr %stderr_override) {
     entry:
       %command = call ptr @sollang_process_join_windows_args(ptr %argv, i64 %count)
@@ -860,7 +939,9 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       store ptr %stderr_handle, ptr %stderr_ptr, align 8
       %has_environment = icmp ne ptr %environment, null
       %creation_flags = select i1 %has_environment, i32 1024, i32 0
-      %created = call i32 @CreateProcessW(ptr %program, ptr %command, ptr null, ptr null, i32 1, i32 %creation_flags, ptr %environment, ptr %working_directory, ptr %startup, ptr %process_info)
+      %explicit_application = call i1 @sollang_process_windows_explicit_application(ptr %program)
+      %application = select i1 %explicit_application, ptr %program, ptr null
+      %created = call i32 @CreateProcessW(ptr %application, ptr %command, ptr null, ptr null, i32 1, i32 %creation_flags, ptr %environment, ptr %working_directory, ptr %startup, ptr %process_info)
       %created_ok = icmp ne i32 %created, 0
       br i1 %created_ok, label %spawned, label %close_handles_fail
     spawned:

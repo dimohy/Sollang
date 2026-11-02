@@ -635,6 +635,13 @@ staging and release its own locks after publication or failure.
 Validate final file paths and derived semantic-cache destinations against the
 file publication contract before starting frontend or link work. An output path
 that fits does not establish that its longer derived cache path also fits.
+Keep checked preparation and cache admission common across target descriptors.
+A browser target uses the same source and type decisions before its own runtime
+and linker checks. Give each linker its object compilation, library/export
+arguments, and host execution boundary; preserve the corresponding C# linker's
+stage order. Convert Windows paths to absolute WSL paths only at the Linux
+link boundary, and retain the owned path until the converted argument is stored.
+Cross-target `build` and host-only `run` are separate contracts.
 
 Associated types may occur inside input or result storage: for example,
 `[Item; ~]`, `[Item; 2]`, and `{Text: Item}` retain their declared shape when
