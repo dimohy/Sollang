@@ -2863,3 +2863,41 @@ public specialize request: SpecializationRequest -> SpecializationResult {
     SpecializationResult { types: types!, root: specialized.root, status: specialized.status } => result
     result
 }
+
+# A concrete outer reference may still contain a deferred associated Item.
+# Classify the complete graph once; such declarations keep their canonical
+# dependent syntax instead of trying to serialize the unresolved sentinel.
+public isConcrete types: ref [SemanticType; ~], fields: ref [NominalField; ~], typeId: Int, memo: mut [Int; ~] -> Bool {
+    typeId < 0 or typeId >= (types -> len)
+        -> if { false -> return }
+    memo[typeId] == 1 -> if { true -> return }
+    memo[typeId] == 0 or memo[typeId] == 2 -> if { false -> return }
+    2 => memo[typeId]
+    types[typeId] => type
+    type.status != 0 or type.containsParameter or type.kind <= 0
+        -> if { 0 => memo[typeId]
+            false -> return }
+    type.kind != 1 and type.kind != 9 -> if {
+        type.first >= 0 -> if {
+            types -> isConcrete(fields, type.first, memo)
+                -> unless { 0 => memo[typeId]
+                    false -> return }
+        }
+        type.second >= 0 -> if {
+            types -> isConcrete(fields, type.second, memo)
+                -> unless { 0 => memo[typeId]
+                    false -> return }
+        }
+        type.kind == 10 -> if {
+            fields -> each field {
+                field.ownerType == typeId -> if {
+                    types -> isConcrete(fields, field.fieldType, memo)
+                        -> unless { 0 => memo[typeId]
+                            false -> return }
+                }
+            }
+        }
+    }
+    1 => memo[typeId]
+    true
+}

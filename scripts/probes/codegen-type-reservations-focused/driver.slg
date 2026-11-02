@@ -25,7 +25,7 @@ run: -> Unit uses Console {
         return }
     prepared.package -> artifacts.captureTypeDetailsAnalyzed(current!.types, current!.references, current!.fields) => details
     generations.CompilationIdentity { compiler: 1, target: 0, configuration: 1 } => identity
-    current!.types -> arrays.capture(details, declarations, identity, fingerprint.bytes) -> when {
+    current!.types -> arrays.capture(current!.fields, details, declarations, identity, fingerprint.bytes) -> when {
         Ok(words) { words }
         Err(code) { "capture:$code" -> println
             return }
@@ -49,4 +49,36 @@ run: -> Unit uses Console {
         or duplicate!.types[target + 1].length != 9 -> if { "duplicate-input-mutated" -> println }
 }
 
-main { run() }
+associated: -> Unit uses Console {
+    """
+    trait Counter {
+        type Item
+        count: self, values: [Item; 2] -> Int
+    }
+    struct IntCounter { }
+    impl Counter for IntCounter {
+        type Item = Int
+        count: self, values: [Int; 2] -> Int { values -> len }
+    }
+    main { }
+    """ => source
+    [source,; ~] -> context.prepare => prepared
+    prepared.package -> interfaces.declarationIdentitiesAnalyzed(prepared.modules) => declarations
+    prepared -> fingerprints.capture => fingerprint
+    prepared.package -> artifacts.captureTypeDetailsAnalyzed(prepared.semantic.types, prepared.semantic.references, prepared.semantic.fields) => details
+    generations.CompilationIdentity { compiler: 1, target: 0, configuration: 1 } => identity
+    prepared.semantic.types -> arrays.capture(prepared.semantic.fields, details, declarations, identity, fingerprint.bytes) -> when {
+        Ok(words) { words }
+        Err(code) { "associated:capture:$code" -> println
+            return }
+    } => words
+    words[6] == 1 -> if { "associated:concrete-only" -> println } else {
+        "associated:count:$(words[6])" -> println
+    }
+    [source,; ~] -> context.prepare => fresh
+    "associated" -> report(words -> arrays.restore(prepared.package, fresh.semantic, identity, fingerprint.bytes))
+}
+
+main { run()
+    associated()
+}

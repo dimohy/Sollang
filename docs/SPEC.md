@@ -6543,7 +6543,13 @@ Current backend:
   publication uses a same-directory write-through temporary file and atomic
   replacement after a successful link.
 - semantic owner restoration retains a static-array allocation plan alongside
-  owner facts. Before restoring owners, it validates compiler, target,
+  owner facts. Only arrays with a fully concrete element graph enter this plan.
+  Associated-type annotations in trait prototypes remain deferred until
+  implementation substitution; a resolved outer wrapper does not make an
+  unresolved nested element concrete. Declaration fingerprints, plan capture
+  and restoration share the same recursive concreteness decision. Admitted
+  element recipes retain all identity and slot-conflict checks.
+  Before restoring owners, it validates compiler, target,
   configuration and the current declaration fingerprint, resolves each saved
   element recipe, and reserves array slots in saved ID order. A saved slot is
   an allocation coordinate, never a replacement for structural type identity.

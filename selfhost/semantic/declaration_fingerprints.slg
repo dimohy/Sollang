@@ -19,41 +19,6 @@ struct HeaderTypes {
     lengths: [Int; ~]
 }
 
-# A concrete outer reference may still contain a deferred associated Item.
-# Classify the complete graph once; such declarations keep their canonical
-# dependent syntax instead of trying to serialize the unresolved sentinel.
-concrete prepared: ref context.SemanticSnapshot, typeId: Int, memo: mut [Int; ~] -> Bool {
-    typeId < 0 or typeId >= (prepared.semantic.types -> len)
-        -> if { false -> return }
-    memo[typeId] == 1 -> if { true -> return }
-    memo[typeId] == 0 or memo[typeId] == 2 -> if { false -> return }
-    2 => memo[typeId]
-    prepared.semantic.types[typeId] => type
-    type.status != 0 or type.containsParameter or type.kind <= 0
-        -> if { 0 => memo[typeId]
-            false -> return }
-    type.kind != 1 and type.kind != 9 -> if {
-        type.first >= 0 -> if {
-            prepared -> concrete(type.first, memo) -> unless { 0 => memo[typeId]
-                false -> return }
-        }
-        type.second >= 0 -> if {
-            prepared -> concrete(type.second, memo) -> unless { 0 => memo[typeId]
-                false -> return }
-        }
-        type.kind == 10 -> if {
-            prepared.semantic.fields -> each field {
-                field.ownerType == typeId -> if {
-                    prepared -> concrete(field.fieldType, memo) -> unless { 0 => memo[typeId]
-                        false -> return }
-                }
-            }
-        }
-    }
-    1 => memo[typeId]
-    true
-}
-
 surface prepared: ref context.SemanticSnapshot, source: Int, symbol: Int -> Bool {
     prepared.package.ranges[source] => range
     prepared.package.symbols[range.symbolStart + symbol] => declaration
@@ -277,7 +242,7 @@ public capture prepared: ref context.SemanticSnapshot -> Fingerprint {
     prepared.semantic.references -> each reference {
         reference.sourceModule >= 0 and reference.sourceModule < (prepared.package.ranges -> len)
             and reference.status == 0 and reference.typeId >= 0 and reference.typeId < (prepared.semantic.types -> len)
-            and (prepared -> concrete(reference.typeId, concreteTypes!))
+            and (prepared.semantic.types -> typeIds.isConcrete(prepared.semantic.fields, reference.typeId, concreteTypes!))
             -> if {
                 prepared.package.ranges[reference.sourceModule] => range
                 reference.typeAst >= 0 and reference.typeAst < range.astCount
