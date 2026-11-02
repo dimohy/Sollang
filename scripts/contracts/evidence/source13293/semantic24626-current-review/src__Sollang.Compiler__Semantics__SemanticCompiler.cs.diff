@@ -1,0 +1,140 @@
+--- 07564601a6a840901bdcbdaff50e238fe3f91ef1:src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ current:src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -7720,6 +7720,17 @@
+                 typeTemplate[1..^4], elementType, function, inferredTypes, line, column);
+             return;
+         }
++        var dequePrefix = Shared.TypeNamePolicy.StableDequePrefix();
++        if (typeTemplate.StartsWith(dequePrefix, StringComparison.Ordinal)
++            && typeTemplate.EndsWith('>'))
++        {
++            if (!_types.IsDeque(actualType))
++                throw Error(line, column, $"expected a Deque but received {FormatType(actualType)}");
++            InferGenericArgumentsFromTypeTemplate(
++                typeTemplate[dequePrefix.Length..^1], _types.GetDequeElement(actualType),
++                function, inferredTypes, line, column);
++            return;
++        }
+         if (typeTemplate.StartsWith("Option<", StringComparison.Ordinal)
+             && typeTemplate.EndsWith('>')
+             && _types.TryGetOptionValue(actualType, out var optionValue))
+@@ -12547,6 +12558,7 @@
+                         target.Arguments[0].Column,
+                         $"push expects {FormatType(expectedPushedType)}, got {FormatType(pushedType)}");
+                 }
++                MarkFixedLengthCandidateRequiresGrowable(pushedArgument, expectedPushedType, pushedType);
+                 if (_types.ContainsOwnedStorage(expectedPushedType))
+                 {
+                     RejectBorrowedOwnedStorageTransfers(
+@@ -13498,6 +13510,14 @@
+                         throw Error(expression.Line, expression.Column,
+                             $"method '{path}' cannot receive {FormatType(receiverType.Value)}");
+                     }
++                    ValidatePrimaryFunctionCallArgument(
++                        new NameExpression(receiverName, expression.Line, expression.Column),
++                        function,
++                        function.InputType.Value,
++                        receiverType.Value,
++                        bindings,
++                        mutableBindings,
++                        path);
+                     ValidateAdditionalFunctionArguments(
+                         function,
+                         expression.Arguments,
+@@ -14800,13 +14820,14 @@
+             return false;
+         }
+ 
+-        if (!TryResolveInstanceMethod(type, path[1], functions, out function))
++        var valueType = _types.ReadValueType(type);
++        if (!TryResolveInstanceMethod(valueType, path[1], functions, out function))
+         {
+             return false;
+         }
+ 
+         receiverName = path[0];
+-        receiverType = type;
++        receiverType = valueType;
+         return true;
+     }
+ 
+@@ -14982,30 +15003,9 @@
+                 expression.Column,
+                 $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(argumentType)}");
+         }
+-        MarkFixedLengthCandidateRequiresGrowable(
+-            expression.Arguments[0],
+-            function.InputType,
+-            argumentType);
+-        if (_types.IsReference(function.InputType.Value)
+-            && !_types.IsReference(argumentType))
+-        {
+-            EnsureReferenceArgumentPlace(expression.Arguments[0], bindings, mutableBindings, path);
+-        }
+-
+-        if (FunctionMovesOwnedHeapInput(function))
+-        {
+-            EnsureOwnedParameterCallArgument(expression.Arguments[0], path, bindings);
+-        }
+-
+-        if (FunctionMutablyBorrowsInput(function))
+-        {
+-            EnsureMutableBorrowCallArgument(expression.Arguments[0], path, mutableBindings);
+-        }
+-
+-        if (FunctionReadonlyBorrowsHeapInput(function, argumentType))
+-        {
+-            EnsureReadonlyBorrowCallArgument(expression.Arguments[0], path);
+-        }
++        ValidatePrimaryFunctionCallArgument(
++            expression.Arguments[0], function, function.InputType.Value, argumentType,
++            bindings, mutableBindings, path);
+ 
+         ValidateAdditionalFunctionArguments(
+             function,
+@@ -15019,6 +15019,34 @@
+         if (function.IsLocal)
+             _resolvedCaptureCalls[expression] = function;
+         return AsyncCallType(function);
++    }
++
++    private void ValidatePrimaryFunctionCallArgument(
++        Expression argument,
++        BoundFunction function,
++        BoundType expectedType,
++        BoundType actualType,
++        IReadOnlyDictionary<string, BoundType> bindings,
++        IReadOnlySet<string>? mutableBindings,
++        string path)
++    {
++        MarkFixedLengthCandidateRequiresGrowable(argument, expectedType, actualType);
++        if (_types.IsReference(expectedType) && !_types.IsReference(actualType))
++        {
++            EnsureReferenceArgumentPlace(argument, bindings, mutableBindings, path);
++        }
++        if (FunctionMovesOwnedHeapInput(function))
++        {
++            EnsureOwnedParameterCallArgument(argument, path, bindings);
++        }
++        if (FunctionMutablyBorrowsInput(function))
++        {
++            EnsureMutableBorrowCallArgument(argument, path, mutableBindings);
++        }
++        if (FunctionReadonlyBorrowsHeapInput(function, actualType))
++        {
++            EnsureReadonlyBorrowCallArgument(argument, path);
++        }
+     }
+ 
+     private void ValidateAdditionalFunctionArguments(
+@@ -15208,9 +15236,7 @@
+     {
+         if (bindings.TryGetValue(expression.Name, out var type))
+         {
+-            return _types.IsReference(type)
+-                ? _types.GetReference(type).ElementType
+-                : type;
++            return _types.ReadValueType(type);
+         }
+ 
+         if (TryGetFunction(expression.Name, functions, out var function))

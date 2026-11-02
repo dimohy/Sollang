@@ -1,0 +1,69 @@
+--- 67a1172c7edd2256bc9a945e30b7d8d188409566:selfhost/semantic/qualified.slg
++++ current:selfhost/semantic/qualified.slg
+@@ -77,6 +77,43 @@
+         or package.tokens[targetRange.tokenStart + right!].kind == grammar.triviaIdComment())
+         -> while { right! + 1 => right! }
+     right! >= targetRange.tokenCount or package.tokens[targetRange.tokenStart + right!].kind != grammar.tokenIdDot()
++}
++
++# Preserve a known namespace even when the remaining member path is missing.
++# Exact member/enum resolution runs first; this fallback never resolves a leaf.
++canonicalNamespacePrefix package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, firstToken: Int, lastToken: Int -> Int {
++    package.ranges[sourceIndex] => range
++    package.tokens[range.tokenStart + firstToken].span.start => start
++    UInt64(1469598103934665603) => hash!
++    -1 => matchedModule!
++    -1 => matchedToken!
++    firstToken => cursor!
++    cursor! < lastToken -> while {
++        package.tokens[range.tokenStart + cursor!] => token
++        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
++            -> if {
++                UIntSize(0) => byteIndex!
++                byteIndex! < token.span.length -> while {
++                    hash! * 1099511628211 + UInt64(package.sources[sourceIndex] -> byte(token.span.start + byteIndex!)) => hash!
++                    byteIndex! + 1 => byteIndex!
++                }
++                token.kind == grammar.tokenIdIdentifier() -> if {
++                    modules.ImportEdge { sourceModule: sourceIndex, targetHash: hash!, pathStart: start, pathLength: token.span.start + token.span.length - start, aliasToken: -1 } => request
++                    0 => moduleIndex!
++                    moduleIndex! < (identities -> len) and cursor! > matchedToken!
++                        -> while {
++                            package -> modules.importTargetsAnalyzedModule(identities, request, moduleIndex!)
++                                -> if {
++                                    moduleIndex! => matchedModule!
++                                    cursor! => matchedToken!
++                                }
++                            moduleIndex! + 1 => moduleIndex!
++                        }
++                }
++            }
++        cursor! + 1 => cursor!
++    }
++    matchedModule!
+ }
+ 
+ # Status: 0 public symbol, 2 missing member, 3 non-public member.
+@@ -590,6 +627,7 @@
+                                     (package -> modules.importTargetsAnalyzedModule(identities, namespaceRequest, qualifiedModuleSearch!)) or qualifiedEnumMember
+                                         -> if {
+                                             true => qualifiedModuleFound!
++                                            qualifiedModuleTarget! < 0 -> if { qualifiedModuleSearch! => qualifiedModuleTarget! }
+                                             qualifiedIdentity.sourceIndex => qualifiedSourceIndex
+                                             package.sources[qualifiedSourceIndex] -> len => qualifiedSourceLength
+                                             package.sources[qualifiedSourceIndex] -> slice(UIntSize(0), qualifiedSourceLength) => qualifiedSource
+@@ -667,6 +705,14 @@
+                                                 }
+                                         }
+                                     qualifiedModuleSearch! + 1 => qualifiedModuleSearch!
++                                }
++                            not qualifiedModuleFound! and not (package -> qualifiedFunctionUsesImportAlias(imports, sourceIndex!, firstIdentifier!))
++                                -> if {
++                                    package -> canonicalNamespacePrefix(identities, sourceIndex!, firstIdentifier!, lastIdentifier!) => missingNamespace
++                                    missingNamespace >= 0 -> if {
++                                        true => qualifiedModuleFound!
++                                        missingNamespace => qualifiedModuleTarget!
++                                    }
+                                 }
+                             qualifiedModuleFound! -> if {
+                                 2 => qualifiedModuleStatus!

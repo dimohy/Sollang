@@ -1,0 +1,190 @@
+--- 4f5dec5a73862950244db9b9c41ce8e03f3a15e4:selfhost/semantic/call_resolution_sources.slg
++++ current:selfhost/semantic/call_resolution_sources.slg
+@@ -13,6 +13,22 @@
+ 
+ # Per-source typed call resolution extracted from resolveModulesTyped.
+ # Each invocation owns its candidate/result arrays and borrows global indexes.
++
++public receiverSymbolIsRuntimeValue package: ref analysis.PackageAnalysis, sourceModule: Int, symbolIndex: Int -> Bool {
++    sourceModule < 0 or sourceModule >= (package.ranges -> len)
++        -> if { false -> return }
++    package.ranges[sourceModule] => range
++    symbolIndex < 0 or symbolIndex >= range.symbolCount
++        -> if { false -> return }
++    package.symbols[range.symbolStart + symbolIndex] => root
++    root.kind == 35 -> if { true -> return }
++    root.kind != 9 and root.kind != 61 -> if { false -> return }
++    root.parent >= 0 -> if {
++        package.symbols[range.symbolStart + root.parent] => owner
++        owner.kind == 3 or owner.kind == 4 -> if { false -> return }
++    }
++    true
++}
+ 
+ public typedMethodOwnerMatches types: ref [typeIds.SemanticType; ~], receiverTypeId: Int, ownerTypeId: Int, sliceOwner: Bool -> Bool {
+     receiverTypeId < 0 or receiverTypeId >= (types -> len)
+@@ -314,6 +330,10 @@
+ 
+ public prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> TypedMethodDeclarationFacts {
+     package -> indexTypedMethodReferences(references) => referenceIndex
++    package -> prepareTypedMethodDeclarationFactsIndexed(references, identities, resolvedImports, referenceIndex)
++}
++
++prepareTypedMethodDeclarationFactsIndexed package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], referenceIndex: ref TypedMethodReferenceIndex -> TypedMethodDeclarationFacts {
+     [Int; ~] => ownerTypes!
+     [Bool; ~] => primaryMatches!
+     [Int; ~] => traitAsts!
+@@ -408,6 +428,19 @@
+     [Int; ~] => openFunctionCounts
+     [Bool; ~] => importReachability
+     TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability }
++}
++
++typedMethodNameMatches request: TypedMethodRequest, methodSource: Int, nameToken: Int, memberStart: UIntSize, memberLength: UIntSize, package: ref analysis.PackageAnalysis -> Bool {
++    package.ranges[methodSource] => range
++    package.tokens[range.tokenStart + nameToken] => name
++    name.span.length == memberLength => equal!
++    UIntSize(0) => nameByte!
++    equal! and nameByte! < memberLength -> while {
++        (package.sources[methodSource] -> byte(name.span.start + nameByte!)) != (package.sources[request.sourceModule] -> byte(memberStart + nameByte!))
++            -> if { false => equal! }
++        nameByte! + 1 => nameByte!
++    }
++    equal!
+ }
+ 
+ public resolveTypedMethod request: TypedMethodRequest, package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> TypedMethodResolution {
+@@ -496,7 +529,9 @@
+                                     -> if {
+                                         package.symbols[range.symbolStart + method.parent] => implementation
+                                         implementation.kind == 6 and implementation.astNode >= 0
+-                                            and implementation.astNode < range.astCount -> if {
++                                            and implementation.astNode < range.astCount
++                                            and (request -> typedMethodNameMatches(methodSource, method.nameToken, memberStart!, memberLength, package))
++                                            -> if {
+                                                 -1 => ownerTypeId!
+                                                 -1 => ownerAst!
+                                                 (declarations.ownerTypes -> len) == 0 -> if {
+@@ -577,34 +612,24 @@
+                                                                 -> if { true => eligible! }
+                                                         }
+                                                         eligible! -> if {
+-                                                            package.tokens[range.tokenStart + method.nameToken] => name
+-                                                            name.span.length == memberLength => equal!
+-                                                            UIntSize(0) => nameByte!
+-                                                            equal! and nameByte! < memberLength -> while {
+-                                                                (package.sources[methodSource] -> byte(name.span.start + nameByte!)) != (package.sources[request.sourceModule] -> byte(memberStart! + nameByte!))
+-                                                                    -> if { false => equal! }
+-                                                                nameByte! + 1 => nameByte!
+-                                                            }
+-                                                            equal! -> if {
+-                                                                selected!.status >= 0 and candidateRank! == selectedRank!
+-                                                                    -> if {
+-                                                                        2 => selected!.status
+-                                                                        -1 => selected!.functionSymbol
+-                                                                    }
+-                                                                selected!.status < 0 or candidateRank! < selectedRank!
+-                                                                    -> if {
+-                                                                        moduleIndex! => selected!.targetModule
+-                                                                        methodSource => selected!.targetSourceModule
+-                                                                        symbolIndex => selected!.functionSymbol
+-                                                                        ownerTypeId! => selected!.ownerTypeId
+-                                                                        traitIdentity!.targetModule => selected!.traitModule
+-                                                                        traitIdentity!.targetSymbol => selected!.traitSymbol
+-                                                                        candidateRank! => selectedRank!
+-                                                                        modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
+-                                                                            or method.flags / 4 % 2 == 1
+-                                                                            -> if { 0 } else { 1 } => selected!.status
+-                                                                    }
+-                                                            }
++                                                            selected!.status >= 0 and candidateRank! == selectedRank!
++                                                                -> if {
++                                                                    2 => selected!.status
++                                                                    -1 => selected!.functionSymbol
++                                                                }
++                                                            selected!.status < 0 or candidateRank! < selectedRank!
++                                                                -> if {
++                                                                    moduleIndex! => selected!.targetModule
++                                                                    methodSource => selected!.targetSourceModule
++                                                                    symbolIndex => selected!.functionSymbol
++                                                                    ownerTypeId! => selected!.ownerTypeId
++                                                                    traitIdentity!.targetModule => selected!.traitModule
++                                                                    traitIdentity!.targetSymbol => selected!.traitSymbol
++                                                                    candidateRank! => selectedRank!
++                                                                    modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
++                                                                        or method.flags / 4 % 2 == 1
++                                                                        -> if { 0 } else { 1 } => selected!.status
++                                                                }
+                                                         }
+                                                     }
+                                             }
+@@ -1650,45 +1675,33 @@
+     receiverRootNameIndex! < sourceRange.nameCount
+         -> while {
+             package.names[sourceRange.nameStart + receiverRootNameIndex!] => indexedName
+-            false => indexedRootBinding!
+-            indexedName.symbol >= 0 and indexedName.symbol < sourceRange.symbolCount
++            package -> receiverSymbolIsRuntimeValue(sourceIndex, indexedName.symbol)
+                 -> if {
+-                    package.symbols[sourceRange.symbolStart + indexedName.symbol] => indexedRoot
+-                    indexedRoot.kind == 35 or indexedRoot.kind == 9 or indexedRoot.kind == 61
+-                        -> if { true => indexedRootBinding! }
+-                    indexedRootBinding! and indexedRoot.kind != 35 and indexedRoot.parent >= 0
+-                        -> if {
+-                            package.symbols[sourceRange.symbolStart + indexedRoot.parent] => indexedRootParent
+-                            indexedRootParent.kind == 3 or indexedRootParent.kind == 4
+-                                -> if { false => indexedRootBinding! }
++                    package.tokens[sourceRange.tokenStart + indexedName.nameToken] => indexedNameToken
++                    indexedName.astNode => indexedReceiverAncestor!
++                    false => indexedInsideArgument!
++                    indexedReceiverAncestor! >= 0 and not indexedInsideArgument!
++                        -> while {
++                            receiverCallByAst![indexedReceiverAncestor!] => indexedReceiverCall
++                            indexedReceiverCall >= 0 -> if {
++                                package.tokens[sourceRange.tokenStart + receiverNameTokenByCall![indexedReceiverCall]] => indexedReceiverCallName
++                                indexedNameToken.span.start < indexedReceiverCallName.span.start
++                                    and (receiverSymbolByCall![indexedReceiverCall] < 0
++                                    or indexedNameToken.span.start < receiverStartByCall![indexedReceiverCall])
++                                    -> if {
++                                        indexedName.symbol => receiverSymbolByCall![indexedReceiverCall]
++                                        indexedName.astNode => receiverRootAstByCall![indexedReceiverCall]
++                                        indexedNameToken.span.start => receiverStartByCall![indexedReceiverCall]
++                                    }
++                            }
++                            package.nodes[sourceRange.astStart + indexedReceiverAncestor!] => indexedReceiverNode
++                            indexedReceiverNode.kind == 11
++                                and indexedReceiverNode.cstRuleId == grammar.ruleIdCallExpression()
++                                and indexedReceiverNode.start < indexedNameToken.span.start
++                                -> if { true => indexedInsideArgument! }
++                            indexedReceiverNode.parent => indexedReceiverAncestor!
+                         }
+                 }
+-            indexedRootBinding! -> if {
+-                package.tokens[sourceRange.tokenStart + indexedName.nameToken] => indexedNameToken
+-                indexedName.astNode => indexedReceiverAncestor!
+-                false => indexedInsideArgument!
+-                indexedReceiverAncestor! >= 0 and not indexedInsideArgument!
+-                    -> while {
+-                        receiverCallByAst![indexedReceiverAncestor!] => indexedReceiverCall
+-                        indexedReceiverCall >= 0 -> if {
+-                            package.tokens[sourceRange.tokenStart + receiverNameTokenByCall![indexedReceiverCall]] => indexedReceiverCallName
+-                            indexedNameToken.span.start < indexedReceiverCallName.span.start
+-                                and (receiverSymbolByCall![indexedReceiverCall] < 0
+-                                or indexedNameToken.span.start < receiverStartByCall![indexedReceiverCall])
+-                                -> if {
+-                                    indexedName.symbol => receiverSymbolByCall![indexedReceiverCall]
+-                                    indexedName.astNode => receiverRootAstByCall![indexedReceiverCall]
+-                                    indexedNameToken.span.start => receiverStartByCall![indexedReceiverCall]
+-                                }
+-                        }
+-                        package.nodes[sourceRange.astStart + indexedReceiverAncestor!] => indexedReceiverNode
+-                        indexedReceiverNode.kind == 11
+-                            and indexedReceiverNode.cstRuleId == grammar.ruleIdCallExpression()
+-                            and indexedReceiverNode.start < indexedNameToken.span.start
+-                            -> if { true => indexedInsideArgument! }
+-                        indexedReceiverNode.parent => indexedReceiverAncestor!
+-                    }
+-            }
+             receiverRootNameIndex! + 1 => receiverRootNameIndex!
+         }
+     [Int; ~] => leftParenByCall!

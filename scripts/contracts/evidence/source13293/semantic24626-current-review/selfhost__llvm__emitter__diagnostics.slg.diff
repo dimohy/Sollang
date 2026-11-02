@@ -1,0 +1,84 @@
+--- 07564601a6a840901bdcbdaff50e238fe3f91ef1:selfhost/llvm/emitter/diagnostics.slg
++++ current:selfhost/llvm/emitter/diagnostics.slg
+@@ -34,7 +34,7 @@
+ 
+ # Namespace source views may contain trivia. Reuse the language lexer to emit
+ # parsed namespace spelling without allocating a replacement Text owner.
+-emitCanonicalDiagnosticModuleName moduleName: Text -> Unit uses Console {
++public emitCanonicalDiagnosticModuleName moduleName: Text -> Unit uses Console {
+     moduleName -> lexer.lex => tokens
+     tokens -> each token {
+         token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+@@ -5308,8 +5308,8 @@
+     "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+     moduleName -> emitCanonicalDiagnosticModuleName
+     "'] " -> print
+-    diagnostic.code == 5 -> if {
+-        "expected a boxed value but received " -> print
++    diagnostic.code == 5 or diagnostic.code == 9 -> if {
++        diagnostic.code == 9 -> if { "expected a Deque but received " } else { "expected a boxed value but received " } -> print
+         diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
+         println() -> return
+     }
+@@ -8928,25 +8928,55 @@
+     " must implement Hash.hash: self -> Int and Eq.eq: self -> Int" -> println
+ }
+ 
++emitCallOwnershipFunctionName context: ref emitterContext.EmitContext -> Unit uses Console {
++    context.callOwnershipDiagnostic => diagnostic
++    context.ranges[diagnostic.sourceModule] => range
++    diagnostic.callAst >= 0 and diagnostic.callAst < range.astCount
++        and context.nodes[range.astStart + diagnostic.callAst].kind == 11
++        -> if {
++            0 => childAst!
++            childAst! < range.astCount -> while {
++                context.nodes[range.astStart + childAst!] => child
++                child.parent == diagnostic.callAst and child.kind == 16
++                    and child.start == context.nodes[range.astStart + diagnostic.callAst].start
++                    -> if {
++                        calls.ModuleCallResolution {
++                            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++                            origin: 0, targetModule: diagnostic.targetSourceModule,
++                            targetSourceModule: diagnostic.targetSourceModule,
++                            functionSymbol: diagnostic.functionSymbol, status: 0
++                        } => call
++                        context -> emitSemanticCallPathName(call, childAst!, false)
++                        return
++                    }
++                childAst! + 1 => childAst!
++            }
++        }
++    context.ranges[diagnostic.targetSourceModule] => functionRange
++    context.symbols[functionRange.symbolStart + diagnostic.functionSymbol] => function
++    context.tokens[functionRange.tokenStart + function.nameToken] => functionToken
++    context.sources[diagnostic.targetSourceModule] -> slice(functionToken.span.start, functionToken.span.length) -> print
++}
++
+ emitCallOwnershipDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
+     context.callOwnershipDiagnostic => diagnostic
+     context.ranges[diagnostic.sourceModule] => range
+     context.nodes[range.astStart + diagnostic.argumentAst] => argument
+     context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(argument.start) => location
+-    context.ranges[diagnostic.targetSourceModule] => functionRange
+-    context.symbols[functionRange.symbolStart + diagnostic.functionSymbol] => function
+-    context.tokens[functionRange.tokenStart + function.nameToken] => functionToken
+-    context.sources[diagnostic.targetSourceModule] -> slice(functionToken.span.start, functionToken.span.length) => functionName
+     context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+     diagnostic.code == 4 -> if {
+         "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+         moduleName -> emitCanonicalDiagnosticModuleName
+-        "'] function '$functionName' requires an addressable owner or reference; literals and temporary values cannot be borrowed" -> println
++        "'] function '" -> print
++        context -> emitCallOwnershipFunctionName
++        "' requires an addressable owner or reference; literals and temporary values cannot be borrowed" -> println
+         return
+     }
+     "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+     moduleName -> emitCanonicalDiagnosticModuleName
+-    "'] function '$functionName' mutably borrows a container" -> print
++    "'] function '" -> print
++    context -> emitCallOwnershipFunctionName
++    "' mutably borrows a container" -> print
+     diagnostic.code == 1 -> if {
+         context.nodes[range.astStart + diagnostic.rootAst] => root
+         context.tokens[range.tokenStart + root.firstToken] => token

@@ -1,0 +1,50 @@
+--- ef3274c5622c5603b0fd805056259de2ba00a8d8:selfhost/semantic/calls.slg
++++ current:selfhost/semantic/calls.slg
+@@ -1421,6 +1421,21 @@
+     results
+ }
+ 
++# One analysis owns these immutable declaration coordinates. Receiver types,
++# resolved type arenas and selected calls remain inputs to each live query.
++public struct ModuleCallFacts {
++    declarations: TypedMethodDeclarationFacts
++    references: TypedMethodReferenceIndex
++    intrinsicNames: [DeclaredIntrinsicCallableName; ~]
++}
++
++public prepareModuleCallFacts package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> ModuleCallFacts {
++    package -> indexTypedMethodReferences(references) => referenceIndex
++    package -> prepareTypedMethodDeclarationFactsIndexed(references, identities, resolvedImports, referenceIndex) => declarations
++    package -> declaredIntrinsicCallableNames => intrinsicNames
++    ModuleCallFacts { declarations: declarations, references: referenceIndex, intrinsicNames: intrinsicNames }
++}
++
+ public resolveModulesTypedWithReceiverTypes package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~] -> [ModuleCallResolution; ~] {
+     [Bool; ~] => owners
+     [ModuleCallResolution; ~] => calls
+@@ -1439,9 +1454,13 @@
+ # in later call passes while keeping standalone preparation in the public
+ # wrapper above. Receiver types and admitted owner seeds remain separate.
+ public resolveModulesTypedWithPreparedFacts package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], seededOwners: ref [Bool; ~], seededCalls: ref [ModuleCallResolution; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> [ModuleCallResolution; ~] {
+-    package -> indexTypedMethodReferences(semantic.references) => referenceIndex
+-    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => declarations
+-    package -> declaredIntrinsicCallableNames => declaredIntrinsicNames
++    package -> prepareModuleCallFacts(semantic.references, identities, resolvedImports) => facts
++    package -> resolveModulesTypedWithDeclarationFacts(semantic, receiverTypeByCallAst, resolvedTypes, seededOwners, seededCalls, identities, imports, resolvedImports, qualifiedResults, facts)
++}
++
++# Facts must come from this package's unchanged semantic references, module
++# identities and resolved imports. This bundle never crosses an analysis.
++public resolveModulesTypedWithDeclarationFacts package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], seededOwners: ref [Bool; ~], seededCalls: ref [ModuleCallResolution; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], facts: ref ModuleCallFacts -> [ModuleCallResolution; ~] {
+     [Bool; ~] => resolvedNameByAst!
+     package.nodes -> each node { resolvedNameByAst! -> push(false) }
+     [ModuleCallResolution; ~] => results!
+@@ -1517,7 +1536,7 @@
+                 sourceIndex! + 1 => sourceIndex!
+                 continue
+             }
+-        sourceIndex! -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, declaredIntrinsicNames, receiverTypeByCallAst, resolvedTypes, declarations, referenceIndex) => sourceResults
++        sourceIndex! -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, facts.intrinsicNames, receiverTypeByCallAst, resolvedTypes, facts.declarations, facts.references) => sourceResults
+         0 => sourceResultIndex!
+         sourceResultIndex! < (sourceResults -> len) -> while {
+             results! -> push(sourceResults[sourceResultIndex!])

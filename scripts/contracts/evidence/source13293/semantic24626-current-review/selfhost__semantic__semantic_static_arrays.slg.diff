@@ -1,0 +1,33 @@
+--- e000c2aba3a15390804443049ba0ffff8179dfa3:selfhost/semantic/semantic_static_arrays.slg
++++ current:selfhost/semantic/semantic_static_arrays.slg
+@@ -6,15 +6,18 @@
+ import sollang.compiler.semantic.semantic_generations as generations
+ import sollang.compiler.ir.module_artifact_types as artifacts
+ 
+-public capture table: ref [types.SemanticType; ~], details: ref artifacts.TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, identity: generations.CompilationIdentity, fingerprint: [UInt8] -> Result<[UInt64; ~], Int> {
++public capture table: ref [types.SemanticType; ~], fields: ref [types.NominalField; ~], details: ref artifacts.TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, identity: generations.CompilationIdentity, fingerprint: [UInt8] -> Result<[UInt64; ~], Int> {
+     (fingerprint -> len) != 32 or (table -> len) > 1000000
+         -> if { Result<[UInt64; ~], Int>.Err(41) -> return }
+     [UInt64(5931875489630604371), 1, identity.compiler, identity.target, identity.configuration, UInt64(table -> len), 0; ~] => words!
+     fingerprint -> each byte { words! -> push(UInt64(byte)) }
+     UInt64(0) => count!
++    [Int; ~] => concreteTypes!
++    table -> each type { concreteTypes! -> push(-1) }
+     0..<(table -> len) -> each index {
+         table[index] => type
+         type.kind == 4 and type.status == 0 and not type.containsParameter and type.lengthHash == 0
++            and (table -> types.isConcrete(fields, index, concreteTypes!))
+             -> if {
+                 type.length < -1 -> if { Result<[UInt64; ~], Int>.Err(44) -> return }
+                 [type.first,; ~] => roots
+@@ -80,7 +83,9 @@
+         elementRecipe >= UInt64(restored.typeIds -> len)
+             -> if { Result<types.SemanticTypeSet, Int>.Err(44) -> return }
+         restored.typeIds[Int(elementRecipe)] => element
+-        restored.semantic.types[element].status != 0 or restored.semantic.types[element].containsParameter
++        [Int; ~] => concreteTypes!
++        restored.semantic.types -> each type { concreteTypes! -> push(-1) }
++        not (restored.semantic.types -> types.isConcrete(restored.semantic.fields, element, concreteTypes!))
+             -> if { Result<types.SemanticTypeSet, Int>.Err(44) -> return }
+         restored.semantic => nextSemantic
+         nextSemantic.types => nextTypes

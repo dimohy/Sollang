@@ -1,0 +1,140 @@
+--- 07564601a6a840901bdcbdaff50e238fe3f91ef1:selfhost/semantic/diagnostics.slg
++++ current:selfhost/semantic/diagnostics.slg
+@@ -1550,8 +1550,47 @@
+     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
+ }
+ 
++# A typed-empty array owns the location of its element type lookup. Ordinary
++# qualified value paths retain their own location and existing admission.
++typedEmptyArrayPathOwner package: ref analysis.PackageAnalysis, sourceModule: Int, pathAst: Int -> Int {
++    package.ranges[sourceModule] => range
++    package.nodes[range.astStart + pathAst] => path
++    path.kind != 16 -> if { -1 -> return }
++    path.parent => owner!
++    owner! >= 0 and package.nodes[range.astStart + owner!].kind == 12
++        -> while {
++            package.nodes[range.astStart + owner!].parent => owner!
++        }
++    owner! >= 0 and package.nodes[range.astStart + owner!].kind == 37
++        -> if { owner! } else { -1 }
++}
++
+ firstPreparedPrivateNominalDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+     prepared.qualified -> each candidate {
++        candidate.status == 2 and candidate.sourceModule >= 0 and candidate.sourceModule < (prepared.package.ranges -> len)
++            and candidate.targetModule >= 0 and candidate.targetModule < (prepared.modules -> len)
++            and candidate.pathAst >= 0 and candidate.pathAst < prepared.package.ranges[candidate.sourceModule].astCount
++            -> if {
++                prepared.package.ranges[candidate.sourceModule] => range
++                prepared.package -> typedEmptyArrayPathOwner(candidate.sourceModule, candidate.pathAst) => literal
++                literal >= 0 -> if {
++                    false => dependent!
++                    0 => symbolIndex!
++                    symbolIndex! < range.symbolCount and not dependent!
++                        -> while {
++                            prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
++                            (symbol.kind == 7 or symbol.kind == 31) and symbol.astNode >= 0
++                                and (prepared.package -> semanticContext.declarationAncestor(candidate.sourceModule, symbol.astNode, candidate.pathAst))
++                                and (prepared.package -> signatureTypeReferencesGeneric(candidate.sourceModule, symbolIndex!, candidate.pathAst, 0))
++                                -> if { true => dependent! }
++                            symbolIndex! + 1 => symbolIndex!
++                        }
++                    not dependent! -> if {
++                        prepared.package.nodes[range.astStart + literal] => array
++                        SignatureTypeDiagnostic { code: 21, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: array.firstToken, genericToken: -1 } -> return
++                    }
++                }
++            }
+         candidate.status == 3 and candidate.sourceModule >= 0
+             and candidate.sourceModule < (prepared.package.ranges -> len)
+             and candidate.targetModule >= 0 and candidate.targetModule < (prepared.modules -> len)
+@@ -1570,7 +1609,10 @@
+                                         prepared.package.nodes[range.astStart + candidate.pathAst] => path
+                                         path.firstToken >= 0 and path.firstToken < range.tokenCount
+                                             -> if {
+-                                                SignatureTypeDiagnostic { code: 14, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: path.firstToken, genericToken: -1 } -> return
++                                                path.firstToken => locationToken!
++                                                prepared.package -> typedEmptyArrayPathOwner(candidate.sourceModule, candidate.pathAst) => literal
++                                                literal >= 0 -> if { prepared.package.nodes[range.astStart + literal].firstToken => locationToken! }
++                                                SignatureTypeDiagnostic { code: 14, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: locationToken!, genericToken: -1 } -> return
+                                             }
+                                     }
+                             }
+@@ -3191,12 +3233,13 @@
+                         0 => code!
+                         readonlyBorrow -> if {
+                             rootAst! < 0 -> if { 4 => code! } else {
+-                                prepared.package.nodes[range.astStart + rootAst!].kind != 15
++                                not (prepared.package -> semanticContext.callArgumentIsNamedRead(argument.sourceModule, argument.callAst, rootAst!))
+                                     or symbolByAst![range.astStart + rootAst!] < 0
+                                     -> if { 4 => code! }
+                             }
+                         } else {
+-                            rootAst! >= 0 and prepared.package.nodes[range.astStart + rootAst!].kind == 15
++                            rootAst! >= 0
++                                and (prepared.package -> semanticContext.callArgumentIsNamedRead(argument.sourceModule, argument.callAst, rootAst!))
+                                 -> if {
+                                     symbolByAst![range.astStart + rootAst!] => ownerSymbol
+                                     ownerSymbol >= 0 and not (prepared.package -> mutableBorrowOwnerSymbol(argument.sourceModule, prepared.package.symbols[range.symbolStart + ownerSymbol]))
+@@ -4042,32 +4085,35 @@
+         -> if {
+             resolved.types[argument.mismatchExpectedTypeId] => expected
+             resolved.types[argument.mismatchActualTypeId] => actual
+-            expected.kind == 6 and actual.kind != 6 -> if {
+-                argument.argumentAst => diagnosticAst!
+-                argument.parameterOrdinal == 0 and argument.callAst >= 0
+-                    -> if {
+-                        package.ranges[argument.sourceModule] => range
+-                        range.astStart + argument.callAst => globalCall
+-                        package.nodes[globalCall].kind == 10 -> if {
+-                            package -> semanticContext.indexDirectFlowTargetPathsByAst => paths
+-                            paths[globalCall] => target
+-                            target >= 0 -> if { target => diagnosticAst! }
+-                        }
+-                    }
+-                NumericCallArgumentDiagnostic {
+-                    code: 5
+-                    sourceModule: argument.sourceModule
+-                    argumentAst: diagnosticAst!
+-                    callAst: argument.callAst
+-                    targetSourceModule: argument.targetSourceModule
+-                    functionSymbol: argument.functionSymbol
+-                    parameterSymbol: argument.parameterSymbol
+-                    parameterOrdinal: argument.parameterOrdinal
+-                    genericParameterSymbol: -1
+-                    expectedTypeId: argument.mismatchExpectedTypeId
+-                    actualTypeId: argument.mismatchActualTypeId
+-                } -> return
+-            }
++            expected.kind == 7 and expected.origin == 4 and expected.symbol == 6
++                and not (actual.kind == 7 and actual.origin == 4 and actual.symbol == 6) => dequeMismatch
++            (expected.kind == 6 and actual.kind != 6) or dequeMismatch
++                -> if {
++                    argument.argumentAst => diagnosticAst!
++                    argument.parameterOrdinal == 0 and argument.callAst >= 0
++                        -> if {
++                            package.ranges[argument.sourceModule] => range
++                            range.astStart + argument.callAst => globalCall
++                            package.nodes[globalCall].kind == 10 -> if {
++                                package -> semanticContext.indexDirectFlowTargetPathsByAst => paths
++                                paths[globalCall] => target
++                                target >= 0 -> if { target => diagnosticAst! }
++                            }
++                        }
++                    NumericCallArgumentDiagnostic {
++                        code: dequeMismatch -> if { 9 } else { 5 }
++                        sourceModule: argument.sourceModule
++                        argumentAst: diagnosticAst!
++                        callAst: argument.callAst
++                        targetSourceModule: argument.targetSourceModule
++                        functionSymbol: argument.functionSymbol
++                        parameterSymbol: argument.parameterSymbol
++                        parameterOrdinal: argument.parameterOrdinal
++                        genericParameterSymbol: -1
++                        expectedTypeId: argument.mismatchExpectedTypeId
++                        actualTypeId: argument.mismatchActualTypeId
++                    } -> return
++                }
+         }
+     argument.status == 0 and argument.expectedTypeId >= 0
+         and argument.expectedTypeId < (resolved.types -> len)

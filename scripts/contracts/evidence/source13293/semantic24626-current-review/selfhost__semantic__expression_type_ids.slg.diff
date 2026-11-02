@@ -1,0 +1,213 @@
+--- 07564601a6a840901bdcbdaff50e238fe3f91ef1:selfhost/semantic/expression_type_ids.slg
++++ current:selfhost/semantic/expression_type_ids.slg
+@@ -2024,76 +2024,9 @@
+             types! -> push(semanticType)
+             semanticTypeCopyIndex56! + 1 => semanticTypeCopyIndex56!
+         }
+-    # Imported spellings of the affine sys.file.SourceText declaration must
+-    # share the builtin type id semantics. Keeping a second nominal shape here
+-    # makes arrays project the declaration's token field instead of the native
+-    # { data, length, mapping, mappedLength } representation.
+-    -1 => sourceTextModule!
+-    -1 => sourceTextSymbol!
+-    0 => sourceTextModuleSearch!
+-    sourceTextModuleSearch! < (prepared.modules -> len)
+-        -> while {
+-            prepared.modules[sourceTextModuleSearch!] => sourceTextIdentity
+-            prepared.package.sources[sourceTextIdentity.sourceIndex] -> len => sourceTextSourceLength
+-            prepared.package.sources[sourceTextIdentity.sourceIndex] -> slice(UIntSize(0), sourceTextSourceLength) => sourceTextSource
+-            sourceTextIdentity.pathLength == 8 => sourceTextNamespaceEqual!
+-            "sys.file" => sourceTextNamespace
+-            UIntSize(0) => sourceTextNamespaceByte!
+-            sourceTextNamespaceEqual! and sourceTextNamespaceByte! < sourceTextIdentity.pathLength
+-                -> while {
+-                    (sourceTextSource -> byte(sourceTextIdentity.pathStart + sourceTextNamespaceByte!)) != (sourceTextNamespace -> byte(sourceTextNamespaceByte!))
+-                        -> if { false => sourceTextNamespaceEqual! }
+-                    sourceTextNamespaceByte! + 1 => sourceTextNamespaceByte!
+-                }
+-            sourceTextNamespaceEqual! -> if {
+-                prepared.package.ranges[sourceTextIdentity.sourceIndex] => sourceTextRange
+-                0 => sourceTextSymbolSearch!
+-                sourceTextSymbolSearch! < sourceTextRange.symbolCount
+-                    -> while {
+-                        prepared.package.symbols[sourceTextRange.symbolStart + sourceTextSymbolSearch!] => sourceTextCandidate
+-                        sourceTextCandidate.kind == 3 and sourceTextCandidate.parent < 0
+-                            -> if {
+-                                prepared.package.tokens[sourceTextRange.tokenStart + sourceTextCandidate.nameToken] => sourceTextCandidateName
+-                                sourceTextCandidateName.span.length == 10 => sourceTextNameEqual!
+-                                "SourceText" => sourceTextName
+-                                UIntSize(0) => sourceTextNameByte!
+-                                sourceTextNameEqual! and sourceTextNameByte! < sourceTextCandidateName.span.length
+-                                    -> while {
+-                                        (sourceTextSource -> byte(sourceTextCandidateName.span.start + sourceTextNameByte!)) != (sourceTextName -> byte(sourceTextNameByte!))
+-                                            -> if { false => sourceTextNameEqual! }
+-                                        sourceTextNameByte! + 1 => sourceTextNameByte!
+-                                    }
+-                                sourceTextNameEqual! -> if {
+-                                    sourceTextIdentity.sourceIndex => sourceTextModule!
+-                                    sourceTextSymbolSearch! => sourceTextSymbol!
+-                                }
+-                            }
+-                        sourceTextSymbolSearch! + 1 => sourceTextSymbolSearch!
+-                    }
+-            }
+-            sourceTextModuleSearch! + 1 => sourceTextModuleSearch!
+-        }
+-    0 => sourceTextTypeIndex!
+-    sourceTextTypeIndex! < (types! -> len) -> while {
+-        types![sourceTextTypeIndex!] => sourceTextType
+-        sourceTextModule! >= 0 and sourceTextSymbol! >= 0
+-            and sourceTextType.kind == 1 and sourceTextType.module == sourceTextModule! and sourceTextType.symbol == sourceTextSymbol!
+-            -> if {
+-                typeIds.SemanticType {
+-                    kind: 1
+-                    origin: 1
+-                    module: -1
+-                    symbol: 24
+-                    first: -1
+-                    second: -1
+-                    length: -1
+-                    lengthHash: 0
+-                    containsParameter: false
+-                    status: 0
+-                } => types![sourceTextTypeIndex!]
+-            }
+-        sourceTextTypeIndex! + 1 => sourceTextTypeIndex!
+-    }
++    prepared.package -> typeIds.intrinsicSourceTextDeclaration(prepared.modules) => sourceTextDeclaration
++    sourceTextDeclaration.targetModule => sourceTextModule
++    sourceTextDeclaration.targetSymbol => sourceTextSymbol
+     [typeIds.TypeReference; ~] => references!
+     0 => referenceCopyIndex119!
+     referenceCopyIndex119! < (prepared.semantic.references -> len)
+@@ -2182,7 +2115,8 @@
+             controlOwnerSource! + 1 => controlOwnerSource!
+         }
+ 
+-    resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule!, sourceTextSymbol!, seeds.ownerBySource, callbackArgumentIndex)
++    prepared.package -> indexTypeReferences(references!) => sourceReferences
++    resolveInitialExpressionTypes(prepared, types!, references!, sourceReferences, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule, sourceTextSymbol, seeds.ownerBySource, callbackArgumentIndex)
+     resolveContextualDictionaryStructValues(prepared, types!, expressions!, expressionIndexByAst!)
+     # Register literal backing storage with the declared element contract.
+     # Readonly array returns keep their own extent and independent values.
+@@ -2204,7 +2138,7 @@
+     prepared.package.symbols -> each patternSymbol { patternBindingTypeBySymbol! -> push(-1) }
+     [Int; ~] => expectedContextByAst!
+     prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
+-    resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!, callbackArgumentIndex)
++    resolvePaths(prepared, types!, references!, sourceReferences, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!, callbackArgumentIndex)
+ 
+     # Imported calls become typed during path resolution. Commit their Result
+     # payloads before inferred bindings, members and arithmetic consume them.
+@@ -2214,39 +2148,11 @@
+         resolveResultPropagationPayloadTypes(prepared, types!, expressions!, expressionIndexByAst!) => payloadChanged
+         wrapperChanged or payloadChanged => propagationPathsChanged!
+         propagationPathsChanged! -> if {
+-            resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!, callbackArgumentIndex)
++            resolvePaths(prepared, types!, references!, sourceReferences, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!, callbackArgumentIndex)
+         }
+     }
+ 
+     resolveFileScalarArgumentTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, flowTargetTokenByAst, numericContextIndex)
+-
+-    # Generic specialization and literal inference can append semantic types
+-    # after the initial imported-SourceText normalization. Canonicalize the
+-    # completed arena as well so composites created by those later passes
+-    # cannot retain a second nominal identity for the intrinsic owner.
+-    sourceTextModule! >= 0 and sourceTextSymbol! >= 0
+-        -> if {
+-            0 => finalSourceTextTypeIndex!
+-            finalSourceTextTypeIndex! < (types! -> len) -> while {
+-                types![finalSourceTextTypeIndex!] => finalSourceTextType
+-                finalSourceTextType.kind == 1 and finalSourceTextType.module == sourceTextModule! and finalSourceTextType.symbol == sourceTextSymbol!
+-                    -> if {
+-                        typeIds.SemanticType {
+-                            kind: 1
+-                            origin: 1
+-                            module: -1
+-                            symbol: 24
+-                            first: -1
+-                            second: -1
+-                            length: -1
+-                            lengthHash: 0
+-                            containsParameter: false
+-                            status: 0
+-                        } => types![finalSourceTextTypeIndex!]
+-                    }
+-                finalSourceTextTypeIndex! + 1 => finalSourceTextTypeIndex!
+-            }
+-        }
+ 
+     # Preserve declared parameter and inferred binding types before Typed IR.
+     # Interpolation reads the same lexical symbol identity as ordinary name
+@@ -3316,7 +3222,13 @@
+                         argument.status == 0 and argument.typeId >= 0
+                             and argument.typeId < (resolved.types -> len)
+                             and not resolved.types[argument.typeId].containsParameter
+-                            -> if { argument.typeId => actualType! }
++                            -> if {
++                                argument.typeId => actualType!
++                                binding.parameterOrdinal == 0
++                                    and prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 16
++                                    and (prepared.package -> semanticContext.callArgumentIsNamedRead(binding.sourceModule, binding.callAst, binding.argumentAst))
++                                    -> if { resolved.types -> typeIds.materializedReadTypeId(actualType!) => actualType! }
++                            }
+                     }
+                     actualType! >= 0 -> if {
+                         resolved.types[templateType].containsParameter
+@@ -3671,13 +3583,14 @@
+ # Transfer each completed context into the next refinement. Owned analysis
+ # tables are bound once; no owner rebinding or name-check bypass is needed.
+ refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ResolvedCallContext {
++    initialPrepared.package -> calls.prepareModuleCallFacts(initialPrepared.semantic.references, initialPrepared.modules, initialPrepared.resolvedImports) => declarationFacts
+     [Int; ~] => previousReceiverTypes
+     [typeIds.SemanticType; ~] => previousResolvedTypes
+     [calls.ModuleCallResolution; ~] => previousSeededCalls
+-    initialPrepared -> refineResolvedCallContextWithMatchingInputs(initialTypes, seeds, externalResults, committedTypes, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls)
+-}
+-
+-refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool, hasPreviousMatchingInputs: Bool, previousReceiverTypes: ref [Int; ~], previousResolvedTypes: ref [typeIds.SemanticType; ~], previousSeededCalls: ref [calls.ModuleCallResolution; ~] -> ResolvedCallContext {
++    initialPrepared -> refineResolvedCallContextWithMatchingInputs(initialTypes, seeds, externalResults, committedTypes, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls, declarationFacts)
++}
++
++refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool, hasPreviousMatchingInputs: Bool, previousReceiverTypes: ref [Int; ~], previousResolvedTypes: ref [typeIds.SemanticType; ~], previousSeededCalls: ref [calls.ModuleCallResolution; ~], declarationFacts: ref calls.ModuleCallFacts -> ResolvedCallContext {
+     initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+     [Int; ~] => receiverTypeByCallAst!
+     initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+@@ -3713,7 +3626,7 @@
+         -> if {
+             ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
+         }
+-    initialPrepared.package -> calls.resolveModulesTypedWithPreparedFacts(
++    initialPrepared.package -> calls.resolveModulesTypedWithDeclarationFacts(
+     initialPrepared.semantic,
+     receiverTypeByCallAst!,
+     initialTypes.types,
+@@ -3722,7 +3635,8 @@
+     initialPrepared.modules,
+     initialPrepared.imports,
+     initialPrepared.resolvedImports,
+-    initialPrepared.qualified
++    initialPrepared.qualified,
++    declarationFacts
+     ) => resolvedCalls
+     not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
+     # A committed round already owns the types for this exact prepared call
+@@ -3740,7 +3654,7 @@
+         initialPrepared.package -> semanticContext.resolveCallArgumentBindings(initialPrepared.calls) => bindings
+         initialTypes => resolved!
+         completeCallAndEnumFactsSeeded(initialPrepared, resolved!, bindings, seeds)
+-        initialPrepared -> refineResolvedCallContext(resolved!, seeds, externalResults, true) -> return
++        initialPrepared -> refineResolvedCallContextWithMatchingInputs(resolved!, seeds, externalResults, true, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls, declarationFacts) -> return
+     }
+     initialPrepared => prepared!
+     resolvedCalls => prepared!.calls
+@@ -3751,7 +3665,7 @@
+     prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
+     prepared! -> semanticContext.freeze => finalPrepared
+     finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
+-    finalPrepared -> refineResolvedCallContextWithMatchingInputs(finalTypes, seeds, externalResults, true, true, receiverTypeByCallAst!, initialTypes.types, seededCalls!)
++    finalPrepared -> refineResolvedCallContextWithMatchingInputs(finalTypes, seeds, externalResults, true, true, receiverTypeByCallAst!, initialTypes.types, seededCalls!, declarationFacts)
+ }
+ 
+ # Measurement-only entry: exposes a completed pair, never initial type facts.

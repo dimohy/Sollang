@@ -1,0 +1,208 @@
+--- f617b0add191503355cb0ac45167242577610ef6:selfhost/semantic/context.slg
++++ current:selfhost/semantic/context.slg
+@@ -425,17 +425,81 @@
+ 
+ # Public queries retain source scanning; binding collection supplies one child index.
+ # Both entry paths share argument ownership, exclusion and source-order decisions.
++directCallReceiverForName package: ref analysis.PackageAnalysis, sourceModule: Int, nameIndex: Int -> Int {
++    package.ranges[sourceModule] => range
++    package.names[range.nameStart + nameIndex] => name
++    name.astNode < 0 or name.astNode >= range.astCount
++        or not (package -> calls.receiverSymbolIsRuntimeValue(sourceModule, name.symbol))
++        -> if { -1 -> return }
++    package.nodes[range.astStart + name.astNode] => receiver
++    receiver.kind != 16 or receiver.parent < 0 or receiver.parent >= range.astCount
++        or name.nameToken != receiver.firstToken
++        -> if { -1 -> return }
++    package.nodes[range.astStart + receiver.parent] => call
++    call.kind == 11 and receiver.start == call.start
++        -> if { name.astNode -> return }
++    -1
++}
++
++public directCallReceiverAst package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int -> Int {
++    sourceModule < 0 or sourceModule >= (package.ranges -> len)
++        -> if { -1 -> return }
++    package.ranges[sourceModule] => range
++    callAst < 0 or callAst >= range.astCount -> if { -1 -> return }
++    package.nodes[range.astStart + callAst] => call
++    call.kind != 11 -> if { -1 -> return }
++    0 => nameIndex!
++    nameIndex! < range.nameCount -> while {
++        package -> directCallReceiverForName(sourceModule, nameIndex!) => receiverAst
++        receiverAst >= 0 and package.nodes[range.astStart + receiverAst].parent == callAst
++            -> if { receiverAst -> return }
++        nameIndex! + 1 => nameIndex!
++    }
++    -1
++}
++
++public indexDirectCallReceiversByAst package: ref analysis.PackageAnalysis -> [Int; ~] {
++    [Int; ~] => receivers!
++    package.nodes -> each node { receivers! -> push(-1) }
++    0..<Int(package.ranges -> len) -> each sourceModule {
++        package.ranges[sourceModule] => range
++        0..<range.nameCount -> each nameIndex {
++            package -> directCallReceiverForName(sourceModule, nameIndex) => receiverAst
++            receiverAst >= 0 -> if {
++                range.astStart + package.nodes[range.astStart + receiverAst].parent => globalCall
++                # Preserve the scan query's first qualifying lexical fact.
++                receivers![globalCall] < 0 -> if { receiverAst => receivers![globalCall] }
++            }
++        }
++    }
++    receivers!
++}
++
++public callArgumentIsNamedRead package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int, argumentAst: Int -> Bool {
++    sourceModule < 0 or sourceModule >= (package.ranges -> len)
++        -> if { false -> return }
++    package.ranges[sourceModule] => range
++    argumentAst < 0 or argumentAst >= range.astCount
++        -> if { false -> return }
++    package.nodes[range.astStart + argumentAst].kind == 15
++        -> if { true -> return }
++    package.nodes[range.astStart + argumentAst].kind != 16
++        -> if { false -> return }
++    (package -> directCallReceiverAst(sourceModule, callAst)) == argumentAst
++}
++
+ public callArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~] -> [Int; ~] {
+     [Int; ~] => unusedChildIndex
+-    package -> collectCallArgumentAsts(call, flowSources, unusedChildIndex, unusedChildIndex, false)
++    package -> collectCallArgumentAsts(call, flowSources, unusedChildIndex, unusedChildIndex, false, unusedChildIndex, false)
+ }
+ 
+ public indexedCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> [Int; ~] {
+-    package -> collectCallArgumentAsts(call, flowSources, firstChildByAst, nextSiblingByAst, true)
+-}
+-
+-
+-collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool -> [Int; ~] {
++    [Int; ~] => unusedReceiverIndex
++    package -> collectCallArgumentAsts(call, flowSources, firstChildByAst, nextSiblingByAst, true, unusedReceiverIndex, false)
++}
++
++
++collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool, receiverByCallAst: ref [Int; ~], indexedReceivers: Bool -> [Int; ~] {
+     [Int; ~] => arguments!
+     package.ranges[call.sourceModule] => range
+     range.astStart + call.callAst => globalCall
+@@ -464,6 +528,30 @@
+     target! < 0 -> if { arguments! -> return }
+     package.nodes[range.astStart + target!] => targetNode
+     package -> blockCallbackStartOffset(call.sourceModule, target!) => runtimeArgumentEnd
++    # Direct instance syntax has the same primary input as a flow call.
++    # Reuse its resolved lexical receiver path, which also owns the Typed IR
++    # receiver; a namespace/type-qualified callee is not a runtime input.
++    node.kind == 11 and call.targetSourceModule >= 0
++        and call.targetSourceModule < (package.ranges -> len)
++        and call.functionSymbol >= 0
++        -> if {
++            package.ranges[call.targetSourceModule] => declarationRange
++            call.functionSymbol < declarationRange.symbolCount
++                -> if {
++                    package.symbols[declarationRange.symbolStart + call.functionSymbol] => declaration
++                    (declaration.kind == 31 or declaration.kind == 7)
++                        and declaration.parent >= 0 and declaration.parent < declarationRange.symbolCount
++                        and package.symbols[declarationRange.symbolStart + declaration.parent].kind == 6
++                        -> if {
++                            indexedReceivers -> if {
++                                receiverByCallAst[range.astStart + target!]
++                            } else {
++                                package -> directCallReceiverAst(call.sourceModule, target!)
++                            } => receiverAst
++                            receiverAst >= 0 -> if { arguments! -> push(range.astStart + receiverAst) }
++                        }
++                }
++        }
+     -1 => previous!
+     false => done!
+     not done! -> while {
+@@ -497,7 +585,7 @@
+                     # using the same ordering as an ordinary flow call.
+                     call => headerCall!
+                     selected! => headerCall!.callAst
+-                    package -> collectCallArgumentAsts(headerCall!, flowSources, firstChildByAst, nextSiblingByAst, indexed) => headerArguments
++                    package -> collectCallArgumentAsts(headerCall!, flowSources, firstChildByAst, nextSiblingByAst, indexed, receiverByCallAst, indexedReceivers) => headerArguments
+                     headerArguments -> each argument { arguments! -> push(argument) }
+                 } else {
+                     arguments! -> push(range.astStart + selected!)
+@@ -537,6 +625,7 @@
+         }
+     }
+     package -> indexFlowSourcesByAst => flowSources
++    package -> indexDirectCallReceiversByAst => receiverByCallAst
+     resolvedCalls -> each call {
+         call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (package.ranges -> len)
+             and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
+@@ -551,7 +640,7 @@
+                     or package.nodes[sourceRange.astStart + call.callAst].kind == 48
+                     or package.nodes[sourceRange.astStart + call.callAst].kind == 77)
+                     -> if {
+-                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true) => argumentAsts
++                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true, receiverByCallAst, true) => argumentAsts
+                         # Repeated calls borrow the same declaration order, like
+                         # C# BoundFunction. The key includes the source owner.
+                         targetRange.symbolStart + call.functionSymbol => targetGlobalSymbol
+@@ -607,7 +696,8 @@
+         package.ranges[binding.targetSourceModule] => targetRange
+         sourceRange.astStart + binding.argumentAst => argumentGlobalAst
+         package.symbols[targetRange.symbolStart + binding.parameterSymbol] => parameter
+-        parameter.flags % 2 == 1 and package.nodes[argumentGlobalAst].kind == 15
++        parameter.flags % 2 == 1
++            and (package -> callArgumentIsNamedRead(binding.sourceModule, binding.callAst, binding.argumentAst))
+             -> if { true => moved![argumentGlobalAst] }
+     }
+     moved!
+@@ -618,6 +708,10 @@
+ # mutable reinitialization and control joins remain with the ownership pass.
+ public indexDeclaredMoveReadsByAst package: ref analysis.PackageAnalysis, moveArguments: ref [Bool; ~] -> [Bool; ~] {
+     [Bool; ~] => reads!
++    [Int; ~] => firstNameBySymbol!
++    [Int; ~] => nextName!
++    package.symbols -> each symbol { firstNameBySymbol! -> push(-1) }
++    package.names -> each name { nextName! -> push(-1) }
+     0 => seed!
+     seed! < (package.nodes -> len) -> while {
+         reads! -> push(false)
+@@ -626,6 +720,19 @@
+     0 => sourceIndex!
+     sourceIndex! < (package.ranges -> len) -> while {
+         package.ranges[sourceIndex!] => range
++        # Name coordinates are immutable. Retain their original order while
++        # restricting each lexical owner query to its own resolved identities.
++        range.nameCount => indexedName!
++        indexedName! > 0 -> while {
++            indexedName! - 1 => indexedName!
++            package.names[range.nameStart + indexedName!] => name
++            name.symbol >= 0 and name.symbol < range.symbolCount
++                -> if {
++                    range.symbolStart + name.symbol => globalSymbol
++                    firstNameBySymbol![globalSymbol] => nextName![range.nameStart + indexedName!]
++                    indexedName! => firstNameBySymbol![globalSymbol]
++                }
++        }
+         0 => movedNameIndex!
+         movedNameIndex! < range.nameCount -> while {
+             package.names[range.nameStart + movedNameIndex!] => movedName
+@@ -648,8 +755,8 @@
+                             movedStatement! >= 0 -> if {
+                                 package.nodes[range.astStart + movedStatement!] => movedBinding
+                                 movedBinding.start + movedBinding.length => consumedAfter
+-                                0 => readNameIndex!
+-                                readNameIndex! < range.nameCount -> while {
++                                firstNameBySymbol![range.symbolStart + movedName.symbol] => readNameIndex!
++                                readNameIndex! >= 0 -> while {
+                                     package.names[range.nameStart + readNameIndex!] => readName
+                                     readName.symbol == movedName.symbol
+                                         and readName.astNode >= 0 and readName.astNode < range.astCount
+@@ -667,7 +774,7 @@
+                                             readStatement! >= 0 and package.nodes[range.astStart + readStatement!].parent == movedBinding.parent
+                                                 -> if { true => reads![range.astStart + readName.astNode] }
+                                         }
+-                                    readNameIndex! + 1 => readNameIndex!
++                                    nextName![range.nameStart + readNameIndex!] => readNameIndex!
+                                 }
+                             }
+                         }

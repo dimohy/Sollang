@@ -1,0 +1,112 @@
+--- 225dd77b3637d69068ea2b76de4978417b979f92:selfhost/semantic/type_ids.slg
++++ current:selfhost/semantic/type_ids.slg
+@@ -863,6 +863,30 @@
+     public matchCount: Int
+ }
+ 
++# C# registers this intrinsic declaration as SourceText before any containing
++# type is interned. Resolve its declaration once, independently of import aliases.
++public intrinsicSourceTextDeclaration package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~] -> OpenNominalTypeResolution {
++    OpenNominalTypeResolution { targetModule: -1, targetSymbol: -1, matchCount: 0 } => result!
++    0 => moduleIndex!
++    moduleIndex! < (identities -> len) -> while {
++        identities[moduleIndex!] => identity
++        package.ranges[identity.sourceIndex] => range
++        0 => symbolIndex!
++        symbolIndex! < range.symbolCount -> while {
++            package.symbols[range.symbolStart + symbolIndex!] => symbol
++            symbol.kind == 3 and symbol.parent < 0 -> if {
++                (package -> intrinsicNominalSymbol(identities, moduleIndex!, symbolIndex!)) == 24
++                    -> if {
++                        OpenNominalTypeResolution { targetModule: identity.sourceIndex, targetSymbol: symbolIndex!, matchCount: result!.matchCount + 1 } => result!
++                    }
++            }
++            symbolIndex! + 1 => symbolIndex!
++        }
++        moduleIndex! + 1 => moduleIndex!
++    }
++    result!
++}
++
+ public struct OpenNominalTypeCandidate {
+     public targetModule: Int
+     public targetSymbol: Int
+@@ -1712,6 +1736,7 @@
+     package -> modules.importsAnalyzed => imports
+     package -> moduleResolve.resolveAnalyzed => resolvedImports
+     package -> qualified.resolveAnalyzed => qualifiedResults
++    package -> intrinsicSourceTextDeclaration(identities) => sourceTextDeclaration
+     [SemanticType; ~] => semanticTypes!
+     [TypeReference; ~] => references!
+     [NominalField; ~] => fields!
+@@ -2191,6 +2216,17 @@
+                                         package.terms[sourceRange.termStart + productCountField!].secondArgument => productCountField!
+                                     }
+                                 }
++                                # Use the canonical scalar before interning arrays,
++                                # references and generic applications that contain it.
++                                term.kind == 1 and sourceTextDeclaration.matchCount == 1
++                                    and targetModule! == sourceTextDeclaration.targetModule
++                                    and targetSymbol! == sourceTextDeclaration.targetSymbol
++                                    and status! == 0
++                                    -> if {
++                                        1 => origin!
++                                        -1 => targetModule!
++                                        24 => targetSymbol!
++                                    }
+                                 term.kind => resolvedKind!
+                                 term.kind == 15 -> if { 1 => resolvedKind! }
+                                 term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0
+@@ -2334,6 +2370,10 @@
+             fieldSymbol.kind == 26 and fieldSymbol.parent >= 0 and fieldSymbol.typeNode >= 0
+                 -> if {
+                     -1 => ownerType!
++                    sourceTextDeclaration.matchCount == 1
++                        and sourceIndex! == sourceTextDeclaration.targetModule
++                        and fieldSymbol.parent == sourceTextDeclaration.targetSymbol
++                        -> if { semanticTypes! -> builtinTypeSlot(24) => ownerType! }
+                     0 => ownerTypeSearch!
+                     ownerTypeSearch! < (semanticTypes! -> len) and ownerType! < 0
+                         -> while {
+@@ -2823,3 +2863,41 @@
+     SpecializationResult { types: types!, root: specialized.root, status: specialized.status } => result
+     result
+ }
++
++# A concrete outer reference may still contain a deferred associated Item.
++# Classify the complete graph once; such declarations keep their canonical
++# dependent syntax instead of trying to serialize the unresolved sentinel.
++public isConcrete types: ref [SemanticType; ~], fields: ref [NominalField; ~], typeId: Int, memo: mut [Int; ~] -> Bool {
++    typeId < 0 or typeId >= (types -> len)
++        -> if { false -> return }
++    memo[typeId] == 1 -> if { true -> return }
++    memo[typeId] == 0 or memo[typeId] == 2 -> if { false -> return }
++    2 => memo[typeId]
++    types[typeId] => type
++    type.status != 0 or type.containsParameter or type.kind <= 0
++        -> if { 0 => memo[typeId]
++            false -> return }
++    type.kind != 1 and type.kind != 9 -> if {
++        type.first >= 0 -> if {
++            types -> isConcrete(fields, type.first, memo)
++                -> unless { 0 => memo[typeId]
++                    false -> return }
++        }
++        type.second >= 0 -> if {
++            types -> isConcrete(fields, type.second, memo)
++                -> unless { 0 => memo[typeId]
++                    false -> return }
++        }
++        type.kind == 10 -> if {
++            fields -> each field {
++                field.ownerType == typeId -> if {
++                    types -> isConcrete(fields, field.fieldType, memo)
++                        -> unless { 0 => memo[typeId]
++                            false -> return }
++                }
++            }
++        }
++    }
++    1 => memo[typeId]
++    true
++}

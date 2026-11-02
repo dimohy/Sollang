@@ -1,0 +1,505 @@
+--- 07564601a6a840901bdcbdaff50e238fe3f91ef1:selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ current:selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -953,34 +953,154 @@
+     changed!
+ }
+ 
+-struct InitialTypeReferenceIndex {
++struct TypeReferenceIndex {
++    firstByAst: [Int; ~]
++    references: [Int; ~]
++    next: [Int; ~]
++    firstPathByArrayAst: [Int; ~]
+     firstBySource: [Int; ~]
+-    next: [Int; ~]
++    nextBySource: [Int; ~]
+ }
+ 
+ # Group identities only. Type/status decisions remain live at their original
+ # query point, and ascending reference order preserves the last-match rule.
+-indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> InitialTypeReferenceIndex {
++indexTypeReferences package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> TypeReferenceIndex {
+     [Int; ~] => first!
++    [Int; ~] => indexedReferences!
+     [Int; ~] => next!
+-    package.ranges -> each range { first! -> push(-1) }
+-    references -> each reference { next! -> push(-1) }
++    [Int; ~] => firstPath!
++    [Int; ~] => firstBySource!
++    [Int; ~] => nextBySource!
++    package.ranges -> each range { firstBySource! -> push(-1) }
++    references -> each reference { nextBySource! -> push(-1) }
++    package.nodes -> each node {
++        first! -> push(-1)
++        firstPath! -> push(-1)
++    }
+     Int(references -> len) => index!
+     index! > 0 -> while {
+         index! - 1 => index!
+-        references[index!].sourceModule => source
+-        source >= 0 and source < (first! -> len) -> if {
+-            first![source] => next![index!]
+-            index! => first![source]
++        references[index!] => reference
++        reference.sourceModule >= 0 and reference.sourceModule < (package.ranges -> len)
++            -> if {
++                firstBySource![reference.sourceModule] => nextBySource![index!]
++                index! => firstBySource![reference.sourceModule]
++                package.ranges[reference.sourceModule] => range
++                reference.typeAst >= 0 and reference.typeAst < range.astCount
++                    -> if {
++                        range.astStart + reference.typeAst => owner!
++                        0 => relation!
++                        relation! < 2 and owner! >= range.astStart and owner! < range.astStart + range.astCount
++                            -> while {
++                                Int(indexedReferences! -> len) => entry
++                                indexedReferences! -> push(index!)
++                                next! -> push(first![owner!])
++                                entry => first![owner!]
++                                package.nodes[owner!].parent => parent
++                                parent >= 0 -> if { range.astStart + parent => owner! } else { -1 => owner! }
++                                relation! + 1 => relation!
++                            }
++                    }
++            }
++    }
++    # Preserve the fallback's first AST ordinal descendant, rather than the
++    # nearest path or a traversal-dependent first child.
++    package.ranges -> each range {
++        0 => localAst!
++        localAst! < range.astCount -> while {
++            package.nodes[range.astStart + localAst!] => node
++            node.kind == 12 or node.kind == 16 -> if {
++                node.parent => ancestor!
++                ancestor! >= 0 and ancestor! < range.astCount
++                    -> while {
++                        range.astStart + ancestor! => globalAncestor
++                        package.nodes[globalAncestor] => parent
++                        parent.kind == 37 and firstPath![globalAncestor] < 0
++                            -> if { localAst! => firstPath![globalAncestor] }
++                        parent.parent => ancestor!
++                    }
++            }
++            localAst! + 1 => localAst!
+         }
+     }
+-    InitialTypeReferenceIndex { firstBySource: first!, next: next! }
+-}
+-
+-resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
++    TypeReferenceIndex { firstByAst: first!, references: indexedReferences!, next: next!, firstPathByArrayAst: firstPath!, firstBySource: firstBySource!, nextBySource: nextBySource! }
++}
++
++struct InitialQualifiedReferenceIndex {
++    lastByAst: [Int; ~]
++    lastInSubtreeByAst: [Int; ~]
++    lastByToken: [Int; ~]
++}
++
++# Prepared qualified resolutions are immutable during initial inference. Keep
++# their original last-successful selection at each coordinate, including the
++# ancestor and token-span queries used by type and record syntax.
++indexInitialQualifiedReferences prepared: ref semanticContext.SemanticSnapshot -> InitialQualifiedReferenceIndex {
++    [Int; ~] => byAst!
++    [Int; ~] => inSubtree!
++    [Int; ~] => byToken!
++    prepared.package.nodes -> each node {
++        byAst! -> push(-1)
++        inSubtree! -> push(-1)
++    }
++    prepared.package.tokens -> each token { byToken! -> push(-1) }
++    0 => search!
++    search! < (prepared.qualified -> len) -> while {
++        prepared.qualified[search!] => candidate
++        candidate.status == 0 and candidate.sourceModule >= 0 and candidate.sourceModule < (prepared.package.ranges -> len)
++            -> if {
++                prepared.package.ranges[candidate.sourceModule] => range
++                candidate.pathAst >= 0 and candidate.pathAst < range.astCount
++                    -> if {
++                        range.astStart + candidate.pathAst => globalPath
++                        search! => byAst![globalPath]
++                        candidate.pathAst => ancestor!
++                        ancestor! >= 0 and ancestor! < range.astCount
++                            -> while {
++                                range.astStart + ancestor! => globalAncestor
++                                search! => inSubtree![globalAncestor]
++                                prepared.package.nodes[globalAncestor].parent => ancestor!
++                            }
++                        prepared.package.nodes[globalPath] => path
++                        path.firstToken => tokenIndex!
++                        tokenIndex! >= 0 and tokenIndex! < path.firstToken + path.tokenCount and tokenIndex! < range.tokenCount
++                            -> while {
++                                search! => byToken![range.tokenStart + tokenIndex!]
++                                tokenIndex! + 1 => tokenIndex!
++                            }
++                    }
++            }
++        search! + 1 => search!
++    }
++    InitialQualifiedReferenceIndex { lastByAst: byAst!, lastInSubtreeByAst: inSubtree!, lastByToken: byToken! }
++}
++
++# Qualified type spellings retain their prepared declaration identity, just as
++# C# ParseType resolves the full name before interning an array element.
++initialQualifiedArrayElementType prepared: ref semanticContext.SemanticSnapshot, qualifiedReferences: ref InitialQualifiedReferenceIndex, types: ref [typeIds.SemanticType; ~], sourceModule: Int, pathAst: Int, sourceTextModule: Int, sourceTextSymbol: Int -> Int {
++    pathAst < 0 -> if { -1 -> return }
++    prepared.package.ranges[sourceModule] => range
++    qualifiedReferences.lastInSubtreeByAst[range.astStart + pathAst] => qualifiedIndex
++    qualifiedIndex < 0 -> if { -1 -> return }
++    prepared.qualified[qualifiedIndex] => qualifiedType
++    qualifiedType.targetModule == sourceTextModule and qualifiedType.targetSymbol == sourceTextSymbol
++        and sourceTextModule >= 0 and sourceTextSymbol >= 0
++        -> if { types -> typeIds.builtinTypeId(24) -> return }
++    -1 => elementType!
++    0 => typeIndex!
++    typeIndex! < (types -> len) -> while {
++        types[typeIndex!] => candidate
++        candidate.kind == 1 and candidate.module == qualifiedType.targetModule and candidate.symbol == qualifiedType.targetSymbol
++            -> if { typeIndex! => elementType! }
++        typeIndex! + 1 => typeIndex!
++    }
++    elementType!
++}
++
++resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], sourceReferences: ref TypeReferenceIndex, expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValueAsts
+     prepared.package -> indexContextualRecords => syntaxChildren
+-    prepared.package -> indexInitialTypeReferences(references) => sourceReferences
++    prepared -> indexInitialQualifiedReferences => sourceQualified
+     # Expression slots keep their AST identity while their type/status may change.
+     # Index ancestry once, but read the current slot when resolving each binding.
+     [Int; ~] => inferredBindingHeads!
+@@ -1086,10 +1206,10 @@
+                     # remain available to bottom-up value inference below.
+                 }
+                 node.kind == 37 and typedArrayTypeSyntax! -> if {
+-                    sourceReferences.firstBySource[sourceIndex!] => arrayReferenceSearch!
++                    sourceReferences.firstByAst[sourceRange.astStart + astIndex!] => arrayReferenceSearch!
+                     arrayReferenceSearch! >= 0
+                         -> while {
+-                            references[arrayReferenceSearch!] => arrayReference
++                            references[sourceReferences.references[arrayReferenceSearch!]] => arrayReference
+                             arrayReference.status == 0 and arrayReference.sourceModule == sourceIndex! and (types[arrayReference.typeId].kind == 3 or types[arrayReference.typeId].kind == 12)
+                                 -> if {
+                                     arrayReference.typeAst == astIndex! or prepared.package.nodes[sourceRange.astStart + arrayReference.typeAst].parent == astIndex!
+@@ -1100,23 +1220,21 @@
+                             sourceReferences.next[arrayReferenceSearch!] => arrayReferenceSearch!
+                         }
+                     builtinTypeId! < 0 -> if {
+-                        -1 => typedArrayPathAst!
+-                        0 => typedArrayChildSearch!
+-                        typedArrayChildSearch! < sourceRange.astCount
+-                            -> while {
+-                                prepared.package.nodes[sourceRange.astStart + typedArrayChildSearch!] => typedArrayChild
+-                                (typedArrayChild.kind == 12 or typedArrayChild.kind == 16) and typedArrayPathAst! < 0
+-                                    -> if {
+-                                        typedArrayChild.parent => typedArrayPathAncestor!
+-                                        typedArrayPathAncestor! >= 0 and typedArrayPathAncestor! != astIndex!
+-                                            -> while {
+-                                                prepared.package.nodes[sourceRange.astStart + typedArrayPathAncestor!].parent => typedArrayPathAncestor!
+-                                            }
+-                                        typedArrayPathAncestor! == astIndex! -> if { typedArrayChildSearch! => typedArrayPathAst! }
+-                                    }
+-                                typedArrayChildSearch! + 1 => typedArrayChildSearch!
+-                            }
+-                        -1 => typedArrayElementType!
++                        sourceReferences.firstPathByArrayAst[sourceRange.astStart + astIndex!] => typedArrayPathAst
++                        false => typedArrayQualifiedSyntax!
++                        typedArrayPathAst >= 0 -> if {
++                            prepared.package.nodes[sourceRange.astStart + typedArrayPathAst] => typePath
++                            typePath.firstToken => pathToken!
++                            pathToken! < typePath.firstToken + typePath.tokenCount
++                                -> while {
++                                    prepared.package.tokens[sourceRange.tokenStart + pathToken!].kind == grammar.tokenIdDot()
++                                        -> if { true => typedArrayQualifiedSyntax! }
++                                    pathToken! + 1 => pathToken!
++                                }
++                        }
++                        typedArrayQualifiedSyntax! -> if {
++                            prepared -> initialQualifiedArrayElementType(sourceQualified, types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol)
++                        } else { -1 } => typedArrayElementType!
+                         -1 => typedArrayNameToken!
+                         false => typedArrayBounded!
+                         -1 => typedArrayCapacity!
+@@ -1143,59 +1261,60 @@
+                                     -> if { typedArrayTokenIndex! => typedArrayNameToken! }
+                                 typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
+                             }
+-                        typedArrayNameToken! >= 0 -> if {
+-                            prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Unit" } -> textMatches
+-                                -> if { 0 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches
+-                                -> if { 1 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int" } -> textMatches
+-                                -> if { 2 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt8" } -> textMatches
+-                                -> if { 8 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt16" } -> textMatches
+-                                -> if { 9 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt32" } -> textMatches
+-                                -> if { 10 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt64" } -> textMatches
+-                                -> if { 11 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Long" } -> textMatches
+-                                -> if { 7 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int8" } -> textMatches
+-                                -> if { 3 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int16" } -> textMatches
+-                                -> if { 4 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int32" } -> textMatches
+-                                -> if { 5 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int64" } -> textMatches
+-                                -> if { 6 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Size" } -> textMatches
+-                                -> if { 12 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UIntSize" } -> textMatches
+-                                -> if { 13 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "CodePoint" } -> textMatches
+-                                -> if { 14 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arena" } -> textMatches
+-                                -> if { 15 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arguments" } -> textMatches
+-                                -> if { 16 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MappedBytes" } -> textMatches
+-                                -> if { 17 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MutableMappedBytes" } -> textMatches
+-                                -> if { 18 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float" } -> textMatches
+-                                -> if { 19 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float32" } -> textMatches
+-                                -> if { 20 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float64" } -> textMatches
+-                                -> if { 21 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Double" } -> textMatches
+-                                -> if { 22 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Bool" } -> textMatches
+-                                -> if { 23 => typedArrayElementType! }
+-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "SourceText" } -> textMatches
+-                                -> if { 24 => typedArrayElementType! }
+-                        }
++                        typedArrayNameToken! >= 0 and not typedArrayQualifiedSyntax!
++                            -> if {
++                                prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Unit" } -> textMatches
++                                    -> if { 0 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches
++                                    -> if { 1 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int" } -> textMatches
++                                    -> if { 2 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt8" } -> textMatches
++                                    -> if { 8 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt16" } -> textMatches
++                                    -> if { 9 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt32" } -> textMatches
++                                    -> if { 10 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt64" } -> textMatches
++                                    -> if { 11 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Long" } -> textMatches
++                                    -> if { 7 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int8" } -> textMatches
++                                    -> if { 3 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int16" } -> textMatches
++                                    -> if { 4 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int32" } -> textMatches
++                                    -> if { 5 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int64" } -> textMatches
++                                    -> if { 6 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Size" } -> textMatches
++                                    -> if { 12 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UIntSize" } -> textMatches
++                                    -> if { 13 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "CodePoint" } -> textMatches
++                                    -> if { 14 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arena" } -> textMatches
++                                    -> if { 15 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arguments" } -> textMatches
++                                    -> if { 16 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MappedBytes" } -> textMatches
++                                    -> if { 17 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MutableMappedBytes" } -> textMatches
++                                    -> if { 18 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float" } -> textMatches
++                                    -> if { 19 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float32" } -> textMatches
++                                    -> if { 20 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float64" } -> textMatches
++                                    -> if { 21 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Double" } -> textMatches
++                                    -> if { 22 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Bool" } -> textMatches
++                                    -> if { 23 => typedArrayElementType! }
++                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "SourceText" } -> textMatches
++                                    -> if { 24 => typedArrayElementType! }
++                            }
+                         typedArrayElementType! >= 0 -> if {
+                             typedArrayElementType! -> typeIds.canonicalBuiltinSymbol => typedArrayElementType!
+                         }
+@@ -1203,7 +1322,7 @@
+                         # imported qualified paths. Without this, `[LocalTask; ~]`
+                         # leaves the array untyped and later member projections see
+                         # the element name as a standalone nominal expression.
+-                        typedArrayElementType! < 0 and typedArrayNameToken! >= 0
++                        typedArrayElementType! < 0 and typedArrayNameToken! >= 0 and not typedArrayQualifiedSyntax!
+                             -> if {
+                                 prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => localArrayElementName
+                                 -1 => localArrayElementSymbol!
+@@ -1280,29 +1399,10 @@
+                                         }
+                                 }
+                             }
+-                        typedArrayElementType! < 0 -> if {
+-                            -1 => typedArrayQualifiedIndex!
+-                            0 => typedArrayQualifiedSearch!
+-                            typedArrayQualifiedSearch! < (prepared.qualified -> len)
+-                                -> while {
+-                                    prepared.qualified[typedArrayQualifiedSearch!] => typedArrayQualifiedCandidate
+-                                    typedArrayQualifiedCandidate.sourceModule == sourceIndex! and typedArrayQualifiedCandidate.pathAst == typedArrayPathAst! and typedArrayQualifiedCandidate.status == 0
+-                                        -> if { typedArrayQualifiedSearch! => typedArrayQualifiedIndex! }
+-                                    typedArrayQualifiedSearch! + 1 => typedArrayQualifiedSearch!
+-                                }
+-                            typedArrayQualifiedIndex! >= 0 -> if {
+-                                prepared.qualified[typedArrayQualifiedIndex!] => typedArrayQualified
+-                                0 => typedArrayElementSearch!
+-                                typedArrayElementSearch! < (types -> len) -> while {
+-                                    types[typedArrayElementSearch!] => typedArrayElementCandidate
+-                                    typedArrayElementCandidate.kind == 1 and typedArrayQualified.targetModule == sourceTextModule and typedArrayQualified.targetSymbol == sourceTextSymbol and typedArrayElementCandidate.origin == 1 and typedArrayElementCandidate.symbol == 24
+-                                        -> if { typedArrayElementSearch! => typedArrayElementType! }
+-                                    typedArrayElementCandidate.kind == 1 and typedArrayElementCandidate.module == typedArrayQualified.targetModule and typedArrayElementCandidate.symbol == typedArrayQualified.targetSymbol
+-                                        -> if { typedArrayElementSearch! => typedArrayElementType! }
+-                                    typedArrayElementSearch! + 1 => typedArrayElementSearch!
+-                                }
+-                            }
+-                        }
++                        typedArrayElementType! < 0 and not typedArrayQualifiedSyntax!
++                            -> if {
++                                prepared -> initialQualifiedArrayElementType(sourceQualified, types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol) => typedArrayElementType!
++                            }
+                         typedArrayElementType! >= 0 -> if {
+                             3 => typedArrayKind!
+                             -1 => typedArrayLength!
+@@ -1348,13 +1448,13 @@
+                     prepared.package -> typeIds.arrayStorageSyntax(sourceIndex!, astIndex!) => typedDictionaryStorage
+                     typedDictionaryStorage.bounded => typedDictionaryBounded
+                     typedDictionaryStorage.length => typedDictionaryCapacity
+-                    0 => typedDictionaryChildSearch!
+-                    typedDictionaryChildSearch! < sourceRange.astCount
++                    syntaxChildren.firstChild[sourceRange.astStart + astIndex!] => typedDictionaryChildSearch!
++                    typedDictionaryChildSearch! >= 0
+                         -> while {
+-                            prepared.package.nodes[sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryChild
+-                            typedDictionaryChild.kind == 12 and typedDictionaryChild.parent == astIndex!
++                            prepared.package.nodes[typedDictionaryChildSearch!] => typedDictionaryChild
++                            typedDictionaryChild.kind == 12
+                                 -> if {
+-                                    referenceIndexByTypeAst[sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryReferenceIndex
++                                    referenceIndexByTypeAst[typedDictionaryChildSearch!] => typedDictionaryReferenceIndex
+                                     typedDictionaryReferenceIndex >= 0 -> if {
+                                         references[typedDictionaryReferenceIndex] => typedDictionaryReference
+                                         typedDictionaryReference.status == 0 -> if {
+@@ -1366,7 +1466,7 @@
+                                         }
+                                     }
+                                 }
+-                            typedDictionaryChildSearch! + 1 => typedDictionaryChildSearch!
++                            syntaxChildren.nextChild[typedDictionaryChildSearch!] => typedDictionaryChildSearch!
+                         }
+                     typedDictionaryKeyType! >= 0 and typedDictionaryValueType! >= 0
+                         -> if {
+@@ -1727,19 +1827,9 @@
+                             -> if { 16 => builtinTypeId! }
+                     }
+                     builtinTypeId! < 0 -> if {
+-                        -1 => qualifiedValueIndex!
+-                        0 => qualifiedValueSearch!
+-                        qualifiedValueSearch! < (prepared.qualified -> len)
+-                            -> while {
+-                                prepared.qualified[qualifiedValueSearch!] => qualifiedValueCandidate
+-                                qualifiedValueCandidate.sourceModule == sourceIndex! and qualifiedValueCandidate.pathAst == astIndex! and qualifiedValueCandidate.status == 0
+-                                    -> if {
+-                                        qualifiedValueSearch! => qualifiedValueIndex!
+-                                    }
+-                                qualifiedValueSearch! + 1 => qualifiedValueSearch!
+-                            }
+-                        qualifiedValueIndex! >= 0 -> if {
+-                            prepared.qualified[qualifiedValueIndex!] => qualifiedValue
++                        sourceQualified.lastByAst[sourceRange.astStart + astIndex!] => qualifiedValueIndex
++                        qualifiedValueIndex >= 0 -> if {
++                            prepared.qualified[qualifiedValueIndex] => qualifiedValue
+                             prepared.modules[qualifiedValue.targetModule].sourceIndex => qualifiedValueTargetSource
+                             prepared.package.ranges[qualifiedValueTargetSource] => qualifiedValueTargetRange
+                             prepared.package.symbols[qualifiedValueTargetRange.symbolStart + qualifiedValue.targetSymbol] => qualifiedValueTargetSymbol
+@@ -1832,23 +1922,15 @@
+                                 siblingModuleIndex! + 1 => siblingModuleIndex!
+                             }
+                     }
+-                    literalTargetSymbol! < 0 -> if {
+-                        0 => qualifiedSearch!
+-                        qualifiedSearch! < (prepared.qualified -> len)
+-                            -> while {
+-                                prepared.qualified[qualifiedSearch!] => importedCandidate
+-                                importedCandidate.sourceModule == sourceIndex! and importedCandidate.status == 0
+-                                    -> if {
+-                                        prepared.package.nodes[sourceRange.astStart + importedCandidate.pathAst] => importedPath
+-                                        typeNameToken! >= importedPath.firstToken and typeNameToken! < importedPath.firstToken + importedPath.tokenCount
+-                                            -> if {
+-                                                prepared.modules[importedCandidate.targetModule].sourceIndex => literalTargetModule!
+-                                                importedCandidate.targetSymbol => literalTargetSymbol!
+-                                            }
+-                                    }
+-                                qualifiedSearch! + 1 => qualifiedSearch!
+-                            }
+-                    }
++                    literalTargetSymbol! < 0 and typeNameToken! >= 0
++                        -> if {
++                            sourceQualified.lastByToken[sourceRange.tokenStart + typeNameToken!] => qualifiedIndex
++                            qualifiedIndex >= 0 -> if {
++                                prepared.qualified[qualifiedIndex] => importedCandidate
++                                prepared.modules[importedCandidate.targetModule].sourceIndex => literalTargetModule!
++                                importedCandidate.targetSymbol => literalTargetSymbol!
++                            }
++                        }
+                     literalTargetSymbol! >= 0 -> if {
+                         -1 => nominalTypeId!
+                         0 => nominalTypeSearch!
+@@ -3113,6 +3195,9 @@
+     # declaration order. They are canonicalized against the shared field table
+     # instead of being collapsed to a homogeneous array or a nominal stand-in.
+     false => productChanged!
++    [Int; ~] => productFirstField!
++    [Int; ~] => productLastField!
++    [Int; ~] => productNextField!
+     0 => productCandidateIndex!
+     productCandidateIndex! < (productAsts -> len)
+         -> while {
+@@ -3200,6 +3285,10 @@
+             }
+             (productFieldTypes! -> len) >= 2 and productFieldsReady!
+                 -> if {
++                    # Shape equality historically reads the last field for an
++                    # owner/ordinal without filtering its status. Keep that
++                    # rule while sharing the append-synchronized owner index.
++                    synchronizeFieldIndex(types, fields, productFirstField!, productLastField!, productNextField!, false)
+                     -1 => productType!
+                     0 => productTypeSearch!
+                     productTypeSearch! < (types -> len) and productType! < 0
+@@ -3212,15 +3301,15 @@
+                                     productFieldOrdinal! < Int(productFieldTypes! -> len) and productTypeEqual!
+                                         -> while {
+                                             -1 => productCandidateFieldIndex!
+-                                            0 => productCandidateFieldSearch!
+-                                            productCandidateFieldSearch! < (fields -> len)
++                                            productFirstField![productTypeSearch!] => productCandidateFieldSearch!
++                                            productCandidateFieldSearch! >= 0
+                                                 -> while {
+                                                     fields[productCandidateFieldSearch!] => productCandidateField
+-                                                    productCandidateField.ownerType == productTypeSearch! and productCandidateField.ordinal == productFieldOrdinal!
++                                                    productCandidateField.ordinal == productFieldOrdinal!
+                                                         -> if {
+                                                             productCandidateFieldSearch! => productCandidateFieldIndex!
+                                                         }
+-                                                    productCandidateFieldSearch! + 1 => productCandidateFieldSearch!
++                                                    productNextField![productCandidateFieldSearch!] => productCandidateFieldSearch!
+                                                 }
+                                             productCandidateFieldIndex! < 0 -> if { false => productTypeEqual! } else {
+                                                 fields[productCandidateFieldIndex!] => productCandidateField

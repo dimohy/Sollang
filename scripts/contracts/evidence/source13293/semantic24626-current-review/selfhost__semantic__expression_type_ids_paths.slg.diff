@@ -1,0 +1,436 @@
+--- 07564601a6a840901bdcbdaff50e238fe3f91ef1:selfhost/semantic/expression_type_ids_paths.slg
++++ current:selfhost/semantic/expression_type_ids_paths.slg
+@@ -781,7 +781,67 @@
+     changed!
+ }
+ 
+-resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
++# Index immutable coordinates, not inferred results. Preserve ascending
++# expression order and the caller's round-start limit; appended role facts
++# become candidates next round while existing type/status facts stay live.
++synchronizeCollectionSourceExpressions package: ref analysis.PackageAnalysis, expressions: ref [ExpressionTypeId; ~], limit: Int, indexed: Int, first: mut [Int; ~], last: mut [Int; ~], expressionIndices: mut [Int; ~], distances: mut [Int; ~], next: mut [Int; ~] -> Int {
++    (first -> len) == 0 -> if {
++        package.nodes -> each node { first -> push(-1)
++            last -> push(-1) }
++    }
++    indexed => expressionIndex!
++    expressionIndex! < limit -> while {
++        expressions[expressionIndex!] => expression
++        package.ranges[expression.sourceModule] => range
++        package.nodes[range.astStart + expression.astNode] => node
++        node.parent => ancestor!
++        1 => distance!
++        ancestor! >= 0 -> while {
++            range.astStart + ancestor! => globalAncestor
++            package.nodes[globalAncestor] => owner
++            owner.kind == 48 and owner.payloadToken >= 0
++                and node.start + node.length <= package.tokens[range.tokenStart + owner.payloadToken].span.start
++                -> if {
++                    Int(expressionIndices -> len) => entry
++                    expressionIndices -> push(expressionIndex!)
++                    distances -> push(distance!)
++                    next -> push(-1)
++                    last[globalAncestor] >= 0 -> if {
++                        entry => next[last[globalAncestor]]
++                    } else { entry => first[globalAncestor] }
++                    entry => last[globalAncestor]
++                }
++            owner.parent => ancestor!
++            distance! + 1 => distance!
++        }
++        expressionIndex! + 1 => expressionIndex!
++    }
++    limit
++}
++
++# Keep original expression order within each source. Queries synchronize at
++# their own boundary so facts appended earlier in this pass remain visible;
++# types and statuses are always read from the current expression record.
++synchronizeExpressionSourceIndex expressions: ref [ExpressionTypeId; ~], sourceCount: Int, firstBySource: mut [Int; ~], lastBySource: mut [Int; ~], nextByExpression: mut [Int; ~] -> Unit {
++    Int(firstBySource -> len) < sourceCount -> while {
++        firstBySource -> push(-1)
++        lastBySource -> push(-1)
++    }
++    Int(nextByExpression -> len) => expressionIndex!
++    expressionIndex! < (expressions -> len) -> while {
++        expressions[expressionIndex!].sourceModule => source
++        nextByExpression -> push(-1)
++        source >= 0 and source < sourceCount -> if {
++            lastBySource[source] >= 0 -> if {
++                expressionIndex! => nextByExpression[lastBySource[source]]
++            } else { expressionIndex! => firstBySource[source] }
++            expressionIndex! => lastBySource[source]
++        }
++        expressionIndex! + 1 => expressionIndex!
++    }
++}
++
++resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], sourceReferences: ref TypeReferenceIndex, referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
+     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
+     prepared.package -> indexResolvedNameReferences => nameReferences
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+@@ -978,7 +1038,7 @@
+     [Int; ~] => firstFieldByOwnerType!
+     [Int; ~] => lastFieldByOwnerType!
+     [Int; ~] => nextFieldByField!
+-    synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
++    synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!, true)
+ 
+     # A flow's source is its direct child at the same source start. Resolve
+     # intrinsic results from that source before selecting a branch's final
+@@ -1036,6 +1096,15 @@
+     [Int; ~] => inferredReturnLastByFunction!
+     [Int; ~] => inferredReturnNextExpression!
+     [Int; ~] => inferredReturnExpressionDistances!
++    [Int; ~] => collectionFirstExpressionByOwner!
++    [Int; ~] => collectionLastExpressionByOwner!
++    [Int; ~] => collectionSourceExpressions!
++    [Int; ~] => collectionSourceDistances!
++    [Int; ~] => collectionSourceNext!
++    0 => collectionIndexedExpressions!
++    [Int; ~] => firstExpressionBySource!
++    [Int; ~] => lastExpressionBySource!
++    [Int; ~] => nextExpressionInSource!
+     true => pathChanged!
+     pathChanged! -> while {
+         false => pathChanged!
+@@ -1048,7 +1117,7 @@
+         resolveContainerTransformTypes(prepared, types, expressions, expressionIndexByAst, flowSourceByAst)
+             -> if { true => pathChanged! }
+         # Late array and dictionary interning can grow the arena between rounds.
+-        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
++        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!, true)
+         resolveContextualRecordTypes(prepared, types, fields, expressions, expressionIndexByAst, flowSourceByAst, contextualRecords, firstFieldByOwnerType!, nextFieldByField!, bindingValues, mutableOwners, references, expectedContextByAst)
+             -> if { true => pathChanged! }
+         0 => intrinsicSource!
+@@ -1452,30 +1521,7 @@
+         # The intrinsic each role binds its block item to the source
+         # collection's element type. Repeat this with the surrounding fixed
+         # point because the collection can itself be a newly inferred local.
+-        [Int; ~] => eachFirstExpressionBySource!
+-        [Int; ~] => eachLastExpressionBySource!
+-        0 => eachExpressionSourceSeed!
+-        eachExpressionSourceSeed! < (prepared.package.ranges -> len)
+-            -> while {
+-                eachFirstExpressionBySource! -> push(-1)
+-                eachLastExpressionBySource! -> push(-1)
+-                eachExpressionSourceSeed! + 1 => eachExpressionSourceSeed!
+-            }
+-        [Int; ~] => eachNextExpressionInSource!
+-        0 => eachExpressionIndexSeed!
+-        eachExpressionIndexSeed! < (expressions -> len)
+-            -> while {
+-                expressions[eachExpressionIndexSeed!] => eachIndexedExpression
+-                eachLastExpressionBySource![eachIndexedExpression.sourceModule] >= 0
+-                    -> if {
+-                        eachExpressionIndexSeed! => eachNextExpressionInSource![eachLastExpressionBySource![eachIndexedExpression.sourceModule]]
+-                    } else {
+-                        eachExpressionIndexSeed! => eachFirstExpressionBySource![eachIndexedExpression.sourceModule]
+-                    }
+-                eachExpressionIndexSeed! => eachLastExpressionBySource![eachIndexedExpression.sourceModule]
+-                eachNextExpressionInSource! -> push(-1)
+-                eachExpressionIndexSeed! + 1 => eachExpressionIndexSeed!
+-            }
++        synchronizeCollectionSourceExpressions(prepared.package, expressions, Int(expressions -> len), collectionIndexedExpressions!, collectionFirstExpressionByOwner!, collectionLastExpressionByOwner!, collectionSourceExpressions!, collectionSourceDistances!, collectionSourceNext!) => collectionIndexedExpressions!
+         0 => eachReferenceSource!
+         eachReferenceSource! < (prepared.package.ranges -> len)
+             -> while {
+@@ -1495,34 +1541,26 @@
+                                     -1 => eachSourceExpression!
+                                     UIntSize(0) => eachSourceEnd!
+                                     1000000 => eachSourceDistance!
+-                                    eachFirstExpressionBySource![eachReferenceSource!] => eachSourceSearch!
++                                    collectionFirstExpressionByOwner![eachReferenceRange.astStart + eachSymbol.astNode] => eachSourceSearch!
+                                     eachSourceSearch! >= 0 -> while {
+-                                        expressions[eachSourceSearch!] => eachSourceCandidate
++                                        collectionSourceExpressions![eachSourceSearch!] => eachCandidateIndex
++                                        expressions[eachCandidateIndex] => eachSourceCandidate
+                                         eachSourceCandidate.sourceModule == eachReferenceSource!
+                                             -> if {
+                                                 prepared.package.nodes[eachReferenceRange.astStart + eachSourceCandidate.astNode] => eachSourceNode
+                                                 eachSourceNode.start + eachSourceNode.length <= prepared.package.tokens[eachReferenceRange.tokenStart + eachRoleAst.payloadToken].span.start
+                                                     -> if {
+-                                                        eachSourceNode.parent => eachSourceAncestor!
+-                                                        1 => eachDistance!
+-                                                        false => belongsToEach!
+-                                                        eachSourceAncestor! >= 0 and not belongsToEach!
+-                                                            -> while {
+-                                                                eachSourceAncestor! == eachSymbol.astNode -> if { true => belongsToEach! } else {
+-                                                                    prepared.package.nodes[eachReferenceRange.astStart + eachSourceAncestor!].parent => eachSourceAncestor!
+-                                                                    eachDistance! + 1 => eachDistance!
+-                                                                }
+-                                                            }
++                                                        collectionSourceDistances![eachSourceSearch!] => eachDistance
+                                                         eachSourceNode.start + eachSourceNode.length => eachCandidateEnd
+-                                                        belongsToEach! and (eachSourceExpression! < 0 or eachCandidateEnd > eachSourceEnd! or (eachCandidateEnd == eachSourceEnd! and eachDistance! < eachSourceDistance!))
++                                                        eachSourceExpression! < 0 or eachCandidateEnd > eachSourceEnd! or (eachCandidateEnd == eachSourceEnd! and eachDistance < eachSourceDistance!)
+                                                             -> if {
+-                                                                eachSourceSearch! => eachSourceExpression!
++                                                                eachCandidateIndex => eachSourceExpression!
+                                                                 eachCandidateEnd => eachSourceEnd!
+-                                                                eachDistance! => eachSourceDistance!
++                                                                eachDistance => eachSourceDistance!
+                                                             }
+                                                     }
+                                             }
+-                                        eachNextExpressionInSource![eachSourceSearch!] => eachSourceSearch!
++                                        collectionSourceNext![eachSourceSearch!] => eachSourceSearch!
+                                     }
+                                     eachSourceExpression! >= 0 and expressions[eachSourceExpression!].typeId >= 0 and expressions[eachSourceExpression!].typeId < (types -> len)
+                                         -> if {
+@@ -2481,10 +2519,11 @@
+                                 streamGenericCallAst.tertiaryToken >= 0 -> if {
+                                     prepared.package.tokens[streamGenericCallRange.tokenStart + streamGenericCallAst.tertiaryToken].span.start => streamGenericBodyStart!
+                                 }
++                                synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
+                                 UIntSize(0) => streamGenericArgumentStart!
+-                                0 => streamGenericArgumentSearch!
+-                                streamGenericFunction.blockTypeNode < 0 -> if { expressions -> len => streamGenericArgumentSearch! }
+-                                streamGenericArgumentSearch! < (expressions -> len)
++                                firstExpressionBySource![streamGenericCall.sourceModule] => streamGenericArgumentSearch!
++                                streamGenericFunction.blockTypeNode < 0 -> if { -1 => streamGenericArgumentSearch! }
++                                streamGenericArgumentSearch! >= 0
+                                     -> while {
+                                         expressions[streamGenericArgumentSearch!] => streamGenericArgument
+                                         streamGenericArgument.status == 0 and streamGenericArgument.sourceModule == streamGenericCall.sourceModule and not types[streamGenericArgument.typeId].containsParameter
+@@ -2510,13 +2549,13 @@
+                                                             }
+                                                     }
+                                             }
+-                                        streamGenericArgumentSearch! + 1 => streamGenericArgumentSearch!
++                                        nextExpressionInSource![streamGenericArgumentSearch!] => streamGenericArgumentSearch!
+                                     }
+                                 streamGenericConcreteType! < 0 -> if {
+                                     -1 => streamGenericSourceType!
+                                     1000000 => streamGenericSourceDistance!
+-                                    0 => streamGenericSourceSearch!
+-                                    streamGenericSourceSearch! < (expressions -> len)
++                                    firstExpressionBySource![streamGenericCall.sourceModule] => streamGenericSourceSearch!
++                                    streamGenericSourceSearch! >= 0
+                                         -> while {
+                                             expressions[streamGenericSourceSearch!] => streamGenericSourceCandidate
+                                             streamGenericSourceCandidate.sourceModule == streamGenericCall.sourceModule
+@@ -2544,14 +2583,16 @@
+                                                                 }
+                                                         }
+                                                 }
+-                                            streamGenericSourceSearch! + 1 => streamGenericSourceSearch!
++                                            nextExpressionInSource![streamGenericSourceSearch!] => streamGenericSourceSearch!
+                                         }
+                                     streamGenericSourceType! => streamGenericConcreteType!
+                                     streamGenericFunction.typeNode => streamGenericInputAst!
+                                 }
+                                 streamGenericConcreteType! >= 0 -> if {
+                                     expressions[streamGenericExpressionIndex] => streamGenericExpression!
+-                                    references -> each streamGenericReference {
++                                    sourceReferences.firstBySource[streamGenericCall.targetSourceModule] => streamGenericReferenceSearch!
++                                    streamGenericReferenceSearch! >= 0 -> while {
++                                        references[streamGenericReferenceSearch!] => streamGenericReference
+                                         streamGenericReference.sourceModule == streamGenericCall.targetSourceModule
+                                             and streamGenericReference.typeAst == streamGenericInputAst!
+                                             and streamGenericReference.status == 0
+@@ -2563,6 +2604,7 @@
+                                                     streamGenericExpression! => expressions[streamGenericExpressionIndex]
+                                                 }
+                                             }
++                                        sourceReferences.nextBySource[streamGenericReferenceSearch!] => streamGenericReferenceSearch!
+                                     }
+                                 }
+                             }
+@@ -2589,8 +2631,9 @@
+                                 -1 => streamRoleSourceType!
+                                 1000000 => streamRoleSourceDistance!
+                                 prepared.package.tokens[streamRoleCallRange.tokenStart + streamRoleCallAst.payloadToken].span.start => streamRoleTargetStart
+-                                0 => streamRoleSourceSearch!
+-                                streamRoleSourceSearch! < (expressions -> len)
++                                synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
++                                firstExpressionBySource![streamRoleCall.sourceModule] => streamRoleSourceSearch!
++                                streamRoleSourceSearch! >= 0
+                                     -> while {
+                                         expressions[streamRoleSourceSearch!] => streamRoleSourceCandidate
+                                         streamRoleSourceCandidate.sourceModule == streamRoleCall.sourceModule
+@@ -2618,7 +2661,7 @@
+                                                             }
+                                                     }
+                                             }
+-                                        streamRoleSourceSearch! + 1 => streamRoleSourceSearch!
++                                        nextExpressionInSource![streamRoleSourceSearch!] => streamRoleSourceSearch!
+                                     }
+                                 -1 => streamRoleElementType!
+                                 streamRoleSourceType! >= 0 -> if {
+@@ -2674,7 +2717,9 @@
+                                                     declaredRoleOrdinal! <= streamRoleOrdinal! -> while {
+                                                         -1 => declaredRoleType!
+                                                         UIntSize(0) => declaredRoleEnd!
+-                                                        references -> each declaredRoleReference {
++                                                        sourceReferences.firstBySource[streamRoleCall.targetSourceModule] => declaredRoleReferenceSearch!
++                                                        declaredRoleReferenceSearch! >= 0 -> while {
++                                                            references[declaredRoleReferenceSearch!] => declaredRoleReference
+                                                             declaredRoleReference.sourceModule == streamRoleCall.targetSourceModule
+                                                                 and declaredRoleReference.status == 0
+                                                                 -> if {
+@@ -2687,6 +2732,7 @@
+                                                                             declaredRoleNode.start => declaredRoleEnd!
+                                                                         }
+                                                                 }
++                                                            sourceReferences.nextBySource[declaredRoleReferenceSearch!] => declaredRoleReferenceSearch!
+                                                         }
+                                                         declaredRoleType! => streamRoleType!
+                                                         declaredRoleEnd! + 1 => declaredRoleStart!
+@@ -2694,7 +2740,9 @@
+                                                     }
+                                                 }
+                                                 streamRoleType! >= 0 -> if {
+-                                                    references -> each roleConstraint {
++                                                    sourceReferences.firstBySource[streamRoleCall.targetSourceModule] => roleConstraintSearch!
++                                                    roleConstraintSearch! >= 0 -> while {
++                                                        references[roleConstraintSearch!] => roleConstraint
+                                                         roleConstraint.sourceModule == streamRoleCall.targetSourceModule
+                                                             and roleConstraint.status == 0
+                                                             -> if {
+@@ -2709,6 +2757,7 @@
+                                                                         -> if { roleSpecialization.root => streamRoleType! }
+                                                                 }
+                                                             }
++                                                        sourceReferences.nextBySource[roleConstraintSearch!] => roleConstraintSearch!
+                                                     }
+                                                 }
+ 
+@@ -2755,7 +2804,7 @@
+         # Revisit indexed candidates and append only newly interned field links.
+         resolveStructuralProductTypes(prepared, types, fields, expressions, expressionIndexByAst, productSources, productAsts) => productTypesChanged
+         productTypesChanged -> if { true => pathChanged! }
+-        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
++        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!, true)
+         true => pathRoundChanged!
+         pathRoundChanged! -> while {
+             false => pathRoundChanged!
+@@ -3172,24 +3221,23 @@
+                         false => declaredDictionaryTypes!
+                         -1 => lateDictionaryFirstChild!
+                         -1 => lateDictionarySecondChild!
+-                        0 => lateDictionaryChildSearch!
++                        contextualRecords.firstChild[lateDictionaryGlobalAst] => lateDictionaryChildSearch!
+                         lateDictionaryNode.kind == 38 and not contextualNominalLiteral!
+                             -> if {
+-                                lateDictionaryChildSearch! < lateDictionaryRange.astCount
++                                lateDictionaryChildSearch! >= 0
+                                     -> while {
+-                                        prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryChildSearch!] => lateDictionaryChild
+-                                        lateDictionaryChild.parent == lateDictionaryAstIndex!
+-                                            -> if {
+-                                                lateDictionaryChild.kind == 12 -> if { true => declaredDictionaryTypes! }
+-                                                lateDictionaryFirstChild! < 0 -> if { lateDictionaryChildSearch! => lateDictionaryFirstChild! } else {
+-                                                    lateDictionarySecondChild! < 0 -> if { lateDictionaryChildSearch! => lateDictionarySecondChild! }
+-                                                }
+-                                            }
+-                                        lateDictionaryChildSearch! + 1 => lateDictionaryChildSearch!
++                                        prepared.package.nodes[lateDictionaryChildSearch!] => lateDictionaryChild
++                                        lateDictionaryChildSearch! - lateDictionaryRange.astStart => lateDictionaryLocalChild
++                                        lateDictionaryChild.kind == 12 -> if { true => declaredDictionaryTypes! }
++                                        lateDictionaryFirstChild! < 0 -> if { lateDictionaryLocalChild => lateDictionaryFirstChild! } else {
++                                            lateDictionarySecondChild! < 0 -> if { lateDictionaryLocalChild => lateDictionarySecondChild! }
++                                        }
++                                        contextualRecords.nextChild[lateDictionaryChildSearch!] => lateDictionaryChildSearch!
+                                     }
+                             }
+                         lateDictionaryNode.kind == 38 and not contextualNominalLiteral! and not declaredDictionaryTypes!
+                             -> if {
++                                synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
+                                 prepared.package -> typeIds.arrayStorageSyntax(lateDictionarySourceIndex!, lateDictionaryAstIndex!) => lateDictionaryStorage
+                                 lateDictionaryStorage.bounded -> if { 13 } else { 5 } => lateDictionaryKind
+                                 lateDictionaryStorage.bounded -> if { lateDictionaryStorage.length } else { -1 } => lateDictionaryLength
+@@ -3197,8 +3245,8 @@
+                                 -1 => lateDictionarySecondType!
+                                 lateDictionaryFirstChild! >= 0 -> if {
+                                     1000000 => lateDictionaryDistance!
+-                                    0 => lateDictionaryCandidateSearch!
+-                                    lateDictionaryCandidateSearch! < (expressions -> len)
++                                    firstExpressionBySource![lateDictionarySourceIndex!] => lateDictionaryCandidateSearch!
++                                    lateDictionaryCandidateSearch! >= 0
+                                         -> while {
+                                             expressions[lateDictionaryCandidateSearch!] => lateDictionaryCandidate
+                                             lateDictionaryCandidate.sourceModule == lateDictionarySourceIndex!
+@@ -3225,13 +3273,13 @@
+                                                             lateDictionaryCandidate.typeId => lateDictionaryFirstType!
+                                                         }
+                                                 }
+-                                            lateDictionaryCandidateSearch! + 1 => lateDictionaryCandidateSearch!
++                                            nextExpressionInSource![lateDictionaryCandidateSearch!] => lateDictionaryCandidateSearch!
+                                         }
+                                 }
+                                 lateDictionarySecondChild! >= 0 -> if {
+                                     1000000 => lateDictionaryDistance!
+-                                    0 => lateDictionaryCandidateSearch!
+-                                    lateDictionaryCandidateSearch! < (expressions -> len)
++                                    firstExpressionBySource![lateDictionarySourceIndex!] => lateDictionaryCandidateSearch!
++                                    lateDictionaryCandidateSearch! >= 0
+                                         -> while {
+                                             expressions[lateDictionaryCandidateSearch!] => lateDictionaryCandidate
+                                             lateDictionaryCandidate.sourceModule == lateDictionarySourceIndex!
+@@ -3258,7 +3306,7 @@
+                                                             lateDictionaryCandidate.typeId => lateDictionarySecondType!
+                                                         }
+                                                 }
+-                                            lateDictionaryCandidateSearch! + 1 => lateDictionaryCandidateSearch!
++                                            nextExpressionInSource![lateDictionaryCandidateSearch!] => lateDictionaryCandidateSearch!
+                                         }
+                                 }
+                                 lateDictionaryFirstType! >= 0 and lateDictionarySecondType! >= 0
+@@ -3319,9 +3367,10 @@
+                             lateDictionaryIndexRange.astStart + lateDictionaryIndexAst! => lateDictionaryIndexGlobal
+                             expressionIndexByAst[lateDictionaryIndexGlobal] < 0
+                                 -> if {
++                                    synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
+                                     -1 => lateDictionaryBaseType!
+-                                    0 => lateDictionaryBaseSearch!
+-                                    lateDictionaryBaseSearch! < (expressions -> len)
++                                    firstExpressionBySource![lateDictionaryIndexSource!] => lateDictionaryBaseSearch!
++                                    lateDictionaryBaseSearch! >= 0
+                                         -> while {
+                                             expressions[lateDictionaryBaseSearch!] => lateDictionaryBaseCandidate
+                                             lateDictionaryBaseCandidate.sourceModule == lateDictionaryIndexSource!
+@@ -3337,7 +3386,7 @@
+                                                         }
+                                                     lateDictionaryBaseBelongs! -> if { lateDictionaryBaseCandidate.typeId => lateDictionaryBaseType! }
+                                                 }
+-                                            lateDictionaryBaseSearch! + 1 => lateDictionaryBaseSearch!
++                                            nextExpressionInSource![lateDictionaryBaseSearch!] => lateDictionaryBaseSearch!
+                                         }
+                                     lateDictionaryBaseType! >= 0 and lateDictionaryBaseType! < (types -> len) and types[lateDictionaryBaseType!].kind == 5
+                                         -> if {
+@@ -3356,8 +3405,9 @@
+ 
+ }
+ 
+-# Extend the derived field index from canonical arena lengths, preserving existing links.
+-synchronizeFieldIndex types: [typeIds.SemanticType], fields: [typeIds.NominalField], firstByOwner: mut [Int; ~], lastByOwner: mut [Int; ~], nextByField: mut [Int; ~] -> Unit {
++# Extend owner links in original field order. Member lookup admits only
++# resolved fields; product shape equality retains its all-status selection.
++synchronizeFieldIndex types: [typeIds.SemanticType], fields: [typeIds.NominalField], firstByOwner: mut [Int; ~], lastByOwner: mut [Int; ~], nextByField: mut [Int; ~], resolvedOnly: Bool -> Unit {
+     (firstByOwner -> len) < (types -> len) -> while {
+         firstByOwner -> push(-1)
+         lastByOwner -> push(-1)
+@@ -3366,14 +3416,15 @@
+     fieldIndex! < (fields -> len) -> while {
+         fields[fieldIndex!] => field
+         nextByField -> push(-1)
+-        field.status == 0 and field.ownerType >= 0 -> if {
+-            lastByOwner[field.ownerType] >= 0 -> if {
+-                fieldIndex! => nextByField[lastByOwner[field.ownerType]]
+-            } else {
+-                fieldIndex! => firstByOwner[field.ownerType]
++        (not resolvedOnly or field.status == 0) and field.ownerType >= 0
++            -> if {
++                lastByOwner[field.ownerType] >= 0 -> if {
++                    fieldIndex! => nextByField[lastByOwner[field.ownerType]]
++                } else {
++                    fieldIndex! => firstByOwner[field.ownerType]
++                }
++                fieldIndex! => lastByOwner[field.ownerType]
+             }
+-            fieldIndex! => lastByOwner[field.ownerType]
+-        }
+         fieldIndex! + 1 => fieldIndex!
+     }
+ }
