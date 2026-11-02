@@ -2024,76 +2024,9 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
             types! -> push(semanticType)
             semanticTypeCopyIndex56! + 1 => semanticTypeCopyIndex56!
         }
-    # Imported spellings of the affine sys.file.SourceText declaration must
-    # share the builtin type id semantics. Keeping a second nominal shape here
-    # makes arrays project the declaration's token field instead of the native
-    # { data, length, mapping, mappedLength } representation.
-    -1 => sourceTextModule!
-    -1 => sourceTextSymbol!
-    0 => sourceTextModuleSearch!
-    sourceTextModuleSearch! < (prepared.modules -> len)
-        -> while {
-            prepared.modules[sourceTextModuleSearch!] => sourceTextIdentity
-            prepared.package.sources[sourceTextIdentity.sourceIndex] -> len => sourceTextSourceLength
-            prepared.package.sources[sourceTextIdentity.sourceIndex] -> slice(UIntSize(0), sourceTextSourceLength) => sourceTextSource
-            sourceTextIdentity.pathLength == 8 => sourceTextNamespaceEqual!
-            "sys.file" => sourceTextNamespace
-            UIntSize(0) => sourceTextNamespaceByte!
-            sourceTextNamespaceEqual! and sourceTextNamespaceByte! < sourceTextIdentity.pathLength
-                -> while {
-                    (sourceTextSource -> byte(sourceTextIdentity.pathStart + sourceTextNamespaceByte!)) != (sourceTextNamespace -> byte(sourceTextNamespaceByte!))
-                        -> if { false => sourceTextNamespaceEqual! }
-                    sourceTextNamespaceByte! + 1 => sourceTextNamespaceByte!
-                }
-            sourceTextNamespaceEqual! -> if {
-                prepared.package.ranges[sourceTextIdentity.sourceIndex] => sourceTextRange
-                0 => sourceTextSymbolSearch!
-                sourceTextSymbolSearch! < sourceTextRange.symbolCount
-                    -> while {
-                        prepared.package.symbols[sourceTextRange.symbolStart + sourceTextSymbolSearch!] => sourceTextCandidate
-                        sourceTextCandidate.kind == 3 and sourceTextCandidate.parent < 0
-                            -> if {
-                                prepared.package.tokens[sourceTextRange.tokenStart + sourceTextCandidate.nameToken] => sourceTextCandidateName
-                                sourceTextCandidateName.span.length == 10 => sourceTextNameEqual!
-                                "SourceText" => sourceTextName
-                                UIntSize(0) => sourceTextNameByte!
-                                sourceTextNameEqual! and sourceTextNameByte! < sourceTextCandidateName.span.length
-                                    -> while {
-                                        (sourceTextSource -> byte(sourceTextCandidateName.span.start + sourceTextNameByte!)) != (sourceTextName -> byte(sourceTextNameByte!))
-                                            -> if { false => sourceTextNameEqual! }
-                                        sourceTextNameByte! + 1 => sourceTextNameByte!
-                                    }
-                                sourceTextNameEqual! -> if {
-                                    sourceTextIdentity.sourceIndex => sourceTextModule!
-                                    sourceTextSymbolSearch! => sourceTextSymbol!
-                                }
-                            }
-                        sourceTextSymbolSearch! + 1 => sourceTextSymbolSearch!
-                    }
-            }
-            sourceTextModuleSearch! + 1 => sourceTextModuleSearch!
-        }
-    0 => sourceTextTypeIndex!
-    sourceTextTypeIndex! < (types! -> len) -> while {
-        types![sourceTextTypeIndex!] => sourceTextType
-        sourceTextModule! >= 0 and sourceTextSymbol! >= 0
-            and sourceTextType.kind == 1 and sourceTextType.module == sourceTextModule! and sourceTextType.symbol == sourceTextSymbol!
-            -> if {
-                typeIds.SemanticType {
-                    kind: 1
-                    origin: 1
-                    module: -1
-                    symbol: 24
-                    first: -1
-                    second: -1
-                    length: -1
-                    lengthHash: 0
-                    containsParameter: false
-                    status: 0
-                } => types![sourceTextTypeIndex!]
-            }
-        sourceTextTypeIndex! + 1 => sourceTextTypeIndex!
-    }
+    prepared.package -> typeIds.intrinsicSourceTextDeclaration(prepared.modules) => sourceTextDeclaration
+    sourceTextDeclaration.targetModule => sourceTextModule
+    sourceTextDeclaration.targetSymbol => sourceTextSymbol
     [typeIds.TypeReference; ~] => references!
     0 => referenceCopyIndex119!
     referenceCopyIndex119! < (prepared.semantic.references -> len)
@@ -2182,7 +2115,7 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
             controlOwnerSource! + 1 => controlOwnerSource!
         }
 
-    resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule!, sourceTextSymbol!, seeds.ownerBySource, callbackArgumentIndex)
+    resolveInitialExpressionTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, controlOwnerByAst!, sourceTextModule, sourceTextSymbol, seeds.ownerBySource, callbackArgumentIndex)
     resolveContextualDictionaryStructValues(prepared, types!, expressions!, expressionIndexByAst!)
     # Register literal backing storage with the declared element contract.
     # Readonly array returns keep their own extent and independent values.
@@ -2219,34 +2152,6 @@ resolveContextCoreWithCallArgumentBindings prepared: semanticContext.SemanticSna
     }
 
     resolveFileScalarArgumentTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, flowTargetTokenByAst, numericContextIndex)
-
-    # Generic specialization and literal inference can append semantic types
-    # after the initial imported-SourceText normalization. Canonicalize the
-    # completed arena as well so composites created by those later passes
-    # cannot retain a second nominal identity for the intrinsic owner.
-    sourceTextModule! >= 0 and sourceTextSymbol! >= 0
-        -> if {
-            0 => finalSourceTextTypeIndex!
-            finalSourceTextTypeIndex! < (types! -> len) -> while {
-                types![finalSourceTextTypeIndex!] => finalSourceTextType
-                finalSourceTextType.kind == 1 and finalSourceTextType.module == sourceTextModule! and finalSourceTextType.symbol == sourceTextSymbol!
-                    -> if {
-                        typeIds.SemanticType {
-                            kind: 1
-                            origin: 1
-                            module: -1
-                            symbol: 24
-                            first: -1
-                            second: -1
-                            length: -1
-                            lengthHash: 0
-                            containsParameter: false
-                            status: 0
-                        } => types![finalSourceTextTypeIndex!]
-                    }
-                finalSourceTextTypeIndex! + 1 => finalSourceTextTypeIndex!
-            }
-        }
 
     # Preserve declared parameter and inferred binding types before Typed IR.
     # Interpolation reads the same lexical symbol identity as ordinary name

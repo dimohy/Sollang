@@ -863,6 +863,33 @@ public struct OpenNominalTypeResolution {
     public matchCount: Int
 }
 
+# C# registers this intrinsic declaration as SourceText before any containing
+# type is interned. Resolve its declaration once, independently of import aliases.
+public intrinsicSourceTextDeclaration package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~] -> OpenNominalTypeResolution {
+    OpenNominalTypeResolution { targetModule: -1, targetSymbol: -1, matchCount: 0 } => result!
+    identities -> each identity {
+        package.sources[identity.sourceIndex] -> len => sourceLength
+        package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+        SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: "sys.file" } -> spanNameIs
+            -> if {
+                package.ranges[identity.sourceIndex] => range
+                0 => symbolIndex!
+                symbolIndex! < range.symbolCount -> while {
+                    package.symbols[range.symbolStart + symbolIndex!] => symbol
+                    symbol.kind == 3 and symbol.parent < 0 -> if {
+                        package.tokens[range.tokenStart + symbol.nameToken] => name
+                        SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: "SourceText" } -> spanNameIs
+                            -> if {
+                                OpenNominalTypeResolution { targetModule: identity.sourceIndex, targetSymbol: symbolIndex!, matchCount: result!.matchCount + 1 } => result!
+                            }
+                    }
+                    symbolIndex! + 1 => symbolIndex!
+                }
+            }
+    }
+    result!
+}
+
 public struct OpenNominalTypeCandidate {
     public targetModule: Int
     public targetSymbol: Int
@@ -1712,6 +1739,7 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
     package -> modules.importsAnalyzed => imports
     package -> moduleResolve.resolveAnalyzed => resolvedImports
     package -> qualified.resolveAnalyzed => qualifiedResults
+    package -> intrinsicSourceTextDeclaration(identities) => sourceTextDeclaration
     [SemanticType; ~] => semanticTypes!
     [TypeReference; ~] => references!
     [NominalField; ~] => fields!
@@ -2191,6 +2219,17 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
                                         package.terms[sourceRange.termStart + productCountField!].secondArgument => productCountField!
                                     }
                                 }
+                                # Use the canonical scalar before interning arrays,
+                                # references and generic applications that contain it.
+                                term.kind == 1 and sourceTextDeclaration.matchCount == 1
+                                    and targetModule! == sourceTextDeclaration.targetModule
+                                    and targetSymbol! == sourceTextDeclaration.targetSymbol
+                                    and status! == 0
+                                    -> if {
+                                        1 => origin!
+                                        -1 => targetModule!
+                                        24 => targetSymbol!
+                                    }
                                 term.kind => resolvedKind!
                                 term.kind == 15 -> if { 1 => resolvedKind! }
                                 term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0
@@ -2334,6 +2373,10 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
             fieldSymbol.kind == 26 and fieldSymbol.parent >= 0 and fieldSymbol.typeNode >= 0
                 -> if {
                     -1 => ownerType!
+                    sourceTextDeclaration.matchCount == 1
+                        and sourceIndex! == sourceTextDeclaration.targetModule
+                        and fieldSymbol.parent == sourceTextDeclaration.targetSymbol
+                        -> if { semanticTypes! -> builtinTypeSlot(24) => ownerType! }
                     0 => ownerTypeSearch!
                     ownerTypeSearch! < (semanticTypes! -> len) and ownerType! < 0
                         -> while {

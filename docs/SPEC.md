@@ -3723,6 +3723,10 @@ a typed variable does not gain an implicit narrowing conversion.
 An incompatible nominal field value reports the value expression's location,
 the field name, and the canonical expected and actual type names. An import
 alias changes the source spelling, not the declaring module's type identity.
+The intrinsic `sys.file.SourceText` declaration has the builtin `SourceText`
+identity before containing arrays, references, or generic applications are
+interned. Qualified aliases and builtin spellings therefore share the same
+element identity; a same-named declaration in another module remains distinct.
 Integer-literal diagnostics use the parsed decimal value with digit separators
 removed. A `CodePoint` literal outside `0..1114111` reports the range; a value
 inside the Unicode surrogate interval `55296..57343` reports the surrogate
