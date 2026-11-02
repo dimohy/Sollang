@@ -172,6 +172,54 @@ class PhaseClosureTests(unittest.TestCase):
                                       "requiredDecisionIds": [], "decisions": []}})
             self.phases.append({"phase": phase, "aligned": "partial-behavior"})
 
+    def test_supporting_source_is_separate_from_owned_inventory(self):
+        source = "src/Sollang.Compiler/CodeGen/Dependency.cs"
+        self.write(source, "cross-phase dependency")
+        decision = {"supportingSources": [source]}
+        self.assertEqual(MODULE.supporting_decision_sources(
+            decision, "managed", set(self.side_sources["managed"]), self.root, "parsing"), {source})
+        with self.assertRaisesRegex(MODULE.PhaseClosureError, "outside scope"):
+            MODULE.validate_decision_source_scope([source], set(self.side_sources["managed"]))
+
+    def test_supporting_source_cannot_hide_owned_source(self):
+        source = self.sources["managed"]
+        with self.assertRaisesRegex(MODULE.PhaseClosureError, "cannot be reclassified"):
+            MODULE.supporting_decision_sources({"supportingSources": [source]},
+                "managed", set(self.side_sources["managed"]), self.root, "parsing")
+
+    def test_supporting_source_rejects_wrong_side_and_path_escape(self):
+        for source in ["selfhost/incorrect.cs", "../outside.cs",
+                       "src/Sollang.Compiler/Parsing/../Parsing/Parser.cs"]:
+            with self.subTest(source=source), self.assertRaises(MODULE.PhaseClosureError):
+                MODULE.supporting_decision_sources({"supportingSources": [source]},
+                    "managed", set(), self.root, "parsing")
+
+    def test_supporting_source_rejects_duplicate_or_unknown_side(self):
+        source = "src/Sollang.Compiler/CodeGen/Dependency.cs"
+        self.write(source, "cross-phase dependency")
+        for supporting in [[source, source], {"other": [source]}]:
+            with self.subTest(supporting=supporting), self.assertRaises(MODULE.PhaseClosureError):
+                MODULE.supporting_decision_sources({"supportingSources": supporting},
+                    "managed", set(), self.root, "parsing")
+
+    def test_phase_proof_must_include_supporting_source_hash(self):
+        source = "src/Sollang.Compiler/CodeGen/Dependency.cs"
+        self.write(source, "cross-phase dependency")
+        decision = self.detail["phaseProgress"][0]["decisionInventory"]["decisions"][0]
+        decision["supportingSources"] = [source]
+        self.rejects("source comparison is stale")
+
+    def test_compiled_proof_must_include_supporting_source_hash(self):
+        source = "src/Sollang.Compiler/CodeGen/Dependency.cs"
+        self.write(source, "cross-phase dependency")
+        decisions = self.detail["phaseProgress"][0]["decisionInventory"]["decisions"]
+        decisions[0]["supportingSources"] = [source]
+        self.change_record("records/comparison.json", decisions=decisions,
+                           sourceHashes={**self.hashes, source: MODULE.file_hash(self.root / source)})
+        self.change_record("records/paired.json",
+                           sourceComparisonRecord=self.link("records/comparison.json"))
+        self.rejects("compiled proof does not cover current sources")
+
     def write(self, path, value):
         destination = self.root / path
         destination.parent.mkdir(parents=True, exist_ok=True)

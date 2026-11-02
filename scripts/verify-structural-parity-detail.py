@@ -170,6 +170,28 @@ def validate_decision_source_scope(named, sources):
     require(bool(named) and set(named) <= sources, "decision source outside scope")
 
 
+def supporting_decision_sources(decision, side, sources, root, phase):
+    """Retain cross-phase dependencies without counting them as owned sources."""
+    named = decision.get("supportingSources", [])
+    require(isinstance(named, list) and all(isinstance(path, str) for path in named)
+            and len(named) == len(set(named)), "invalid supporting source list")
+    root = root.resolve()
+    selected = set()
+    for name in named:
+        path = (root / name).resolve()
+        require(path.is_relative_to(root) and path.is_file()
+                and path.relative_to(root).as_posix() == name,
+                "invalid supporting source path")
+        dependency_side = "managed" if path.suffix == ".cs" else "selfhost"
+        require(path.suffix in (".cs", ".slg")
+                and source_scope_belongs_to_compiler(name, phase, dependency_side),
+                "supporting source belongs to the wrong compiler")
+        if dependency_side == side:
+            require(name not in sources, "owned source cannot be reclassified as supporting")
+            selected.add(name)
+    return selected
+
+
 def phase_path(root, relative):
     """Keep source authority local; admit evidence in the existing owned artifact root."""
     from completed_artifact_plan import assert_artifact_path, reparse
@@ -323,6 +345,7 @@ def validate_phase_closure(detail, phases, root):
                                if p.is_file() and p.suffix == extension)
             require(bool(sources), f"empty {side} source scope")
             covered = set()
+            supporting = set()
             for decision in decisions:
                 require(decision["status"] == "complete", "pending phase decision")
                 for field in requirements["decisionFields"]:
@@ -331,9 +354,10 @@ def validate_phase_closure(detail, phases, root):
                 named = decision[side + "Sources"]
                 validate_decision_source_scope(named, sources)
                 covered.update(named)
+                supporting.update(supporting_decision_sources(decision, side, sources, root, phase))
             require(covered == sources, f"unreviewed {side} sources")
-            side_sources[side] = sources
-            source_hashes.update({source: file_hash(local_file(source)) for source in sources})
+            side_sources[side] = sources | supporting
+            source_hashes.update({source: file_hash(local_file(source)) for source in sources | supporting})
 
         shared_hashes = {}
         if phase == "parsing":

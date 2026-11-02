@@ -48,9 +48,11 @@ def audit_source_connections(detail, root):
                 "duplicate decision identity")
         require(set(ids) == set(required), "required decision inventory differs")
         coverage = {}
+        dependencies = {}
         for side, extension in detail["promotionRequirements"]["sourceExtensions"].items():
             sources = phase_source_files(root, phase, inventory, side, extension)
             named = set()
+            supporting = set()
             for decision in decisions:
                 require(decision["status"] in ("pending", "complete"), "invalid decision status")
                 for field in detail["promotionRequirements"]["decisionFields"]:
@@ -62,11 +64,14 @@ def audit_source_connections(detail, root):
                 require(len(links) == len(set(links)), "duplicate decision source")
                 validate_decision_source_scope(links, sources)
                 named.update(links)
+                supporting.update(DETAIL.supporting_decision_sources(decision, side, sources, root, phase))
             coverage[side] = {"actual": len(sources), "named": len(named),
                               "missing": sorted(sources - named), "outOfScope": []}
+            dependencies[side] = sorted(supporting)
         if phase != "parsing":
             phases.append({"phase": phase, "inventoryStatus": inventory["status"],
                            "registeredDecisions": len(decisions), "coverage": coverage,
+                           "supportingSources": dependencies,
                            "sourceConnectionsComplete": all(not value["missing"] for value in coverage.values())})
     return {"schemaVersion": 1, "status": "measured-source-connection-intake-not-phase-qualification",
             "observedAtUtc": datetime.now(timezone.utc).isoformat(),
