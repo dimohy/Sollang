@@ -425,6 +425,22 @@ public blockCallbackStartOffset package: ref analysis.PackageAnalysis, sourceMod
 
 # Public queries retain source scanning; binding collection supplies one child index.
 # Both entry paths share argument ownership, exclusion and source-order decisions.
+directCallReceiverForName package: ref analysis.PackageAnalysis, sourceModule: Int, nameIndex: Int -> Int {
+    package.ranges[sourceModule] => range
+    package.names[range.nameStart + nameIndex] => name
+    name.astNode < 0 or name.astNode >= range.astCount
+        or not (package -> calls.receiverSymbolIsRuntimeValue(sourceModule, name.symbol))
+        -> if { -1 -> return }
+    package.nodes[range.astStart + name.astNode] => receiver
+    receiver.kind != 16 or receiver.parent < 0 or receiver.parent >= range.astCount
+        or name.nameToken != receiver.firstToken
+        -> if { -1 -> return }
+    package.nodes[range.astStart + receiver.parent] => call
+    call.kind == 11 and receiver.start == call.start
+        -> if { name.astNode -> return }
+    -1
+}
+
 public directCallReceiverAst package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int -> Int {
     sourceModule < 0 or sourceModule >= (package.ranges -> len)
         -> if { -1 -> return }
@@ -434,18 +450,29 @@ public directCallReceiverAst package: ref analysis.PackageAnalysis, sourceModule
     call.kind != 11 -> if { -1 -> return }
     0 => nameIndex!
     nameIndex! < range.nameCount -> while {
-        package.names[range.nameStart + nameIndex!] => name
-        name.astNode >= 0 and name.astNode < range.astCount
-            and (package -> calls.receiverSymbolIsRuntimeValue(sourceModule, name.symbol))
-            -> if {
-                package.nodes[range.astStart + name.astNode] => receiver
-                receiver.kind == 16 and receiver.parent == callAst
-                    and receiver.start == call.start and name.nameToken == receiver.firstToken
-                    -> if { name.astNode -> return }
-            }
+        package -> directCallReceiverForName(sourceModule, nameIndex!) => receiverAst
+        receiverAst >= 0 and package.nodes[range.astStart + receiverAst].parent == callAst
+            -> if { receiverAst -> return }
         nameIndex! + 1 => nameIndex!
     }
     -1
+}
+
+public indexDirectCallReceiversByAst package: ref analysis.PackageAnalysis -> [Int; ~] {
+    [Int; ~] => receivers!
+    package.nodes -> each node { receivers! -> push(-1) }
+    0..<Int(package.ranges -> len) -> each sourceModule {
+        package.ranges[sourceModule] => range
+        0..<range.nameCount -> each nameIndex {
+            package -> directCallReceiverForName(sourceModule, nameIndex) => receiverAst
+            receiverAst >= 0 -> if {
+                range.astStart + package.nodes[range.astStart + receiverAst].parent => globalCall
+                # Preserve the scan query's first qualifying lexical fact.
+                receivers![globalCall] < 0 -> if { receiverAst => receivers![globalCall] }
+            }
+        }
+    }
+    receivers!
 }
 
 public callArgumentIsNamedRead package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int, argumentAst: Int -> Bool {
@@ -463,15 +490,16 @@ public callArgumentIsNamedRead package: ref analysis.PackageAnalysis, sourceModu
 
 public callArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~] -> [Int; ~] {
     [Int; ~] => unusedChildIndex
-    package -> collectCallArgumentAsts(call, flowSources, unusedChildIndex, unusedChildIndex, false)
+    package -> collectCallArgumentAsts(call, flowSources, unusedChildIndex, unusedChildIndex, false, unusedChildIndex, false)
 }
 
 public indexedCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> [Int; ~] {
-    package -> collectCallArgumentAsts(call, flowSources, firstChildByAst, nextSiblingByAst, true)
+    [Int; ~] => unusedReceiverIndex
+    package -> collectCallArgumentAsts(call, flowSources, firstChildByAst, nextSiblingByAst, true, unusedReceiverIndex, false)
 }
 
 
-collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool -> [Int; ~] {
+collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool, receiverByCallAst: ref [Int; ~], indexedReceivers: Bool -> [Int; ~] {
     [Int; ~] => arguments!
     package.ranges[call.sourceModule] => range
     range.astStart + call.callAst => globalCall
@@ -515,7 +543,11 @@ collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.Modul
                         and declaration.parent >= 0 and declaration.parent < declarationRange.symbolCount
                         and package.symbols[declarationRange.symbolStart + declaration.parent].kind == 6
                         -> if {
-                            package -> directCallReceiverAst(call.sourceModule, target!) => receiverAst
+                            indexedReceivers -> if {
+                                receiverByCallAst[range.astStart + target!]
+                            } else {
+                                package -> directCallReceiverAst(call.sourceModule, target!)
+                            } => receiverAst
                             receiverAst >= 0 -> if { arguments! -> push(range.astStart + receiverAst) }
                         }
                 }
@@ -553,7 +585,7 @@ collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.Modul
                     # using the same ordering as an ordinary flow call.
                     call => headerCall!
                     selected! => headerCall!.callAst
-                    package -> collectCallArgumentAsts(headerCall!, flowSources, firstChildByAst, nextSiblingByAst, indexed) => headerArguments
+                    package -> collectCallArgumentAsts(headerCall!, flowSources, firstChildByAst, nextSiblingByAst, indexed, receiverByCallAst, indexedReceivers) => headerArguments
                     headerArguments -> each argument { arguments! -> push(argument) }
                 } else {
                     arguments! -> push(range.astStart + selected!)
@@ -593,6 +625,7 @@ public resolveCallArgumentBindings package: ref analysis.PackageAnalysis, resolv
         }
     }
     package -> indexFlowSourcesByAst => flowSources
+    package -> indexDirectCallReceiversByAst => receiverByCallAst
     resolvedCalls -> each call {
         call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (package.ranges -> len)
             and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
@@ -607,7 +640,7 @@ public resolveCallArgumentBindings package: ref analysis.PackageAnalysis, resolv
                     or package.nodes[sourceRange.astStart + call.callAst].kind == 48
                     or package.nodes[sourceRange.astStart + call.callAst].kind == 77)
                     -> if {
-                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true) => argumentAsts
+                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true, receiverByCallAst, true) => argumentAsts
                         # Repeated calls borrow the same declaration order, like
                         # C# BoundFunction. The key includes the source owner.
                         targetRange.symbolStart + call.functionSymbol => targetGlobalSymbol

@@ -1,0 +1,74 @@
+import sollang.compiler.semantic.context as semanticContext
+
+checkReceiverIndex source: Text, expectedReceivers: Int -> Bool {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared.package -> semanticContext.indexDirectCallReceiversByAst => receivers
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    0 => receiverCount!
+    true => equal!
+    0..<Int(prepared.package.ranges -> len) -> each sourceModule {
+        prepared.package.ranges[sourceModule] => range
+        0..<range.astCount -> each callAst {
+            prepared.package -> semanticContext.directCallReceiverAst(sourceModule, callAst) => scanned
+            receivers[range.astStart + callAst] => indexed
+            equal! and scanned == indexed => equal!
+            indexed >= 0 -> if { receiverCount! + 1 => receiverCount! }
+        }
+    }
+    # The public scan query independently retains argument order and exclusions.
+    prepared.calls -> each call {
+        call.status == 0 and call.functionSymbol >= 0
+            -> if {
+                prepared.package -> semanticContext.callArgumentAsts(call, flowSources) => arguments
+                prepared.package.ranges[call.sourceModule] => range
+                bindings -> each binding {
+                    binding.sourceModule == call.sourceModule and binding.callAst == call.callAst
+                        -> if {
+                            binding.parameterOrdinal >= 0 and binding.parameterOrdinal < Int(arguments -> len)
+                                -> if {
+                                    equal! and arguments[binding.parameterOrdinal] == range.astStart + binding.argumentAst => equal!
+                                } else { false => equal! }
+                        }
+                }
+            }
+    }
+    equal! and receiverCount! == expectedReceivers
+}
+
+main {
+    """struct Counter { value: Int }
+impl Counter { weighted: self, scale: Int, offset: Int -> Int => self.value * scale + offset }
+main { Counter { value: 5 } => counter
+counter.weighted(3, 4) => result }
+""" -> checkReceiverIndex(1) => direct
+    """struct Counter { value: Int }
+impl Counter { weighted: self, scale: Int, offset: Int -> Int => self.value * scale + offset }
+read counter: Counter -> Int => counter.weighted(3, 4)
+main { Counter { value: 5 } -> read => result }
+""" -> checkReceiverIndex(1) => parameter
+    """struct Counter { value: Int }
+impl Counter { weighted: self, scale: Int, offset: Int -> Int => self.value * scale + offset }
+read counter: ref Counter -> Int => counter.weighted(3, 4)
+main { Counter { value: 5 } => counter
+counter -> read => result }
+""" -> checkReceiverIndex(1) => readonly
+    """struct Counter { value: Int }
+impl Counter { weighted: self, scale: Int, offset: Int -> Int => self.value * scale + offset }
+main { Counter { value: 5 } => counter
+counter -> weighted(3, 4) => result }
+""" -> checkReceiverIndex(0) => flow
+    """struct Counter { value: Int }
+impl Counter { weighted: self, scale: Int, offset: Int -> Int => self.value * scale + offset }
+main { Counter.weighted(Counter { value: 5 }, 3, 4) => result }
+""" -> checkReceiverIndex(0) => static
+    """struct Counter { value: Int }
+impl Counter { weighted: self, scale: Int, offset: Int -> Int => self.value * scale + offset }
+first counter: Counter -> Int => counter.weighted(2, 1)
+second counter: Counter -> Int => counter.weighted(3, 4)
+main { Counter { value: 5 } => counter
+counter.weighted(1, 0) => result }
+""" -> checkReceiverIndex(3) => shadow
+    "direct=$direct parameter=$parameter readonly=$readonly flow=$flow static=$static shadow=$shadow" -> println
+}
