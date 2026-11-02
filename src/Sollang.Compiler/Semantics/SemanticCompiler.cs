@@ -2808,6 +2808,10 @@ internal sealed partial class SemanticCompiler
         if (function.Body is not null)
         {
             MarkFixedLengthCandidateRequiresGrowable(function.Body, function.ReturnType, bodyType);
+            if (bodyType == BoundType.Unit)
+            {
+                ValidateOwnedParameterConsumptionExpression(function.Body, scopedFunctions, bodyBindings);
+            }
         }
         // Explicit returns have already checked their payload against the declared
         // type. Only a reachable fallthrough contributes the final body value.

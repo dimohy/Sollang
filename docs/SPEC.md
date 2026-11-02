@@ -3691,6 +3691,8 @@ container insertion counts as a transfer of its inserted owner; the mutable
 container receiver remains borrowed. Mixing a transfer with a continuing path
 that retains the owner is rejected. A terminating path contributes no ownership
 state to the continuation.
+The same check applies to a discarded `Unit` expression at a function tail;
+an inconsistent transfer is a semantic diagnostic before LLVM generation.
 
 The same transfer rule applies when an aggregate containing a borrowed owned
 value enters owned container storage through `push`, `put`, heap insertion, or

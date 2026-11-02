@@ -5660,6 +5660,12 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     # The move-event table records consuming calls and aggregate insertion,
     # while a bare name at a region's value remains a kind-5 read in Typed IR.
     # Its heap/resource traits distinguish that transfer from fixed-storage copy.
+    alternativeBody regionIndex: Int -> Int {
+        typed[regionIndex] => region
+        region.kind == 19 and region.operand1 >= 0 and region.operand1 < (typed -> len)
+            and typed[region.operand1].kind == 19 and typed[region.operand1].parent == regionIndex
+            -> if { region.operand1 } else { regionIndex }
+    }
     regionTransfersBindingResult regionIndex: Int, moveEvent: typedIr.MoveEvent -> Bool {
         false => transfers!
         regionIndex >= 0 and regionIndex < (typed -> len)
@@ -6145,52 +6151,74 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             and alternativeMove.bindingIr < (typed -> len)
             and (prepared -> semanticTypeContainsOwnedStorageCached(types, fields, ownedStorageByType!, typed[alternativeMove.bindingIr].typeId))
             -> if {
-                typed[alternativeMove.regionIr].parent => alternativeControlIndex
+                alternativeMove.regionIr => movingAlternative!
+                typed[movingAlternative!].parent => alternativeControlSearch!
+                alternativeControlSearch! >= 0 and alternativeControlSearch! < (typed -> len)
+                    and typed[alternativeControlSearch!].kind == 19
+                    and typed[alternativeControlSearch!].operand1 == movingAlternative!
+                    -> if {
+                        typed[alternativeControlSearch!].parent => selectionIndex
+                        selectionIndex >= 0 and selectionIndex < (typed -> len)
+                            and (typed[selectionIndex].kind == 33 or typed[selectionIndex].kind == 34)
+                            -> if {
+                                alternativeControlSearch! => movingAlternative!
+                                selectionIndex => alternativeControlSearch!
+                            }
+                    }
+                alternativeControlSearch! => alternativeControlIndex
                 alternativeControlIndex >= 0
                     and alternativeControlIndex < (typed -> len)
-                    and typed[alternativeControlIndex].kind == 18
+                    and (typed[alternativeControlIndex].kind == 18 or typed[alternativeControlIndex].kind == 33
+                    or typed[alternativeControlIndex].kind == 34)
                     and (alternativeMove -> bindingDeclaredBeforeControl(alternativeControlIndex))
                     -> if {
                         typed[alternativeControlIndex] => alternativeControl
-                        -1 => retainingAlternativeRegion!
-                        alternativeControl.operand1 == alternativeMove.regionIr
-                            -> if {
-                                alternativeControl.nextOperand < 0 -> if {
-                                    alternativeMove.regionIr => retainingAlternativeRegion!
-                                } else {
-                                    alternativeControl.nextOperand => retainingAlternativeRegion!
+                        [Int; ~] => alternativeRegions!
+                        alternativeControl.kind == 18 -> if {
+                            alternativeRegions! -> push(alternativeControl.operand1)
+                            alternativeRegions! -> push(alternativeControl.nextOperand)
+                        } else {
+                            alternativeControl.operand1 => alternativeArm!
+                            alternativeControl.kind == 33 -> if { alternativeControl.operand0 => alternativeArm! }
+                            0 => alternativeArmEdges!
+                            alternativeArm! >= 0 and alternativeArm! < (typed -> len)
+                                and typed[alternativeArm!].parent == alternativeControlIndex
+                                and alternativeArmEdges! < (typed -> len)
+                                -> while {
+                                    alternativeRegions! -> push(alternativeArm!)
+                                    typed[alternativeArm!].nextOperand => alternativeArm!
+                                    alternativeArmEdges! + 1 => alternativeArmEdges!
                                 }
-                            } else {
-                                alternativeControl.nextOperand == alternativeMove.regionIr
-                                    -> if { alternativeControl.operand1 => retainingAlternativeRegion! }
-                            }
+                        }
                         false => retainingAlternativeContinues!
-                        retainingAlternativeRegion! == alternativeMove.regionIr
-                            -> if {
-                                true => retainingAlternativeContinues!
-                            } else {
-                                retainingAlternativeRegion! >= 0
-                                    and retainingAlternativeRegion! < (typed -> len)
-                                    and not terminatingControls[retainingAlternativeRegion!]
-                                    -> if {
-                                        retainingAlternativeRegion! -> regionTransfersBindingResult(alternativeMove) => retainingAlternativeMoves!
-                                        0 => retainingMoveSearch!
-                                        retainingMoveSearch! < (moves! -> len) and not retainingAlternativeMoves!
-                                            -> while {
-                                                moves![retainingMoveSearch!] => retainingMove
-                                                retainingMove.sourceModule == alternativeMove.sourceModule
-                                                    and retainingMove.symbol == alternativeMove.symbol
-                                                    and retainingMove.regionIr >= 0
-                                                    and retainingMove.regionIr < (typed -> len)
-                                                    and not terminatingControls[retainingMove.regionIr]
-                                                    and (retainingMove.siteIr -> nodeBelongsTo(retainingAlternativeRegion!))
-                                                    -> if { true => retainingAlternativeMoves! }
-                                                retainingMoveSearch! + 1 => retainingMoveSearch!
-                                            }
-                                        not retainingAlternativeMoves!
-                                            -> if { true => retainingAlternativeContinues! }
-                                    }
+                        alternativeRegions! -> each alternativeRegion {
+                            alternativeRegion != movingAlternative! -> if {
+                                alternativeRegion < 0 -> if {
+                                    true => retainingAlternativeContinues!
+                                } else {
+                                    alternativeRegion -> alternativeBody => retainingAlternativeRegion
+                                    not terminatingControls[retainingAlternativeRegion]
+                                        -> if {
+                                            retainingAlternativeRegion -> regionTransfersBindingResult(alternativeMove) => retainingAlternativeMoves!
+                                            0 => retainingMoveSearch!
+                                            retainingMoveSearch! < (moves! -> len) and not retainingAlternativeMoves!
+                                                -> while {
+                                                    moves![retainingMoveSearch!] => retainingMove
+                                                    retainingMove.sourceModule == alternativeMove.sourceModule
+                                                        and retainingMove.symbol == alternativeMove.symbol
+                                                        and retainingMove.regionIr >= 0
+                                                        and retainingMove.regionIr < (typed -> len)
+                                                        and not terminatingControls[retainingMove.regionIr]
+                                                        and (retainingMove.siteIr -> nodeBelongsTo(retainingAlternativeRegion))
+                                                        -> if { true => retainingAlternativeMoves! }
+                                                    retainingMoveSearch! + 1 => retainingMoveSearch!
+                                                }
+                                            not retainingAlternativeMoves!
+                                                -> if { true => retainingAlternativeContinues! }
+                                        }
+                                }
                             }
+                        }
                         retainingAlternativeContinues! -> if {
                             false => duplicateAlternativeDiagnostic!
                             0 => existingAlternativeDiagnosticIndex!
