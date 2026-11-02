@@ -14,6 +14,130 @@ struct FirstQueryProfile {
     expressions: Int
     calls: Int
     changed: Int
+    decisions: CallDecisionChanges
+}
+
+struct CallRowIndex {
+    first: [Int; ~]
+    next: [Int; ~]
+    invalid: Int
+    duplicates: Int
+}
+
+struct CallDecisionChanges {
+    changed: Int
+    added: Int
+    removed: Int
+    invalid: Int
+    duplicates: Int
+}
+
+# Keep every record for an AST in its original order. Nonaddressable records
+# retain their complete keys in one conservative, ordered comparison bucket.
+indexProfileCalls rows: ref [calls.ModuleCallResolution; ~], starts: ref [Int; ~], counts: ref [Int; ~], astCount: Int -> CallRowIndex {
+    [Int; ~] => first!
+    0..astCount -> each index { first! -> push(-1) }
+    [Int; ~] => next!
+    rows -> each row { next! -> push(-1) }
+    0 => invalid!
+    0 => duplicates!
+    Int(rows -> len) => index!
+    index! > 0 -> while {
+        index! - 1 => index!
+        rows[index!] => row
+        astCount => bucket!
+        row.sourceModule >= 0 and row.sourceModule < (starts -> len)
+            and row.callAst >= 0 and row.callAst < counts[row.sourceModule]
+            -> if { starts[row.sourceModule] + row.callAst => bucket! }
+        bucket! == astCount -> if {
+            invalid! + 1 => invalid!
+        } else {
+            first![bucket!] >= 0 -> if { duplicates! + 1 => duplicates! }
+        }
+        first![bucket!] => next![index!]
+        index! => first![bucket!]
+    }
+    CallRowIndex { first: first!, next: next!, invalid: invalid!, duplicates: duplicates! }
+}
+
+profileCallDecisions left: ref [calls.ModuleCallResolution; ~], right: ref [calls.ModuleCallResolution; ~], starts: ref [Int; ~], counts: ref [Int; ~], astCount: Int -> CallDecisionChanges {
+    left -> indexProfileCalls(starts, counts, astCount) => previous
+    right -> indexProfileCalls(starts, counts, astCount) => current
+    0 => changed!
+    0 => added!
+    0 => removed!
+    0..astCount -> each bucket {
+        previous.first[bucket] => leftIndex!
+        current.first[bucket] => rightIndex!
+        leftIndex! >= 0 and rightIndex! >= 0 -> while {
+            left[leftIndex!] => before
+            right[rightIndex!] => after
+            before.sourceModule != after.sourceModule or before.callAst != after.callAst
+                or before.origin != after.origin or before.targetModule != after.targetModule
+                or before.targetSourceModule != after.targetSourceModule
+                or before.functionSymbol != after.functionSymbol or before.status != after.status
+                -> if { changed! + 1 => changed! }
+            previous.next[leftIndex!] => leftIndex!
+            current.next[rightIndex!] => rightIndex!
+        }
+        leftIndex! >= 0 -> while {
+            removed! + 1 => removed!
+            previous.next[leftIndex!] => leftIndex!
+        }
+        rightIndex! >= 0 -> while {
+            added! + 1 => added!
+            current.next[rightIndex!] => rightIndex!
+        }
+    }
+    CallDecisionChanges {
+        changed: changed!, added: added!, removed: removed!
+        invalid: previous.invalid + current.invalid
+        duplicates: previous.duplicates + current.duplicates
+    }
+}
+
+profileDecisionRow source: Int, ast: Int, target: Int -> calls.ModuleCallResolution {
+    calls.ModuleCallResolution {
+        sourceModule: source, callAst: ast, origin: 0
+        targetModule: source, targetSourceModule: source
+        functionSymbol: target, status: 0
+    }
+}
+
+profileDecisionControls: -> Bool {
+    [0, 4; ~] => starts
+    [4, 3; ~] => counts
+    profileDecisionRow(0, 1, 10) => first
+    profileDecisionRow(1, 1, 20) => second
+    profileDecisionRow(0, 1, 30) => duplicate
+    profileDecisionRow(-1, 9, 40) => invalid
+    [first, second; ~] => original
+    [second, first; ~] => reordered
+    original -> profileCallDecisions(reordered, starts, counts, 7) => order
+    order.changed != 0 or order.added != 0 or order.removed != 0
+        -> if { false -> return }
+    [first, duplicate; ~] => duplicates
+    [duplicate, first; ~] => reversedDuplicates
+    duplicates -> profileCallDecisions(reversedDuplicates, starts, counts, 7) => duplicateOrder
+    duplicateOrder.changed != 2 or duplicateOrder.duplicates != 2
+        -> if { false -> return }
+    [first, duplicate, second; ~] => inserted
+    original -> profileCallDecisions(inserted, starts, counts, 7) => addition
+    addition.changed != 0 or addition.added != 1 or addition.removed != 0
+        -> if { false -> return }
+    inserted -> profileCallDecisions(original, starts, counts, 7) => removal
+    removal.changed != 0 or removal.added != 0 or removal.removed != 1
+        -> if { false -> return }
+    [first, invalid; ~] => invalidRows
+    [invalid, first; ~] => reorderedInvalidRows
+    invalidRows -> profileCallDecisions(reorderedInvalidRows, starts, counts, 7) => invalidOrder
+    invalidOrder.changed != 0 or invalidOrder.invalid != 2
+        -> if { false -> return }
+    [profileDecisionRow(-2, 9, 40), first; ~] => changedInvalidRows
+    invalidRows -> profileCallDecisions(changedInvalidRows, starts, counts, 7) => invalidChange
+    invalidChange.changed != 1 or invalidChange.invalid != 2
+        -> if { false -> return }
+    true
 }
 
 # Observe only the first typed query. Its output is not a completed context.
@@ -54,6 +178,13 @@ profileFirstQuery prepared: move semanticContext.SemanticSnapshot -> Result<Firs
     prepared.qualified
     ) => resolvedCalls
     clock -> now => queryCompleted
+    [Int; ~] => starts!
+    [Int; ~] => counts!
+    prepared.package.ranges -> each range {
+        starts! -> push(range.astStart)
+        counts! -> push(range.astCount)
+    }
+    prepared.calls -> profileCallDecisions(resolvedCalls, starts!, counts!, Int(prepared.package.nodes -> len)) => decisions
     0 => changed!
     0..<Int(resolvedCalls -> len) -> each index {
         index >= (prepared.calls -> len) -> if {
@@ -80,29 +211,41 @@ profileFirstQuery prepared: move semanticContext.SemanticSnapshot -> Result<Firs
         expressions: Int(initialTypes.expressions -> len)
         calls: Int(resolvedCalls -> len)
         changed: changed!
+        decisions: decisions
     } -> Result<FirstQueryProfile, time.Error>.Ok
 }
 
 main {
     process.arguments() => arguments
-    [Text; ~] => paths!
-    UIntSize(1) => index!
-    index! < (arguments -> len) -> while {
-        paths! -> push(arguments[index!])
-        index! + 1 => index!
-    }
-    "phase=source-preparation" -> println
-    paths! -> semanticContext.prepareFiles => prepared!
-    144 => prepared!.standardLibrarySourceCount
-    prepared! -> semanticContext.freeze => prepared
-    "phase=first-typed-query" -> println
-    prepared -> profileFirstQuery -> when {
-        Err(error) {
-            "first query profile clock failure" -> println
-            process.exit(1)
+    (arguments -> len) == 2 and arguments[1] == "--decision-controls"
+        -> if {
+            profileDecisionControls() -> if {
+                "decision-controls=6/6" -> println
+            } else {
+                "decision-controls=failed" -> println
+                process.exit(1)
+            }
+        } else {
+            [Text; ~] => paths!
+            UIntSize(1) => index!
+            index! < (arguments -> len) -> while {
+                paths! -> push(arguments[index!])
+                index! + 1 => index!
+            }
+            "phase=source-preparation" -> println
+            paths! -> semanticContext.prepareFiles => prepared!
+            144 => prepared!.standardLibrarySourceCount
+            prepared! -> semanticContext.freeze => prepared
+            "phase=first-typed-query" -> println
+            prepared -> profileFirstQuery -> when {
+                Err(error) {
+                    "first query profile clock failure" -> println
+                    process.exit(1)
+                }
+                Ok(value) {
+                    "sources=$(value.sources) initial=$(value.initialMilliseconds) receiver=$(value.receiverMilliseconds) query=$(value.queryMilliseconds) types=$(value.types) expressions=$(value.expressions) calls=$(value.calls) changed=$(value.changed)" -> println
+                    "keyed-changed=$(value.decisions.changed) added=$(value.decisions.added) removed=$(value.decisions.removed) invalid=$(value.decisions.invalid) duplicates=$(value.decisions.duplicates)" -> println
+                }
+            }
         }
-        Ok(value) {
-            "sources=$(value.sources) initial=$(value.initialMilliseconds) receiver=$(value.receiverMilliseconds) query=$(value.queryMilliseconds) types=$(value.types) expressions=$(value.expressions) calls=$(value.calls) changed=$(value.changed)" -> println
-        }
-    }
 }
