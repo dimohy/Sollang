@@ -953,20 +953,26 @@ resolveResultPropagationPayloadTypes prepared: ref semanticContext.SemanticSnaps
     changed!
 }
 
-struct InitialTypeReferenceIndex {
+struct TypeReferenceIndex {
     firstByAst: [Int; ~]
     references: [Int; ~]
     next: [Int; ~]
     firstPathByArrayAst: [Int; ~]
+    firstBySource: [Int; ~]
+    nextBySource: [Int; ~]
 }
 
 # Group identities only. Type/status decisions remain live at their original
 # query point, and ascending reference order preserves the last-match rule.
-indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> InitialTypeReferenceIndex {
+indexTypeReferences package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> TypeReferenceIndex {
     [Int; ~] => first!
     [Int; ~] => indexedReferences!
     [Int; ~] => next!
     [Int; ~] => firstPath!
+    [Int; ~] => firstBySource!
+    [Int; ~] => nextBySource!
+    package.ranges -> each range { firstBySource! -> push(-1) }
+    references -> each reference { nextBySource! -> push(-1) }
     package.nodes -> each node {
         first! -> push(-1)
         firstPath! -> push(-1)
@@ -977,6 +983,8 @@ indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: re
         references[index!] => reference
         reference.sourceModule >= 0 and reference.sourceModule < (package.ranges -> len)
             -> if {
+                firstBySource![reference.sourceModule] => nextBySource![index!]
+                index! => firstBySource![reference.sourceModule]
                 package.ranges[reference.sourceModule] => range
                 reference.typeAst >= 0 and reference.typeAst < range.astCount
                     -> if {
@@ -1015,7 +1023,7 @@ indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: re
             localAst! + 1 => localAst!
         }
     }
-    InitialTypeReferenceIndex { firstByAst: first!, references: indexedReferences!, next: next!, firstPathByArrayAst: firstPath! }
+    TypeReferenceIndex { firstByAst: first!, references: indexedReferences!, next: next!, firstPathByArrayAst: firstPath!, firstBySource: firstBySource!, nextBySource: nextBySource! }
 }
 
 struct InitialQualifiedReferenceIndex {
@@ -1089,10 +1097,9 @@ initialQualifiedArrayElementType prepared: ref semanticContext.SemanticSnapshot,
     elementType!
 }
 
-resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
+resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], sourceReferences: ref TypeReferenceIndex, expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
     prepared.package -> semanticContext.indexBindingValueAsts => bindingValueAsts
     prepared.package -> indexContextualRecords => syntaxChildren
-    prepared.package -> indexInitialTypeReferences(references) => sourceReferences
     prepared -> indexInitialQualifiedReferences => sourceQualified
     # Expression slots keep their AST identity while their type/status may change.
     # Index ancestry once, but read the current slot when resolving each binding.

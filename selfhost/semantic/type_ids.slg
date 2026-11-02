@@ -867,25 +867,22 @@ public struct OpenNominalTypeResolution {
 # type is interned. Resolve its declaration once, independently of import aliases.
 public intrinsicSourceTextDeclaration package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~] -> OpenNominalTypeResolution {
     OpenNominalTypeResolution { targetModule: -1, targetSymbol: -1, matchCount: 0 } => result!
-    identities -> each identity {
-        package.sources[identity.sourceIndex] -> len => sourceLength
-        package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
-        SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: "sys.file" } -> spanNameIs
-            -> if {
-                package.ranges[identity.sourceIndex] => range
-                0 => symbolIndex!
-                symbolIndex! < range.symbolCount -> while {
-                    package.symbols[range.symbolStart + symbolIndex!] => symbol
-                    symbol.kind == 3 and symbol.parent < 0 -> if {
-                        package.tokens[range.tokenStart + symbol.nameToken] => name
-                        SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: "SourceText" } -> spanNameIs
-                            -> if {
-                                OpenNominalTypeResolution { targetModule: identity.sourceIndex, targetSymbol: symbolIndex!, matchCount: result!.matchCount + 1 } => result!
-                            }
+    0 => moduleIndex!
+    moduleIndex! < (identities -> len) -> while {
+        identities[moduleIndex!] => identity
+        package.ranges[identity.sourceIndex] => range
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => symbol
+            symbol.kind == 3 and symbol.parent < 0 -> if {
+                (package -> intrinsicNominalSymbol(identities, moduleIndex!, symbolIndex!)) == 24
+                    -> if {
+                        OpenNominalTypeResolution { targetModule: identity.sourceIndex, targetSymbol: symbolIndex!, matchCount: result!.matchCount + 1 } => result!
                     }
-                    symbolIndex! + 1 => symbolIndex!
-                }
             }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        moduleIndex! + 1 => moduleIndex!
     }
     result!
 }

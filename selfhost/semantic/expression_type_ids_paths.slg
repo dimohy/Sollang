@@ -841,7 +841,7 @@ synchronizeExpressionSourceIndex expressions: ref [ExpressionTypeId; ~], sourceC
     }
 }
 
-resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
+resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], sourceReferences: ref TypeReferenceIndex, referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
     prepared.package -> indexResolvedNameReferences => nameReferences
     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
@@ -2590,7 +2590,9 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                 }
                                 streamGenericConcreteType! >= 0 -> if {
                                     expressions[streamGenericExpressionIndex] => streamGenericExpression!
-                                    references -> each streamGenericReference {
+                                    sourceReferences.firstBySource[streamGenericCall.targetSourceModule] => streamGenericReferenceSearch!
+                                    streamGenericReferenceSearch! >= 0 -> while {
+                                        references[streamGenericReferenceSearch!] => streamGenericReference
                                         streamGenericReference.sourceModule == streamGenericCall.targetSourceModule
                                             and streamGenericReference.typeAst == streamGenericInputAst!
                                             and streamGenericReference.status == 0
@@ -2602,6 +2604,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                     streamGenericExpression! => expressions[streamGenericExpressionIndex]
                                                 }
                                             }
+                                        sourceReferences.nextBySource[streamGenericReferenceSearch!] => streamGenericReferenceSearch!
                                     }
                                 }
                             }
@@ -2714,7 +2717,9 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                     declaredRoleOrdinal! <= streamRoleOrdinal! -> while {
                                                         -1 => declaredRoleType!
                                                         UIntSize(0) => declaredRoleEnd!
-                                                        references -> each declaredRoleReference {
+                                                        sourceReferences.firstBySource[streamRoleCall.targetSourceModule] => declaredRoleReferenceSearch!
+                                                        declaredRoleReferenceSearch! >= 0 -> while {
+                                                            references[declaredRoleReferenceSearch!] => declaredRoleReference
                                                             declaredRoleReference.sourceModule == streamRoleCall.targetSourceModule
                                                                 and declaredRoleReference.status == 0
                                                                 -> if {
@@ -2727,6 +2732,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                                             declaredRoleNode.start => declaredRoleEnd!
                                                                         }
                                                                 }
+                                                            sourceReferences.nextBySource[declaredRoleReferenceSearch!] => declaredRoleReferenceSearch!
                                                         }
                                                         declaredRoleType! => streamRoleType!
                                                         declaredRoleEnd! + 1 => declaredRoleStart!
@@ -2734,7 +2740,9 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                     }
                                                 }
                                                 streamRoleType! >= 0 -> if {
-                                                    references -> each roleConstraint {
+                                                    sourceReferences.firstBySource[streamRoleCall.targetSourceModule] => roleConstraintSearch!
+                                                    roleConstraintSearch! >= 0 -> while {
+                                                        references[roleConstraintSearch!] => roleConstraint
                                                         roleConstraint.sourceModule == streamRoleCall.targetSourceModule
                                                             and roleConstraint.status == 0
                                                             -> if {
@@ -2749,6 +2757,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                                         -> if { roleSpecialization.root => streamRoleType! }
                                                                 }
                                                             }
+                                                        sourceReferences.nextBySource[roleConstraintSearch!] => roleConstraintSearch!
                                                     }
                                                 }
 
