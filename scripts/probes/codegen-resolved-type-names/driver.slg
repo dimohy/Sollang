@@ -1,0 +1,31 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sys.file as file
+import sys.process as process
+import sys.text as text
+
+main {
+    process.arguments() => arguments
+    [file.mapText(arguments[1]),; ~] -> analysis.analyzeTestSources([Int; ~], [Int; ~]) => package
+    package -> typeIds.resolveAnalyzed => semantic
+    keys.TypeFieldContext {
+        identities: package -> modules.identitiesAnalyzed
+        imports: package -> modules.importsAnalyzed
+        sourceModule: 0
+        ownerSymbol: -1
+    } => context!
+    semantic.references -> each reference {
+        reference.status == 0 -> if {
+            context! -> keys.resolvedTypeNameField(package, semantic, reference.typeId) -> when {
+                Err(_) { process.exit(1) }
+                Ok(field) {
+                    field.bytes -> file.borrowBytes => owner
+                    owner -> slice(0, owner -> len) => name
+                    name -> text.contains("dyn ") -> if { name -> println }
+                }
+            }
+        }
+    }
+}
