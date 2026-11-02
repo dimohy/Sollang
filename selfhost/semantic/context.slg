@@ -618,6 +618,10 @@ public indexDeclaredMoveArgumentBindingsByAst package: ref analysis.PackageAnaly
 # mutable reinitialization and control joins remain with the ownership pass.
 public indexDeclaredMoveReadsByAst package: ref analysis.PackageAnalysis, moveArguments: ref [Bool; ~] -> [Bool; ~] {
     [Bool; ~] => reads!
+    [Int; ~] => firstNameBySymbol!
+    [Int; ~] => nextName!
+    package.symbols -> each symbol { firstNameBySymbol! -> push(-1) }
+    package.names -> each name { nextName! -> push(-1) }
     0 => seed!
     seed! < (package.nodes -> len) -> while {
         reads! -> push(false)
@@ -626,6 +630,19 @@ public indexDeclaredMoveReadsByAst package: ref analysis.PackageAnalysis, moveAr
     0 => sourceIndex!
     sourceIndex! < (package.ranges -> len) -> while {
         package.ranges[sourceIndex!] => range
+        # Name coordinates are immutable. Retain their original order while
+        # restricting each lexical owner query to its own resolved identities.
+        range.nameCount => indexedName!
+        indexedName! > 0 -> while {
+            indexedName! - 1 => indexedName!
+            package.names[range.nameStart + indexedName!] => name
+            name.symbol >= 0 and name.symbol < range.symbolCount
+                -> if {
+                    range.symbolStart + name.symbol => globalSymbol
+                    firstNameBySymbol![globalSymbol] => nextName![range.nameStart + indexedName!]
+                    indexedName! => firstNameBySymbol![globalSymbol]
+                }
+        }
         0 => movedNameIndex!
         movedNameIndex! < range.nameCount -> while {
             package.names[range.nameStart + movedNameIndex!] => movedName
@@ -648,8 +665,8 @@ public indexDeclaredMoveReadsByAst package: ref analysis.PackageAnalysis, moveAr
                             movedStatement! >= 0 -> if {
                                 package.nodes[range.astStart + movedStatement!] => movedBinding
                                 movedBinding.start + movedBinding.length => consumedAfter
-                                0 => readNameIndex!
-                                readNameIndex! < range.nameCount -> while {
+                                firstNameBySymbol![range.symbolStart + movedName.symbol] => readNameIndex!
+                                readNameIndex! >= 0 -> while {
                                     package.names[range.nameStart + readNameIndex!] => readName
                                     readName.symbol == movedName.symbol
                                         and readName.astNode >= 0 and readName.astNode < range.astCount
@@ -667,7 +684,7 @@ public indexDeclaredMoveReadsByAst package: ref analysis.PackageAnalysis, moveAr
                                             readStatement! >= 0 and package.nodes[range.astStart + readStatement!].parent == movedBinding.parent
                                                 -> if { true => reads![range.astStart + readName.astNode] }
                                         }
-                                    readNameIndex! + 1 => readNameIndex!
+                                    nextName![range.nameStart + readNameIndex!] => readNameIndex!
                                 }
                             }
                         }
