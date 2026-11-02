@@ -1852,6 +1852,13 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
+Parameterless ASCII text constants use the same compiled-policy path. Windows
+import definitions share one table of library names, DLL names, optional LLVM
+declaration prefixes and ordered exports. Keep the table in C# and regenerate
+its SLG module; never copy export lists into a second handwritten compiler
+path. Both adapters preserve library order, the bounded prefix scan and exact
+UTF-8 definition bytes. Generated import paths own their storage until linking
+finishes; the caller owns their private work directory and cleanup boundary.
 Before compiling self-host sources, run `selfhost-sync --root <repository>
 --check` with the selected managed compiler. A source change requires rebuilding
 that compiler; a generated-source change requires regeneration. Both checks

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Sollang.Compiler.Diagnostics;
+using Sollang.Compiler.Shared;
 
 namespace Sollang.Compiler.Tooling;
 
@@ -18,12 +19,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
     {
         var outputName = Path.GetFileNameWithoutExtension(outputPath);
         var objectPath = Path.Combine(workDir, outputName + ".obj");
-        var importLib = CreateKernel32ImportLibrary(workDir);
-        var shellImportLib = CreateShell32ImportLibrary(workDir);
-        var oleImportLib = UsesComInterop(llPath) ? CreateOle32ImportLibrary(workDir) : null;
-        var winsockImportLib = UsesNetworkSockets(llPath) ? CreateWs2_32ImportLibrary(workDir) : null;
-        var bcryptImportLib = UsesSecureRandom(llPath) ? CreateBcryptImportLibrary(workDir) : null;
-        var ucrtImportLib = CreateUcrtBaseImportLibrary(workDir);
+        var importLibraries = CreateImportLibraries(llPath, workDir);
 
         var objects = optimizationLevel == "-O0"
             ? CompileSingleModule(llPath, objectPath, "-O0")
@@ -53,20 +49,8 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             linkArguments.Add("/entry:sollang_start");
         }
         linkArguments.AddRange(objects);
-        linkArguments.AddRange([importLib, shellImportLib]);
-        if (oleImportLib is not null)
-        {
-            linkArguments.Add(oleImportLib);
-        }
-        if (winsockImportLib is not null)
-        {
-            linkArguments.Add(winsockImportLib);
-        }
-        if (bcryptImportLib is not null)
-        {
-            linkArguments.Add(bcryptImportLib);
-        }
-        linkArguments.AddRange([ucrtImportLib, "/out:" + outputPath]);
+        linkArguments.AddRange(importLibraries);
+        linkArguments.Add("/out:" + outputPath);
         Run(toolchain.LldLink, linkArguments);
     }
 
@@ -173,281 +157,29 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         return Math.Min(requested, processorCount);
     }
 
-    private string CreateKernel32ImportLibrary(string workDir)
+    private IReadOnlyList<string> CreateImportLibraries(string llPath, string workDir)
     {
-        var defPath = Path.Combine(workDir, "kernel32.def");
-        var libPath = Path.Combine(workDir, "kernel32.lib");
-        File.WriteAllText(defPath, """
-            LIBRARY kernel32.dll
-            EXPORTS
-            GetStdHandle
-            ExitProcess
-            GetConsoleMode
-            WriteConsoleW
-            CreateProcessW
-            GetProcessId
-            GetExitCodeProcess
-            TerminateProcess
-            CreatePipe
-            ReadFile
-            GetOverlappedResult
-            WriteFile
-            CreateFileA
-            CreateFileW
-            CloseHandle
-            GetCurrentProcess
-            GetCurrentProcessId
-            DuplicateHandle
-            SetFilePointerEx
-            GetFileSizeEx
-            GetFinalPathNameByHandleW
-            GetFullPathNameW
-            GetFileInformationByHandle
-            SetEndOfFile
-            CreateFileMappingA
-            MapViewOfFile
-            FlushViewOfFile
-            FlushFileBuffers
-            MoveFileExA
-            MoveFileExW
-            DeleteFileA
-            DeleteFileW
-            UnmapViewOfFile
-            GetTickCount64
-            GetSystemTimePreciseAsFileTime
-            Sleep
-            GetCommandLineW
-            WideCharToMultiByte
-            MultiByteToWideChar
-            GetEnvironmentStringsW
-            FreeEnvironmentStringsW
-            CompareStringOrdinal
-            GetEnvironmentVariableW
-            GetLastError
-            SetLastError
-            LoadLibraryA
-            GetProcAddress
-            CreateIoCompletionPort
-            GetQueuedCompletionStatusEx
-            PostQueuedCompletionStatus
-            CancelIoEx
-            SetFileCompletionNotificationModes
-            FreeLibrary
-            CreateDirectoryA
-            CreateDirectoryW
-            GetFileAttributesA
-            GetFileAttributesW
-            FindFirstFileA
-            FindFirstFileW
-            FindNextFileA
-            FindNextFileW
-            FindClose
-            LocalFree
-            GetProcessHeap
-            HeapAlloc
-            HeapFree
-            CreateThread
-            CreateEventA
-            SetEvent
-            SetConsoleMode
-            ReadConsoleInputW
-            CancelSynchronousIo
-            ResetEvent
-            CreateSemaphoreA
-            ReleaseSemaphore
-            GetActiveProcessorCount
-            WaitForSingleObject
-            AcquireSRWLockExclusive
-            ReleaseSRWLockExclusive
-            InitializeConditionVariable
-            SleepConditionVariableSRW
-            WakeAllConditionVariable
-            __chkstk
-            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Run(toolchain.LlvmLib,
-        [
-            "/nologo",
-            "/machine:x64",
-            "/def:" + defPath,
-            "/out:" + libPath
-        ]);
-
-        return libPath;
-    }
-
-    private string CreateShell32ImportLibrary(string workDir)
-    {
-        var defPath = Path.Combine(workDir, "shell32.def");
-        var libPath = Path.Combine(workDir, "shell32.lib");
-        File.WriteAllText(defPath, """
-            LIBRARY shell32.dll
-            EXPORTS
-            CommandLineToArgvW
-            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Run(toolchain.LlvmLib,
-        [
-            "/nologo",
-            "/machine:x64",
-            "/def:" + defPath,
-            "/out:" + libPath
-        ]);
-
-        return libPath;
-    }
-
-    private string CreateUcrtBaseImportLibrary(string workDir)
-    {
-        var defPath = Path.Combine(workDir, "ucrtbase.def");
-        var libPath = Path.Combine(workDir, "ucrtbase.lib");
-        File.WriteAllText(defPath, """
-            LIBRARY ucrtbase.dll
-            EXPORTS
-            _wspawnvp
-            memcpy
-            strlen
-            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Run(toolchain.LlvmLib,
-        [
-            "/nologo",
-            "/machine:x64",
-            "/def:" + defPath,
-            "/out:" + libPath
-        ]);
-
-        return libPath;
-    }
-
-    private string CreateOle32ImportLibrary(string workDir)
-    {
-        var defPath = Path.Combine(workDir, "ole32.def");
-        var libPath = Path.Combine(workDir, "ole32.lib");
-        File.WriteAllText(defPath, """
-            LIBRARY ole32.dll
-            EXPORTS
-            CoInitializeEx
-            CoUninitialize
-            CoCreateInstance
-            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Run(toolchain.LlvmLib,
-        [
-            "/nologo",
-            "/machine:x64",
-            "/def:" + defPath,
-            "/out:" + libPath
-        ]);
-
-        return libPath;
-    }
-
-    private string CreateWs2_32ImportLibrary(string workDir)
-    {
-        var defPath = Path.Combine(workDir, "ws2_32.def");
-        var libPath = Path.Combine(workDir, "ws2_32.lib");
-        File.WriteAllText(defPath, """
-            LIBRARY ws2_32.dll
-            EXPORTS
-            WSAStartup
-            WSACleanup
-            WSAGetLastError
-            WSASocketW
-            WSADuplicateSocketW
-            closesocket
-            bind
-            getsockname
-            getpeername
-            listen
-            accept
-            connect
-            recv
-            WSARecv
-            send
-            WSASend
-            WSAGetOverlappedResult
-            recvfrom
-            WSARecvFrom
-            sendto
-            shutdown
-            setsockopt
-            getsockopt
-            ioctlsocket
-            WSAPoll
-            GetAddrInfoW
-            FreeAddrInfoW
-            inet_pton
-            inet_ntop
-            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Run(toolchain.LlvmLib,
-        [
-            "/nologo",
-            "/machine:x64",
-            "/def:" + defPath,
-            "/out:" + libPath
-        ]);
-
-        return libPath;
-    }
-
-    private string CreateBcryptImportLibrary(string workDir)
-    {
-        var defPath = Path.Combine(workDir, "bcrypt.def");
-        var libPath = Path.Combine(workDir, "bcrypt.lib");
-        File.WriteAllText(defPath, """
-            LIBRARY bcrypt.dll
-            EXPORTS
-            BCryptGenRandom
-            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Run(toolchain.LlvmLib,
-        [
-            "/nologo",
-            "/machine:x64",
-            "/def:" + defPath,
-            "/out:" + libPath
-        ]);
-
-        return libPath;
-    }
-
-    private static bool UsesComInterop(string llPath)
-    {
-        const int PrefixLimit = 1024 * 1024;
-        ReadOnlySpan<byte> marker = "declare dllimport i32 @CoInitializeEx"u8;
-        using var stream = File.OpenRead(llPath);
-        Span<byte> buffer = stackalloc byte[4096];
-        var remaining = Math.Min(stream.Length, PrefixLimit);
-        var matched = 0;
-        while (remaining > 0)
+        var libraries = new List<string>();
+        foreach (var row in WindowsLinkPolicy.ImportLibraries().Split('|'))
         {
-            var read = stream.Read(buffer[..(int)Math.Min(buffer.Length, remaining)]);
-            if (read == 0)
+            var fields = row.Split(';');
+            var marker = fields[2];
+            if (marker.Length != 0 && !ContainsPrefixMarker(llPath, Encoding.ASCII.GetBytes(marker)))
             {
-                break;
+                continue;
             }
-            remaining -= read;
-            foreach (var value in buffer[..read])
-            {
-                matched = value == marker[matched]
-                    ? matched + 1
-                    : value == marker[0] ? 1 : 0;
-                if (matched == marker.Length)
-                {
-                    return true;
-                }
-            }
+            var defPath = Path.Combine(workDir, fields[0] + ".def");
+            var libPath = Path.Combine(workDir, fields[0] + ".lib");
+            var definition = "LIBRARY " + fields[1] + "\nEXPORTS\n" + fields[3].Replace(',', '\n');
+            File.WriteAllText(defPath, definition, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            Run(toolchain.LlvmLib,
+            [
+                "/nologo", "/machine:x64", "/def:" + defPath, "/out:" + libPath
+            ]);
+            libraries.Add(libPath);
         }
-        return false;
+        return libraries;
     }
-
-    private static bool UsesNetworkSockets(string llPath) =>
-        ContainsPrefixMarker(llPath, "declare dllimport i32 @WSAStartup"u8);
-
-    private static bool UsesSecureRandom(string llPath) =>
-        ContainsPrefixMarker(llPath, "declare dllimport i32 @BCryptGenRandom"u8);
 
     private static bool ContainsPrefixMarker(string path, ReadOnlySpan<byte> marker)
     {
