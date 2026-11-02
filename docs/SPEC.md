@@ -6325,6 +6325,12 @@ Current backend:
   element or entry layout facts. Prepared type identities reuse equal storage
   shapes including capacity. A new bounded dictionary first interns its heap
   dictionary layout, preserving the C# type allocation order.
+  `Set<T>`, `Deque<T>` and `BinaryHeap<T>` retain distinct factory identities
+  when ordered synthetic types are registered. Set cache records use dictionary
+  storage with a `Unit` value, zero value size and alignment one. Deque and heap
+  records use dynamic-array storage. Concrete and abstract signature records
+  consume the same semantic storage-family classification and layout rules;
+  the source collection name does not become an unresolved nominal type.
   Public struct, enum, trait and function interface fields use these same
   compiled rules. Current declaration adapters supply complete declaration names,
   parser type spelling, visibility, ordered members and signature facts; the
