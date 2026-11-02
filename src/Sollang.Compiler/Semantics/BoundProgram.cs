@@ -1021,18 +1021,8 @@ internal sealed partial class TypeDefinitionTable
         {
             var heapDictionaryType = GetOrAddDictionary(shape.KeyType, shape.ValueType);
             var layout = _dictionaries[heapDictionaryType];
-            var minimumBuckets = checked((int)(((long)shape.MaxEntries * 8 + 6) / 7));
-            var bucketCapacity = 16;
-            while (bucketCapacity < minimumBuckets)
-            {
-                bucketCapacity = checked(bucketCapacity * 2);
-            }
-            var entriesOffset = AlignUp(checked(bucketCapacity + 16),
-                Math.Max(layout.KeyAlignment, layout.ValueAlignment));
-            var alignment = Math.Max(8, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
-            var storageSize = AlignUp(
-                checked(entriesOffset + checked(bucketCapacity * layout.EntryStride)), alignment);
-            var size = AlignUp(checked(8 + storageSize), alignment);
+            var (bucketCapacity, entriesOffset, storageSize, size, alignment) = BoundedDictionaryStorageLayout(
+                shape.MaxEntries, layout.EntryStride, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
             _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
                 id, shape.KeyType, shape.ValueType, shape.MaxEntries, bucketCapacity,
                 ControlsOffset: 0, entriesOffset, storageSize, size, alignment, layout));
@@ -1137,18 +1127,9 @@ internal sealed partial class TypeDefinitionTable
 
         var heapDictionaryType = GetOrAddDictionary(keyType, valueType);
         var layout = _dictionaries[heapDictionaryType];
-        var minimumBuckets = checked((int)(((long)maxEntries * 8 + 6) / 7));
-        var bucketCapacity = 16;
-        while (bucketCapacity < minimumBuckets)
-        {
-            bucketCapacity = checked(bucketCapacity * 2);
-        }
+        var (bucketCapacity, entriesOffset, storageSize, size, alignment) = BoundedDictionaryStorageLayout(
+            maxEntries, layout.EntryStride, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
         var controlsOffset = 0;
-        var entriesOffset = AlignUp(checked(bucketCapacity + 16),
-            Math.Max(layout.KeyAlignment, layout.ValueAlignment));
-        var alignment = Math.Max(8, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
-        var storageSize = AlignUp(checked(entriesOffset + checked(bucketCapacity * layout.EntryStride)), alignment);
-        var size = AlignUp(checked(8 + storageSize), alignment);
         var id = AllocateParametricTypeId();
         _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
             id, keyType, valueType, maxEntries, bucketCapacity,
@@ -1156,6 +1137,33 @@ internal sealed partial class TypeDefinitionTable
         RecordTypeGraphMutation();
         _boundedDictionariesByShape.Add((keyType, valueType, maxEntries), id);
         return id;
+    }
+
+    private static (int BucketCapacity, int EntriesOffset, int StorageSize, int Size, int Alignment)
+        BoundedDictionaryStorageLayout(int maxEntries, int entryStride, int entryAlignment)
+    {
+        if (maxEntries <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxEntries), "bounded dictionary capacity must be positive");
+        }
+        try
+        {
+            var minimumBuckets = checked((int)(((long)maxEntries * 8 + 6) / 7));
+            var bucketCapacity = 16;
+            while (bucketCapacity < minimumBuckets)
+            {
+                bucketCapacity = checked(bucketCapacity * 2);
+            }
+            var entriesOffset = AlignUp(checked(bucketCapacity + 16), entryAlignment);
+            var alignment = Math.Max(8, entryAlignment);
+            var storageSize = AlignUp(checked(entriesOffset + checked(bucketCapacity * entryStride)), alignment);
+            var size = AlignUp(checked(8 + storageSize), alignment);
+            return (bucketCapacity, entriesOffset, storageSize, size, alignment);
+        }
+        catch (OverflowException)
+        {
+            throw new SollangException("bounded dictionary storage layout exceeds the Int32 size limit");
+        }
     }
 
     public BoundBoundedDictionaryDefinition GetBoundedDictionary(TypeId type) =>

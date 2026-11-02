@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--provider-contract", type=Path)
     parser.add_argument("--arithmetic-only", action="store_true",
                         help="Test the independent production arithmetic module; no full layoutsFor API claim")
+    parser.add_argument("--dictionary", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append", required=True)
     args = parser.parse_args()
@@ -39,9 +40,12 @@ def main():
     sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
     managed = json.loads(args.managed_proof.read_text(encoding="utf-8-sig"))
     assert args.arithmetic_only or (args.semantic_proof and args.provider_contract), "LAYOUT_FULL_API_PROOFS_REQUIRED"
-    assert managed["completed"] == managed["total"] == 9
-    api_cases = [case for case in managed["cases"] if "capacity" in case]
-    assert len(api_cases) == 7 and all(case["passed"] for case in api_cases)
+    assert not args.dictionary or args.arithmetic_only, "DICTIONARY_LAYOUT_ARITHMETIC_SCOPE_REQUIRED"
+    assert managed["completed"] == managed["total"] == (18 if args.dictionary else 9)
+    api_cases = [case for case in managed["cases"] if "capacity" in case and not case.get("restored", False)]
+    # Historical records used the domain status as the case completion status.
+    api_cases = [{**case, "status": case["layoutStatus"]} if "layoutStatus" in case else case for case in api_cases]
+    assert len(api_cases) == (8 if args.dictionary else 7) and all(case["passed"] for case in api_cases)
     pins = {}
     references = [(args.managed_proof, managed)]
     if args.semantic_proof:
@@ -54,7 +58,7 @@ def main():
         pins[str(path.resolve())] = sha(path)
     if args.arithmetic_only:
         providers = [ROOT / "selfhost/llvm/emitter/layout_arithmetic.slg"]
-        source = Path(__file__).with_name("arithmetic.slg")
+        source = Path(__file__).with_name("dictionary-arithmetic.slg" if args.dictionary else "arithmetic.slg")
     else:
         contract = json.loads(args.provider_contract.read_text(encoding="utf-8-sig"))
         providers = [ROOT / name for name in contract["reusableCheckedProducer"]["additionalSources"]]
@@ -76,7 +80,7 @@ def main():
     stable = lambda: all(Path(path).is_file() and sha(path) == value for path, value in pins.items())
     initialize_output(ROOT, output, reusable_directories=[path.resolve() for path in args.reusable_compiler_directory])
     output.mkdir()
-    result = dict(schemaVersion=1, status="running", completed=0, total=7, inputHashes=pins,
+    result = dict(schemaVersion=1, status="running", completed=0, total=len(api_cases), inputHashes=pins,
                   cases=[], maximumCaseSeconds=180, claimsGoalComplete=False,
                   scope="Actual SLG layoutsFor API, two tiny semantic types; no huge array/backing/LLVM allocation or new Native compiler")
     if args.arithmetic_only:

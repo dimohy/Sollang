@@ -1514,6 +1514,11 @@ Bounded-array storage layout uses checked Int32 arithmetic for element bytes,
 the aligned data offset and the final aligned size. An overflowing operation
 rejects the type with `bounded array storage layout exceeds the Int32 size limit`;
 the compiler must not publish a wrapped size or continue LLVM generation.
+Bounded-dictionary storage applies the same checked Int32 limit to bucket-count
+rounding, entry bytes, aligned offsets and final inline size. Overflow rejects
+the type with `bounded dictionary storage layout exceeds the Int32 size limit`.
+Type creation and restored type registration use the same layout calculation;
+neither may publish a wrapped layout or report an unexpected compiler failure.
 The generated grammar must retain the numeric alternative even though array
 expressions have their own repeat and bounded-storage alternatives.
 

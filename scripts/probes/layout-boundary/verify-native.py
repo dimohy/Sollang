@@ -21,12 +21,13 @@ def main():
     parser.add_argument("--native-build", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append", required=True)
+    parser.add_argument("--dictionary", action="store_true")
     args = parser.parse_args()
     managed, output = args.managed_compiler.resolve(), args.output.resolve()
     digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
     reference = args.managed_proof.resolve()
     previous = json.loads(reference.read_text(encoding="utf-8-sig"))
-    assert previous["status"] == "passed" and previous["completed"] == previous["total"] == 9
+    assert previous["status"] == "passed" and previous["completed"] == previous["total"] == (18 if args.dictionary else 9)
     assert previous["inputsStable"] and previous["processesStopped"]
     assert previous["inputHashes"].get(str(managed)) == digest(managed), "LAYOUT_NATIVE_MANAGED_IDENTITY_MISMATCH"
     pins = dict(previous["inputHashes"])
@@ -59,7 +60,8 @@ def main():
                 return execution.run(list(map(str, command)), output / label, timeout=remaining)
 
             target = output / (name + ".exe")
-            done = run([native, "build", Path(__file__).with_name(name + ".slg"), "-o", target,
+            prefix = "dictionary-" if args.dictionary else ""
+            done = run([native, "build", Path(__file__).with_name(prefix + name + ".slg"), "-o", target,
                         "--target", "windows-x64", "--llvm", llvm, "--stdlib", ROOT / "stdlib",
                         "--jobs", "1", "-O0", "--keep-temps"], name + "-build")
             if name == "overflow":

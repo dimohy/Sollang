@@ -54,28 +54,41 @@ struct BoundedDictionaryLayout {
     storageSize: Int
     size: Int
     align: Int
+    status: Int
 }
 
 boundedDictionaryLayout capacity: Int, keySize: Int, keyAlign: Int, valueSize: Int, valueAlign: Int -> BoundedDictionaryLayout {
-    Int((UInt64(capacity) * 8 + 6) / 7) => minimumBuckets
-    16 => bucketCapacity!
-    bucketCapacity! < minimumBuckets -> while { bucketCapacity! * 2 => bucketCapacity! }
     keySize -> dictionaryEntryLayout(keyAlign, valueSize, valueAlign) => entryLayout
-    8 => align!
-    entryLayout.align > align! -> if { entryLayout.align => align! }
-    ((bucketCapacity! + 16 + entryLayout.align - 1) / entryLayout.align) * entryLayout.align => entriesOffset
-    ((entriesOffset + bucketCapacity! * entryLayout.stride + align! - 1) / align!) * align! => storageSize
-    ((8 + storageSize + align! - 1) / align!) * align! => size
-    BoundedDictionaryLayout {
-        bucketCapacity: bucketCapacity!
-        entriesOffset: entriesOffset
-        entryStride: entryLayout.stride
-        valueOffset: entryLayout.valueOffset
-        keyAlign: keyAlign
-        valueAlign: valueAlign
-        storageSize: storageSize
-        size: size
-        align: align!
+    capacity -> layoutArithmetic.boundedDictionaryStorageLayout(entryLayout.stride, entryLayout.align) -> when {
+        Ok(layout) {
+            BoundedDictionaryLayout {
+                bucketCapacity: layout.bucketCapacity
+                entriesOffset: layout.entriesOffset
+                entryStride: entryLayout.stride
+                valueOffset: entryLayout.valueOffset
+                keyAlign: keyAlign
+                valueAlign: valueAlign
+                storageSize: layout.storageSize
+                size: layout.size
+                align: layout.align
+                status: 0
+            }
+        }
+        Err(error) {
+            error -> when { InvalidInput { 2 } Overflow { 4 } } => status
+            BoundedDictionaryLayout {
+                bucketCapacity: -1
+                entriesOffset: -1
+                entryStride: entryLayout.stride
+                valueOffset: entryLayout.valueOffset
+                keyAlign: keyAlign
+                valueAlign: valueAlign
+                storageSize: -1
+                size: -1
+                align: 1
+                status: status
+            }
+        }
     }
 }
 
@@ -301,7 +314,7 @@ layoutsForScope request: TypeLayoutRequest, metadataSignatures: Bool -> TypeLayo
                             current.length -> boundedDictionaryLayout(dictionaryKeyLayout.size, dictionaryKeyLayout.align, dictionaryValueLayout.size, dictionaryValueLayout.align) => dictionaryLayout
                             dictionaryLayout.size => sizes![typeIndex!]
                             dictionaryLayout.align => aligns![typeIndex!]
-                            0 => statuses![typeIndex!]
+                            dictionaryLayout.status => statuses![typeIndex!]
                             true => changed!
                         }
                 }

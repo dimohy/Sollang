@@ -8,6 +8,51 @@ public struct BoundedArrayLayout {
 
 public enum Error { InvalidInput, Overflow }
 
+public struct BoundedDictionaryLayout {
+    public bucketCapacity: Int
+    public entriesOffset: Int
+    public storageSize: Int
+    public size: Int
+    public align: Int
+}
+
+public boundedDictionaryStorageLayout capacity: Int, entryStride: Int, entryAlign: Int -> Result<BoundedDictionaryLayout, Error> {
+    capacity <= 0 or entryStride < 0 or entryAlign < 1
+        -> if { Error.InvalidInput -> Result<BoundedDictionaryLayout, Error>.Err -> return }
+    Error.Overflow -> Result<BoundedDictionaryLayout, Error>.Err => overflow
+    (Int64(capacity) * 8 + 6) / 7 => minimumBuckets
+    minimumBuckets > 2147483647 -> if { overflow -> return }
+    Int64(16) => buckets!
+    buckets! < minimumBuckets -> while {
+        buckets! * 2 => buckets!
+        buckets! > 2147483647 -> if { overflow -> return }
+    }
+    buckets! + 16 => controlsEnd
+    controlsEnd > 2147483647 -> if { overflow -> return }
+    Int64(entryAlign) => fieldAlign
+    controlsEnd + fieldAlign > 2147483647 -> if { overflow -> return }
+    ((controlsEnd + fieldAlign - 1) / fieldAlign) * fieldAlign => entriesOffset
+    buckets! * Int64(entryStride) => payload
+    payload > 2147483647 -> if { overflow -> return }
+    entriesOffset + payload => end
+    end > 2147483647 -> if { overflow -> return }
+    entryAlign > 8 -> if { entryAlign } else { 8 } => alignment
+    Int64(alignment) => storageAlign
+    end + storageAlign > 2147483647 -> if { overflow -> return }
+    ((end + storageAlign - 1) / storageAlign) * storageAlign => storageSize
+    8 + storageSize => valueEnd
+    valueEnd > 2147483647 -> if { overflow -> return }
+    valueEnd + storageAlign > 2147483647 -> if { overflow -> return }
+    ((valueEnd + storageAlign - 1) / storageAlign) * storageAlign => size
+    BoundedDictionaryLayout {
+        bucketCapacity: Int(buckets!)
+        entriesOffset: Int(entriesOffset)
+        storageSize: Int(storageSize)
+        size: Int(size)
+        align: alignment
+    } -> Result<BoundedDictionaryLayout, Error>.Ok
+}
+
 # Match TypeDefinitionTable's checked operation order before publishing a size.
 public boundedArrayStorageLayout elementSize: Int, elementAlign: Int, capacity: Int -> Result<BoundedArrayLayout, Error> {
     elementSize < 0 or elementAlign < 1 or capacity <= 0
