@@ -3188,6 +3188,9 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
     # declaration order. They are canonicalized against the shared field table
     # instead of being collapsed to a homogeneous array or a nominal stand-in.
     false => productChanged!
+    [Int; ~] => productFirstField!
+    [Int; ~] => productLastField!
+    [Int; ~] => productNextField!
     0 => productCandidateIndex!
     productCandidateIndex! < (productAsts -> len)
         -> while {
@@ -3275,6 +3278,10 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
             }
             (productFieldTypes! -> len) >= 2 and productFieldsReady!
                 -> if {
+                    # Shape equality historically reads the last field for an
+                    # owner/ordinal without filtering its status. Keep that
+                    # rule while sharing the append-synchronized owner index.
+                    synchronizeFieldIndex(types, fields, productFirstField!, productLastField!, productNextField!, false)
                     -1 => productType!
                     0 => productTypeSearch!
                     productTypeSearch! < (types -> len) and productType! < 0
@@ -3287,15 +3294,15 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                     productFieldOrdinal! < Int(productFieldTypes! -> len) and productTypeEqual!
                                         -> while {
                                             -1 => productCandidateFieldIndex!
-                                            0 => productCandidateFieldSearch!
-                                            productCandidateFieldSearch! < (fields -> len)
+                                            productFirstField![productTypeSearch!] => productCandidateFieldSearch!
+                                            productCandidateFieldSearch! >= 0
                                                 -> while {
                                                     fields[productCandidateFieldSearch!] => productCandidateField
-                                                    productCandidateField.ownerType == productTypeSearch! and productCandidateField.ordinal == productFieldOrdinal!
+                                                    productCandidateField.ordinal == productFieldOrdinal!
                                                         -> if {
                                                             productCandidateFieldSearch! => productCandidateFieldIndex!
                                                         }
-                                                    productCandidateFieldSearch! + 1 => productCandidateFieldSearch!
+                                                    productNextField![productCandidateFieldSearch!] => productCandidateFieldSearch!
                                                 }
                                             productCandidateFieldIndex! < 0 -> if { false => productTypeEqual! } else {
                                                 fields[productCandidateFieldIndex!] => productCandidateField

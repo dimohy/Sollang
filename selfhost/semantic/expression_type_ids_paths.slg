@@ -1016,7 +1016,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
     [Int; ~] => firstFieldByOwnerType!
     [Int; ~] => lastFieldByOwnerType!
     [Int; ~] => nextFieldByField!
-    synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
+    synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!, true)
 
     # A flow's source is its direct child at the same source start. Resolve
     # intrinsic results from that source before selecting a branch's final
@@ -1092,7 +1092,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
         resolveContainerTransformTypes(prepared, types, expressions, expressionIndexByAst, flowSourceByAst)
             -> if { true => pathChanged! }
         # Late array and dictionary interning can grow the arena between rounds.
-        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
+        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!, true)
         resolveContextualRecordTypes(prepared, types, fields, expressions, expressionIndexByAst, flowSourceByAst, contextualRecords, firstFieldByOwnerType!, nextFieldByField!, bindingValues, mutableOwners, references, expectedContextByAst)
             -> if { true => pathChanged! }
         0 => intrinsicSource!
@@ -2768,7 +2768,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
         # Revisit indexed candidates and append only newly interned field links.
         resolveStructuralProductTypes(prepared, types, fields, expressions, expressionIndexByAst, productSources, productAsts) => productTypesChanged
         productTypesChanged -> if { true => pathChanged! }
-        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
+        synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!, true)
         true => pathRoundChanged!
         pathRoundChanged! -> while {
             false => pathRoundChanged!
@@ -3369,8 +3369,9 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
 
 }
 
-# Extend the derived field index from canonical arena lengths, preserving existing links.
-synchronizeFieldIndex types: [typeIds.SemanticType], fields: [typeIds.NominalField], firstByOwner: mut [Int; ~], lastByOwner: mut [Int; ~], nextByField: mut [Int; ~] -> Unit {
+# Extend owner links in original field order. Member lookup admits only
+# resolved fields; product shape equality retains its all-status selection.
+synchronizeFieldIndex types: [typeIds.SemanticType], fields: [typeIds.NominalField], firstByOwner: mut [Int; ~], lastByOwner: mut [Int; ~], nextByField: mut [Int; ~], resolvedOnly: Bool -> Unit {
     (firstByOwner -> len) < (types -> len) -> while {
         firstByOwner -> push(-1)
         lastByOwner -> push(-1)
@@ -3379,14 +3380,15 @@ synchronizeFieldIndex types: [typeIds.SemanticType], fields: [typeIds.NominalFie
     fieldIndex! < (fields -> len) -> while {
         fields[fieldIndex!] => field
         nextByField -> push(-1)
-        field.status == 0 and field.ownerType >= 0 -> if {
-            lastByOwner[field.ownerType] >= 0 -> if {
-                fieldIndex! => nextByField[lastByOwner[field.ownerType]]
-            } else {
-                fieldIndex! => firstByOwner[field.ownerType]
+        (not resolvedOnly or field.status == 0) and field.ownerType >= 0
+            -> if {
+                lastByOwner[field.ownerType] >= 0 -> if {
+                    fieldIndex! => nextByField[lastByOwner[field.ownerType]]
+                } else {
+                    fieldIndex! => firstByOwner[field.ownerType]
+                }
+                fieldIndex! => lastByOwner[field.ownerType]
             }
-            fieldIndex! => lastByOwner[field.ownerType]
-        }
         fieldIndex! + 1 => fieldIndex!
     }
 }
