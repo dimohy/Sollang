@@ -4185,7 +4185,9 @@ Container rules:
   A qualified element type in a typed empty array follows ordinary full-name
   type resolution and visibility rules. A missing or inaccessible qualified
   type is diagnosed at the array literal; a same-named local or builtin type
-  cannot replace it.
+  cannot replace it. Diagnostic names retain every path segment after import
+  alias expansion, including a missing member beneath a known namespace.
+  These lookup errors are rejected before LLVM emission.
 - `[T; N~]` is a typed empty growable array with `len == 0` and
   `capacity == N`; its payload allocation is performed once at construction.
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys

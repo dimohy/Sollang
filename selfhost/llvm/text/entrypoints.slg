@@ -751,26 +751,33 @@ emitSignatureRejection rejection: ref SignatureRejection, paths: [Text; ~] -> Un
             }
         typeOwner! >= 0 and rejection.prepared.package.nodes[range.astStart + typeOwner!].kind == 37
             -> if {
-                rejection.prepared.qualified -> each candidate {
-                    not expanded! and candidate.sourceModule == diagnostic.sourceModule and candidate.pathAst == diagnostic.typeAst
-                        and candidate.targetModule >= 0 and candidate.targetModule < (rejection.prepared.modules -> len)
+                rejection.prepared.resolvedImports -> each imported {
+                    not expanded! and imported.sourceModule == diagnostic.sourceModule and imported.status == 0
                         -> if {
-                            rejection.prepared.modules[candidate.targetModule] => owner
-                            owner.pathLength > 0 -> if {
-                                rejection.prepared.package.sources[owner.sourceIndex] -> slice(owner.pathStart, owner.pathLength) -> print
-                                "." -> print
-                            }
-                            annotation.firstToken => finalName!
-                            annotation.firstToken => tokenIndex!
-                            tokenIndex! < annotation.firstToken + annotation.tokenCount
+                            rejection.prepared.imports[imported.edge] => edge
+                            rejection.prepared.package.tokens[range.tokenStart + edge.aliasToken] => alias
+                            rejection.prepared.package.tokens[range.tokenStart + annotation.firstToken] => root
+                            alias.span.length == root.span.length => matchesAlias!
+                            UIntSize(0) => aliasByte!
+                            matchesAlias! and aliasByte! < root.span.length
                                 -> while {
-                                    rejection.prepared.package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
-                                        -> if { tokenIndex! => finalName! }
-                                    tokenIndex! + 1 => tokenIndex!
+                                    (source -> byte(alias.span.start + aliasByte!)) != (source -> byte(root.span.start + aliasByte!))
+                                        -> if { false => matchesAlias! }
+                                    aliasByte! + 1 => aliasByte!
                                 }
-                            rejection.prepared.package.tokens[range.tokenStart + finalName!] => finalToken
-                            source -> slice(finalToken.span.start, finalToken.span.length) -> print
-                            true => expanded!
+                            matchesAlias! and annotation.tokenCount > 1 -> if {
+                                rejection.prepared.modules[imported.targetModule] => owner
+                                rejection.prepared.package.sources[owner.sourceIndex] -> slice(owner.pathStart, owner.pathLength)
+                                    -> diagnostics.emitCanonicalDiagnosticModuleName
+                                # Replace only the alias; retain every suffix segment.
+                                annotation => suffix!
+                                annotation.firstToken + 1 => suffix!.firstToken
+                                annotation.tokenCount - 1 => suffix!.tokenCount
+                                rejection.prepared.package.tokens[range.tokenStart + suffix!.firstToken].span.start => suffix!.start
+                                annotation.start + annotation.length - suffix!.start => suffix!.length
+                                source -> diagnostics.emitDeclaredTypeSpelling(rejection.prepared.package.tokens, range.tokenStart, suffix!)
+                                true => expanded!
+                            }
                         }
                 }
             }
