@@ -425,6 +425,42 @@ public blockCallbackStartOffset package: ref analysis.PackageAnalysis, sourceMod
 
 # Public queries retain source scanning; binding collection supplies one child index.
 # Both entry paths share argument ownership, exclusion and source-order decisions.
+public directCallReceiverAst package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int -> Int {
+    sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        -> if { -1 -> return }
+    package.ranges[sourceModule] => range
+    callAst < 0 or callAst >= range.astCount -> if { -1 -> return }
+    package.nodes[range.astStart + callAst] => call
+    call.kind != 11 -> if { -1 -> return }
+    0 => nameIndex!
+    nameIndex! < range.nameCount -> while {
+        package.names[range.nameStart + nameIndex!] => name
+        name.astNode >= 0 and name.astNode < range.astCount
+            and (package -> calls.receiverSymbolIsRuntimeValue(sourceModule, name.symbol))
+            -> if {
+                package.nodes[range.astStart + name.astNode] => receiver
+                receiver.kind == 16 and receiver.parent == callAst
+                    and receiver.start == call.start and name.nameToken == receiver.firstToken
+                    -> if { name.astNode -> return }
+            }
+        nameIndex! + 1 => nameIndex!
+    }
+    -1
+}
+
+public callArgumentIsNamedRead package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int, argumentAst: Int -> Bool {
+    sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        -> if { false -> return }
+    package.ranges[sourceModule] => range
+    argumentAst < 0 or argumentAst >= range.astCount
+        -> if { false -> return }
+    package.nodes[range.astStart + argumentAst].kind == 15
+        -> if { true -> return }
+    package.nodes[range.astStart + argumentAst].kind != 16
+        -> if { false -> return }
+    (package -> directCallReceiverAst(sourceModule, callAst)) == argumentAst
+}
+
 public callArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~] -> [Int; ~] {
     [Int; ~] => unusedChildIndex
     package -> collectCallArgumentAsts(call, flowSources, unusedChildIndex, unusedChildIndex, false)
@@ -464,6 +500,26 @@ collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.Modul
     target! < 0 -> if { arguments! -> return }
     package.nodes[range.astStart + target!] => targetNode
     package -> blockCallbackStartOffset(call.sourceModule, target!) => runtimeArgumentEnd
+    # Direct instance syntax has the same primary input as a flow call.
+    # Reuse its resolved lexical receiver path, which also owns the Typed IR
+    # receiver; a namespace/type-qualified callee is not a runtime input.
+    node.kind == 11 and call.targetSourceModule >= 0
+        and call.targetSourceModule < (package.ranges -> len)
+        and call.functionSymbol >= 0
+        -> if {
+            package.ranges[call.targetSourceModule] => declarationRange
+            call.functionSymbol < declarationRange.symbolCount
+                -> if {
+                    package.symbols[declarationRange.symbolStart + call.functionSymbol] => declaration
+                    (declaration.kind == 31 or declaration.kind == 7)
+                        and declaration.parent >= 0 and declaration.parent < declarationRange.symbolCount
+                        and package.symbols[declarationRange.symbolStart + declaration.parent].kind == 6
+                        -> if {
+                            package -> directCallReceiverAst(call.sourceModule, target!) => receiverAst
+                            receiverAst >= 0 -> if { arguments! -> push(range.astStart + receiverAst) }
+                        }
+                }
+        }
     -1 => previous!
     false => done!
     not done! -> while {
@@ -607,7 +663,8 @@ public indexDeclaredMoveArgumentBindingsByAst package: ref analysis.PackageAnaly
         package.ranges[binding.targetSourceModule] => targetRange
         sourceRange.astStart + binding.argumentAst => argumentGlobalAst
         package.symbols[targetRange.symbolStart + binding.parameterSymbol] => parameter
-        parameter.flags % 2 == 1 and package.nodes[argumentGlobalAst].kind == 15
+        parameter.flags % 2 == 1
+            and (package -> callArgumentIsNamedRead(binding.sourceModule, binding.callAst, binding.argumentAst))
             -> if { true => moved![argumentGlobalAst] }
     }
     moved!

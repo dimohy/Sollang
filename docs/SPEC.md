@@ -4237,7 +4237,13 @@ Container rules:
   This join uses the resolved callee and every declared `move` parameter for
   direct calls as well as flowed calls. In `receiver.method(arguments)`, the
   receiver is the primary input and the explicit arguments are the additional
-  inputs; an argument cannot be mistaken for the receiver.
+  inputs; an argument cannot be mistaken for the receiver. Semantic argument
+  bindings use that same receiver-first order for direct and flowed instance
+  calls, including receivers supplied as function parameters. A namespace- or
+  type-qualified function path does not introduce an implicit runtime receiver.
+  Reading a named readonly receiver materializes one reference layer for
+  dispatch and value compatibility. Its declared borrowed origin still governs
+  move rejection and mutable-owner checks.
   A `when` or enum-match subject is evaluated before its arms. A move in that
   subject remains a move on every continuing arm; returning arms contribute no
   ownership state to the continuation. Mixed ownership is diagnosed during

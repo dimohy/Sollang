@@ -1547,6 +1547,9 @@ internal sealed partial class TypeDefinitionTable
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a reference");
     }
 
+    public TypeId ReadValueType(TypeId type) =>
+        _references.TryGetValue(type, out var reference) ? reference.ElementType : type;
+
     public TypeId GetOrAddSlice(TypeId elementType)
     {
         if (elementType == TypeId.Int)

@@ -499,8 +499,8 @@ internal sealed partial class LlvmEmitter
                     $"method '{path}' expects {additionalParameterCount} additional argument(s)");
             }
 
-            argument = ResolveLocal(methodReceiverName);
-            EnsureFunctionArgumentRuntimeType(argument, function.InputType!.Value, path);
+            argument = EmitPrimaryFunctionCallArgument(
+                new NameExpression(methodReceiverName, expression.Line, expression.Column), function, path);
         }
         else if (function.InputType is null)
         {
@@ -518,28 +518,7 @@ internal sealed partial class LlvmEmitter
                     $"function '{path}' expects {1 + additionalParameterCount} argument(s)");
             }
 
-            if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
-            {
-                argument = CreateMutableBorrowArgument(
-                    expression.Arguments[0],
-                    function.InputType!.Value,
-                    path,
-                    function.InputName ?? "it");
-            }
-            else if (_program.Types.IsReference(function.InputType.Value))
-            {
-                argument = CreateReadonlyReferenceArgument(
-                    expression.Arguments[0],
-                    function.InputType.Value,
-                    path);
-            }
-            else
-            {
-                argument = EmitFunctionArgumentExpression(
-                    expression.Arguments[0],
-                    function.InputType.Value);
-                EnsureFunctionArgumentRuntimeType(argument, function.InputType.Value, path);
-            }
+            argument = EmitPrimaryFunctionCallArgument(expression.Arguments[0], function, path);
         }
 
         var borrowedTemporaries = new List<RuntimeValue>();
@@ -777,6 +756,23 @@ internal sealed partial class LlvmEmitter
         return _program.Types.IsSlice(expectedType)
             ? CreateRuntimeSlice(expectedType, value)
             : value;
+    }
+
+    private RuntimeValue EmitPrimaryFunctionCallArgument(
+        Expression expression, BoundFunction function, string path)
+    {
+        var expectedType = function.InputType!.Value;
+        if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
+        {
+            return CreateMutableBorrowArgument(expression, expectedType, path, function.InputName ?? "it");
+        }
+        if (_program.Types.IsReference(expectedType))
+        {
+            return CreateReadonlyReferenceArgument(expression, expectedType, path);
+        }
+        var value = EmitFunctionArgumentExpression(expression, expectedType);
+        EnsureFunctionArgumentRuntimeType(value, expectedType, path);
+        return value;
     }
 
     private RuntimeValue EmitFunctionArgumentExpression(Expression expression, BoundType expectedType)
@@ -1148,7 +1144,7 @@ internal sealed partial class LlvmEmitter
             return false;
         }
 
-        if (!TryResolveInstanceMethod(receiver.Type, path[1], out function))
+        if (!TryResolveInstanceMethod(_program.Types.ReadValueType(receiver.Type), path[1], out function))
         {
             return false;
         }

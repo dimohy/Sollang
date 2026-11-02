@@ -3222,7 +3222,13 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                         argument.status == 0 and argument.typeId >= 0
                             and argument.typeId < (resolved.types -> len)
                             and not resolved.types[argument.typeId].containsParameter
-                            -> if { argument.typeId => actualType! }
+                            -> if {
+                                argument.typeId => actualType!
+                                binding.parameterOrdinal == 0
+                                    and prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 16
+                                    and (prepared.package -> semanticContext.callArgumentIsNamedRead(binding.sourceModule, binding.callAst, binding.argumentAst))
+                                    -> if { resolved.types -> typeIds.materializedReadTypeId(actualType!) => actualType! }
+                            }
                     }
                     actualType! >= 0 -> if {
                         resolved.types[templateType].containsParameter

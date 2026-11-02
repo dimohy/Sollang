@@ -13499,6 +13499,14 @@ internal sealed partial class SemanticCompiler
                         throw Error(expression.Line, expression.Column,
                             $"method '{path}' cannot receive {FormatType(receiverType.Value)}");
                     }
+                    ValidatePrimaryFunctionCallArgument(
+                        new NameExpression(receiverName, expression.Line, expression.Column),
+                        function,
+                        function.InputType.Value,
+                        receiverType.Value,
+                        bindings,
+                        mutableBindings,
+                        path);
                     ValidateAdditionalFunctionArguments(
                         function,
                         expression.Arguments,
@@ -14801,13 +14809,14 @@ internal sealed partial class SemanticCompiler
             return false;
         }
 
-        if (!TryResolveInstanceMethod(type, path[1], functions, out function))
+        var valueType = _types.ReadValueType(type);
+        if (!TryResolveInstanceMethod(valueType, path[1], functions, out function))
         {
             return false;
         }
 
         receiverName = path[0];
-        receiverType = type;
+        receiverType = valueType;
         return true;
     }
 
@@ -14983,30 +14992,9 @@ internal sealed partial class SemanticCompiler
                 expression.Column,
                 $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(argumentType)}");
         }
-        MarkFixedLengthCandidateRequiresGrowable(
-            expression.Arguments[0],
-            function.InputType,
-            argumentType);
-        if (_types.IsReference(function.InputType.Value)
-            && !_types.IsReference(argumentType))
-        {
-            EnsureReferenceArgumentPlace(expression.Arguments[0], bindings, mutableBindings, path);
-        }
-
-        if (FunctionMovesOwnedHeapInput(function))
-        {
-            EnsureOwnedParameterCallArgument(expression.Arguments[0], path, bindings);
-        }
-
-        if (FunctionMutablyBorrowsInput(function))
-        {
-            EnsureMutableBorrowCallArgument(expression.Arguments[0], path, mutableBindings);
-        }
-
-        if (FunctionReadonlyBorrowsHeapInput(function, argumentType))
-        {
-            EnsureReadonlyBorrowCallArgument(expression.Arguments[0], path);
-        }
+        ValidatePrimaryFunctionCallArgument(
+            expression.Arguments[0], function, function.InputType.Value, argumentType,
+            bindings, mutableBindings, path);
 
         ValidateAdditionalFunctionArguments(
             function,
@@ -15020,6 +15008,34 @@ internal sealed partial class SemanticCompiler
         if (function.IsLocal)
             _resolvedCaptureCalls[expression] = function;
         return AsyncCallType(function);
+    }
+
+    private void ValidatePrimaryFunctionCallArgument(
+        Expression argument,
+        BoundFunction function,
+        BoundType expectedType,
+        BoundType actualType,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string>? mutableBindings,
+        string path)
+    {
+        MarkFixedLengthCandidateRequiresGrowable(argument, expectedType, actualType);
+        if (_types.IsReference(expectedType) && !_types.IsReference(actualType))
+        {
+            EnsureReferenceArgumentPlace(argument, bindings, mutableBindings, path);
+        }
+        if (FunctionMovesOwnedHeapInput(function))
+        {
+            EnsureOwnedParameterCallArgument(argument, path, bindings);
+        }
+        if (FunctionMutablyBorrowsInput(function))
+        {
+            EnsureMutableBorrowCallArgument(argument, path, mutableBindings);
+        }
+        if (FunctionReadonlyBorrowsHeapInput(function, actualType))
+        {
+            EnsureReadonlyBorrowCallArgument(argument, path);
+        }
     }
 
     private void ValidateAdditionalFunctionArguments(
@@ -15209,9 +15225,7 @@ internal sealed partial class SemanticCompiler
     {
         if (bindings.TryGetValue(expression.Name, out var type))
         {
-            return _types.IsReference(type)
-                ? _types.GetReference(type).ElementType
-                : type;
+            return _types.ReadValueType(type);
         }
 
         if (TryGetFunction(expression.Name, functions, out var function))
