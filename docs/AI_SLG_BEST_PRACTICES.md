@@ -2084,6 +2084,15 @@ For `verify-example-test-catalog.py`, identify that tree with `--fixture-root`;
 the runner must belong to that exact repository root. Generated output and
 compiler retention remain owned by the controller's repository.
 
+For examples classified by `IsReusableSelfHostCompilerTest` in the example
+runner, use its extracted program inputs and reusable-driver dispatch. Compiling
+the outer source carrier is a different request. A linked LLVM execution sidecar
+admits the canonical standard library; an emission-only fixture retains its
+partial source graph. Preserve both the raw LLVM and linked execution assertions.
+Before refreshing a raw LLVM expectation, compare its functions and inspect
+changed bodies against the compiler sources; identifier changes alone do not
+explain a runtime implementation change.
+
 For a focused comparison of user-program behavior, invoke the verified current
 C# and SLG compiler binaries on the same program inputs. Reuse the existing
 checked-emission producer for its declared source-proof purpose; compiling the
