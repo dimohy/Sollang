@@ -24,6 +24,8 @@ import sys.file as file
 struct SourceLowerFacts {
     names: [resolution.ResolvedName; ~]
     symbolsByAst: [Int; ~]
+    bindingSymbolByAst: [Int; ~]
+    blockResultBindingByAst: [Bool; ~]
     qualifiedByAst: [Bool; ~]
     functionPathByAst: [Bool; ~]
     valueVariantByAst: [Int; ~]
@@ -33,8 +35,11 @@ struct SourceLowerFacts {
 # One immutable source fact set is borrowed by entry and all function workers.
 prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int -> SourceLowerFacts {
     prepared.package.ranges[sourceIndex] => sourceRange
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), prepared.package.sources[sourceIndex] -> len) => source
     [resolution.ResolvedName; ~] => resolvedNames!
     [Int; ~] => resolvedSymbolByAst!
+    [Int; ~] => bindingSymbolByAst!
+    [Bool; ~] => blockResultBindingByAst!
     [Bool; ~] => resolvedQualifiedByAst!
     [Bool; ~] => qualifiedFunctionPathByAst!
     [Int; ~] => qualifiedValueVariantIndexByAst!
@@ -42,6 +47,8 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
     resolvedNameIndexSeed! < sourceRange.astCount
         -> while {
             resolvedSymbolByAst! -> push(-1)
+            bindingSymbolByAst! -> push(-1)
+            blockResultBindingByAst! -> push(false)
             resolvedQualifiedByAst! -> push(false)
             qualifiedFunctionPathByAst! -> push(false)
             qualifiedValueVariantIndexByAst! -> push(-1)
@@ -57,6 +64,38 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
             }
         sourceNameOffset! + 1 => sourceNameOffset!
     }
+    0 => bindingDeclarationIndex!
+    bindingDeclarationIndex! < sourceRange.symbolCount
+        -> while {
+            prepared.package.symbols[sourceRange.symbolStart + bindingDeclarationIndex!] => bindingDeclaration
+            (bindingDeclaration.kind == 9 or bindingDeclaration.kind == 61)
+                and bindingDeclaration.astNode >= 0
+                and bindingDeclaration.astNode < sourceRange.astCount
+                -> if {
+                    bindingDeclarationIndex! => bindingSymbolByAst![bindingDeclaration.astNode]
+                }
+            bindingDeclarationIndex! + 1 => bindingDeclarationIndex!
+        }
+    0 => bindingValueAstIndex!
+    bindingValueAstIndex! < sourceRange.astCount
+        -> while {
+            prepared.package.nodes[sourceRange.astStart + bindingValueAstIndex!] => bindingValue
+            bindingValue.kind == 48 and bindingValue.secondaryToken >= 0
+                -> if { true => blockResultBindingByAst![bindingValueAstIndex!] }
+            bindingValue.kind == 10 and bindingValue.parent >= 0
+                and bindingValue.parent < sourceRange.astCount
+                and not blockResultBindingByAst![bindingValue.parent]
+                -> if {
+                    prepared.package.nodes[sourceRange.astStart + bindingValue.parent] => bindingOwner
+                    bindingOwner.kind == 9 or bindingOwner.kind == 61
+                        -> if {
+                            source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, bindingValueAstIndex!) => bindingValueOpcode
+                            bindingValueOpcode == -227
+                                -> if { true => blockResultBindingByAst![bindingValue.parent] }
+                        }
+                }
+            bindingValueAstIndex! + 1 => bindingValueAstIndex!
+        }
     prepared -> localMemberRoots(resolvedNames!, sourceIndex) => localMemberByParentAst
     0 => qualifiedIndexBuild!
     qualifiedIndexBuild! < (prepared.qualified -> len)
@@ -87,6 +126,8 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
     SourceLowerFacts {
         names: resolvedNames!
         symbolsByAst: resolvedSymbolByAst!
+        bindingSymbolByAst: bindingSymbolByAst!
+        blockResultBindingByAst: blockResultBindingByAst!
         qualifiedByAst: resolvedQualifiedByAst!
         functionPathByAst: qualifiedFunctionPathByAst!
         valueVariantByAst: qualifiedValueVariantIndexByAst!
@@ -752,22 +793,8 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                 # operations are Unit-valued at the call site, so
                                 # the declared block-result type is authoritative
                                 # for the response binding.
-                                (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0) => bindingUsesBlockResult!
-                                bindingAst.kind == 9 or bindingAst.kind == 61
-                                    -> if {
-                                        0 => bindingYieldSearch!
-                                        bindingYieldSearch! < sourceRange.astCount and not bindingUsesBlockResult!
-                                            -> while {
-                                                prepared.package.nodes[sourceRange.astStart + bindingYieldSearch!] => bindingYieldCandidate
-                                                bindingYieldCandidate.parent == bindingAstIndex and bindingYieldCandidate.kind == 10
-                                                    -> if {
-                                                        source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, bindingYieldSearch!) => bindingYieldOpcode
-                                                        bindingYieldOpcode == -227 -> if { true => bindingUsesBlockResult! }
-                                                    }
-                                                bindingYieldSearch! + 1 => bindingYieldSearch!
-                                            }
-                                    }
-                                bindingUsesBlockResult! and function.blockResultTypeNode >= 0
+                                sourceFacts.blockResultBindingByAst[bindingAstIndex]
+                                    and function.blockResultTypeNode >= 0
                                     -> if {
                                         -1 => roleResultReferenceIndex!
                                         function.blockResultTypeNode < sourceRange.astCount
@@ -777,14 +804,7 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                             and recursiveTypes.references[roleResultReferenceIndex!].typeId >= 0
                                             -> if { recursiveTypes.references[roleResultReferenceIndex!].typeId => bindingCanonicalTypeId! }
                                     }
-                                -1 => bindingSymbol!
-                                0 => bindingSymbolSearch!
-                                bindingSymbolSearch! < sourceRange.symbolCount
-                                    -> while {
-                                        (prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].astNode == bindingAstIndex
-                                            -> if { bindingSymbolSearch! => bindingSymbol! }
-                                        bindingSymbolSearch! + 1 => bindingSymbolSearch!
-                                    }
+                                sourceFacts.bindingSymbolByAst[bindingAstIndex] => bindingSymbol!
                                 # A mutable rebind inside a stream callback refers
                                 # to the existing outer slot. Its callback-local
                                 # symbol can have no standalone inferred type, so
