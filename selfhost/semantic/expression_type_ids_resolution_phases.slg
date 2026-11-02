@@ -3198,9 +3198,57 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
     [Int; ~] => productFirstField!
     [Int; ~] => productLastField!
     [Int; ~] => productNextField!
+    (productAsts -> len) == 0 -> if { false -> return }
+    [Int; ~] => productExpressionByElement!
+    [Int; ~] => productExpressionDistanceByElement!
+    prepared.package.nodes -> each _ {
+        productExpressionByElement! -> push(-1)
+        productExpressionDistanceByElement! -> push(1000000)
+    }
+    0 => indexedProductExpressions!
     0 => productCandidateIndex!
     productCandidateIndex! < (productAsts -> len)
         -> while {
+            # Coordinates remain fixed while inferred types stay live. Index
+            # each expression once, including nested products appended by an
+            # earlier candidate in this pass; retain the first nearest result.
+            indexedProductExpressions! < (expressions -> len)
+                -> while {
+                    expressions[indexedProductExpressions!] => indexedProductExpression
+                    indexedProductExpression.sourceModule >= 0
+                        and indexedProductExpression.sourceModule < (prepared.package.ranges -> len)
+                        -> if {
+                            prepared.package.ranges[indexedProductExpression.sourceModule] => indexedProductRange
+                            indexedProductExpression.astNode => indexedProductAst
+                            prepared.package.nodes[indexedProductRange.astStart + indexedProductAst] => indexedProductNode
+                            indexedProductNode.parent => productExpressionAncestor!
+                            indexedProductNode.kind == 72 -> if { indexedProductAst => productExpressionAncestor! }
+                            1 => productExpressionDistance!
+                            true => productExpressionSearching!
+                            productExpressionAncestor! >= 0 and productExpressionSearching!
+                                -> while {
+                                    indexedProductRange.astStart + productExpressionAncestor! => productAncestorGlobal
+                                    prepared.package.nodes[productAncestorGlobal] => productAncestor
+                                    productAncestor.kind == 72 -> if {
+                                        productExpressionDistance! < productExpressionDistanceByElement![productAncestorGlobal]
+                                            -> if {
+                                                indexedProductExpressions! => productExpressionByElement![productAncestorGlobal]
+                                                productExpressionDistance! => productExpressionDistanceByElement![productAncestorGlobal]
+                                            }
+                                        false => productExpressionSearching!
+                                    } else {
+                                        productAncestor.kind == 71 or productAncestor.kind == 36
+                                            -> if {
+                                                false => productExpressionSearching!
+                                            } else {
+                                                productAncestor.parent => productExpressionAncestor!
+                                                productExpressionDistance! + 1 => productExpressionDistance!
+                                            }
+                                    }
+                                }
+                        }
+                    indexedProductExpressions! + 1 => indexedProductExpressions!
+                }
             productSources[productCandidateIndex!] => productSourceIndex
             productAsts[productCandidateIndex!] => productAstIndex
             prepared.package.sources[productSourceIndex] -> len => productSourceLength
@@ -3237,43 +3285,10 @@ resolveStructuralProductTypes prepared: ref semanticContext.SemanticSnapshot, ty
                 nextProductElement! >= 0 -> if {
                     prepared.package.nodes[productRange.astStart + nextProductElement!] => productElement
                     -1 => productElementType!
-                    1000000 => productElementDistance!
-                    0 => productExpressionSearch!
-                    productExpressionSearch! < (expressions -> len)
-                        -> while {
-                            expressions[productExpressionSearch!] => productExpressionCandidate
-                            productExpressionCandidate.sourceModule == productSourceIndex
-                                -> if {
-                                    productExpressionCandidate.astNode => productExpressionAst
-                                    prepared.package.nodes[productRange.astStart + productExpressionAst].parent => productExpressionAncestor!
-                                    1 => productExpressionDistance!
-                                    false => productExpressionBelongs!
-                                    productExpressionAst == nextProductElement! -> if { true => productExpressionBelongs! }
-                                    productExpressionAncestor! >= 0 and not productExpressionBelongs!
-                                        -> while {
-                                            productExpressionAncestor! == nextProductElement!
-                                                -> if { true => productExpressionBelongs! } else {
-                                                    # Product/member expressions own their result type;
-                                                    # a receiver or operand cannot replace that result
-                                                    # while member inference is still pending.
-                                                    prepared.package.nodes[productRange.astStart + productExpressionAncestor!].kind => productAncestorKind
-                                                    productAncestorKind == 71 or productAncestorKind == 36
-                                                        -> if {
-                                                            -1 => productExpressionAncestor!
-                                                        } else {
-                                                            prepared.package.nodes[productRange.astStart + productExpressionAncestor!].parent => productExpressionAncestor!
-                                                        }
-                                                    productExpressionDistance! + 1 => productExpressionDistance!
-                                                }
-                                        }
-                                    productExpressionBelongs! and productExpressionDistance! < productElementDistance!
-                                        -> if {
-                                            types -> typeIds.materializedReadTypeId(productExpressionCandidate.typeId) => productElementType!
-                                            productExpressionDistance! => productElementDistance!
-                                        }
-                                }
-                            productExpressionSearch! + 1 => productExpressionSearch!
-                        }
+                    productExpressionByElement![productRange.astStart + nextProductElement!] => productExpressionIndex
+                    productExpressionIndex >= 0 -> if {
+                        types -> typeIds.materializedReadTypeId(expressions[productExpressionIndex].typeId) => productElementType!
+                    }
                     prepared.package.tokens -> typeTerms.productFieldLabelToken(productRange.tokenStart, productElement.firstToken, productElement.tokenCount) => productElementLabel
                     productElementType! < 0 -> if { false => productFieldsReady! }
                     productFieldTypes! -> push(productElementType!)
