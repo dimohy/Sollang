@@ -1,0 +1,101 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.reference_prepared_type_ids as reference
+import std.time as time
+import sys.process as process
+import sys.runtime as runtime
+
+struct RegistrationProfile {
+    sources: Int
+    types: Int
+    preparationMilliseconds: Long
+    metadataMilliseconds: Long
+    declarationMilliseconds: Long
+    emptyUsesMilliseconds: Long
+    metadataNext: Int
+    declarationNext: Int
+    emptyUsesNext: Int
+    declarationIdsEqual: Bool
+}
+
+sameIds left: ref [Int; ~], right: ref [Int; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<Int(left -> len) -> each index {
+        left[index] != right[index] -> if { false -> return }
+    }
+    true
+}
+
+profileRegistration paths: ref [Text; ~] -> Result<RegistrationProfile, Int> uses Clock, File, Console {
+    time.monotonicClock() => clock
+    "registration-phase=preparation" -> runtime.eprintln
+    clock -> now => started
+    paths -> semanticContext.prepareFiles => prepared!
+    144 => prepared!.standardLibrarySourceCount
+    prepared! -> semanticContext.freeze => prepared
+    clock -> now => preparedAt
+    "registration-phase=metadata" -> runtime.eprintln
+    prepared -> reference.registerMetadataSignatures -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(1) -> return }
+        Ok(value) { value }
+    } => metadata
+    clock -> now => metadataAt
+    "registration-phase=declarations" -> runtime.eprintln
+    prepared -> reference.registerDeclarations -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(2) -> return }
+        Ok(value) { value }
+    } => declarations
+    clock -> now => declarationsAt
+    "registration-phase=empty-uses" -> runtime.eprintln
+    [Int; ~] => uses
+    prepared -> reference.registerResolvedTypeUses(prepared.semantic, uses) -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(3) -> return }
+        Ok(value) { value }
+    } => emptyUses
+    clock -> now => completed
+    "registration-phase=complete" -> runtime.eprintln
+    preparedAt -> durationSince(started) -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(4) -> return }
+        Ok(value) { value -> asMilliseconds }
+    } => preparationMilliseconds
+    metadataAt -> durationSince(preparedAt) -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(4) -> return }
+        Ok(value) { value -> asMilliseconds }
+    } => metadataMilliseconds
+    declarationsAt -> durationSince(metadataAt) -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(4) -> return }
+        Ok(value) { value -> asMilliseconds }
+    } => declarationMilliseconds
+    completed -> durationSince(declarationsAt) -> when {
+        Err(_) { Result<RegistrationProfile, Int>.Err(4) -> return }
+        Ok(value) { value -> asMilliseconds }
+    } => emptyUsesMilliseconds
+    RegistrationProfile {
+        sources: Int(prepared.package.sources -> len)
+        types: Int(prepared.semantic.types -> len)
+        preparationMilliseconds: preparationMilliseconds
+        metadataMilliseconds: metadataMilliseconds
+        declarationMilliseconds: declarationMilliseconds
+        emptyUsesMilliseconds: emptyUsesMilliseconds
+        metadataNext: metadata.nextTypeId
+        declarationNext: declarations.nextTypeId
+        emptyUsesNext: emptyUses.nextTypeId
+        declarationIdsEqual: declarations.nextTypeId == emptyUses.nextTypeId and (declarations.ids -> sameIds(emptyUses.ids))
+    } -> Result<RegistrationProfile, Int>.Ok
+}
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    paths! -> profileRegistration -> when {
+        Err(code) { "registration-stage-error=$code" -> println
+            process.exit(code) }
+        Ok(value) {
+            "sources=$(value.sources) types=$(value.types) preparation=$(value.preparationMilliseconds) metadata=$(value.metadataMilliseconds) declarations=$(value.declarationMilliseconds) empty-uses=$(value.emptyUsesMilliseconds) metadata-next=$(value.metadataNext) declaration-next=$(value.declarationNext) empty-uses-next=$(value.emptyUsesNext) ids-equal=$(value.declarationIdsEqual)" -> println
+        }
+    }
+}
