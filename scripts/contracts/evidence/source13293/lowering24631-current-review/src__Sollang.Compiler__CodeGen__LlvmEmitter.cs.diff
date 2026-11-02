@@ -1,0 +1,35 @@
+--- 5f7f63b38b3c80645c887792cd077aca5f07b71d:src/Sollang.Compiler/CodeGen/LlvmEmitter.cs
++++ current:src/Sollang.Compiler/CodeGen/LlvmEmitter.cs
+@@ -287,7 +287,13 @@
+     {
+         foreach (var function in functions)
+         {
+-            var scope = CreateFunctionScope(parentScope, function.LocalFunctions);
++            if (_functionScopes.ContainsKey(function))
++                continue;
++            if (function.LexicalParent is { } parent && !_functionScopes.ContainsKey(parent))
++                RecordFunctionScopes([parent], parentScope);
++            var scope = CreateFunctionScope(
++                function.LexicalParent is { } owner ? _functionScopes[owner] : parentScope,
++                function.LocalFunctions);
+             _functionScopes[function] = scope;
+             RecordFunctionScopes(function.LocalFunctions.Values, scope);
+         }
+@@ -789,11 +795,15 @@
+                 "mouse event streams are unavailable on wasm32-browser; "
+                 + "browser events require host-driven callback lowering");
+         }
+-        var moduleGroups = GetEmittableUserFunctions()
++        var emittableFunctions = GetEmittableUserFunctions();
++        var functionIdentities = SemanticStableIdentity.IndexFunctions(
++            _program.Types, _program.Functions.Values, emittableFunctions);
++        var moduleGroups = emittableFunctions
+             .GroupBy(static function => function.ModuleName ?? "", StringComparer.Ordinal)
+             .OrderBy(static group => LlvmCodegenUnit.StableIdentity(group.Key))
+             .ThenBy(static group => group.Key, StringComparer.Ordinal)
+-            .Select(static group => new ModuleFunctionGroup(group.Key, group.ToArray()))
++            .Select(group => new ModuleFunctionGroup(group.Key,
++                group.OrderBy(function => functionIdentities[function], StringComparer.Ordinal).ToArray()))
+             .ToArray();
+         _usesAes128CpuSpecialization = moduleGroups
+             .SelectMany(static group => group.Functions)

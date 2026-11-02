@@ -1,0 +1,227 @@
+--- 1dfd39d6c5a326cb7048c07db3e5d0968b0c972d:selfhost/llvm/text/ownership.slg
++++ current:selfhost/llvm/text/ownership.slg
+@@ -65,7 +65,7 @@
+ 
+ writeEnumSubjectValue subjectIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     (context.ir[subjectIndex] -> referenceValueTypeId(context, state)) >= 0
+-        -> if { "%v$(subjectIndex)" -> print } else {
++        -> if { "%v$(subjectIndex -> valueNameId(state))" -> print } else {
+             subjectIndex -> writeValue(ownerIndex, context, state)
+         }
+ }
+@@ -659,7 +659,7 @@
+     "  %dropg$(nameRoot)_p0 = load " -> print
+     context.ir[bindingIndex] -> writeIrType(context, state)
+     ", ptr " -> print
+-    frameRoot -> writeAsyncLocalAddress(context)
++    frameRoot -> writeAsyncLocalAddress(context, state)
+     ", align " -> print
+     context.ir[bindingIndex] -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+     true
+@@ -670,7 +670,7 @@
+         context -> writeParameterReference(functionIndex, context.ir[parameterIndex].symbol) => parameterWritten
+     } else {
+         valueIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyType
+-        bindingCopyType >= 0 -> if { "%v$(valueIndex)_binding_copy" -> print } else { "%v$(valueIndex)" -> print }
++        bindingCopyType >= 0 -> if { "%v$(valueIndex -> valueNameId(state))_binding_copy" -> print } else { "%v$(valueIndex -> valueNameId(state))" -> print }
+     }
+ }
+ 
+@@ -1339,8 +1339,8 @@
+     request.valueKind == 0 -> if {
+         request.valueIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyType
+         bindingCopyType >= 0 -> if {
+-            "%v$(request.valueIndex)_binding_copy" -> print
+-        } else { "%v$(request.valueIndex)" -> print }
++            "%v$(request.valueIndex -> valueNameId(state))_binding_copy" -> print
++        } else { "%v$(request.valueIndex -> valueNameId(state))" -> print }
+     } else {
+         request.valueKind == 1 -> if {
+             context.ir[request.regionIndex].parent => dropParameterOwner!
+@@ -1487,19 +1487,19 @@
+         -> if { backing => transferred! }
+     transferred!
+ }
+-emitPromotedFixedBackingDrop callIndex: Int, edgeIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
++emitPromotedFixedBackingDrop callIndex: Int, edgeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     # A direct literal owns its physical allocation; a copy or returned value
+     # owns the backing carried by its descriptor instead.
+     context.ir[callIndex].kind == 14 and (callIndex -> bindingFixedStorageCopyTypeId(context)) < 0
+         -> if {
+             "  call void @sollang_free(ptr " -> print
+-            ArrayStorageIdentity { resultDomain: 0, resultIndex: callIndex, labelIndex: -1 } -> writeArrayHeapIdentity
++            ArrayStorageIdentity { resultDomain: 0, resultIndex: callIndex, labelIndex: -1 } -> writeArrayHeapIdentity(state)
+             ")" -> println
+             return
+         }
+     "  %fixedbacking$(edgeIndex)_$(callIndex) = extractvalue %sollang.int_slice " -> print
+     (callIndex -> bindingFixedStorageCopyTypeId(context)) >= 0
+-        -> if { "%v$(callIndex)_binding_copy" -> print } else { "%v$(callIndex)" -> print }
++        -> if { "%v$(callIndex -> valueNameId(state))_binding_copy" -> print } else { "%v$(callIndex -> valueNameId(state))" -> print }
+     ", 0" -> println
+     "  call void @sollang_free(ptr %fixedbacking$(edgeIndex)_$(callIndex))" -> println
+ }
+@@ -1622,7 +1622,7 @@
+ }
+ 
+ emitDirectCopyableFixedStructCopy valueIndex: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+-    "%v$(valueIndex)" -> emitCopyableFixedStructValue("%v$(valueIndex)_copy_source", typeId, context, state)
++    "%v$(valueIndex -> valueNameId(state))" -> emitCopyableFixedStructValue("%v$(valueIndex -> valueNameId(state))_copy_source", typeId, context, state)
+ }
+ 
+ # Only the two borrowing intrinsics construct SourceText with a literal null
+@@ -1681,7 +1681,7 @@
+     bindingIndex < 0 -> if { return }
+     context.ir[bindingIndex] => binding
+     binding.kind == 29 and (bindingIndex -> patternBindingNeedsOwnershipFlag(context, state))
+-        -> if { "  store i1 false, ptr %v$(bindingIndex)_owned, align 1" -> println }
++        -> if { "  store i1 false, ptr %v$(bindingIndex -> valueNameId(state))_owned, align 1" -> println }
+     binding.kind == 10 and (bindingIndex -> moveParameterNeedsPathOwnershipFlag(ownerIndex, context, state))
+         -> if { "  store i1 false, ptr %arg$(bindingIndex)_owned, align 1" -> println }
+ }
+@@ -1958,7 +1958,7 @@
+                     and (context.ir[dropTask.valueIndex].kind == 14 or (dropTask.valueIndex -> promotedFixedArrayCall(context, state)) >= 0)
+                     -> if {
+                         true => dropTaskNeedsFixedReload!
+-                        "  %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data = extractvalue %sollang.int_slice %v$(dropTask.valueIndex), 0" -> println
++                        "  %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data = extractvalue %sollang.int_slice %v$(dropTask.valueIndex -> valueNameId(state)), 0" -> println
+                         "  %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!) = load " -> print
+                         dropTask.typeId -> writeSemanticTypeId(context, state)
+                         ", ptr %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data, align " -> print
+@@ -2086,7 +2086,7 @@
+                                                             or (dropFieldTypeId! -> semanticTypeOwns(context, state))))
+                                                             -> if {
+                                                                 dropTasks! -> len => dropFieldPath
+-                                                                "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sollang.struct.m$(dropTask.typeModule)_s$(dropTask.typeSymbol) " -> print
++                                                                "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropTask.typeModule, dropTask.typeSymbol)) " -> print
+                                                                 dropTask -> emitDropValueName(context, state)
+                                                                 ", $(dropFieldOrdinal!)" -> println
+                                                                 dropTasks! -> push(DropGlueRequest {
+@@ -2340,7 +2340,7 @@
+ 
+ emitNamedBindingOwnershipInitialization bindingIndex: Int, state: ref CoreEmitterState -> Unit uses Console {
+     bindingIndex -> namedBindingNeedsOwnershipFlag(state)
+-        -> if { "  store i1 true, ptr %v$(bindingIndex)_owned, align 1" -> println }
++        -> if { "  store i1 true, ptr %v$(bindingIndex -> valueNameId(state))_owned, align 1" -> println }
+ }
+ 
+ patternBindingNeedsOwnershipFlag bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+@@ -2373,7 +2373,7 @@
+         "  %dropg$(bindingIndex)_p0 = load " -> print
+         context.ir[bindingIndex] -> writeIrType(context, state)
+         ", ptr " -> print
+-        frameRoot -> writeAsyncLocalAddress(context)
++        frameRoot -> writeAsyncLocalAddress(context, state)
+         ", align " -> print
+         context.ir[bindingIndex] -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+     }
+@@ -2398,7 +2398,7 @@
+     }
+     context.types[typeId].kind == 4 -> if {
+         "  %patternfixed$(bindingIndex)_data = extractvalue %sollang.int_slice " -> print
+-        frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
++        frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex -> valueNameId(state))" -> print }
+         ", 0" -> println
+         typeId -> semanticTypeOwns(context, state) -> if {
+             "  %patternfixed$(bindingIndex)_elements = load " -> print
+@@ -2413,7 +2413,7 @@
+     } else {
+         context.types[typeId].kind == 12 -> if {
+             "  %patternbounded$(bindingIndex)_handle = freeze %sollang.array.i32 " -> print
+-            frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
++            frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex -> valueNameId(state))" -> print }
+             "" -> println
+             "patternbounded$(bindingIndex)" -> emitBoundedArrayValueFromHandle("%patternbounded$(bindingIndex)_handle", typeId, context, state)
+         }
+@@ -2421,7 +2421,7 @@
+         typeId -> writeSemanticTypeId(context, state)
+         " " -> print
+         context.types[typeId].kind == 12 -> if { "%patternbounded$(bindingIndex)" -> print } else {
+-            frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
++            frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex -> valueNameId(state))" -> print }
+         }
+         ")" -> println
+     }
+@@ -2868,7 +2868,7 @@
+                     -> if {
+                         dropType.kind == 1 and (dropTypeIndex! -> isOwnedSocketType(context, state))
+                             -> if {
+-                                "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
++                                "  %handle = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropType.module, dropType.symbol)) %value, 0" -> println
+                                 context.ranges[dropType.module] => socketOwnerRange
+                                 context.symbols[socketOwnerRange.symbolStart + dropType.symbol] => socketOwnerSymbol
+                                 dropType.module -> sourceTokenIs(socketOwnerSymbol.nameToken, "CompletionReactor", context, state)
+@@ -2880,12 +2880,12 @@
+                             } else {
+                                 dropType.kind == 1 and (dropTypeIndex! -> isOwnedProcessChildType(context, state))
+                                     -> if {
+-                                        "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
++                                        "  %handle = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropType.module, dropType.symbol)) %value, 0" -> println
+                                         "  call void @sollang_drop_process_child(i64 %handle)" -> println
+                                     } else {
+                                         dropType.kind == 1 and (dropTypeIndex! -> isOwnedFileType(context, state))
+                                             -> if {
+-                                                "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
++                                                "  %handle = extractvalue %sollang.struct.$(context -> emitterContext.declarationName(dropType.module, dropType.symbol)) %value, 0" -> println
+                                                 "  call void @sollang_platform_close_owned_file(i64 %handle)" -> println
+                                             } else {
+                                                 0 => dropFieldIndex!
+@@ -3074,7 +3074,7 @@
+         }
+     payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2)
+         -> if {
+-            "  %dropg$(request.nameRoot)_p0 = load %sollang.struct.m$(payloadType.module)_s$(payloadType.symbol), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
++            "  %dropg$(request.nameRoot)_p0 = load %sollang.struct.$(context -> emitterContext.declarationName(payloadType.module, payloadType.symbol)), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+             context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+             DropGlueRequest {
+                 typeId: request.payloadTypeId
+@@ -3096,11 +3096,11 @@
+ }
+ emitEnumDrop request: EnumDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     request.valueKind == 2 -> if {
+-        "  %enumdrop$(request.nameRoot)_value = load %sollang.enum.t$(request.typeId), ptr %slot$(request.valueIndex), align " -> print
++        "  %enumdrop$(request.nameRoot)_value = load %sollang.enum.t$(request.typeId), ptr %slot$(request.valueIndex -> valueNameId(state)), align " -> print
+         context.typeAligns[request.typeId] -> writeDecimalLine
+     }
+     "  call void @sollang_drop_t$(request.typeId)(%sollang.enum.t$(request.typeId) " -> print
+-    request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
++    request.valueKind == 0 -> if { "%v$(request.valueIndex -> valueNameId(state))" -> print }
+     request.valueKind == 1 -> if {
+         context.ir[request.regionIndex].parent => enumParameterOwner!
+         enumParameterOwner! >= 0 and context.ir[enumParameterOwner!].kind != 0 and context.ir[enumParameterOwner!].kind != 11
+@@ -3250,7 +3250,7 @@
+ emitBoundedArrayValue prefix: Text, valueIndex: Int, ownerIndex: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[valueIndex].kind == 5 and (valueIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state)) >= 0 => liveMutableRead
+     "  %$(prefix)_handle = freeze %sollang.array.i32 " -> print
+-    liveMutableRead -> if { "%v$(valueIndex)" -> print } else { valueIndex -> writeValue(ownerIndex, context, state) }
++    liveMutableRead -> if { "%v$(valueIndex -> valueNameId(state))" -> print } else { valueIndex -> writeValue(ownerIndex, context, state) }
+     "" -> println
+     prefix -> emitBoundedArrayValueFromHandle("%$(prefix)_handle", typeId, context, state)
+ }
+@@ -3324,7 +3324,7 @@
+ }
+ 
+ writeMemberStorageValueName nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+-    "%v$(nodeIndex)" -> print
++    "%v$(nodeIndex -> valueNameId(state))" -> print
+     (context.ir[nodeIndex] -> boundedArrayValueTypeId(context, state)) >= 0
+         -> if { "_bounded_value" -> print }
+ }
+@@ -3375,7 +3375,7 @@
+                 current.origin == 16 -> if { "%sollang.dyn" -> print } else {
+                     current.origin == 0 or current.origin == 2 -> if {
+                         typeTask -> isNominalEnumType(context, state)
+-                            -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print }
++                            -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.$(context -> emitterContext.declarationName(current.module, current.symbol))" -> print }
+                     } else {
+                         current.symbol == 0 -> if { "void" -> print }
+                         current.symbol == 1 -> if { "%sollang.text" -> print }
+@@ -3481,7 +3481,7 @@
+                                 # and is still written by writeSemanticTypeId for owner layouts.
+                                 "%sollang.int_slice" -> print
+                             } else {
+-                                typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
++                                typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeContextualType(context) }
+                             }
+                     }
+                 }

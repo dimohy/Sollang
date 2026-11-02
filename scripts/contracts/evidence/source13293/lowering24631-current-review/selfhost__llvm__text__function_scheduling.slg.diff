@@ -1,0 +1,81 @@
+--- 2329e331d1f3c793235cbc2da3f90d0f48c5b362:selfhost/llvm/text/function_scheduling.slg
++++ current:selfhost/llvm/text/function_scheduling.slg
+@@ -6,6 +6,38 @@
+ 
+ isUserBlockScope node: typedIr.TypedIrNode -> Bool {
+     node.kind == 19 and node.opcode == -227 and node.symbol != -2
++}
++
++# Consumer and per-item scopes own the cleanup target of stream transfers.
++isStreamConsumerScope node: typedIr.TypedIrNode -> Bool {
++    node.kind == 19 and node.opcode == -227 and (node.symbol == -4 or node.symbol == -5)
++}
++
++# Cancellation belongs to the nearest pipeline invocation, including nested
++# consumers. Producer and callback loops observe it after their current body.
++streamPipelineOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
++    nodeIndex => ancestor!
++    ancestor! >= 0 -> while {
++        context.ir[ancestor!] => owner
++        owner.kind == 19 and owner.opcode == -227 and owner.symbol == -4
++            -> if { ancestor! -> return }
++        owner.parent => ancestor!
++    }
++    -1
++}
++
++# Enter an owning scope before scheduling its internal input computation.
++# Inputs outside that scope still have to be ready before the scope starts.
++scopeOwnsInputDependency nodeIndex: Int, context: ref emitterContext.EmitContext -> Bool {
++    context.ir[nodeIndex] => node
++    not (node -> isUserBlockScope) or node.operand0 < 0
++        -> if { false -> return }
++    node.operand0 => ancestor!
++    ancestor! >= 0 -> while {
++        ancestor! == nodeIndex -> if { true -> return }
++        context.ir[ancestor!].parent => ancestor!
++    }
++    false
+ }
+ 
+ # Planned stream terminals own their ordered callback and junction dispatch.
+@@ -36,18 +68,7 @@
+ }
+ 
+ isUserBlockBorrowedRoleBinding index: Int, context: ref emitterContext.EmitContext -> Bool {
+-    context.ir[index] => binding
+-    binding.kind != 17 or binding.flags != 0 or binding.symbol < 0
+-        or binding.parent < 0 or binding.operand0 < 0
+-        -> if { false -> return }
+-    context.ir[binding.parent] => scope
+-    not (scope -> isUserBlockScope) or scope.symbol != -1
+-        -> if { false -> return }
+-    context.ir[binding.operand0].parent != binding.parent
+-        -> if { false -> return }
+-    context.ranges[binding.sourceModule] => range
+-    context.symbols[range.symbolStart + binding.symbol] => role
+-    role.kind == 35 and role.astNode == binding.astNode
++    index -> typedIr.isBorrowedBlockInputBinding(context.ir, context.ranges, context.symbols)
+ }
+ 
+ # Original callback children retain provenance beneath a deferred region.
+@@ -202,9 +223,9 @@
+         context.ir[roleIndex!] => role
+         (roleIndex! -> structuredParallelRoleOwner(context)) == parallelIndex
+             -> if {
+-                "  %v$(roleIndex!) = freeze " -> print
++                "  %v$(roleIndex! -> valueNameId(state)) = freeze " -> print
+                 role -> writeIrType(context, state)
+-                " %v$(parallelIndex)_item" -> println
++                " %v$(parallelIndex -> valueNameId(state))_item" -> println
+             }
+         roleIndex! + 1 => roleIndex!
+     }
+@@ -538,6 +559,7 @@
+                                 }
+                         }
+                     scheduleReady! and scheduleNode.kind != 38 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart]
++                        and not (scheduleCandidate! -> scopeOwnsInputDependency(context))
+                         -> if { false => scheduleReady! }
+                     # Assignment operand0 may be a non-emitting value wrapper.
+                     # Wait for the canonical child that the emitter reads, so a

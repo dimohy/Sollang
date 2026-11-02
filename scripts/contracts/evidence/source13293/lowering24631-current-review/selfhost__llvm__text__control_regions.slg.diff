@@ -1,0 +1,224 @@
+--- 09c720ad4a867d80ddf6896cf229924b0d29d5bc:selfhost/llvm/text/control_regions.slg
++++ current:selfhost/llvm/text/control_regions.slg
+@@ -29,15 +29,20 @@
+ import sollang.compiler.syntax as syntax
+ import syntax.generated.slg as grammar
+ import sys.file as file
++import sys.process as process
+ 
+-writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Unit uses Console {
++writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.ir[transfer.operand0] => loop
++    loop -> isStreamConsumerScope -> if {
++        "  br label %stream_scope$(transfer.operand0 -> valueNameId(state))_cleanup" -> println
++        return
++    }
+     loop.kind == 6 and (loop.opcode -> typedIr.isDirectIterationOpcode)
+         -> if {
+-            "  br label %each$(transfer.operand0)_" -> print
++            "  br label %each$(transfer.operand0 -> valueNameId(state))_" -> print
+             transfer.opcode == 1 -> if { "continue" -> println } else { "exit" -> println }
+         } else {
+-            "  br label %while$(transfer.operand0)_" -> print
++            "  br label %while$(transfer.operand0 -> valueNameId(state))_" -> print
+             transfer.opcode == 1 -> if { "header" -> println } else { "exit" -> println }
+         }
+ }
+@@ -101,6 +106,25 @@
+         regionOrder[regionOrderIndex!] => regionNodeIndex
+         context.ir[regionNodeIndex] => regionNode
+         regionEventKinds[regionOrderIndex!] => regionEventKind!
++        regionEventKind! == 1 and regionNode.kind == 30 and regionNode.astNode >= 0
++            -> if {
++                context.ranges[regionNode.sourceModule] => sourceRange
++                context.nodes[sourceRange.astStart + regionNode.astNode].kind == 62
++                    -> if { 11 => regionEventKind! }
++            }
++        regionEventKind! == 10 and not regionTerminated!
++            -> if {
++                "  store i1 false, ptr %stream_scope$(regionNodeIndex -> valueNameId(state))_cancelled, align 1" -> println
++            }
++        regionEventKind! == 11 and not regionTerminated!
++            -> if {
++                regionNodeIndex -> streamPipelineOwner(context) => pipeline
++                pipeline < 0 -> if {
++                    "; sollang compiler invariant [STREAM_STOP_SCOPE_MISSING]" -> println
++                    process.exit(1)
++                }
++                "  store i1 true, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
++            }
+         # Ordinary enclosing bodies delegate interpolation to its consumer.
+         # Once inside that canonical root, its nested regions own their events.
+         state.frozenCanonicalInterpolationRootByIr[regionNodeIndex] >= 0
+@@ -294,7 +318,7 @@
+                                                     } else {
+                                                         returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol
+                                                             and not (returnedValueIndex! -> referenceParameterValueIsMaterialized(ownerIndex!, context, state))
+-                                                            -> if { "%arg" -> print } else { "%v$(returnedValueIndex!)" -> print }
++                                                            -> if { "%arg" -> print } else { "%v$(returnedValueIndex! -> valueNameId(state))" -> print }
+                                                     }
+                                             }
+                                     }
+@@ -313,7 +337,7 @@
+                             -> if { "1" -> print } else { "0" -> print }
+                     } else {
+                         ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and guardCondition.kind == 5 and guardCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
+-                            -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
++                            -> if { "%arg" -> print } else { "%v$(regionNode.operand1 -> valueNameId(state))" -> print }
+                     }
+                     ", label %guard$(regionNodeIndex)_exit, label %guard$(regionNodeIndex)_next" -> println
+                     "guard$(regionNodeIndex)_exit:" -> println
+@@ -326,7 +350,7 @@
+                                 }
+                             context.ir[guardCleanupAncestor!].parent => guardCleanupAncestor!
+                         }
+-                    regionNode -> writeLoopTransferTarget(context)
++                    regionNode -> writeLoopTransferTarget(context, state)
+                     "guard$(regionNodeIndex)_next:" -> println
+                     false => regionTerminated!
+                 }
+@@ -341,7 +365,7 @@
+                             }
+                             context.ir[cleanupAncestor!].parent => cleanupAncestor!
+                         }
+-                    regionNode -> writeLoopTransferTarget(context)
++                    regionNode -> writeLoopTransferTarget(context, state)
+                     true => regionTerminated!
+                 }
+                 regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23
+@@ -392,10 +416,10 @@
+                 (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
+                 nestedShortCircuit -> if {
+                     WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex } -> emitWhileBranch(emissionOrder, context, state)
+-                    "while$(regionNodeIndex)_body:" -> println
+-                    regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex)
+-                    "while$(regionNodeIndex)_exit:" -> println
+-                    regionNode -> writeIfShortCircuitExitTarget(regionNodeIndex)
++                    "while$(regionNodeIndex -> valueNameId(state))_body:" -> println
++                    regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex, state)
++                    "while$(regionNodeIndex -> valueNameId(state))_exit:" -> println
++                    regionNode -> writeIfShortCircuitExitTarget(regionNodeIndex, state)
+                 } else {
+                     "  br i1 " -> print
+                     nestedCondition.kind == 4 -> if {
+@@ -404,11 +428,11 @@
+                             -> if { "1" -> print } else { "0" -> print }
+                     } else {
+                         ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
+-                            -> if { "%arg" -> print } else { "%v$nestedConditionIndex" -> print }
+-                    }
+-                    regionNode -> writeIfDirectBranchTargets(regionNodeIndex)
+-                }
+-                "if$(regionNodeIndex)_then:" -> println
++                            -> if { "%arg" -> print } else { "%v$(nestedConditionIndex -> valueNameId(state))" -> print }
++                    }
++                    regionNode -> writeIfDirectBranchTargets(regionNodeIndex, state)
++                }
++                "if$(regionNodeIndex -> valueNameId(state))_then:" -> println
+                 false => regionTerminated!
+             }
+         }
+@@ -424,10 +448,10 @@
+                                 regionNode -> emitIfResultStore(nestedThenStoreIndex, ownerIndex!, regionNodeIndex, 0, context, state)
+                             }
+                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+-                        "  br label %if$(regionNodeIndex)_merge" -> println
++                        "  br label %if$(regionNodeIndex -> valueNameId(state))_merge" -> println
+                         true => ifThenReachesMerge[regionNodeIndex - regionLocalStart]
+                     }
+-                    "if$(regionNodeIndex)_else:" -> println
++                    "if$(regionNodeIndex -> valueNameId(state))_else:" -> println
+                     false => regionTerminated!
+                 }
+         }
+@@ -448,34 +472,44 @@
+                         } else {
+                             OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                         }
+-                        "  br label %if$(regionNodeIndex)_merge" -> println
++                        "  br label %if$(regionNodeIndex -> valueNameId(state))_merge" -> println
+                         true => ifThenReachesMerge[regionNodeIndex - regionLocalStart]
+                     }
+                     ifThenReachesMerge[regionNodeIndex - regionLocalStart]
+                         -> if {
+-                            "if$(regionNodeIndex)_merge:" -> println
++                            "if$(regionNodeIndex -> valueNameId(state))_merge:" -> println
+                             false => regionTerminated!
+                             false => nestedMergeValueUsed!
+                             regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedMergeValueUsed!
+                             nestedMergeValueUsed! and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0
+                                 -> if {
+-                                    "  %v$(regionNodeIndex) = load " -> print
++                                    "  %v$(regionNodeIndex -> valueNameId(state)) = load " -> print
+                                     regionNode -> writeIrType(context, state)
+-                                    ", ptr %if$(regionNodeIndex)_result, align " -> print
++                                    ", ptr %if$(regionNodeIndex -> valueNameId(state))_result, align " -> print
+                                     regionNode -> storageAlign(context, state) -> writeDecimalLine
+                                 }
+                         }
+                 }
+         }
+-        regionEventKind! == 9 and not regionTerminated!
+-            -> if {
++        regionEventKind! == 9 -> if {
++            regionNode -> isStreamConsumerScope -> if {
++                not regionTerminated! -> if {
++                    "  br label %stream_scope$(regionNodeIndex -> valueNameId(state))_cleanup" -> println
++                }
++                "stream_scope$(regionNodeIndex -> valueNameId(state))_cleanup:" -> println
+                 OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+-            }
++                false => regionTerminated!
++            } else {
++                not regionTerminated! -> if {
++                    OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
++                }
++            }
++        }
+         regionEventKind! == 6 -> if {
+             not regionTerminated! -> if {
+                 true => loopActive[regionNodeIndex - regionLocalStart]
+-                "  br label %while$(regionNodeIndex)_header" -> println
+-                "while$(regionNodeIndex)_header:" -> println
++                "  br label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
++                "while$(regionNodeIndex -> valueNameId(state))_header:" -> println
+                 false => regionTerminated!
+             }
+         }
+@@ -483,7 +517,7 @@
+             loopActive[regionNodeIndex - regionLocalStart]
+                 -> if {
+                     WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
+-                    "while$(regionNodeIndex)_body:" -> println
++                    "while$(regionNodeIndex -> valueNameId(state))_body:" -> println
+                     false => regionTerminated!
+                 }
+         }
+@@ -492,9 +526,15 @@
+                 -> if {
+                     not regionTerminated! -> if {
+                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+-                        "  br label %while$(regionNodeIndex)_header" -> println
+-                    }
+-                    "while$(regionNodeIndex)_exit:" -> println
++                        regionNodeIndex -> streamPipelineOwner(context) => pipeline
++                        pipeline >= 0 -> if {
++                            "  %while$(regionNodeIndex -> valueNameId(state))_stream_cancelled = load i1, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
++                            "  br i1 %while$(regionNodeIndex -> valueNameId(state))_stream_cancelled, label %while$(regionNodeIndex -> valueNameId(state))_exit, label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
++                        } else {
++                            "  br label %while$(regionNodeIndex -> valueNameId(state))_header" -> println
++                        }
++                    }
++                    "while$(regionNodeIndex -> valueNameId(state))_exit:" -> println
+                     false => regionTerminated!
+                 }
+         }
+@@ -517,7 +557,7 @@
+                 }
+             }
+             nextInside! -> if { false => closeEach! } else {
+-                eachIndex -> emitDirectEachEnd(regionTerminated!, context)
++                eachIndex -> emitDirectEachEnd(regionTerminated!, context, state)
+                 eachIndex -> emitStorageLifetimeEndsAfter(false, context)
+                 false => regionTerminated!
+                 activeEachSize! - 1 => activeEachSize!

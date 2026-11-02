@@ -1,0 +1,154 @@
+--- 5e66803356eed8804d4d960020a3b40bd06eaa1e:src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs
++++ current:src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs
+@@ -387,49 +387,60 @@
+         EmitLabel(endLabel);
+         _currentBlockLabel = endLabel;
+ 
+-        var incomingScopes = new List<(LocalScope Scope, string Label)>();
+-        if (!thenTerminated)
+-        {
+-            incomingScopes.Add((thenResult.ExitScope, thenEndLabel));
+-        }
+-        if (expression.Else is null)
+-        {
+-            incomingScopes.Add((entryScope, conditionLabel));
+-            continuationEdges.Add((continuationScopes.Select(item => item.Entry).ToArray(), conditionLabel));
+-        }
+-        else if (!elseTerminated)
+-        {
+-            incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
+-        }
+-        if (HasCurrentFunctionAsyncCfg() || continuationScopes.Count > 0)
+-        {
+-            MergeAsyncOuterScope(entryScope, incomingScopes);
+-        }
+-        else
+-        {
+-            MergeSynchronousOuterScope(entryScope, incomingScopes);
+-        }
+-        MergeAsyncContinuationScopes(continuationScopes, continuationEdges, entryScope, incomingScopes);
+-
+-        if (expression.Else is null)
+-        {
+-            return RuntimeUnit.Instance;
+-        }
+-
+-        if (thenTerminated)
+-        {
+-            return elseResult?.Value ?? RuntimeUnit.Instance;
+-        }
+-        if (elseTerminated)
+-        {
+-            return thenResult.Value ?? RuntimeUnit.Instance;
+-        }
+-        if (thenResult.Value is null || elseResult?.Value is null)
+-        {
+-            return RuntimeUnit.Instance;
+-        }
+-
+-        return EmitPhiValue("if", thenResult.Value, thenEndLabel, elseResult.Value, elseResult.EndLabel);
++        // Scope cleanup can emit lifetime markers or ownership stores. Keep
++        // every join PHI in the existing leading insertion point.
++        var previousJoinPhis = _scopeJoinPhis;
++        _scopeJoinPhis = (_activeFunctions, endLabel, _activeFunctions.CreateInsertionPoint());
++        try
++        {
++            var incomingScopes = new List<(LocalScope Scope, string Label)>();
++            if (!thenTerminated)
++            {
++                incomingScopes.Add((thenResult.ExitScope, thenEndLabel));
++            }
++            if (expression.Else is null)
++            {
++                incomingScopes.Add((entryScope, conditionLabel));
++                continuationEdges.Add((continuationScopes.Select(item => item.Entry).ToArray(), conditionLabel));
++            }
++            else if (!elseTerminated)
++            {
++                incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
++            }
++            if (HasCurrentFunctionAsyncCfg() || continuationScopes.Count > 0)
++            {
++                MergeAsyncOuterScope(entryScope, incomingScopes);
++            }
++            else
++            {
++                MergeSynchronousOuterScope(entryScope, incomingScopes);
++            }
++            MergeAsyncContinuationScopes(continuationScopes, continuationEdges, entryScope, incomingScopes);
++
++            if (expression.Else is null)
++            {
++                return RuntimeUnit.Instance;
++            }
++
++            if (thenTerminated)
++            {
++                return elseResult?.Value ?? RuntimeUnit.Instance;
++            }
++            if (elseTerminated)
++            {
++                return thenResult.Value ?? RuntimeUnit.Instance;
++            }
++            if (thenResult.Value is null || elseResult?.Value is null)
++            {
++                return RuntimeUnit.Instance;
++            }
++
++            return EmitPhiValue("if", thenResult.Value, thenEndLabel, elseResult.Value, elseResult.EndLabel);
++        }
++        finally
++        {
++            _scopeJoinPhis = previousJoinPhis;
++        }
+     }
+ 
+     private RuntimeValue EmitWhenExpression(WhenExpression expression, BoundType? expectedResultType = null)
+@@ -505,21 +516,32 @@
+         EmitLabel(endLabel);
+         _currentBlockLabel = endLabel;
+ 
+-        if (HasCurrentFunctionAsyncCfg())
+-        {
+-            MergeAsyncOuterScope(entryScope, scopeResults);
+-        }
+-        else
+-        {
+-            MergeSynchronousOuterScope(entryScope, scopeResults);
+-        }
+-
+-        if (valueResults.Count == 0)
+-        {
+-            return RuntimeUnit.Instance;
+-        }
+-
+-        return EmitPhiValue("when", valueResults);
++        // Scope cleanup can emit lifetime markers or ownership stores. Keep
++        // every join PHI in the existing leading insertion point.
++        var previousJoinPhis = _scopeJoinPhis;
++        _scopeJoinPhis = (_activeFunctions, endLabel, _activeFunctions.CreateInsertionPoint());
++        try
++        {
++            if (HasCurrentFunctionAsyncCfg())
++            {
++                MergeAsyncOuterScope(entryScope, scopeResults);
++            }
++            else
++            {
++                MergeSynchronousOuterScope(entryScope, scopeResults);
++            }
++
++            if (valueResults.Count == 0)
++            {
++                return RuntimeUnit.Instance;
++            }
++
++            return EmitPhiValue("when", valueResults);
++        }
++        finally
++        {
++            _scopeJoinPhis = previousJoinPhis;
++        }
+     }
+ 
+     private static bool IsSubjectWhenCondition(Expression condition)

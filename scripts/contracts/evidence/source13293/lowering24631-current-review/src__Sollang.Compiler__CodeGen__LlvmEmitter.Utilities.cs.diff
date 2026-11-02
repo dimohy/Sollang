@@ -1,0 +1,117 @@
+--- e96e137f3be40f244f8593ee0d5032fe57ddbcc5:src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs
++++ current:src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs
+@@ -176,8 +176,21 @@
+         var adjustedLoopContext = false;
+         if (invocation.OwnsItem && _loopContexts.TryPeek(out var activeLoop))
+         {
+-            _loopContexts.Push(activeLoop with { OuterScope = callbackOuterLocals });
++            var callbackLoop = activeLoop with { OuterScope = callbackOuterLocals };
++            _loopContexts.Push(callbackLoop);
+             adjustedLoopContext = true;
++            if (activeLoop.StreamSourceCallerDepth >= 0)
++            {
++                var sourceCallers = _streamProducerCallers
++                    .Take(_streamProducerCallers.Count - activeLoop.StreamSourceCallerDepth);
++                callbackBoundary = new RuntimeCallbackLoopBoundary(
++                    new RuntimeCallbackLoopAuthority(
++                        [callbackLoop], invocation.LoopAuthority?.HiddenScopes ?? []),
++                    blockFunctionLocals,
++                    producerSnapshots.Concat(sourceCallers).ToArray(),
++                    invocation.CallerLocals, invocation.CallerAsyncScopes ?? []);
++                _callbackLoopBoundaries.Push(callbackBoundary);
++            }
+         }
+         RuntimeValue result = RuntimeUnit.Instance;
+         if (preserveProducer)
+@@ -226,8 +239,11 @@
+             {
+                 if (!ReferenceEquals(_callbackLoopBoundaries.Pop(), callbackBoundary))
+                     throw new SollangException("block callback lexical boundary stack diverged");
+-                _loopContexts.Clear();
+-                foreach (var loop in producerLoops.Reverse()) _loopContexts.Push(loop);
++                if (!invocation.OwnsItem)
++                {
++                    _loopContexts.Clear();
++                    foreach (var loop in producerLoops.Reverse()) _loopContexts.Push(loop);
++                }
+             }
+             if (preserveProducer)
+             {
+@@ -338,6 +354,7 @@
+             _asyncScopeSnapshots.Clear();
+             _asyncScopeSnapshots.Push(stage.StateLocals);
+         }
++        _streamProducerCallers.Push(returnLocals);
+         try
+         {
+             RestoreLocals(stage.StateLocals);
+@@ -379,6 +396,7 @@
+         }
+         finally
+         {
++            _streamProducerCallers.Pop();
+             if (preserveCaller)
+             {
+                 _asyncHiddenScopes.Pop();
+@@ -648,6 +666,10 @@
+     {
+         foreach (var (name, storedValue) in _locals.Reverse())
+         {
++            // Match payload locals are views. Their obligations below own
++            // cleanup, including the siblings of a projected return value.
++            if (_borrowedOwnedLocals.Contains(name))
++                continue;
+             if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
+             {
+                 if (TryDropTransferredOwnerSiblings(name, storedValue, transferredExpression))
+@@ -751,6 +773,22 @@
+             && obligation.Value is RuntimeStruct projectedOwner)
+         {
+             DropOwnedStructFieldsExcept(projectedOwner, excludedField);
++            return;
++        }
++        // Early return/break/continue must honor the same projected transfers
++        // as an arm's ordinary exit. The payload's retained flag alone only
++        // distinguishes a whole move; sibling fields still need cleanup.
++        if (obligation.BindingName is { } bindingName
++            && obligation.Value is RuntimeStruct payload
++            && _movedOwnedStructFields.TryGetValue(bindingName, out var movedFields)
++            && movedFields.Count > 0)
++        {
++            var transferredPaths = movedFields.Select(static path =>
++                (IReadOnlyList<string>)path.Split('.')).ToArray();
++            if (obligation.RetainedFlag is { } payloadRetainedFlag)
++                DropOwnedStructFieldsExceptTransferredIfRetained(payloadRetainedFlag, payload, transferredPaths);
++            else
++                DropOwnedStructFieldsExceptTransferred(payload, transferredPaths);
+             return;
+         }
+         if (obligation.RetainedFlag is { } retainedFlag)
+@@ -2121,7 +2159,9 @@
+         LocalScope OuterScope,
+         List<(LocalScope Scope, string Label)>? ContinueEdges,
+         List<(LocalScope Scope, string Label)>? BreakEdges,
+-        Action<LoopControlKind, string>? CaptureContinuationEdge = null);
++        Action<LoopControlKind, string>? CaptureContinuationEdge = null,
++        int StreamSourceCallerDepth = -1,
++        LocalScope? StreamSourceSurvivor = null);
+ 
+     private sealed record RuntimeBlockInvocation(
+         string ItemName,
+@@ -2154,6 +2194,7 @@
+         IReadOnlyList<LocalScope> CallerSnapshots);
+ 
+     private readonly Stack<RuntimeCallbackLoopBoundary> _callbackLoopBoundaries = new();
++    private readonly Stack<LocalScope> _streamProducerCallers = new();
+ 
+     private RuntimeCallbackLoopAuthority CaptureCallbackLoopAuthority() =>
+         new(_loopContexts.ToArray(), _asyncHiddenScopes.ToArray());
+@@ -2173,7 +2214,7 @@
+                 .Where(hidden => !retainedHidden.Any(retained => ReferenceEquals(retained, hidden)))
+                 .SelectMany(hidden => new[] { hidden.Scope }.Concat(hidden.Mirrors)))
+             .Distinct<LocalScope>(ReferenceEqualityComparer.Instance).ToArray();
+-        var survivor = target.OuterScope;
++        var survivor = target.StreamSourceSurvivor ?? target.OuterScope;
+         var dropped = new List<(LocalScope Scope, string Name)>();
+         var obligations = new List<TerminatingOwnedCleanupObligation>();
+         try
