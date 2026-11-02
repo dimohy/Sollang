@@ -1550,8 +1550,47 @@ firstPreparedValueLayoutDiagnostic prepared: ref semanticContext.SemanticSnapsho
     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
 }
 
+# A typed-empty array owns the location of its element type lookup. Ordinary
+# qualified value paths retain their own location and existing admission.
+typedEmptyArrayPathOwner package: ref analysis.PackageAnalysis, sourceModule: Int, pathAst: Int -> Int {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + pathAst] => path
+    path.kind != 16 -> if { -1 -> return }
+    path.parent => owner!
+    owner! >= 0 and package.nodes[range.astStart + owner!].kind == 12
+        -> while {
+            package.nodes[range.astStart + owner!].parent => owner!
+        }
+    owner! >= 0 and package.nodes[range.astStart + owner!].kind == 37
+        -> if { owner! } else { -1 }
+}
+
 firstPreparedPrivateNominalDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
     prepared.qualified -> each candidate {
+        candidate.status == 2 and candidate.sourceModule >= 0 and candidate.sourceModule < (prepared.package.ranges -> len)
+            and candidate.targetModule >= 0 and candidate.targetModule < (prepared.modules -> len)
+            and candidate.pathAst >= 0 and candidate.pathAst < prepared.package.ranges[candidate.sourceModule].astCount
+            -> if {
+                prepared.package.ranges[candidate.sourceModule] => range
+                prepared.package -> typedEmptyArrayPathOwner(candidate.sourceModule, candidate.pathAst) => literal
+                literal >= 0 -> if {
+                    false => dependent!
+                    0 => symbolIndex!
+                    symbolIndex! < range.symbolCount and not dependent!
+                        -> while {
+                            prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
+                            (symbol.kind == 7 or symbol.kind == 31) and symbol.astNode >= 0
+                                and (prepared.package -> semanticContext.declarationAncestor(candidate.sourceModule, symbol.astNode, candidate.pathAst))
+                                and (prepared.package -> signatureTypeReferencesGeneric(candidate.sourceModule, symbolIndex!, candidate.pathAst, 0))
+                                -> if { true => dependent! }
+                            symbolIndex! + 1 => symbolIndex!
+                        }
+                    not dependent! -> if {
+                        prepared.package.nodes[range.astStart + literal] => array
+                        SignatureTypeDiagnostic { code: 21, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: array.firstToken, genericToken: -1 } -> return
+                    }
+                }
+            }
         candidate.status == 3 and candidate.sourceModule >= 0
             and candidate.sourceModule < (prepared.package.ranges -> len)
             and candidate.targetModule >= 0 and candidate.targetModule < (prepared.modules -> len)
@@ -1570,7 +1609,10 @@ firstPreparedPrivateNominalDiagnostic prepared: ref semanticContext.SemanticSnap
                                         prepared.package.nodes[range.astStart + candidate.pathAst] => path
                                         path.firstToken >= 0 and path.firstToken < range.tokenCount
                                             -> if {
-                                                SignatureTypeDiagnostic { code: 14, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: path.firstToken, genericToken: -1 } -> return
+                                                path.firstToken => locationToken!
+                                                prepared.package -> typedEmptyArrayPathOwner(candidate.sourceModule, candidate.pathAst) => literal
+                                                literal >= 0 -> if { prepared.package.nodes[range.astStart + literal].firstToken => locationToken! }
+                                                SignatureTypeDiagnostic { code: 14, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: locationToken!, genericToken: -1 } -> return
                                             }
                                     }
                             }

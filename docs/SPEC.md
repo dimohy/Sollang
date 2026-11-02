@@ -4173,6 +4173,10 @@ Container rules:
 - Typed empty arrays and dictionaries without capacity hints begin with a null
   pointer and zero capacity. Their first mutation allocates initial storage;
   readonly use of the empty value performs no heap allocation.
+  A qualified element type in a typed empty array follows ordinary full-name
+  type resolution and visibility rules. A missing or inaccessible qualified
+  type is diagnosed at the array literal; a same-named local or builtin type
+  cannot replace it.
 - `[T; N~]` is a typed empty growable array with `len == 0` and
   `capacity == N`; its payload allocation is performed once at construction.
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys

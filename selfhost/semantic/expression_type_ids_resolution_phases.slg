@@ -1018,6 +1018,35 @@ indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: re
     InitialTypeReferenceIndex { firstByAst: first!, references: indexedReferences!, next: next!, firstPathByArrayAst: firstPath! }
 }
 
+# Qualified type spellings retain their prepared declaration identity, just as
+# C# ParseType resolves the full name before interning an array element.
+initialQualifiedArrayElementType prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], sourceModule: Int, pathAst: Int, sourceTextModule: Int, sourceTextSymbol: Int -> Int {
+    pathAst < 0 -> if { -1 -> return }
+    -1 => qualifiedIndex!
+    0 => search!
+    search! < (prepared.qualified -> len) -> while {
+        prepared.qualified[search!] => candidate
+        candidate.sourceModule == sourceModule and candidate.status == 0
+            and (candidate.pathAst == pathAst or (prepared.package -> semanticContext.declarationAncestor(sourceModule, pathAst, candidate.pathAst)))
+            -> if { search! => qualifiedIndex! }
+        search! + 1 => search!
+    }
+    qualifiedIndex! < 0 -> if { -1 -> return }
+    prepared.qualified[qualifiedIndex!] => qualifiedType
+    -1 => elementType!
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => candidate
+        candidate.kind == 1 and qualifiedType.targetModule == sourceTextModule and qualifiedType.targetSymbol == sourceTextSymbol
+            and candidate.origin == 1 and candidate.symbol == 24
+            -> if { typeIndex! => elementType! }
+        candidate.kind == 1 and candidate.module == qualifiedType.targetModule and candidate.symbol == qualifiedType.targetSymbol
+            -> if { typeIndex! => elementType! }
+        typeIndex! + 1 => typeIndex!
+    }
+    elementType!
+}
+
 resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], controlOwnerByAst: ref [Bool; ~], sourceTextModule: Int, sourceTextSymbol: Int, seededOwners: ref [Bool; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
     prepared.package -> semanticContext.indexBindingValueAsts => bindingValueAsts
     prepared.package -> indexContextualRecords => syntaxChildren
@@ -1142,7 +1171,20 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                         }
                     builtinTypeId! < 0 -> if {
                         sourceReferences.firstPathByArrayAst[sourceRange.astStart + astIndex!] => typedArrayPathAst
-                        -1 => typedArrayElementType!
+                        false => typedArrayQualifiedSyntax!
+                        typedArrayPathAst >= 0 -> if {
+                            prepared.package.nodes[sourceRange.astStart + typedArrayPathAst] => typePath
+                            typePath.firstToken => pathToken!
+                            pathToken! < typePath.firstToken + typePath.tokenCount
+                                -> while {
+                                    prepared.package.tokens[sourceRange.tokenStart + pathToken!].kind == grammar.tokenIdDot()
+                                        -> if { true => typedArrayQualifiedSyntax! }
+                                    pathToken! + 1 => pathToken!
+                                }
+                        }
+                        typedArrayQualifiedSyntax! -> if {
+                            prepared -> initialQualifiedArrayElementType(types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol)
+                        } else { -1 } => typedArrayElementType!
                         -1 => typedArrayNameToken!
                         false => typedArrayBounded!
                         -1 => typedArrayCapacity!
@@ -1169,59 +1211,60 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                     -> if { typedArrayTokenIndex! => typedArrayNameToken! }
                                 typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
                             }
-                        typedArrayNameToken! >= 0 -> if {
-                            prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Unit" } -> textMatches
-                                -> if { 0 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches
-                                -> if { 1 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int" } -> textMatches
-                                -> if { 2 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt8" } -> textMatches
-                                -> if { 8 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt16" } -> textMatches
-                                -> if { 9 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt32" } -> textMatches
-                                -> if { 10 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt64" } -> textMatches
-                                -> if { 11 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Long" } -> textMatches
-                                -> if { 7 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int8" } -> textMatches
-                                -> if { 3 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int16" } -> textMatches
-                                -> if { 4 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int32" } -> textMatches
-                                -> if { 5 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int64" } -> textMatches
-                                -> if { 6 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Size" } -> textMatches
-                                -> if { 12 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UIntSize" } -> textMatches
-                                -> if { 13 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "CodePoint" } -> textMatches
-                                -> if { 14 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arena" } -> textMatches
-                                -> if { 15 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arguments" } -> textMatches
-                                -> if { 16 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MappedBytes" } -> textMatches
-                                -> if { 17 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MutableMappedBytes" } -> textMatches
-                                -> if { 18 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float" } -> textMatches
-                                -> if { 19 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float32" } -> textMatches
-                                -> if { 20 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float64" } -> textMatches
-                                -> if { 21 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Double" } -> textMatches
-                                -> if { 22 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Bool" } -> textMatches
-                                -> if { 23 => typedArrayElementType! }
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "SourceText" } -> textMatches
-                                -> if { 24 => typedArrayElementType! }
-                        }
+                        typedArrayNameToken! >= 0 and not typedArrayQualifiedSyntax!
+                            -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Unit" } -> textMatches
+                                    -> if { 0 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches
+                                    -> if { 1 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int" } -> textMatches
+                                    -> if { 2 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt8" } -> textMatches
+                                    -> if { 8 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt16" } -> textMatches
+                                    -> if { 9 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt32" } -> textMatches
+                                    -> if { 10 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt64" } -> textMatches
+                                    -> if { 11 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Long" } -> textMatches
+                                    -> if { 7 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int8" } -> textMatches
+                                    -> if { 3 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int16" } -> textMatches
+                                    -> if { 4 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int32" } -> textMatches
+                                    -> if { 5 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int64" } -> textMatches
+                                    -> if { 6 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Size" } -> textMatches
+                                    -> if { 12 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UIntSize" } -> textMatches
+                                    -> if { 13 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "CodePoint" } -> textMatches
+                                    -> if { 14 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arena" } -> textMatches
+                                    -> if { 15 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arguments" } -> textMatches
+                                    -> if { 16 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MappedBytes" } -> textMatches
+                                    -> if { 17 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MutableMappedBytes" } -> textMatches
+                                    -> if { 18 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float" } -> textMatches
+                                    -> if { 19 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float32" } -> textMatches
+                                    -> if { 20 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float64" } -> textMatches
+                                    -> if { 21 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Double" } -> textMatches
+                                    -> if { 22 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Bool" } -> textMatches
+                                    -> if { 23 => typedArrayElementType! }
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "SourceText" } -> textMatches
+                                    -> if { 24 => typedArrayElementType! }
+                            }
                         typedArrayElementType! >= 0 -> if {
                             typedArrayElementType! -> typeIds.canonicalBuiltinSymbol => typedArrayElementType!
                         }
@@ -1229,7 +1272,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                         # imported qualified paths. Without this, `[LocalTask; ~]`
                         # leaves the array untyped and later member projections see
                         # the element name as a standalone nominal expression.
-                        typedArrayElementType! < 0 and typedArrayNameToken! >= 0
+                        typedArrayElementType! < 0 and typedArrayNameToken! >= 0 and not typedArrayQualifiedSyntax!
                             -> if {
                                 prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => localArrayElementName
                                 -1 => localArrayElementSymbol!
@@ -1306,29 +1349,10 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                         }
                                 }
                             }
-                        typedArrayElementType! < 0 -> if {
-                            -1 => typedArrayQualifiedIndex!
-                            0 => typedArrayQualifiedSearch!
-                            typedArrayQualifiedSearch! < (prepared.qualified -> len)
-                                -> while {
-                                    prepared.qualified[typedArrayQualifiedSearch!] => typedArrayQualifiedCandidate
-                                    typedArrayQualifiedCandidate.sourceModule == sourceIndex! and typedArrayQualifiedCandidate.pathAst == typedArrayPathAst and typedArrayQualifiedCandidate.status == 0
-                                        -> if { typedArrayQualifiedSearch! => typedArrayQualifiedIndex! }
-                                    typedArrayQualifiedSearch! + 1 => typedArrayQualifiedSearch!
-                                }
-                            typedArrayQualifiedIndex! >= 0 -> if {
-                                prepared.qualified[typedArrayQualifiedIndex!] => typedArrayQualified
-                                0 => typedArrayElementSearch!
-                                typedArrayElementSearch! < (types -> len) -> while {
-                                    types[typedArrayElementSearch!] => typedArrayElementCandidate
-                                    typedArrayElementCandidate.kind == 1 and typedArrayQualified.targetModule == sourceTextModule and typedArrayQualified.targetSymbol == sourceTextSymbol and typedArrayElementCandidate.origin == 1 and typedArrayElementCandidate.symbol == 24
-                                        -> if { typedArrayElementSearch! => typedArrayElementType! }
-                                    typedArrayElementCandidate.kind == 1 and typedArrayElementCandidate.module == typedArrayQualified.targetModule and typedArrayElementCandidate.symbol == typedArrayQualified.targetSymbol
-                                        -> if { typedArrayElementSearch! => typedArrayElementType! }
-                                    typedArrayElementSearch! + 1 => typedArrayElementSearch!
-                                }
+                        typedArrayElementType! < 0 and not typedArrayQualifiedSyntax!
+                            -> if {
+                                prepared -> initialQualifiedArrayElementType(types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol) => typedArrayElementType!
                             }
-                        }
                         typedArrayElementType! >= 0 -> if {
                             3 => typedArrayKind!
                             -1 => typedArrayLength!

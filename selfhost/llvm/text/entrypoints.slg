@@ -743,13 +743,43 @@ emitSignatureRejection rejection: ref SignatureRejection, paths: [Text; ~] -> Un
         source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
         "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] unknown type '" -> print
         rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
-        source -> diagnostics.emitDeclaredTypeSpelling(rejection.prepared.package.tokens, range.tokenStart, annotation)
+        false => expanded!
+        annotation.parent => typeOwner!
+        typeOwner! >= 0 and rejection.prepared.package.nodes[range.astStart + typeOwner!].kind == 12
+            -> while {
+                rejection.prepared.package.nodes[range.astStart + typeOwner!].parent => typeOwner!
+            }
+        typeOwner! >= 0 and rejection.prepared.package.nodes[range.astStart + typeOwner!].kind == 37
+            -> if {
+                rejection.prepared.qualified -> each candidate {
+                    not expanded! and candidate.sourceModule == diagnostic.sourceModule and candidate.pathAst == diagnostic.typeAst
+                        and candidate.targetModule >= 0 and candidate.targetModule < (rejection.prepared.modules -> len)
+                        -> if {
+                            rejection.prepared.modules[candidate.targetModule] => owner
+                            owner.pathLength > 0 -> if {
+                                rejection.prepared.package.sources[owner.sourceIndex] -> slice(owner.pathStart, owner.pathLength) -> print
+                                "." -> print
+                            }
+                            annotation.firstToken => finalName!
+                            annotation.firstToken => tokenIndex!
+                            tokenIndex! < annotation.firstToken + annotation.tokenCount
+                                -> while {
+                                    rejection.prepared.package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
+                                        -> if { tokenIndex! => finalName! }
+                                    tokenIndex! + 1 => tokenIndex!
+                                }
+                            rejection.prepared.package.tokens[range.tokenStart + finalName!] => finalToken
+                            source -> slice(finalToken.span.start, finalToken.span.length) -> print
+                            true => expanded!
+                        }
+                }
+            }
+        not expanded! -> if { source -> diagnostics.emitDeclaredTypeSpelling(rejection.prepared.package.tokens, range.tokenStart, annotation) }
         "'" -> println
         return
     }
     diagnostic.code == 14 -> if {
-        rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
-        source -> syntaxDiagnostics.sourceLocation(annotation.start) => location
+        source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
         rejection.prepared.qualified -> each candidate {
             candidate.sourceModule == diagnostic.sourceModule and candidate.pathAst == diagnostic.typeAst
                 and candidate.status == 3
