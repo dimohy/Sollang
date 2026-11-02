@@ -14,6 +14,37 @@ hasKind value: ref path.Path, expected: kinds.Kind -> Bool uses File {
 
 public fileExists value: ref path.Path -> Bool uses File => value -> hasKind(kinds.Kind.File)
 
+# ProjectManifest.FindFrom and WorkspaceManifest.FindFrom share the same
+# nearest-ancestor search; absence is distinct from a path-resolution failure.
+public findFrom directory: Text, fileName: Text, style: path.Style, diagnosticStorage: mut Arena -> Result<Option<path.Path>, Text> uses File {
+    directory -> path.fromText(style) -> absolute -> when {
+        Ok(value) { value }
+        Err(error) { error -> materialize(diagnosticStorage) -> Result<Option<path.Path>, Text>.Err -> return }
+    } => root
+    root -> pathText => rootText
+    rootText -> len => directoryLength!
+    fileName -> path.fromText(style) => entry
+    ".." -> path.fromText(style) => parentName
+    true -> while {
+        rootText -> slice(0, directoryLength!) -> path.fromText(style) => current
+        current -> joinDiscovered(entry) => candidate
+        candidate -> fileExists -> if {
+            Option<path.Path>.Some(candidate) -> Result<Option<path.Path>, Text>.Ok -> return
+        }
+        current -> joinDiscovered(parentName) -> absolute -> when {
+            Ok(value) { value }
+            Err(error) { error -> materialize(diagnosticStorage) -> Result<Option<path.Path>, Text>.Err -> return }
+        } => parent
+        parent -> pathText => parentText
+        parentText == (current -> pathText)
+            -> if {
+                Result<Option<path.Path>, Text>.Ok(Option<path.Path>.None) -> return
+            }
+        parentText -> len => directoryLength!
+    }
+    Result<Option<path.Path>, Text>.Ok(Option<path.Path>.None)
+}
+
 # Only a real directory selects the default manifest filename. Native lexical
 # absolute resolution also works for nonexistent paths and keeps their names.
 public resolve option: Text, fileName: Text, style: path.Style -> Result<path.Path, Text> uses File {

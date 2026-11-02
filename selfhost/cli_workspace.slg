@@ -231,6 +231,14 @@ memberSelectionDiagnostic bytes: ref [UInt8; ~], names: [project.TextSpan; ~], o
 # Status: 0 valid, 1 invalid workspace, 2 requested package missing,
 # 3 package selection required.
 public load option: Text, requestedPackage: Text, manifestStorage: mut Arena, projectStorage: mut Arena -> WorkspaceInput uses File {
+    option -> loadCore(requestedPackage, true, manifestStorage, projectStorage)
+}
+
+public loadForResolution option: Text, manifestStorage: mut Arena, projectStorage: mut Arena -> WorkspaceInput uses File {
+    option -> loadCore("", false, manifestStorage, projectStorage)
+}
+
+loadCore option: Text, requestedPackage: Text, requireSelection: Bool, manifestStorage: mut Arena, projectStorage: mut Arena -> WorkspaceInput uses File {
     option -> manifestEntry.resolve("sollang.workspace", path.nativeStyle()) -> when {
         Err(error) {
             "workspace manifest path invalid: $error" -> materialize(projectStorage) => message
@@ -332,10 +340,11 @@ public load option: Text, requestedPackage: Text, manifestStorage: mut Arena, pr
                     2 -> emptyInput(message) -> return
                 }
             } else {
-                (memberPaths! -> len) == 1 -> if { orderedMembers[0] => selectedIndex! } else {
-                    memberNameBytes! -> memberSelectionDiagnostic(memberNames!, orderedMembers, "", true, projectStorage) => message
-                    3 -> emptyInput(message) -> return
-                }
+                not requireSelection or (memberPaths! -> len) == 1
+                    -> if { orderedMembers[0] => selectedIndex! } else {
+                        memberNameBytes! -> memberSelectionDiagnostic(memberNames!, orderedMembers, "", true, projectStorage) => message
+                        3 -> emptyInput(message) -> return
+                    }
             }
             memberPaths![selectedIndex!] -> pathText -> materialize(projectStorage) => projectOption
             WorkspaceInput { status: 0, diagnostic: "", projectOption: projectOption, sourceDirectory: directory, memberManifests: memberPaths!, memberOrder: orderedMembers } => result

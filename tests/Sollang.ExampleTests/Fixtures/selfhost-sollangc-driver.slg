@@ -16,6 +16,7 @@ import sollang.compiler.semantic.module_cache_io as moduleCacheIo
 import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.cli_project as cliProject
+import sollang.compiler.manifest_entry as manifestEntry
 import sollang.compiler.cli_package_lock as cliLock
 import sollang.compiler.cli_workspace as cliWorkspace
 import sollang.compiler.cli_sources as cliSources
@@ -1769,59 +1770,112 @@ runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectI
 
 runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
     process.arguments() => arguments
-    arguments -> len => argumentCount
     "" => projectOption!
-    "" => invalidOption!
-    0 => status!
+    "" => workspaceOption!
+    false => hasProject!
+    false => hasWorkspace!
     UIntSize(2) => index!
-    index! < argumentCount -> while {
-        arguments[index!] -> textEquals("--project")
+    index! < (arguments -> len) -> while {
+        arguments[index!] => argument
+        argument == "--project" or argument == "--workspace"
             -> if {
-                index! + 1 < argumentCount -> if {
-                    index! + 1 => index!
+                index! + 1 >= (arguments -> len) -> if {
+                    "sollang: missing value for $argument" -> runtime.eprintln
+                    1 -> return
+                }
+                index! + 1 => index!
+                argument == "--project" -> if {
                     arguments[index!] => projectOption!
-                } else { 1 => status! }
+                    true => hasProject!
+                } else {
+                    arguments[index!] => workspaceOption!
+                    true => hasWorkspace!
+                }
             } else {
-                arguments[index!] -> textEquals("--workspace")
-                    -> if {
-                        2 => status!
-                    } else {
-                        arguments[index!] => invalidOption!
-                        3 => status!
-                    }
+                "sollang: unknown resolve option '$argument'; usage: sollang resolve [--project <path> | --workspace <path>]" -> runtime.eprintln
+                1 -> return
             }
         index! + 1 => index!
     }
-    status! != 0 -> if {
-        status! == 3 -> if {
-            "sollang: unknown resolve option '$(invalidOption!)'; usage: sollang resolve [--project <path> | --workspace <path>]" -> runtime.eprintln
-        } else {
-            "sollang: invalid or not-yet-native resolve option (status $(status!))" -> runtime.eprintln
-        }
+    hasProject! and hasWorkspace! -> if {
+        "sollang: --project cannot be combined with --workspace" -> runtime.eprintln
         1 -> return
     }
-    (projectOption! -> len) == 0 -> if {
-        "sollang: resolve currently requires --project <path>" -> println
-        1 -> return
-    }
-
     hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
-    [path.Path; ~] => sources!
+    Arena(0) => projectDiscoveryStorage!
+    Arena(0) => workspaceDiscoveryStorage!
+    not hasProject! and not hasWorkspace! -> if {
+        "." -> manifestEntry.findFrom("sollang.project", hostStyle, projectDiscoveryStorage!) -> when {
+            Ok(found) {
+                found -> when {
+                    Some(value) {
+                        value -> pathText -> materialize(projectDiscoveryStorage!) => projectOption!
+                        true => hasProject!
+                    }
+                    None { }
+                }
+            }
+            Err(error) { "sollang: $error" -> runtime.eprintln
+                1 -> return }
+        }
+        "." -> manifestEntry.findFrom("sollang.workspace", hostStyle, workspaceDiscoveryStorage!) -> when {
+            Ok(found) {
+                found -> when {
+                    Some(value) {
+                        value -> pathText -> materialize(workspaceDiscoveryStorage!) => workspaceOption!
+                        true => hasWorkspace!
+                        false => hasProject!
+                    }
+                    None { }
+                }
+            }
+            Err(error) { "sollang: $error" -> runtime.eprintln
+                1 -> return }
+        }
+    }
+    not hasProject! and not hasWorkspace! -> if {
+        "sollang: no sollang.project or sollang.workspace was found" -> runtime.eprintln
+        1 -> return
+    }
     [path.Path; ~] => packageManifests!
     [path.Path; ~] => packageNames!
     [path.Path; ~] => packageVersions!
     Arena(0) => graphStorage!
-    projectOption! -> cliProject.resolvePathGraph(sources!, packageManifests!, packageNames!, packageVersions!, hostStyle, graphStorage!) => graph
+    Arena(0) => workspaceManifestStorage!
+    Arena(0) => workspaceProjectStorage!
+    "" => rootDirectory!
+    hasWorkspace! -> if {
+        workspaceOption! -> cliWorkspace.loadForResolution(workspaceManifestStorage!, workspaceProjectStorage!) => input
+        input.status != 0 -> if {
+            "sollang: $(input.diagnostic)" -> runtime.eprintln
+            1 -> return
+        }
+        input.sourceDirectory => rootDirectory!
+        input.projectOption -> cliProject.resolveWorkspaceGraph(input.memberManifests, input.memberOrder, packageManifests!, packageNames!, packageVersions!, hostStyle, graphStorage!)
+    } else {
+        projectOption! -> cliProject.resolveGraph(packageManifests!, packageNames!, packageVersions!, hostStyle, graphStorage!)
+    } => graph
     graph.status != 0 -> if {
         "sollang: $(graph.diagnostic)" -> runtime.eprintln
         1 -> return
     }
-    packageManifests! -> cliLock.ensure(packageNames!, packageVersions!, false, true, hostStyle) => lockStatus
-    lockStatus != 0 -> if {
-        "sollang: native package lock failed (status $lockStatus)" -> println
+    hasProject! -> if {
+        ".." -> path.fromText(hostStyle) => parentName
+        packageManifests![0] -> joinDiscovered(parentName) -> absolute -> when {
+            Ok(value) { value }
+            Err(error) { "sollang: $error" -> runtime.eprintln
+                1 -> return }
+        }
+    } else { rootDirectory! -> path.fromText(hostStyle) } => rootDirectoryPath
+    rootDirectoryPath -> pathText => resolvedRootDirectory
+    resolvedRootDirectory -> cliLock.ensureAt(packageManifests!, packageNames!, packageVersions!, false, hostStyle, graphStorage!) => lockResult
+    lockResult.status != 0 -> if {
+        (lockResult.diagnostic -> len) > 0 -> if {
+            "sollang: $(lockResult.diagnostic)" -> runtime.eprintln
+        } else { "sollang: native package lock failed (status $(lockResult.status))" -> runtime.eprintln }
         1 -> return
     }
-    packageManifests! -> cliLock.destination(hostStyle) => lockPath
+    resolvedRootDirectory -> cliLock.destinationAt(hostStyle) => lockPath
     lockPath -> pathText => lockPathText
     packageManifests! -> len => packageCount
     "Resolved $packageCount package(s) into $lockPathText" -> println

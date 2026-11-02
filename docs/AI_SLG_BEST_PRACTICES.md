@@ -643,6 +643,13 @@ stage order. Convert Windows paths to absolute WSL paths only at the Linux
 link boundary, and retain the owned path until the converted argument is stored.
 Cross-target `build` and host-only `run` are separate contracts.
 
+Keep dependency resolution separate from build package selection. Reuse the
+workspace loader and graph traversal, but let `resolve` load every member and
+publish the lock at its owning root. Ancestor discovery shares one manifest
+search and keeps workspace precedence explicit. Keep returned diagnostic Text
+in caller-owned storage and keep the lock-root Path alive independently of
+the graph diagnostic arena.
+
 Associated types may occur inside input or result storage: for example,
 `[Item; ~]`, `[Item; 2]`, and `{Text: Item}` retain their declared shape when
 an implementation binds `Item` to `Int`. Keep the associated-type equality

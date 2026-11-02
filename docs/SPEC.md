@@ -795,6 +795,17 @@ Notes:
   workspace with one member may omit `--package`; a multi-member workspace must
   not choose implicitly. A source-free build inside a declared member discovers
   the enclosing workspace and selects that member.
+- `resolve [--project <path> | --workspace <path>]` resolves the package graph
+  without selecting a build package. Workspace resolution visits every member
+  and writes `sollang.lock` in the workspace directory; explicit project
+  resolution writes it in the root project's directory. Implicit product
+  selection prefers the project's same-named product, otherwise its first
+  product in ordinal name order. Without either option, resolution searches
+  ancestors for both manifests and prefers an enclosing workspace over a
+  project. Explicit project selection bypasses workspace discovery. Resolution
+  refreshes a stale lock using the same deterministic format as build; missing
+  option values, conflicting selections and unknown options fail before graph
+  or lock effects.
 - Local modules resolve relative to the selected product root. The dependency
   name is its first module-path segment; a one-segment import selects its root
   product and deeper paths resolve beneath that product's source directory.

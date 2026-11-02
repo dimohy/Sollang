@@ -31,7 +31,7 @@ internal sealed record ProjectBuild(
         var rootManifest = workspace.Members[0];
         return Load(
             rootManifest,
-            rootManifest.Name,
+            ImplicitProductName(rootManifest),
             workspace,
             includeAllWorkspaceMembers: true,
             useExistingLock: false);
@@ -40,11 +40,14 @@ internal sealed record ProjectBuild(
     public static ProjectBuild LoadProjectForResolution(string pathOrDirectory)
     {
         var manifest = ProjectManifest.Load(pathOrDirectory);
-        var product = manifest.Products.ContainsKey(manifest.Name)
-            ? manifest.Name
-            : manifest.Products.Keys.Order(StringComparer.Ordinal).First();
+        var product = ImplicitProductName(manifest);
         return Load(manifest, product, workspace: null, useExistingLock: false);
     }
+
+    private static string ImplicitProductName(ProjectManifest manifest) =>
+        manifest.Products.ContainsKey(manifest.Name)
+            ? manifest.Name
+            : manifest.Products.Keys.Order(StringComparer.Ordinal).First();
 
     private static ProjectBuild Load(
         ProjectManifest rootManifest,
@@ -90,11 +93,7 @@ internal sealed record ProjectBuild(
                 {
                     continue;
                 }
-                var memberProduct = member.Products.TryGetValue(member.Name, out var memberRoot)
-                    ? new ProjectProduct(member.Name, memberRoot)
-                    : new ProjectProduct(
-                        member.Products.Keys.Order(StringComparer.Ordinal).First(),
-                        member.Products.OrderBy(static pair => pair.Key, StringComparer.Ordinal).First().Value);
+                var memberProduct = member.SelectProduct(ImplicitProductName(member));
                 LoadPackage(
                     member,
                     memberProduct,
