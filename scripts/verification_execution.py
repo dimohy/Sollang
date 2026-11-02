@@ -271,14 +271,20 @@ class VerificationExecution:
 
         A CompletedProcess object is truthy even for exit zero. It is not an
         integer exit code and does not itself certify verification success.
+        The prefix is an opaque name inside this execution's output directory;
+        dots identify steps and must not collapse their independent log pairs.
         """
         if diagnostics is not None and diagnostics.hard_timeout_seconds != timeout:
             raise ValueError('DIAGNOSTIC_HARD_TIMEOUT_MISMATCH')
         if not self.stable():
             raise ValueError("INPUT_DRIFT before " + str(prefix))
-        prefix = Path(prefix)
-        stdout_path, stderr_path = prefix.with_suffix(".stdout"), prefix.with_suffix(".stderr")
-        with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
+        prefix = Path(prefix).resolve()
+        if prefix == self.output.resolve() or not prefix.is_relative_to(self.output.resolve()):
+            raise ValueError("EXECUTION_LOG_OUTSIDE_OUTPUT")
+        stdout_path, stderr_path = Path(str(prefix) + ".stdout"), Path(str(prefix) + ".stderr")
+        if stdout_path.exists() or stderr_path.exists():
+            raise ValueError("EXECUTION_LOG_PATH_ALREADY_EXISTS")
+        with stdout_path.open("xb") as out, stderr_path.open("xb") as err:
             job = _WindowsJob() if os.name == 'nt' else None
             try:
                 process = subprocess.Popen(command, cwd=self.repo, stdout=out, stderr=err,
@@ -288,6 +294,7 @@ class VerificationExecution:
                     job.close()
                 raise
             row = {"pid": process.pid, "command": command, "shutdownConfirmed": False,
+                   "stdoutPath": str(stdout_path), "stderrPath": str(stderr_path),
                    "shutdownScope": 'owned-windows-job' if job is not None else 'owned-posix-process-group',
                    "startedAtUtc": datetime.now(timezone.utc).isoformat()}
             started = time.monotonic()
@@ -403,6 +410,10 @@ class VerificationExecution:
                 row['shutdownConfirmed'] = self.confirm_shutdown(process, row, job)
                 self.result.pop("activeProcess", None)
                 try:
+                    out.flush()
+                    err.flush()
+                    row["stdoutSha256"] = self.sha(stdout_path)
+                    row["stderrSha256"] = self.sha(stderr_path)
                     # Preserve the original failure if the observer itself failed.
                     try:
                         observe()

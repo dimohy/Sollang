@@ -63,6 +63,49 @@ class VerificationExecutionTests(unittest.TestCase):
         self.assertTrue(self.result["processesStopped"])
         self.assertTrue((self.output / "probe.stderr").is_file())
 
+    def test_dotted_step_prefixes_keep_independent_logs_and_hashes(self):
+        for step in ("case.build", "case.run"):
+            result = self.execution.run([sys.executable, "-c",
+                "import sys; print(sys.argv[1]); print('diagnostic-'+sys.argv[1],file=sys.stderr)", step],
+                self.output / step)
+            self.assertEqual(result.returncode, 0)
+        for row, step in zip(self.result["processes"], ("case.build", "case.run")):
+            for stream in ("stdout", "stderr"):
+                path = self.output / (step + "." + stream)
+                self.assertEqual(row[stream + "Path"], str(path))
+                self.assertEqual(row[stream + "Sha256"], hashlib.sha256(path.read_bytes()).hexdigest().upper())
+                self.assertIn(step, path.read_text())
+        self.assertFalse((self.output / "case.stdout").exists())
+        self.result["status"] = "passed"
+        self.execution.finalize(cleanup=False)
+
+    def test_existing_log_pair_rejects_before_launch_without_overwrite(self):
+        self.execution.run([sys.executable, "-c", "print('original')"], self.output / "probe")
+        stdout = (self.output / "probe.stdout").read_bytes()
+        with patch("verification_execution.subprocess.Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "EXECUTION_LOG_PATH_ALREADY_EXISTS"):
+                self.execution.run([sys.executable, "-c", "print('replacement')"], self.output / "probe")
+            launch.assert_not_called()
+        self.assertEqual((self.output / "probe.stdout").read_bytes(), stdout)
+        self.result["status"] = "passed"
+        self.execution.finalize(cleanup=False)
+
+    def test_existing_stderr_rejects_before_creating_stdout(self):
+        (self.output / "probe.stderr").write_text("retained diagnostic")
+        with patch("verification_execution.subprocess.Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "EXECUTION_LOG_PATH_ALREADY_EXISTS"):
+                self.execution.run(["unused"], self.output / "probe")
+            launch.assert_not_called()
+        self.assertEqual((self.output / "probe.stderr").read_text(), "retained diagnostic")
+        self.assertFalse((self.output / "probe.stdout").exists())
+
+    def test_log_prefix_outside_owned_output_rejects_before_launch(self):
+        with patch("verification_execution.subprocess.Popen") as launch:
+            for prefix in (self.output, self.output.parent / "outside"):
+                with self.subTest(prefix=prefix), self.assertRaisesRegex(ValueError, "EXECUTION_LOG_OUTSIDE_OUTPUT"):
+                    self.execution.run(["unused"], prefix)
+            launch.assert_not_called()
+
     def test_initial_record_save_failure_stops_created_root(self):
         original_save = self.execution.save
         calls = 0

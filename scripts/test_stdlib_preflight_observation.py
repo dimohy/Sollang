@@ -29,6 +29,9 @@ class InputLeaseTests(unittest.TestCase):
                 'compiler.exe', 'compiler.dll', 'compiler.deps.json', 'compiler.runtimeconfig.json',
                 'dotnet.exe', 'source.slg', 'stdlib/library.slg',
                 'src/Sollang.Compiler/Cli/CompilerApp.cs', 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs',
+                'src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs',
+                'src/Sollang.Compiler/Shared/SelfHostPolicyAttribute.cs',
+                'src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs',
                 'scripts/contracts/fixtures/focused-selfhost-semantic-preflight-harness.cs',
                 'scripts/contracts/fixtures/semantic-preflight-positive.slg',
                 'scripts/contracts/fixtures/semantic-preflight-deferred-text.slg',
@@ -92,7 +95,9 @@ for name in sys.argv[1:]:
 
             def run(self, command, prefix, **kwargs):
                 targets = [root / 'source.slg', root / 'sources.txt', root / 'compiler.dll',
-                           root / 'stdlib/library.slg', root / 'dotnet.exe']
+                           root / 'stdlib/library.slg', root / 'dotnet.exe',
+                           root / 'src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs',
+                           root / 'src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs']
                 owner.assert_writer_denied(targets)
                 inspected.append(command)
                 code = 1 if 'build' in command else 0
@@ -113,12 +118,15 @@ for name in sys.argv[1:]:
             self.assertEqual(SEMANTIC.main(), 1)
         record = json.loads((root / 'output/result.json').read_text())
         self.assertTrue(record['inputsStable'] and record['processesStopped'])
-        self.assertEqual(len(inspected), 3)
+        self.assertEqual(len(inspected), 4)
+        self.assertIn('selfhost-sync', inspected[1])
         self.assertEqual(cleanup.call_count, 0)
         (root / 'source.slg').write_text('released\n')
         replacement = root / 'replacement'
         replacement.write_text('replacement\n')
         os.replace(replacement, root / 'source.slg')
+        (root / 'src/Sollang.Compiler/Cli/SelfHostPolicyCompiler.cs').write_text('released\n')
+        (root / 'src/Sollang.Compiler/Shared/Policies/TypeNamePolicy.cs').write_text('released\n')
 
     def test_manifest_change_between_discovery_and_lease_stops_before_snapshot(self):
         root = self.workspace()
