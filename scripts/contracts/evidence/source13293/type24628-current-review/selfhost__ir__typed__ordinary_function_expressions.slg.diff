@@ -1,0 +1,114 @@
+--- 88fa9957f9ba29f88de707596e78fac184524572:selfhost/ir/typed/ordinary_function_expressions.slg
++++ current:selfhost/ir/typed/ordinary_function_expressions.slg
+@@ -192,7 +192,7 @@
+     -1
+ }
+ 
+-lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], resolvedSymbolByAst: ref [Int; ~], resolvedQualifiedByAst: ref [Bool; ~], qualifiedFunctionPathByAst: ref [Bool; ~], qualifiedValueVariantIndexByAst: ref [Int; ~], localMemberByParentAst: ref [Bool; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceIndex: Int, symbolIndex: Int, functionIr: Int, resultRootAst: Int, returnIr: Int, functionResultTypeId: Int, functionNodeStart: Int, functionNodeEnd: Int, parameterSymbol: Int, parameterTypeId: Int -> Unit {
++lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], bindingIrBySymbol: ref [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], resolvedSymbolByAst: ref [Int; ~], resolvedQualifiedByAst: ref [Bool; ~], qualifiedFunctionPathByAst: ref [Bool; ~], qualifiedValueVariantIndexByAst: ref [Int; ~], localMemberByParentAst: ref [Bool; ~], transparentFunctionByAst: ref [Bool; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceIndex: Int, symbolIndex: Int, functionIr: Int, resultRootAst: Int, returnIr: Int, functionResultTypeId: Int, functionNodeStart: Int, functionNodeEnd: Int, parameterSymbol: Int, parameterTypeId: Int -> Unit {
+     prepared.package.ranges[sourceIndex] => sourceRange
+     prepared.package.sources[sourceIndex] -> len => sourceLength
+     prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+@@ -284,18 +284,12 @@
+         -1 => patternTypeAst!
+         expression.kind == 59 -> if { expressionAstIndex => patternTypeAst! }
+         expression.kind == 15 -> if {
+-            0 => patternNameResolutionSearch!
+-            patternNameResolutionSearch! < (resolvedNames -> len)
+-                -> while {
+-                    resolvedNames[patternNameResolutionSearch!] => patternResolvedName
+-                    patternResolvedName.astNode == expressionAstIndex
+-                        -> if {
+-                            prepared.package.symbols[sourceRange.symbolStart + patternResolvedName.symbol] => patternResolvedSymbol
+-                            prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59
+-                                -> if { patternResolvedSymbol.astNode => patternTypeAst! }
+-                        }
+-                    patternNameResolutionSearch! + 1 => patternNameResolutionSearch!
+-                }
++            resolvedSymbolByAst[expressionAstIndex] => patternResolvedSymbolIndex
++            patternResolvedSymbolIndex >= 0 -> if {
++                prepared.package.symbols[sourceRange.symbolStart + patternResolvedSymbolIndex] => patternResolvedSymbol
++                prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59
++                    -> if { patternResolvedSymbol.astNode => patternTypeAst! }
++            }
+         }
+         # Name resolution is authoritative for pattern payload
+         # uses even when nominal payload typing is deferred. Keep
+@@ -568,23 +562,17 @@
+             and expression.parent >= 0
+             and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 11)
+             -> if {
+-                0 => localBindingNameSearch!
+-                localBindingNameSearch! < (resolvedNames -> len)
+-                    -> while {
+-                        resolvedNames[localBindingNameSearch!] => localBindingName
+-                        localBindingName.astNode == expressionAstIndex
+-                            -> if {
+-                                prepared.package.symbols[sourceRange.symbolStart + localBindingName.symbol] => localBindingSymbol
+-                                localBindingSymbol.kind == 9
+-                                    or localBindingSymbol.kind == 61
+-                                    or localBindingSymbol.kind == 35
+-                                    -> if {
+-                                        true => knownLocalBindingReference!
+-                                        localBindingName.symbol => knownLocalBindingSymbol!
+-                                    }
+-                            }
+-                        localBindingNameSearch! + 1 => localBindingNameSearch!
+-                    }
++                resolvedSymbolByAst[expressionAstIndex] => localBindingSymbolIndex
++                localBindingSymbolIndex >= 0 -> if {
++                    prepared.package.symbols[sourceRange.symbolStart + localBindingSymbolIndex] => localBindingSymbol
++                    localBindingSymbol.kind == 9
++                        or localBindingSymbol.kind == 61
++                        or localBindingSymbol.kind == 35
++                        -> if {
++                            true => knownLocalBindingReference!
++                            localBindingSymbolIndex => knownLocalBindingSymbol!
++                        }
++                }
+                 # Stream state names are mutable local bindings. Their
+                 # uses can be absent from the general resolved-name
+                 # table, so resolve them against the nearest preceding
+@@ -620,10 +608,9 @@
+                             }
+                     }
+                 knownLocalBindingReference! -> if {
+-                    nodes -> len => localBindingIrLimit
+-                    0 => localBindingIrSearch!
+-                    localBindingIrSearch! < localBindingIrLimit -> while {
+-                        nodes[localBindingIrSearch!] => localBindingIr
++                    bindingIrBySymbol[knownLocalBindingSymbol!] => localBindingIrIndex
++                    localBindingIrIndex >= 0 -> if {
++                        nodes[localBindingIrIndex] => localBindingIr
+                         localBindingIr.kind == 17
+                             and localBindingIr.sourceModule == sourceIndex
+                             and localBindingIr.symbol == knownLocalBindingSymbol!
+@@ -633,7 +620,6 @@
+                                 localBindingIr.typeSymbol => expressionTypeSymbol!
+                                 localBindingIr.typeId => recursiveExpressionTypeId!
+                             }
+-                        localBindingIrSearch! + 1 => localBindingIrSearch!
+                     }
+                 }
+             }
+@@ -1439,19 +1425,7 @@
+                             resolvedExpressionIrKindForAstKind(expression.kind, expressionIsBoolLiteral!, expressionIsCallLike, contextualNullaryOption!, expressionIsPropertyCall!, contextualStructLiteral!) => expressionKind!
+                             knownLocalBindingReference! and expression.kind == 16
+                                 -> if { 5 => expressionKind! }
+-                            false => transparentExpression!
+-                            expression.kind >= 18 and expression.kind <= 21
+-                                -> if {
+-                                    functionNodeStart => transparentChildPosition!
+-                                    transparentChildPosition! < functionNodeEnd
+-                                        -> while {
+-                                            frozenFunctionNodeIndices[transparentChildPosition!] => transparentChildSearch
+-                                            prepared.package.nodes[sourceRange.astStart + transparentChildSearch] => transparentChild
+-                                            transparentChild.parent == expressionAstIndex and transparentChild.start == expression.start and transparentChild.length == expression.length
+-                                                -> if { true => transparentExpression! }
+-                                            transparentChildPosition! + 1 => transparentChildPosition!
+-                                        }
+-                                }
++                            transparentFunctionByAst[expressionAstIndex] => transparentExpression!
+                             expression.kind == 36 -> if {
+                                 functionNodeStart => constructorWrapperChildPosition!
+                                 constructorWrapperChildPosition! < functionNodeEnd

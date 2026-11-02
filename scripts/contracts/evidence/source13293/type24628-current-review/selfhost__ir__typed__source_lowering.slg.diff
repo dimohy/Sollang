@@ -1,0 +1,126 @@
+--- 88fa9957f9ba29f88de707596e78fac184524572:selfhost/ir/typed/source_lowering.slg
++++ current:selfhost/ir/typed/source_lowering.slg
+@@ -45,7 +45,7 @@
+         }
+     sequentialFunctionResults!
+ }
+-lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
++lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], functionOwnerByAst: ref [Int; ~] -> SourceTypedIr {
+     [TypedIrNode; ~] => results!
+     requestedSourceIndex => sourceIndex
+     prepared.package.sources[sourceIndex] -> len => sourceLength
+@@ -53,7 +53,7 @@
+     prepared.package.ranges[sourceIndex] => sourceRange
+     prepared -> interpolationTokenMembership(sourceIndex) => interpolatedTokenBySource
+     prepared -> canonicalInterpolationAstMembership(sourceIndex) => canonicalRootByAst
+-    prepared -> prepareSourceLowerFacts(sourceIndex) => sourceFacts
++    prepared -> prepareSourceLowerFacts(sourceIndex, functionOwnerByAst) => sourceFacts
+     [FunctionLowerRequest; ~] => sourceFunctionRequests!
+     0 => sourceFunctionSymbolIndex!
+     sourceFunctionSymbolIndex! < sourceRange.symbolCount
+@@ -187,6 +187,13 @@
+                             entryAstToIr! -> push(-1)
+                             entryMapIndex! + 1 => entryMapIndex!
+                         }
++                        [Int; ~] => entryBindingIrBySymbol!
++                        0 => entryBindingSymbolSeed!
++                        entryBindingSymbolSeed! < sourceRange.symbolCount
++                            -> while {
++                                entryBindingIrBySymbol! -> push(-1)
++                                entryBindingSymbolSeed! + 1 => entryBindingSymbolSeed!
++                            }
+                         results! -> len => entryExpressionStart
+                         0 => entryBindingAstIndex!
+                         entryBindingAstIndex! < sourceRange.astCount
+@@ -222,14 +229,7 @@
+                                                         entryBindingValueTypeSearch! + 1 => entryBindingValueTypeSearch!
+                                                     }
+                                             }
+-                                            -1 => entryBindingSymbol!
+-                                            0 => entryBindingSymbolSearch!
+-                                            entryBindingSymbolSearch! < sourceRange.symbolCount
+-                                                -> while {
+-                                                    (prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].astNode == entryBindingAstIndex!
+-                                                        -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
+-                                                    entryBindingSymbolSearch! + 1 => entryBindingSymbolSearch!
+-                                                }
++                                            sourceFacts.bindingSymbolByAst[entryBindingAstIndex!] => entryBindingSymbol!
+                                             entryBindingAst.flags == 1 and entryBindingAst.payloadToken >= 0
+                                                 -> if {
+                                                     prepared.package.tokens[sourceRange.tokenStart + entryBindingAst.payloadToken] => entryMutableBindingName
+@@ -316,6 +316,9 @@
+                                                     }
+                                                 results! -> len => entryBindingIr
+                                                 entryBindingIr => entryAstToIr![entryBindingAstIndex!]
++                                                entryBindingSymbol! >= 0 -> if {
++                                                    entryBindingIr => entryBindingIrBySymbol![entryBindingSymbol!]
++                                                }
+                                                 entryBindingAst.payloadToken => entryBindingPayloadToken!
+                                                 entryBindingAst.kind == 48 -> if { entryBindingAst.secondaryToken => entryBindingPayloadToken! }
+                                                 results! -> push(TypedIrNode {
+@@ -417,9 +420,9 @@
+                                                 or entryResolvedSymbolKind == 35
+                                                 -> if {
+                                                     true => knownEntryLocalBindingReference!
+-                                                    0 => entryBindingReadSearch!
+-                                                    entryBindingReadSearch! < (results! -> len) -> while {
+-                                                        results![entryBindingReadSearch!] => entryBindingRead
++                                                    entryBindingIrBySymbol![entryResolvedSymbol] => entryBindingReadIndex
++                                                    entryBindingReadIndex >= 0 -> if {
++                                                        results![entryBindingReadIndex] => entryBindingRead
+                                                         entryBindingRead.kind == 17
+                                                             and entryBindingRead.sourceModule == sourceIndex
+                                                             and entryBindingRead.symbol == entryResolvedSymbol
+@@ -429,7 +432,6 @@
+                                                                 entryBindingRead.typeSymbol => entryExpressionTypeSymbol!
+                                                                 entryBindingRead.typeId => recursiveEntryExpressionTypeId!
+                                                             }
+-                                                        entryBindingReadSearch! + 1 => entryBindingReadSearch!
+                                                     }
+                                                 }
+                                         }
+@@ -438,18 +440,12 @@
+                             -1 => entryPatternTypeAst!
+                             entryExpression.kind == 59 -> if { entryExpressionAst! => entryPatternTypeAst! }
+                             entryExpression.kind == 15 -> if {
+-                                0 => entryPatternNameResolutionSearch!
+-                                entryPatternNameResolutionSearch! < (sourceFacts.names -> len)
+-                                    -> while {
+-                                        sourceFacts.names[entryPatternNameResolutionSearch!] => entryPatternResolvedName
+-                                        entryPatternResolvedName.astNode == entryExpressionAst!
+-                                            -> if {
+-                                                prepared.package.symbols[sourceRange.symbolStart + entryPatternResolvedName.symbol] => entryPatternResolvedSymbol
+-                                                prepared.package.nodes[sourceRange.astStart + entryPatternResolvedSymbol.astNode].kind == 59
+-                                                    -> if { entryPatternResolvedSymbol.astNode => entryPatternTypeAst! }
+-                                            }
+-                                        entryPatternNameResolutionSearch! + 1 => entryPatternNameResolutionSearch!
+-                                    }
++                                sourceFacts.symbolsByAst[entryExpressionAst!] => entryPatternSymbol
++                                entryPatternSymbol >= 0 -> if {
++                                    prepared.package.symbols[sourceRange.symbolStart + entryPatternSymbol] => entryPatternResolvedSymbol
++                                    prepared.package.nodes[sourceRange.astStart + entryPatternResolvedSymbol.astNode].kind == 59
++                                        -> if { entryPatternResolvedSymbol.astNode => entryPatternTypeAst! }
++                                }
+                             }
+                             entryExpression.kind == 15 and entryPatternTypeAst! >= 0
+                                 -> if { true => knownEntryPatternReference! }
+@@ -1397,18 +1393,7 @@
+                                                 resolvedExpressionIrKindForAstKind(entryExpression.kind, entryExpressionIsBoolLiteral!, entryExpressionIsCallLike, contextualEntryNullaryOption!, entryExpressionIsPropertyCall!, contextualEntryStructLiteral!) => entryExpressionKind!
+                                                 knownEntryLocalBindingReference! and entryExpression.kind == 16
+                                                     -> if { 5 => entryExpressionKind! }
+-                                                false => transparentEntryExpression!
+-                                                entryExpression.kind >= 18 and entryExpression.kind <= 21
+-                                                    -> if {
+-                                                        0 => transparentEntryChildSearch!
+-                                                        transparentEntryChildSearch! < sourceRange.astCount
+-                                                            -> while {
+-                                                                prepared.package.nodes[sourceRange.astStart + transparentEntryChildSearch!] => transparentEntryChild
+-                                                                transparentEntryChild.parent == entryExpressionAst! and transparentEntryChild.start == entryExpression.start and transparentEntryChild.length == entryExpression.length
+-                                                                    -> if { true => transparentEntryExpression! }
+-                                                                transparentEntryChildSearch! + 1 => transparentEntryChildSearch!
+-                                                            }
+-                                                    }
++                                                sourceFacts.transparentEntryByAst[entryExpressionAst!] => transparentEntryExpression!
+                                                 entryExpression.kind == 36 -> if {
+                                                     0 => entryConstructorWrapperChildAst!
+                                                     entryConstructorWrapperChildAst! < sourceRange.astCount

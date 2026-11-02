@@ -1,0 +1,197 @@
+--- 8a24149bd6256e7a1cca7c32f318479d4a6488db:selfhost/ir/typed/ordinary_function.slg
++++ current:selfhost/ir/typed/ordinary_function.slg
+@@ -24,27 +24,40 @@
+ struct SourceLowerFacts {
+     names: [resolution.ResolvedName; ~]
+     symbolsByAst: [Int; ~]
++    bindingSymbolByAst: [Int; ~]
++    blockResultBindingByAst: [Bool; ~]
+     qualifiedByAst: [Bool; ~]
+     functionPathByAst: [Bool; ~]
+     valueVariantByAst: [Int; ~]
+     localMemberByAst: [Bool; ~]
++    transparentEntryByAst: [Bool; ~]
++    transparentFunctionByAst: [Bool; ~]
+ }
+ 
+ # One immutable source fact set is borrowed by entry and all function workers.
+-prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int -> SourceLowerFacts {
++prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, functionOwnerByAst: ref [Int; ~] -> SourceLowerFacts {
+     prepared.package.ranges[sourceIndex] => sourceRange
++    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), prepared.package.sources[sourceIndex] -> len) => source
+     [resolution.ResolvedName; ~] => resolvedNames!
+     [Int; ~] => resolvedSymbolByAst!
++    [Int; ~] => bindingSymbolByAst!
++    [Bool; ~] => blockResultBindingByAst!
+     [Bool; ~] => resolvedQualifiedByAst!
+     [Bool; ~] => qualifiedFunctionPathByAst!
+     [Int; ~] => qualifiedValueVariantIndexByAst!
++    [Bool; ~] => transparentEntryByAst!
++    [Bool; ~] => transparentFunctionByAst!
+     0 => resolvedNameIndexSeed!
+     resolvedNameIndexSeed! < sourceRange.astCount
+         -> while {
+             resolvedSymbolByAst! -> push(-1)
++            bindingSymbolByAst! -> push(-1)
++            blockResultBindingByAst! -> push(false)
+             resolvedQualifiedByAst! -> push(false)
+             qualifiedFunctionPathByAst! -> push(false)
+             qualifiedValueVariantIndexByAst! -> push(-1)
++            transparentEntryByAst! -> push(false)
++            transparentFunctionByAst! -> push(false)
+             resolvedNameIndexSeed! + 1 => resolvedNameIndexSeed!
+         }
+     0 => sourceNameOffset!
+@@ -57,6 +70,38 @@
+             }
+         sourceNameOffset! + 1 => sourceNameOffset!
+     }
++    0 => bindingDeclarationIndex!
++    bindingDeclarationIndex! < sourceRange.symbolCount
++        -> while {
++            prepared.package.symbols[sourceRange.symbolStart + bindingDeclarationIndex!] => bindingDeclaration
++            (bindingDeclaration.kind == 9 or bindingDeclaration.kind == 61)
++                and bindingDeclaration.astNode >= 0
++                and bindingDeclaration.astNode < sourceRange.astCount
++                -> if {
++                    bindingDeclarationIndex! => bindingSymbolByAst![bindingDeclaration.astNode]
++                }
++            bindingDeclarationIndex! + 1 => bindingDeclarationIndex!
++        }
++    0 => bindingValueAstIndex!
++    bindingValueAstIndex! < sourceRange.astCount
++        -> while {
++            prepared.package.nodes[sourceRange.astStart + bindingValueAstIndex!] => bindingValue
++            bindingValue.kind == 48 and bindingValue.secondaryToken >= 0
++                -> if { true => blockResultBindingByAst![bindingValueAstIndex!] }
++            bindingValue.kind == 10 and bindingValue.parent >= 0
++                and bindingValue.parent < sourceRange.astCount
++                and not blockResultBindingByAst![bindingValue.parent]
++                -> if {
++                    prepared.package.nodes[sourceRange.astStart + bindingValue.parent] => bindingOwner
++                    bindingOwner.kind == 9 or bindingOwner.kind == 61
++                        -> if {
++                            source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, bindingValueAstIndex!) => bindingValueOpcode
++                            bindingValueOpcode == -227
++                                -> if { true => blockResultBindingByAst![bindingValue.parent] }
++                        }
++                }
++            bindingValueAstIndex! + 1 => bindingValueAstIndex!
++        }
+     prepared -> localMemberRoots(resolvedNames!, sourceIndex) => localMemberByParentAst
+     0 => qualifiedIndexBuild!
+     qualifiedIndexBuild! < (prepared.qualified -> len)
+@@ -84,13 +129,40 @@
+                 }
+             qualifiedIndexBuild! + 1 => qualifiedIndexBuild!
+         }
++    # A precedence wrapper is transparent exactly when a direct child occupies
++    # its full source span. Function workers additionally preserve the frozen
++    # ownership filter, which excludes interpolation-owned AST nodes.
++    0 => transparentChildIndex!
++    transparentChildIndex! < sourceRange.astCount
++        -> while {
++            sourceRange.astStart + transparentChildIndex! => childGlobalAst
++            prepared.package.nodes[childGlobalAst] => child
++            child.parent >= 0 and child.parent < sourceRange.astCount
++                -> if {
++                    sourceRange.astStart + child.parent => parentGlobalAst
++                    prepared.package.nodes[parentGlobalAst] => parent
++                    parent.kind >= 18 and parent.kind <= 21
++                        and child.start == parent.start and child.length == parent.length
++                        -> if {
++                            true => transparentEntryByAst![child.parent]
++                            functionOwnerByAst[parentGlobalAst] >= 0
++                                and functionOwnerByAst[childGlobalAst] == functionOwnerByAst[parentGlobalAst]
++                                -> if { true => transparentFunctionByAst![child.parent] }
++                        }
++                }
++            transparentChildIndex! + 1 => transparentChildIndex!
++        }
+     SourceLowerFacts {
+         names: resolvedNames!
+         symbolsByAst: resolvedSymbolByAst!
++        bindingSymbolByAst: bindingSymbolByAst!
++        blockResultBindingByAst: blockResultBindingByAst!
+         qualifiedByAst: resolvedQualifiedByAst!
+         functionPathByAst: qualifiedFunctionPathByAst!
+         valueVariantByAst: qualifiedValueVariantIndexByAst!
+         localMemberByAst: localMemberByParentAst
++        transparentEntryByAst: transparentEntryByAst!
++        transparentFunctionByAst: transparentFunctionByAst!
+     }
+ }
+ 
+@@ -722,6 +794,12 @@
+                     astToIr! -> push(-1)
+                     astMapIndex! + 1 => astMapIndex!
+                 }
++                [Int; ~] => bindingIrBySymbol!
++                0 => bindingSymbolSeed!
++                bindingSymbolSeed! < sourceRange.symbolCount -> while {
++                    bindingIrBySymbol! -> push(-1)
++                    bindingSymbolSeed! + 1 => bindingSymbolSeed!
++                }
+                 results! -> len => expressionIrStart
+                 sourceRange.astStart + function.astNode => functionGlobalAst
+                 frozenFunctionNodeStartsByAst[functionGlobalAst] => functionNodeStart
+@@ -746,22 +824,8 @@
+                                 # operations are Unit-valued at the call site, so
+                                 # the declared block-result type is authoritative
+                                 # for the response binding.
+-                                (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0) => bindingUsesBlockResult!
+-                                bindingAst.kind == 9 or bindingAst.kind == 61
+-                                    -> if {
+-                                        0 => bindingYieldSearch!
+-                                        bindingYieldSearch! < sourceRange.astCount and not bindingUsesBlockResult!
+-                                            -> while {
+-                                                prepared.package.nodes[sourceRange.astStart + bindingYieldSearch!] => bindingYieldCandidate
+-                                                bindingYieldCandidate.parent == bindingAstIndex and bindingYieldCandidate.kind == 10
+-                                                    -> if {
+-                                                        source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, bindingYieldSearch!) => bindingYieldOpcode
+-                                                        bindingYieldOpcode == -227 -> if { true => bindingUsesBlockResult! }
+-                                                    }
+-                                                bindingYieldSearch! + 1 => bindingYieldSearch!
+-                                            }
+-                                    }
+-                                bindingUsesBlockResult! and function.blockResultTypeNode >= 0
++                                sourceFacts.blockResultBindingByAst[bindingAstIndex]
++                                    and function.blockResultTypeNode >= 0
+                                     -> if {
+                                         -1 => roleResultReferenceIndex!
+                                         function.blockResultTypeNode < sourceRange.astCount
+@@ -771,14 +835,7 @@
+                                             and recursiveTypes.references[roleResultReferenceIndex!].typeId >= 0
+                                             -> if { recursiveTypes.references[roleResultReferenceIndex!].typeId => bindingCanonicalTypeId! }
+                                     }
+-                                -1 => bindingSymbol!
+-                                0 => bindingSymbolSearch!
+-                                bindingSymbolSearch! < sourceRange.symbolCount
+-                                    -> while {
+-                                        (prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].astNode == bindingAstIndex
+-                                            -> if { bindingSymbolSearch! => bindingSymbol! }
+-                                        bindingSymbolSearch! + 1 => bindingSymbolSearch!
+-                                    }
++                                sourceFacts.bindingSymbolByAst[bindingAstIndex] => bindingSymbol!
+                                 # A mutable rebind inside a stream callback refers
+                                 # to the existing outer slot. Its callback-local
+                                 # symbol can have no standalone inferred type, so
+@@ -869,6 +926,9 @@
+                                         }
+                                     results! -> len => bindingIr
+                                     bindingIr => astToIr![bindingAstIndex]
++                                    bindingSymbol! >= 0 -> if {
++                                        bindingIr => bindingIrBySymbol![bindingSymbol!]
++                                    }
+                                     bindingAst.payloadToken => bindingPayloadToken!
+                                     bindingAst.kind == 48 -> if { bindingAst.secondaryToken => bindingPayloadToken! }
+                                     results! -> push(TypedIrNode {
+@@ -896,7 +956,7 @@
+                         }
+                     bindingNodePosition! + 1 => bindingNodePosition!
+                 }
+-                results! -> lowerOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
++                results! -> lowerOrdinaryFunctionExpressions(astToIr!, bindingIrBySymbol!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, sourceFacts.transparentFunctionByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
+ 
+                 results! -> finalizeOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, symbolIndex, functionIr, expressionIrStart, resultRootAst!, returnIr, functionResultOrigin!, functionResultModule!, functionResultSymbol!, functionResultTypeId!)
+             }
