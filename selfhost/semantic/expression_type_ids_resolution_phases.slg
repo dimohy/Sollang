@@ -1018,21 +1018,63 @@ indexInitialTypeReferences package: ref analysis.PackageAnalysis, references: re
     InitialTypeReferenceIndex { firstByAst: first!, references: indexedReferences!, next: next!, firstPathByArrayAst: firstPath! }
 }
 
-# Qualified type spellings retain their prepared declaration identity, just as
-# C# ParseType resolves the full name before interning an array element.
-initialQualifiedArrayElementType prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], sourceModule: Int, pathAst: Int, sourceTextModule: Int, sourceTextSymbol: Int -> Int {
-    pathAst < 0 -> if { -1 -> return }
-    -1 => qualifiedIndex!
+struct InitialQualifiedReferenceIndex {
+    lastByAst: [Int; ~]
+    lastInSubtreeByAst: [Int; ~]
+    lastByToken: [Int; ~]
+}
+
+# Prepared qualified resolutions are immutable during initial inference. Keep
+# their original last-successful selection at each coordinate, including the
+# ancestor and token-span queries used by type and record syntax.
+indexInitialQualifiedReferences prepared: ref semanticContext.SemanticSnapshot -> InitialQualifiedReferenceIndex {
+    [Int; ~] => byAst!
+    [Int; ~] => inSubtree!
+    [Int; ~] => byToken!
+    prepared.package.nodes -> each node {
+        byAst! -> push(-1)
+        inSubtree! -> push(-1)
+    }
+    prepared.package.tokens -> each token { byToken! -> push(-1) }
     0 => search!
     search! < (prepared.qualified -> len) -> while {
         prepared.qualified[search!] => candidate
-        candidate.sourceModule == sourceModule and candidate.status == 0
-            and (candidate.pathAst == pathAst or (prepared.package -> semanticContext.declarationAncestor(sourceModule, pathAst, candidate.pathAst)))
-            -> if { search! => qualifiedIndex! }
+        candidate.status == 0 and candidate.sourceModule >= 0 and candidate.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[candidate.sourceModule] => range
+                candidate.pathAst >= 0 and candidate.pathAst < range.astCount
+                    -> if {
+                        range.astStart + candidate.pathAst => globalPath
+                        search! => byAst![globalPath]
+                        candidate.pathAst => ancestor!
+                        ancestor! >= 0 and ancestor! < range.astCount
+                            -> while {
+                                range.astStart + ancestor! => globalAncestor
+                                search! => inSubtree![globalAncestor]
+                                prepared.package.nodes[globalAncestor].parent => ancestor!
+                            }
+                        prepared.package.nodes[globalPath] => path
+                        path.firstToken => tokenIndex!
+                        tokenIndex! >= 0 and tokenIndex! < path.firstToken + path.tokenCount and tokenIndex! < range.tokenCount
+                            -> while {
+                                search! => byToken![range.tokenStart + tokenIndex!]
+                                tokenIndex! + 1 => tokenIndex!
+                            }
+                    }
+            }
         search! + 1 => search!
     }
-    qualifiedIndex! < 0 -> if { -1 -> return }
-    prepared.qualified[qualifiedIndex!] => qualifiedType
+    InitialQualifiedReferenceIndex { lastByAst: byAst!, lastInSubtreeByAst: inSubtree!, lastByToken: byToken! }
+}
+
+# Qualified type spellings retain their prepared declaration identity, just as
+# C# ParseType resolves the full name before interning an array element.
+initialQualifiedArrayElementType prepared: ref semanticContext.SemanticSnapshot, qualifiedReferences: ref InitialQualifiedReferenceIndex, types: ref [typeIds.SemanticType; ~], sourceModule: Int, pathAst: Int, sourceTextModule: Int, sourceTextSymbol: Int -> Int {
+    pathAst < 0 -> if { -1 -> return }
+    prepared.package.ranges[sourceModule] => range
+    qualifiedReferences.lastInSubtreeByAst[range.astStart + pathAst] => qualifiedIndex
+    qualifiedIndex < 0 -> if { -1 -> return }
+    prepared.qualified[qualifiedIndex] => qualifiedType
     -1 => elementType!
     0 => typeIndex!
     typeIndex! < (types -> len) -> while {
@@ -1051,6 +1093,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
     prepared.package -> semanticContext.indexBindingValueAsts => bindingValueAsts
     prepared.package -> indexContextualRecords => syntaxChildren
     prepared.package -> indexInitialTypeReferences(references) => sourceReferences
+    prepared -> indexInitialQualifiedReferences => sourceQualified
     # Expression slots keep their AST identity while their type/status may change.
     # Index ancestry once, but read the current slot when resolving each binding.
     [Int; ~] => inferredBindingHeads!
@@ -1183,7 +1226,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                 }
                         }
                         typedArrayQualifiedSyntax! -> if {
-                            prepared -> initialQualifiedArrayElementType(types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol)
+                            prepared -> initialQualifiedArrayElementType(sourceQualified, types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol)
                         } else { -1 } => typedArrayElementType!
                         -1 => typedArrayNameToken!
                         false => typedArrayBounded!
@@ -1351,7 +1394,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                             }
                         typedArrayElementType! < 0 and not typedArrayQualifiedSyntax!
                             -> if {
-                                prepared -> initialQualifiedArrayElementType(types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol) => typedArrayElementType!
+                                prepared -> initialQualifiedArrayElementType(sourceQualified, types, sourceIndex!, typedArrayPathAst, sourceTextModule, sourceTextSymbol) => typedArrayElementType!
                             }
                         typedArrayElementType! >= 0 -> if {
                             3 => typedArrayKind!
@@ -1398,13 +1441,13 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                     prepared.package -> typeIds.arrayStorageSyntax(sourceIndex!, astIndex!) => typedDictionaryStorage
                     typedDictionaryStorage.bounded => typedDictionaryBounded
                     typedDictionaryStorage.length => typedDictionaryCapacity
-                    0 => typedDictionaryChildSearch!
-                    typedDictionaryChildSearch! < sourceRange.astCount
+                    syntaxChildren.firstChild[sourceRange.astStart + astIndex!] => typedDictionaryChildSearch!
+                    typedDictionaryChildSearch! >= 0
                         -> while {
-                            prepared.package.nodes[sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryChild
-                            typedDictionaryChild.kind == 12 and typedDictionaryChild.parent == astIndex!
+                            prepared.package.nodes[typedDictionaryChildSearch!] => typedDictionaryChild
+                            typedDictionaryChild.kind == 12
                                 -> if {
-                                    referenceIndexByTypeAst[sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryReferenceIndex
+                                    referenceIndexByTypeAst[typedDictionaryChildSearch!] => typedDictionaryReferenceIndex
                                     typedDictionaryReferenceIndex >= 0 -> if {
                                         references[typedDictionaryReferenceIndex] => typedDictionaryReference
                                         typedDictionaryReference.status == 0 -> if {
@@ -1416,7 +1459,7 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                         }
                                     }
                                 }
-                            typedDictionaryChildSearch! + 1 => typedDictionaryChildSearch!
+                            syntaxChildren.nextChild[typedDictionaryChildSearch!] => typedDictionaryChildSearch!
                         }
                     typedDictionaryKeyType! >= 0 and typedDictionaryValueType! >= 0
                         -> if {
@@ -1777,19 +1820,9 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                             -> if { 16 => builtinTypeId! }
                     }
                     builtinTypeId! < 0 -> if {
-                        -1 => qualifiedValueIndex!
-                        0 => qualifiedValueSearch!
-                        qualifiedValueSearch! < (prepared.qualified -> len)
-                            -> while {
-                                prepared.qualified[qualifiedValueSearch!] => qualifiedValueCandidate
-                                qualifiedValueCandidate.sourceModule == sourceIndex! and qualifiedValueCandidate.pathAst == astIndex! and qualifiedValueCandidate.status == 0
-                                    -> if {
-                                        qualifiedValueSearch! => qualifiedValueIndex!
-                                    }
-                                qualifiedValueSearch! + 1 => qualifiedValueSearch!
-                            }
-                        qualifiedValueIndex! >= 0 -> if {
-                            prepared.qualified[qualifiedValueIndex!] => qualifiedValue
+                        sourceQualified.lastByAst[sourceRange.astStart + astIndex!] => qualifiedValueIndex
+                        qualifiedValueIndex >= 0 -> if {
+                            prepared.qualified[qualifiedValueIndex] => qualifiedValue
                             prepared.modules[qualifiedValue.targetModule].sourceIndex => qualifiedValueTargetSource
                             prepared.package.ranges[qualifiedValueTargetSource] => qualifiedValueTargetRange
                             prepared.package.symbols[qualifiedValueTargetRange.symbolStart + qualifiedValue.targetSymbol] => qualifiedValueTargetSymbol
@@ -1882,23 +1915,15 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                 siblingModuleIndex! + 1 => siblingModuleIndex!
                             }
                     }
-                    literalTargetSymbol! < 0 -> if {
-                        0 => qualifiedSearch!
-                        qualifiedSearch! < (prepared.qualified -> len)
-                            -> while {
-                                prepared.qualified[qualifiedSearch!] => importedCandidate
-                                importedCandidate.sourceModule == sourceIndex! and importedCandidate.status == 0
-                                    -> if {
-                                        prepared.package.nodes[sourceRange.astStart + importedCandidate.pathAst] => importedPath
-                                        typeNameToken! >= importedPath.firstToken and typeNameToken! < importedPath.firstToken + importedPath.tokenCount
-                                            -> if {
-                                                prepared.modules[importedCandidate.targetModule].sourceIndex => literalTargetModule!
-                                                importedCandidate.targetSymbol => literalTargetSymbol!
-                                            }
-                                    }
-                                qualifiedSearch! + 1 => qualifiedSearch!
+                    literalTargetSymbol! < 0 and typeNameToken! >= 0
+                        -> if {
+                            sourceQualified.lastByToken[sourceRange.tokenStart + typeNameToken!] => qualifiedIndex
+                            qualifiedIndex >= 0 -> if {
+                                prepared.qualified[qualifiedIndex] => importedCandidate
+                                prepared.modules[importedCandidate.targetModule].sourceIndex => literalTargetModule!
+                                importedCandidate.targetSymbol => literalTargetSymbol!
                             }
-                    }
+                        }
                     literalTargetSymbol! >= 0 -> if {
                         -1 => nominalTypeId!
                         0 => nominalTypeSearch!
