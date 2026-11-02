@@ -3671,13 +3671,14 @@ completeResolvedCallContextSeeded initialPrepared: move semanticContext.Semantic
 # Transfer each completed context into the next refinement. Owned analysis
 # tables are bound once; no owner rebinding or name-check bypass is needed.
 refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ResolvedCallContext {
+    initialPrepared.package -> calls.prepareModuleCallFacts(initialPrepared.semantic.references, initialPrepared.modules, initialPrepared.resolvedImports) => declarationFacts
     [Int; ~] => previousReceiverTypes
     [typeIds.SemanticType; ~] => previousResolvedTypes
     [calls.ModuleCallResolution; ~] => previousSeededCalls
-    initialPrepared -> refineResolvedCallContextWithMatchingInputs(initialTypes, seeds, externalResults, committedTypes, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls)
+    initialPrepared -> refineResolvedCallContextWithMatchingInputs(initialTypes, seeds, externalResults, committedTypes, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls, declarationFacts)
 }
 
-refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool, hasPreviousMatchingInputs: Bool, previousReceiverTypes: ref [Int; ~], previousResolvedTypes: ref [typeIds.SemanticType; ~], previousSeededCalls: ref [calls.ModuleCallResolution; ~] -> ResolvedCallContext {
+refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool, hasPreviousMatchingInputs: Bool, previousReceiverTypes: ref [Int; ~], previousResolvedTypes: ref [typeIds.SemanticType; ~], previousSeededCalls: ref [calls.ModuleCallResolution; ~], declarationFacts: ref calls.ModuleCallFacts -> ResolvedCallContext {
     initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     [Int; ~] => receiverTypeByCallAst!
     initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
@@ -3713,7 +3714,7 @@ refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContex
         -> if {
             ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
         }
-    initialPrepared.package -> calls.resolveModulesTypedWithPreparedFacts(
+    initialPrepared.package -> calls.resolveModulesTypedWithDeclarationFacts(
     initialPrepared.semantic,
     receiverTypeByCallAst!,
     initialTypes.types,
@@ -3722,7 +3723,8 @@ refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContex
     initialPrepared.modules,
     initialPrepared.imports,
     initialPrepared.resolvedImports,
-    initialPrepared.qualified
+    initialPrepared.qualified,
+    declarationFacts
     ) => resolvedCalls
     not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
     # A committed round already owns the types for this exact prepared call
@@ -3740,7 +3742,7 @@ refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContex
         initialPrepared.package -> semanticContext.resolveCallArgumentBindings(initialPrepared.calls) => bindings
         initialTypes => resolved!
         completeCallAndEnumFactsSeeded(initialPrepared, resolved!, bindings, seeds)
-        initialPrepared -> refineResolvedCallContext(resolved!, seeds, externalResults, true) -> return
+        initialPrepared -> refineResolvedCallContextWithMatchingInputs(resolved!, seeds, externalResults, true, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls, declarationFacts) -> return
     }
     initialPrepared => prepared!
     resolvedCalls => prepared!.calls
@@ -3751,7 +3753,7 @@ refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContex
     prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
     prepared! -> semanticContext.freeze => finalPrepared
     finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
-    finalPrepared -> refineResolvedCallContextWithMatchingInputs(finalTypes, seeds, externalResults, true, true, receiverTypeByCallAst!, initialTypes.types, seededCalls!)
+    finalPrepared -> refineResolvedCallContextWithMatchingInputs(finalTypes, seeds, externalResults, true, true, receiverTypeByCallAst!, initialTypes.types, seededCalls!, declarationFacts)
 }
 
 # Measurement-only entry: exposes a completed pair, never initial type facts.
