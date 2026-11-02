@@ -2519,10 +2519,11 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                 streamGenericCallAst.tertiaryToken >= 0 -> if {
                                     prepared.package.tokens[streamGenericCallRange.tokenStart + streamGenericCallAst.tertiaryToken].span.start => streamGenericBodyStart!
                                 }
+                                synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
                                 UIntSize(0) => streamGenericArgumentStart!
-                                0 => streamGenericArgumentSearch!
-                                streamGenericFunction.blockTypeNode < 0 -> if { expressions -> len => streamGenericArgumentSearch! }
-                                streamGenericArgumentSearch! < (expressions -> len)
+                                firstExpressionBySource![streamGenericCall.sourceModule] => streamGenericArgumentSearch!
+                                streamGenericFunction.blockTypeNode < 0 -> if { -1 => streamGenericArgumentSearch! }
+                                streamGenericArgumentSearch! >= 0
                                     -> while {
                                         expressions[streamGenericArgumentSearch!] => streamGenericArgument
                                         streamGenericArgument.status == 0 and streamGenericArgument.sourceModule == streamGenericCall.sourceModule and not types[streamGenericArgument.typeId].containsParameter
@@ -2548,13 +2549,13 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                             }
                                                     }
                                             }
-                                        streamGenericArgumentSearch! + 1 => streamGenericArgumentSearch!
+                                        nextExpressionInSource![streamGenericArgumentSearch!] => streamGenericArgumentSearch!
                                     }
                                 streamGenericConcreteType! < 0 -> if {
                                     -1 => streamGenericSourceType!
                                     1000000 => streamGenericSourceDistance!
-                                    0 => streamGenericSourceSearch!
-                                    streamGenericSourceSearch! < (expressions -> len)
+                                    firstExpressionBySource![streamGenericCall.sourceModule] => streamGenericSourceSearch!
+                                    streamGenericSourceSearch! >= 0
                                         -> while {
                                             expressions[streamGenericSourceSearch!] => streamGenericSourceCandidate
                                             streamGenericSourceCandidate.sourceModule == streamGenericCall.sourceModule
@@ -2582,7 +2583,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                                 }
                                                         }
                                                 }
-                                            streamGenericSourceSearch! + 1 => streamGenericSourceSearch!
+                                            nextExpressionInSource![streamGenericSourceSearch!] => streamGenericSourceSearch!
                                         }
                                     streamGenericSourceType! => streamGenericConcreteType!
                                     streamGenericFunction.typeNode => streamGenericInputAst!
@@ -2627,8 +2628,9 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                 -1 => streamRoleSourceType!
                                 1000000 => streamRoleSourceDistance!
                                 prepared.package.tokens[streamRoleCallRange.tokenStart + streamRoleCallAst.payloadToken].span.start => streamRoleTargetStart
-                                0 => streamRoleSourceSearch!
-                                streamRoleSourceSearch! < (expressions -> len)
+                                synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
+                                firstExpressionBySource![streamRoleCall.sourceModule] => streamRoleSourceSearch!
+                                streamRoleSourceSearch! >= 0
                                     -> while {
                                         expressions[streamRoleSourceSearch!] => streamRoleSourceCandidate
                                         streamRoleSourceCandidate.sourceModule == streamRoleCall.sourceModule
@@ -2656,7 +2658,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                             }
                                                     }
                                             }
-                                        streamRoleSourceSearch! + 1 => streamRoleSourceSearch!
+                                        nextExpressionInSource![streamRoleSourceSearch!] => streamRoleSourceSearch!
                                     }
                                 -1 => streamRoleElementType!
                                 streamRoleSourceType! >= 0 -> if {
