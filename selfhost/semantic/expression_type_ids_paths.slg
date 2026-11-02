@@ -819,6 +819,28 @@ synchronizeCollectionSourceExpressions package: ref analysis.PackageAnalysis, ex
     limit
 }
 
+# Keep original expression order within each source. Queries synchronize at
+# their own boundary so facts appended earlier in this pass remain visible;
+# types and statuses are always read from the current expression record.
+synchronizeExpressionSourceIndex expressions: ref [ExpressionTypeId; ~], sourceCount: Int, firstBySource: mut [Int; ~], lastBySource: mut [Int; ~], nextByExpression: mut [Int; ~] -> Unit {
+    Int(firstBySource -> len) < sourceCount -> while {
+        firstBySource -> push(-1)
+        lastBySource -> push(-1)
+    }
+    Int(nextByExpression -> len) => expressionIndex!
+    expressionIndex! < (expressions -> len) -> while {
+        expressions[expressionIndex!].sourceModule => source
+        nextByExpression -> push(-1)
+        source >= 0 and source < sourceCount -> if {
+            lastBySource[source] >= 0 -> if {
+                expressionIndex! => nextByExpression[lastBySource[source]]
+            } else { expressionIndex! => firstBySource[source] }
+            expressionIndex! => lastBySource[source]
+        }
+        expressionIndex! + 1 => expressionIndex!
+    }
+}
+
 resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
     prepared.package -> indexResolvedNameReferences => nameReferences
@@ -1080,6 +1102,9 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
     [Int; ~] => collectionSourceDistances!
     [Int; ~] => collectionSourceNext!
     0 => collectionIndexedExpressions!
+    [Int; ~] => firstExpressionBySource!
+    [Int; ~] => lastExpressionBySource!
+    [Int; ~] => nextExpressionInSource!
     true => pathChanged!
     pathChanged! -> while {
         false => pathChanged!
@@ -3201,6 +3226,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                             }
                         lateDictionaryNode.kind == 38 and not contextualNominalLiteral! and not declaredDictionaryTypes!
                             -> if {
+                                synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
                                 prepared.package -> typeIds.arrayStorageSyntax(lateDictionarySourceIndex!, lateDictionaryAstIndex!) => lateDictionaryStorage
                                 lateDictionaryStorage.bounded -> if { 13 } else { 5 } => lateDictionaryKind
                                 lateDictionaryStorage.bounded -> if { lateDictionaryStorage.length } else { -1 } => lateDictionaryLength
@@ -3208,8 +3234,8 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                 -1 => lateDictionarySecondType!
                                 lateDictionaryFirstChild! >= 0 -> if {
                                     1000000 => lateDictionaryDistance!
-                                    0 => lateDictionaryCandidateSearch!
-                                    lateDictionaryCandidateSearch! < (expressions -> len)
+                                    firstExpressionBySource![lateDictionarySourceIndex!] => lateDictionaryCandidateSearch!
+                                    lateDictionaryCandidateSearch! >= 0
                                         -> while {
                                             expressions[lateDictionaryCandidateSearch!] => lateDictionaryCandidate
                                             lateDictionaryCandidate.sourceModule == lateDictionarySourceIndex!
@@ -3236,13 +3262,13 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                             lateDictionaryCandidate.typeId => lateDictionaryFirstType!
                                                         }
                                                 }
-                                            lateDictionaryCandidateSearch! + 1 => lateDictionaryCandidateSearch!
+                                            nextExpressionInSource![lateDictionaryCandidateSearch!] => lateDictionaryCandidateSearch!
                                         }
                                 }
                                 lateDictionarySecondChild! >= 0 -> if {
                                     1000000 => lateDictionaryDistance!
-                                    0 => lateDictionaryCandidateSearch!
-                                    lateDictionaryCandidateSearch! < (expressions -> len)
+                                    firstExpressionBySource![lateDictionarySourceIndex!] => lateDictionaryCandidateSearch!
+                                    lateDictionaryCandidateSearch! >= 0
                                         -> while {
                                             expressions[lateDictionaryCandidateSearch!] => lateDictionaryCandidate
                                             lateDictionaryCandidate.sourceModule == lateDictionarySourceIndex!
@@ -3269,7 +3295,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                             lateDictionaryCandidate.typeId => lateDictionarySecondType!
                                                         }
                                                 }
-                                            lateDictionaryCandidateSearch! + 1 => lateDictionaryCandidateSearch!
+                                            nextExpressionInSource![lateDictionaryCandidateSearch!] => lateDictionaryCandidateSearch!
                                         }
                                 }
                                 lateDictionaryFirstType! >= 0 and lateDictionarySecondType! >= 0
@@ -3330,9 +3356,10 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                             lateDictionaryIndexRange.astStart + lateDictionaryIndexAst! => lateDictionaryIndexGlobal
                             expressionIndexByAst[lateDictionaryIndexGlobal] < 0
                                 -> if {
+                                    synchronizeExpressionSourceIndex(expressions, Int(prepared.package.ranges -> len), firstExpressionBySource!, lastExpressionBySource!, nextExpressionInSource!)
                                     -1 => lateDictionaryBaseType!
-                                    0 => lateDictionaryBaseSearch!
-                                    lateDictionaryBaseSearch! < (expressions -> len)
+                                    firstExpressionBySource![lateDictionaryIndexSource!] => lateDictionaryBaseSearch!
+                                    lateDictionaryBaseSearch! >= 0
                                         -> while {
                                             expressions[lateDictionaryBaseSearch!] => lateDictionaryBaseCandidate
                                             lateDictionaryBaseCandidate.sourceModule == lateDictionaryIndexSource!
@@ -3348,7 +3375,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                         }
                                                     lateDictionaryBaseBelongs! -> if { lateDictionaryBaseCandidate.typeId => lateDictionaryBaseType! }
                                                 }
-                                            lateDictionaryBaseSearch! + 1 => lateDictionaryBaseSearch!
+                                            nextExpressionInSource![lateDictionaryBaseSearch!] => lateDictionaryBaseSearch!
                                         }
                                     lateDictionaryBaseType! >= 0 and lateDictionaryBaseType! < (types -> len) and types[lateDictionaryBaseType!].kind == 5
                                         -> if {
