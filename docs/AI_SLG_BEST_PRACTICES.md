@@ -331,6 +331,12 @@ Specify symbol, handle cleanup, ownership, error mapping, target availability,
 and ABI layout. Do not silently substitute a different library or portable path
 when a declared native dependency is absent. Wrap raw authority under
 `sys.runtime/**`; expose portable policy and domain instances from `std`.
+Compiler-host-specific adapters belong under `selfhost/runtime/**` and are
+selected for the host separately from the product's target. Keep those private
+ABI bindings out of portable application stdlib modules. A native mutable
+ABI-struct argument borrows its original place; preserve every field/index
+projection and bounds check. Reuse ordinary native target/argument/result
+lowering inside control conditions rather than inventing a second call ABI.
 
 ## 4. Model data with struct, enum, products, Option, and Result
 

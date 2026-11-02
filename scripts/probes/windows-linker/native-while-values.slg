@@ -1,0 +1,30 @@
+abi struct Point { x: Int32, y: Int32 }
+abi struct Rectangle { left: Int32, top: Int32, right: Int32, bottom: Int32 }
+abi struct ConsoleSize { columns: Int16, rows: Int16 }
+
+native user from "user32.dll" {
+    contains rectangle: ref Rectangle, point: Point -> Int32 as "PtInRect"
+}
+
+native kernel from "kernel32.dll" {
+    largestConsole handle: Int64 -> ConsoleSize as "GetLargestConsoleWindowSize"
+}
+
+nonnegativeColumns value: ConsoleSize -> Bool => value.columns >= 0
+
+main {
+    Rectangle { left: 0, top: 0, right: 10, bottom: 10 } => rectangle
+    0 => inputCalls!
+    user.contains(rectangle, Point { x: 3, y: 4 }) != 0 -> while {
+        inputCalls! + 1 => inputCalls!
+        inputCalls! == 2 -> if { break }
+    }
+    "argument=$(inputCalls!)" -> println
+    0 => resultCalls!
+    kernel.largestConsole(0) -> nonnegativeColumns
+        -> while {
+            resultCalls! + 1 => resultCalls!
+            resultCalls! == 2 -> if { break }
+        }
+    "result=$(resultCalls!)" -> println
+}

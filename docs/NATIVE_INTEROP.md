@@ -113,6 +113,15 @@ effect, import, and ownership checking. Implemented ABI-safe types are:
 - `ref AbiStruct` readonly pointers and `mut AbiStruct` mutable pointers as
   inputs.
 
+A mutable ABI-struct input passes the original writable place, including a
+local owner, a forwarded mutable parameter, a struct field, or an indexed
+element. Its address calculation preserves every projection and index check;
+a temporary aggregate copy cannot replace it. Readonly pointer inputs and
+by-value aggregate inputs retain their separate ABI classification. Calls in
+conditions, including short-circuit and `while` conditions, perform the same
+cached-target load, argument preparation and result reconstruction as ordinary
+calls.
+
 `Int`, `Size`, `Text`, dynamic arrays, dictionaries, streams, closures, and
 other Sollang-owned layouts do not cross the C boundary implicitly. Higher-level
 bindings must state their encoding, shape, ownership, and destruction rule.

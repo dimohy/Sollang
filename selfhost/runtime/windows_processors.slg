@@ -1,0 +1,192 @@
+namespace sollang.compiler.runtime.windows_processors
+
+import sys.process as process
+
+# Private compiler-host ABI. Callers select this adapter only on Windows;
+# it does not change the portable application's stdlib or compute-pool policy.
+abi struct CpuRate {
+    flags: UInt32
+    rate: UInt32
+}
+
+abi struct AffinityMask { bits: UInt64 }
+abi struct ProcessGroupCount { value: UInt16 }
+abi struct WideCharacter { value: UInt16 }
+abi struct CharacterType { flags: UInt16 }
+
+abi struct SystemInfo {
+    architecture: UInt16
+    reserved: UInt16
+    pageSize: UInt32
+    minimumAddress: UInt64
+    maximumAddress: UInt64
+    activeMask: UInt64
+    processorCount: UInt32
+    processorType: UInt32
+    allocationGranularity: UInt32
+    processorLevel: UInt16
+    processorRevision: UInt16
+}
+
+native kernel from "kernel32.dll" {
+    currentProcess: -> Int64 as "GetCurrentProcess"
+    affinity process: Int64, mask: mut AffinityMask, system: mut AffinityMask -> Int32 as "GetProcessAffinityMask"
+    processGroups process: Int64, count: mut ProcessGroupCount, groups: Int64 -> Int32 as "GetProcessGroupAffinity"
+    activeGroups: -> UInt16 as "GetActiveProcessorGroupCount"
+    activeProcessors group: UInt16 -> UInt32 as "GetActiveProcessorCount"
+    lastError: -> UInt32 as "GetLastError"
+    systemInfo information: mut SystemInfo -> Unit as "GetSystemInfo"
+    jobCpuRate job: Int64, kind: Int32, rate: mut CpuRate, length: UInt32, returned: Int64 -> Int32 as "QueryInformationJobObject"
+    characterType kind: UInt32, character: ref WideCharacter, count: Int32, classification: mut CharacterType -> Int32 as "GetStringTypeW"
+}
+
+digit value: UInt8 -> Int {
+    value >= '0' and value <= '9' -> if { Int(value - '0') -> return }
+    value >= 'a' and value <= 'f' -> if { Int(value - 'a') + 10 -> return }
+    value >= 'A' and value <= 'F' -> if { Int(value - 'A') + 10 -> return }
+    -1
+}
+
+# Windows' wide numeric parser uses NLS C1_SPACE, including legacy U+180E.
+# Query that authority rather than copying a different Unicode whitespace table.
+whitespaceWidth value: Text, index: UIntSize -> UIntSize {
+    value -> byte(index) => first
+    UInt32(first) => character!
+    UIntSize(1) => width!
+    first >= 128 -> if {
+        first >= 194 and first < 224 and index + 1 < (value -> len)
+            -> if {
+                value -> byte(index + 1) => second
+                second < 128 or second >= 192 -> if { 0 -> return }
+                UInt32(first % 32) * 64 + UInt32(second % 64) => character!
+                2 => width!
+            } else {
+                first >= 224 and first < 240 and index + 2 < (value -> len)
+                    -> unless { 0 -> return }
+                value -> byte(index + 1) => second
+                value -> byte(index + 2) => third
+                second < 128 or second >= 192 or third < 128 or third >= 192
+                    -> if { 0 -> return }
+                UInt32(first % 16) * 4096 + UInt32(second % 64) * 64 + UInt32(third % 64) => character!
+                character! < 2048 or (character! >= 55296 and character! <= 57343)
+                    -> if { 0 -> return }
+                3 => width!
+            }
+    }
+    WideCharacter { value: UInt16(character!) } => wide
+    CharacterType { flags: 0 } => classification!
+    kernel.characterType(1, wide, 1, classification!) => status
+    status != 0 and (classification!.flags / 8) % 2 == 1
+        -> if { width! } else { 0 }
+}
+
+configuration key: Text, radix: Int32 -> Option<UInt32> uses Environment {
+    Arena(0) => preferredStorage!
+    "DOTNET_$key" -> materialize(preferredStorage!) => preferred
+    Arena(0) => fallbackStorage!
+    "COMPlus_$key" -> materialize(fallbackStorage!) => fallback
+    process.environment(preferred) -> when {
+        Some(value) { (value -> len) > 0 -> if { value } else {
+                process.environment(fallback) -> when {
+                    Some(other) => other
+                    None => ""
+                }
+        } }
+        None { process.environment(fallback) -> when {
+                Some(other) => other
+                None => ""
+        } }
+    } => value
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> whitespaceWidth(index!) => width
+        width == 0 -> if { break }
+        index! + width => index!
+    }
+    false => negative!
+    index! < (value -> len) -> if {
+        value -> byte(index!) => sign
+        sign == '-' => negative!
+        sign == '+' or sign == '-' -> if { index! + 1 => index! }
+    }
+    index! >= (value -> len) -> if { Option<UInt32>.None -> return }
+    radix == 16 and index! + 2 < (value -> len) -> if {
+        value -> byte(index! + 1) => prefix
+        value -> byte(index! + 2) -> digit => afterPrefix
+        (value -> byte(index!)) == '0' and (prefix == 'x' or prefix == 'X') and afterPrefix >= 0
+            -> if { index! + 2 => index! }
+    }
+    index! => firstDigit
+    UInt64(0) => parsed!
+    index! < (value -> len) -> while {
+        value -> byte(index!) -> digit => next
+        next < 0 or next >= Int(radix) -> if { break }
+        parsed! * UInt64(radix) + UInt64(next) => parsed!
+        parsed! > 4294967295 -> if { Option<UInt32>.None -> return }
+        index! + 1 => index!
+    }
+    index! == firstDigit -> if { Option<UInt32>.None -> return }
+    negative! and parsed! > 0 -> if { 4294967296 - parsed! => parsed! }
+    Option<UInt32>.Some(UInt32(parsed!))
+}
+
+configuredFlag key: Text, fallback: Bool -> Bool uses Environment {
+    key -> configuration(16) -> when {
+        Some(value) => value != 0
+        None => fallback
+    }
+}
+
+public available: -> Int uses Environment {
+    "PROCESSOR_COUNT" -> configuration(10) -> when {
+        Some(value) { value > 0 and value <= 65535 -> if { Int(value) -> return } }
+        None {}
+    }
+    kernel.currentProcess() => process
+    ProcessGroupCount { value: 0 } => processGroups!
+    kernel.processGroups(process, processGroups!, 0) => groupStatus
+    groupStatus != 0 or kernel.lastError() != 122
+        -> if { 1 => processGroups!.value }
+    "GCCpuGroup" -> configuredFlag(processGroups!.value > 1) => gcGroups
+    kernel.activeGroups() > 1 and gcGroups => groupsEnabled
+    "Thread_UseAllCpuGroups" -> configuredFlag(processGroups!.value > 1) => allGroups
+    groupsEnabled and allGroups -> if {
+        Int(kernel.activeProcessors(65535))
+    } else {
+        AffinityMask { bits: 0 } => mask!
+        AffinityMask { bits: 0 } => systemMask!
+        kernel.affinity(process, mask!, systemMask!) == 0
+            -> if { 1 } else {
+                0 => count!
+                mask!.bits > 0 -> while {
+                    count! + Int(mask!.bits % 2) => count!
+                    mask!.bits / 2 => mask!.bits
+                }
+                count! == 0 -> if { 64 } else { count! }
+            }
+    } => count!
+    CpuRate { flags: 0, rate: 0 } => rate!
+    kernel.jobCpuRate(0, 15, rate!, 8, 0) != 0 -> if {
+        rate!.flags % 2 == 1 => enabled
+        enabled and (rate!.flags / 4) % 2 == 1 -> if {
+            UInt64(rate!.rate)
+        } else {
+            enabled and (rate!.flags / 16) % 2 == 1 -> if { UInt64(rate!.rate / 65536) } else { UInt64(0) }
+        } => maximumRate
+        maximumRate > 0 and maximumRate < 10000 -> if {
+            groupsEnabled -> if { UInt64(kernel.activeProcessors(65535)) } else {
+                SystemInfo {
+                    architecture: 0, reserved: 0, pageSize: 0
+                    minimumAddress: 0, maximumAddress: 0, activeMask: 0
+                    processorCount: 0, processorType: 0, allocationGranularity: 0
+                    processorLevel: 0, processorRevision: 0
+                } => information!
+                kernel.systemInfo(information!)
+                UInt64(information!.processorCount)
+            } => total
+            Int((maximumRate * total + 9999) / 10000) => limited
+            limited < count! -> if { limited => count! }
+        }
+    }
+    count!
+}

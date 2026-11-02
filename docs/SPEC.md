@@ -1003,6 +1003,9 @@ source form without changing semantics:
   warning is also suppressed when a downstream parameter requires the
   growable-array type, because the proposed fixed-array rewrite would not
   satisfy that contract.
+  Passing a writable place to a mutable parameter marks its named owner as
+  length-unknown for this analysis, including a member or indexed projection
+  and a native ABI parameter. Readonly borrows do not make that transition.
   The same rule applies when a named owner is transferred into an indexed
   array or dictionary element whose declared value type requires a growable
   array. The stored value must still satisfy that exact element type.
@@ -1350,6 +1353,12 @@ the arm result type. The payload binding is only the arm input; it is not an
 implicit replacement for transformations such as `Err(error) => -error`, and
 an unrelated nested enum producer cannot replace an enclosing scalar result.
 Struct literal ABI selection uses the literal's canonical nominal owner id.
+At a native boundary, `mut AbiStruct` denotes the original writable place, not
+a copied value. Local, forwarded, member and indexed places preserve their
+address and bounds checks. Native calls nested in control conditions use the
+same target binding, parameter ABI classification and result reconstruction as
+ordinary calls; entering a `while` or short-circuit region does not change that
+contract. Readonly references and by-value ABI aggregates remain distinct.
 The builtin `Range` has source-independent field metadata from the shared
 `RangeDefinition` schema: `start: Int`, then `endInclusive: Int`. Its constructor
 orders named initializers by that schema, and member access validates the exact

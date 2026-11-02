@@ -1,0 +1,46 @@
+abi struct ClockValue { low: UInt32, high: UInt32 }
+abi struct MaskValue { bits: UInt64 }
+abi struct RateValue { flags: UInt32, rate: UInt32 }
+struct ClockPair { first: ClockValue, second: ClockValue }
+
+native kernel from "kernel32.dll" {
+    clock value: mut ClockValue -> Unit as "GetSystemTimePreciseAsFileTime"
+    affinity process: Int64, processMask: mut MaskValue, systemMask: mut MaskValue -> Int32 as "GetProcessAffinityMask"
+    rate job: Int64, kind: Int32, value: mut RateValue, length: UInt32, returned: Int64 -> Int32 as "QueryInformationJobObject"
+    compare first: ref ClockValue, second: ref ClockValue -> Int32 as "CompareFileTime"
+}
+
+stamp value: mut ClockValue -> Unit { value -> kernel.clock }
+
+main {
+    ClockValue { low: 0, high: 0 } => direct!
+    direct! -> kernel.clock
+    direct!.high > 0 -> if { "primary=ok" } else { "primary=failed" } -> println
+    MaskValue { bits: 0 } => processMask!
+    MaskValue { bits: 0 } => systemMask!
+    kernel.affinity(-1, processMask!, systemMask!) => affinity
+    affinity != 0 and processMask!.bits > 0 and systemMask!.bits > 0
+        -> if { "additional=ok" } else { "additional=failed" } -> println
+    RateValue { flags: 0, rate: 0 } => rate!
+    kernel.rate(0, 15, rate!, 8, 0) != 0
+        -> if { "condition=ok" } else { "condition=failed" } -> println
+    ClockPair { first: ClockValue { low: 0, high: 0 }, second: ClockValue { low: 0, high: 0 } } => pair!
+    pair!.second -> kernel.clock
+    pair!.second.high > 0 -> if { "member=ok" } else { "member=failed" } -> println
+    ClockValue { low: 0, high: 0 } => forwarded!
+    forwarded! -> stamp
+    forwarded!.high > 0 -> if { "forwarded=ok" } else { "forwarded=failed" } -> println
+    ClockValue { low: 0, high: 0 } => first
+    ClockValue { low: 1, high: 0 } => second
+    kernel.compare(first, second) == -1
+        -> if { "readonly=ok" } else { "readonly=failed" } -> println
+    0 => iterations!
+    kernel.rate(0, 15, rate!, 8, 0) != 0 -> while {
+        iterations! + 1 => iterations!
+        iterations! == 2 -> if { break }
+    }
+    iterations! == 2 -> if { "while=ok" } else { "while=failed" } -> println
+    [ClockValue { low: 0, high: 0 }, ClockValue { low: 0, high: 0 }; ~] => clocks!
+    clocks![1] -> kernel.clock
+    clocks![1].high > 0 -> if { "indexed=ok" } else { "indexed=failed" } -> println
+}

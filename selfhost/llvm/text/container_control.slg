@@ -813,11 +813,15 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
             separator -> if { ", " -> print }
             argumentIndex -> aggregateValueIndex(context, state) => argumentValueIndex
             context.ir[argumentValueIndex] => argument
+            argumentIndex -> writeCallArgumentTypeAndValue(callIndex, ownerIndex, ordinal, context, state) => nativeArgumentHandled
+            nativeArgumentHandled -> if {
+                argument.nextOperand -> emitWhileCallArgumentChain(callIndex, whileIndex, ownerIndex, ordinal + 1, true, context, state)
+                return
+            }
             callIndex -> callTargetParameter(ordinal, context, state) => argumentParameterIndex
             false => argumentNeedsReferenceSlot!
             argumentParameterIndex >= 0 -> if {
-                context.ir[argumentParameterIndex] => argumentParameter
-                argumentParameter.typeId >= 0 and context.types[argumentParameter.typeId].kind == 8 and not (argument.typeId >= 0 and context.types[argument.typeId].kind == 8)
+                (callIndex -> callArgumentReferenceOwnerTypeId(argumentParameterIndex, argumentValueIndex, context, state)) >= 0
                     -> if { true => argumentNeedsReferenceSlot! }
             }
             argumentIndex -> callArgumentNeedsSliceProjection(callIndex, ordinal, context, state) => whileArgumentNeedsSliceProjection
@@ -843,6 +847,7 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
                                     argument -> writeIrType(context, state)
                                 }
                                 " " -> print
+                                callIndex -> writeNativeScalarArgumentAttributes(argumentParameterIndex, context, state)
                                 whileArgumentNeedsReferenceValueLoad -> if {
                                     "%while$(whileIndex -> valueNameId(state))_call$(callIndex)_arg$(ordinal)_reference_value" -> print
                                 } else {
@@ -1356,25 +1361,38 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                         }
                                                     }
                                                 } else {
+                                                    valueNodeIndex -> emitNativeTargetLoad(valueNode, context, state)
                                                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: valueNodeIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitWhileCallEnvironmentValues(whileIndex, context, state)
+                                                    valueNodeIndex -> emitNativeCallValuesInRegion(ownerIndex, whileIndex, context, state)
                                                     valueNode.operand0 -> emitWhileCallArgumentPromotions(valueNodeIndex, whileIndex, ownerIndex, 0, context, state)
+                                                    valueNode -> targetsNativeFunction(context, state) => whileNativeCall
                                                     valueNode -> boundedArrayValueTypeId(context, state) => whileBoundedResultTypeId
                                                     whileBoundedResultTypeId >= 0 and valueNode.flags / 8 % 2 == 0
                                                         and not (valueNode -> targetsNativeFunction(context, state)) => whileBoundedResult
-                                                    whileBoundedResult -> if {
-                                                        "  %while$(whileIndex -> valueNameId(state))_bounded$(valueNodeIndex) = call " -> print
-                                                        whileBoundedResultTypeId -> writeValueAbiTypeId(context, state)
-                                                    } else {
-                                                        "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = call " -> print
-                                                        valueNode -> writeIrType(context, state)
-                                                    }
+                                                    whileNativeCall -> if {
+                                                        valueNodeIndex -> writeCallResultPrefix(context, state)
+                                                    } else { whileBoundedResult -> if {
+                                                            "  %while$(whileIndex -> valueNameId(state))_bounded$(valueNodeIndex) = call " -> print
+                                                            whileBoundedResultTypeId -> writeValueAbiTypeId(context, state)
+                                                        } else {
+                                                            "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = call " -> print
+                                                            valueNode -> writeIrType(context, state)
+                                                    } }
                                                     valueNodeIndex -> writeResolvedCallTarget(valueNode, context, state)
                                                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: valueNodeIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitCallEnvironment(context, state) => whileCallEnvironment
                                                     valueNode.operand0 -> emitWhileCallArgumentChain(valueNodeIndex, whileIndex, ownerIndex, 0, false, context, state)
                                                     ")" -> println
-                                                    whileBoundedResult -> if {
-                                                        "while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))" -> emitBoundedArrayHandle("%while$(whileIndex -> valueNameId(state))_bounded$(valueNodeIndex)", whileBoundedResultTypeId, context, state)
-                                                    }
+                                                    whileNativeCall -> if {
+                                                        valueNodeIndex -> emitCallResultFinish(context, state)
+                                                        valueNode.typeOrigin == 1 and valueNode.typeSymbol == 0
+                                                            -> unless {
+                                                                "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = freeze " -> print
+                                                                valueNode -> writeIrType(context, state)
+                                                                " %v$(valueNodeIndex -> valueNameId(state))" -> println
+                                                            }
+                                                    } else { whileBoundedResult -> if {
+                                                            "while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))" -> emitBoundedArrayHandle("%while$(whileIndex -> valueNameId(state))_bounded$(valueNodeIndex)", whileBoundedResultTypeId, context, state)
+                                                    } }
                                                     valueNodeIndex -> emitCallTemporaryDrops(whileIndex, ownerIndex, context, state)
                                                 }
                                         }

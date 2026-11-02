@@ -864,11 +864,40 @@ callBoundedValueParameterTypeId callIndex: Int, ordinal: Int, context: ref emitt
     context.ir[parameterIndex] -> boundedArrayValueTypeId(context, state)
 }
 
+callArgumentReferenceOwnerTypeId callIndex: Int, parameterIndex: Int, argumentIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[parameterIndex] => parameter
+    parameter.typeId < 0 -> if { -1 -> return }
+    context.ir[argumentIndex] => argument
+    context.types[parameter.typeId].kind == 8 -> if {
+        argument.typeId >= 0 and context.types[argument.typeId].kind == 8
+            -> if { -1 -> return }
+        context.types[parameter.typeId].first -> return
+    }
+    (context.ir[callIndex] -> targetsNativeFunction(context, state))
+        and parameter.flags / 2 % 2 == 1
+        and (context -> diagnostics.nativeAbiStructTypeSafe(parameter.typeId, 0))
+        -> if { parameter.typeId -> return }
+    -1
+}
+
 callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
     parameterIndex < 0 -> if { false -> return }
     context.ir[parameterIndex].flags / 2 % 2 == 1
         and not (context.ir[callIndex] -> targetsNativeFunction(context, state))
+}
+
+writeNativeScalarArgumentAttributes callIndex: Int, parameterIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (context.ir[callIndex] -> targetsNativeFunction(context, state)) and parameterIndex >= 0
+        -> unless { return }
+    context.ir[parameterIndex].typeId => typeId
+    typeId < 0 -> if { return }
+    context.types[typeId] => type
+    type.kind == 1 and type.origin == 1 -> unless { return }
+    type.symbol == 3 or type.symbol == 4
+        -> if { "signext " -> print }
+    type.symbol == 8 or type.symbol == 9
+        -> if { "zeroext " -> print }
 }
 
 writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -914,17 +943,7 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
                     argument -> writeIrType(context, state)
                 }
                 " " -> print
-                (context.ir[callIndex] -> targetsNativeFunction(context, state)) and argumentParameterIndex >= 0
-                    -> if {
-                        context.ir[argumentParameterIndex] => nativeScalarParameter
-                        nativeScalarParameter.typeId >= 0 -> if {
-                            context.types[nativeScalarParameter.typeId] => nativeScalarParameterType
-                            nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 3 or nativeScalarParameterType.symbol == 4)
-                                -> if { "signext " -> print }
-                            nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 8 or nativeScalarParameterType.symbol == 9)
-                                -> if { "zeroext " -> print }
-                        }
-                    }
+                callIndex -> writeNativeScalarArgumentAttributes(argumentParameterIndex, context, state)
                 argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state)
                     -> if {
                         "%call$(callIndex)_arg$(ordinal)_integer" -> print
@@ -1439,7 +1458,13 @@ writeNativeSysVCoercionType typeId: Int, eightbyte: Int, context: ref emitterCon
         }
     }
 }
-emitNativeWindowsArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+writeNativeArgumentValue argumentIndex: Int, ownerIndex: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    whileIndex >= 0 -> if {
+        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentIndex } -> writeWhileValue(context, state)
+    } else { argumentIndex -> writeValue(ownerIndex, context, state) }
+}
+
+emitNativeWindowsArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
     parameterIndex >= 0 and argumentIndex >= 0 -> if {
         context.ir[parameterIndex] => parameter
@@ -1457,7 +1482,7 @@ emitNativeWindowsArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: I
             "  store " -> print
             parameter -> writeIrType(context, state)
             " " -> print
-            argumentIndex -> writeValue(ownerIndex, context, state)
+            argumentIndex -> writeNativeArgumentValue(ownerIndex, whileIndex, context, state)
             ", ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
             parameter -> storageAlign(context, state) -> writeDecimalLine
             directWidth > 0 -> if {
@@ -1467,14 +1492,14 @@ emitNativeWindowsArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: I
         }
     }
 }
-emitNativeWindowsArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitNativeWindowsArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or (argumentIndex == context.ir[callIndex].operand0 and (context.ir[argumentIndex].kind == 18 or context.ir[argumentIndex].kind == 27)))
         -> if {
-            argumentIndex -> emitNativeWindowsArgumentValue(callIndex, ownerIndex, ordinal, context, state)
-            context.ir[argumentIndex].nextOperand -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> emitNativeWindowsArgumentValue(callIndex, ownerIndex, ordinal, whileIndex, context, state)
+            context.ir[argumentIndex].nextOperand -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, ordinal + 1, whileIndex, context, state)
         }
 }
-emitNativeWindowsCallValues callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitNativeWindowsCallValues callIndex: Int, ownerIndex: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[callIndex] => call
     context.expectedPathStyle == 1 and (call -> targetsNativeFunction(context, state))
         -> if {
@@ -1486,10 +1511,10 @@ emitNativeWindowsCallValues callIndex: Int, ownerIndex: Int, context: ref emitte
                     ", align " -> print
                     resultWidth == 0 -> if { "16" -> println } else { call -> storageAlign(context, state) -> writeDecimalLine }
                 }
-            call.operand0 -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, 0, context, state)
+            call.operand0 -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, 0, whileIndex, context, state)
         }
 }
-emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
     parameterIndex >= 0 and argumentIndex >= 0 -> if {
         context.ir[parameterIndex] => parameter
@@ -1508,7 +1533,7 @@ emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                 "  store " -> print
                 parameter -> writeIrType(context, state)
                 " " -> print
-                argumentIndex -> writeValue(ownerIndex, context, state)
+                argumentIndex -> writeNativeArgumentValue(ownerIndex, whileIndex, context, state)
                 ", ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
                 parameter -> storageAlign(context, state) -> writeDecimalLine
             } else {
@@ -1517,7 +1542,7 @@ emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                 "  store " -> print
                 parameter -> writeIrType(context, state)
                 " " -> print
-                argumentIndex -> writeValue(ownerIndex, context, state)
+                argumentIndex -> writeNativeArgumentValue(ownerIndex, whileIndex, context, state)
                 ", ptr %native_arg_storage_$(callIndex)_$(ordinal), align " -> print
                 parameter -> storageAlign(context, state) -> writeDecimalLine
                 "  %native_arg_part_$(callIndex)_$(ordinal)_0 = load " -> print
@@ -1534,14 +1559,14 @@ emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int,
         }
     }
 }
-emitNativeSysVArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitNativeSysVArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or (argumentIndex == context.ir[callIndex].operand0 and (context.ir[argumentIndex].kind == 18 or context.ir[argumentIndex].kind == 27)))
         -> if {
-            argumentIndex -> emitNativeSysVArgumentValue(callIndex, ownerIndex, ordinal, context, state)
-            context.ir[argumentIndex].nextOperand -> emitNativeSysVArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> emitNativeSysVArgumentValue(callIndex, ownerIndex, ordinal, whileIndex, context, state)
+            context.ir[argumentIndex].nextOperand -> emitNativeSysVArgumentValues(callIndex, ownerIndex, ordinal + 1, whileIndex, context, state)
         }
 }
-emitNativeSysVCallValues callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitNativeSysVCallValues callIndex: Int, ownerIndex: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[callIndex] => call
     context.expectedPathStyle == 0 and (call -> targetsNativeFunction(context, state))
         -> if {
@@ -1558,14 +1583,18 @@ emitNativeSysVCallValues callIndex: Int, ownerIndex: Int, context: ref emitterCo
                         "  store [2 x i64] zeroinitializer, ptr %native_result_slot_$(callIndex), align 8" -> println
                     }
                 }
-            call.operand0 -> emitNativeSysVArgumentValues(callIndex, ownerIndex, 0, context, state)
+            call.operand0 -> emitNativeSysVArgumentValues(callIndex, ownerIndex, 0, whileIndex, context, state)
         }
 }
 emitNativeCallValues callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    callIndex -> emitNativeCallValuesInRegion(ownerIndex, -1, context, state)
+}
+
+emitNativeCallValuesInRegion callIndex: Int, ownerIndex: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.expectedPathStyle == 1 -> if {
-        callIndex -> emitNativeWindowsCallValues(ownerIndex, context, state)
+        callIndex -> emitNativeWindowsCallValues(ownerIndex, whileIndex, context, state)
     } else {
-        callIndex -> emitNativeSysVCallValues(ownerIndex, context, state)
+        callIndex -> emitNativeSysVCallValues(ownerIndex, whileIndex, context, state)
     }
     context.ir[callIndex] => nativeTryCall
     nativeTryCall -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
