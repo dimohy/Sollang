@@ -284,18 +284,12 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
         -1 => patternTypeAst!
         expression.kind == 59 -> if { expressionAstIndex => patternTypeAst! }
         expression.kind == 15 -> if {
-            0 => patternNameResolutionSearch!
-            patternNameResolutionSearch! < (resolvedNames -> len)
-                -> while {
-                    resolvedNames[patternNameResolutionSearch!] => patternResolvedName
-                    patternResolvedName.astNode == expressionAstIndex
-                        -> if {
-                            prepared.package.symbols[sourceRange.symbolStart + patternResolvedName.symbol] => patternResolvedSymbol
-                            prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59
-                                -> if { patternResolvedSymbol.astNode => patternTypeAst! }
-                        }
-                    patternNameResolutionSearch! + 1 => patternNameResolutionSearch!
-                }
+            resolvedSymbolByAst[expressionAstIndex] => patternResolvedSymbolIndex
+            patternResolvedSymbolIndex >= 0 -> if {
+                prepared.package.symbols[sourceRange.symbolStart + patternResolvedSymbolIndex] => patternResolvedSymbol
+                prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59
+                    -> if { patternResolvedSymbol.astNode => patternTypeAst! }
+            }
         }
         # Name resolution is authoritative for pattern payload
         # uses even when nominal payload typing is deferred. Keep
@@ -568,23 +562,17 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
             and expression.parent >= 0
             and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 11)
             -> if {
-                0 => localBindingNameSearch!
-                localBindingNameSearch! < (resolvedNames -> len)
-                    -> while {
-                        resolvedNames[localBindingNameSearch!] => localBindingName
-                        localBindingName.astNode == expressionAstIndex
-                            -> if {
-                                prepared.package.symbols[sourceRange.symbolStart + localBindingName.symbol] => localBindingSymbol
-                                localBindingSymbol.kind == 9
-                                    or localBindingSymbol.kind == 61
-                                    or localBindingSymbol.kind == 35
-                                    -> if {
-                                        true => knownLocalBindingReference!
-                                        localBindingName.symbol => knownLocalBindingSymbol!
-                                    }
-                            }
-                        localBindingNameSearch! + 1 => localBindingNameSearch!
-                    }
+                resolvedSymbolByAst[expressionAstIndex] => localBindingSymbolIndex
+                localBindingSymbolIndex >= 0 -> if {
+                    prepared.package.symbols[sourceRange.symbolStart + localBindingSymbolIndex] => localBindingSymbol
+                    localBindingSymbol.kind == 9
+                        or localBindingSymbol.kind == 61
+                        or localBindingSymbol.kind == 35
+                        -> if {
+                            true => knownLocalBindingReference!
+                            localBindingSymbolIndex => knownLocalBindingSymbol!
+                        }
+                }
                 # Stream state names are mutable local bindings. Their
                 # uses can be absent from the general resolved-name
                 # table, so resolve them against the nearest preceding
