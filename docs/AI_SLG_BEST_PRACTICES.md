@@ -1865,6 +1865,17 @@ its SLG module; never copy export lists into a second handwritten compiler
 path. Both adapters preserve library order, the bounded prefix scan and exact
 UTF-8 definition bytes. Generated import paths own their storage until linking
 finishes; the caller owns their private work directory and cleanup boundary.
+Runtime LLVM templates opt into bounded multiline constants explicitly. Keep
+the Windows entry constant in `WindowsLinkPolicy` and the shared legacy integer
+reader in `NativeRuntimePolicy`. Its generated region in `llvm/runtime.slg`
+preserves the surrounding authored module and its existing source manifests.
+Regenerate that region through `selfhost-sync`; do not copy or edit its LLVM
+strings. Region markers and the module namespace must be valid before writing,
+and an authored-output change detected during generation aborts publication.
+The same policy supplies Windows floating-point and memory builtin definitions
+and inherited process-handle selection. Preserve all three memory operations
+when LLVM lowers intrinsics to library calls; adding CRT imports does not align
+the runtime implementations.
 Before compiling self-host sources, run `selfhost-sync --root <repository>
 --check` with the selected managed compiler. A source change requires rebuilding
 that compiler; a generated-source change requires regeneration. Both checks
@@ -2172,6 +2183,20 @@ concurrent optimization processes. Record the selected worker count with the
 build inputs; keep the program, optimization level, and verification timeout
 fixed when comparing behavior. `build-focused-selfhost-compiler.ps1 -Jobs`
 forwards the same explicit setting to both C# and SLG seeds.
+
+Keep Windows native linking in `selfhost/windows_linker.slg` and its
+`windows_imports.slg` fragment. The CLI composes tool paths and host processor
+facts, then submits one request; it must not maintain another clang linker
+command or import list. `WindowsLinkPolicy` generates the shared import table,
+object/bitcode/link arguments, executable/library modes, and partition size.
+Change that policy before regenerating its SLG projection. Keep process owners
+explicit while scheduling partitions, join every started child after a failure,
+and read captured logs through the file reader, which also admits empty logs.
+Use a claimed stage's `.slg-tmp` directory for linker intermediates so completed
+verification can clean them through the common artifact lifecycle.
+Initial files pinned in a result's input hashes remain input fixtures even when
+their extension is `.ll` or `.bc`. The cleanup planner and executor must protect
+them while removing newly produced intermediates.
 
 For a long-running focused step, use the common `VerificationExecution` runner
 with an explicit `SlowStepDiagnostics` plan. Set the stage, soft time limit,

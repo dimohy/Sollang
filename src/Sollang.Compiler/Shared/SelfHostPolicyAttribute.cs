@@ -6,4 +6,6 @@ internal sealed class SelfHostPolicyAttribute(string module, string output, stri
     public string Module { get; } = module;
     public string Output { get; } = output;
     public string Source { get; } = source;
+    public bool MultilineText { get; init; }
+    public string? Region { get; init; }
 }

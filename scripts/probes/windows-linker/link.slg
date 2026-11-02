@@ -1,0 +1,39 @@
+namespace sollang.compiler.windows_linker
+
+import sys.process as process
+import sollang.compiler.runtime.windows_processors as processors
+
+main {
+    process.arguments() => args
+    args[1] => home
+    Arena(0) => clangStorage!
+    "$home/bin/clang.exe" -> materialize(clangStorage!) => clang
+    Arena(0) => linkerStorage!
+    "$home/bin/lld-link.exe" -> materialize(linkerStorage!) => linker
+    Arena(0) => libraryStorage!
+    "$home/bin/llvm-lib.exe" -> materialize(libraryStorage!) => library
+    Arena(0) => splitStorage!
+    "$home/bin/llvm-split.exe" -> materialize(splitStorage!) => split
+    args[6] == "none" -> if { Option<Int>.None } else {
+        args[6] -> positiveInteger -> Option<Int>.Some
+    } => maximum
+    args[8] == "inherit" -> if {
+        process.environment("SOLLANG_NATIVE_JOBS") -> when {
+            Some(value) => value
+            None => ""
+        }
+    } else { args[8] } => nativeJobs
+    processors.available() => available
+    Request {
+        clang: clang, lldLink: linker, llvmLib: library, llvmSplit: split
+        llvmPath: args[2], outputPath: args[3], workDirectory: args[4]
+        optimization: args[5], maximumWorkers: maximum, processors: available
+        nativeJobs: nativeJobs, sharedLibrary: args[7] == "true"
+    } => request
+    Arena(0) => storage!
+    request -> link(storage!) -> when {
+        Ok { "processors=$available" -> println }
+        Err(failure) { failure -> reportFailure
+            process.exit(1) }
+    }
+}

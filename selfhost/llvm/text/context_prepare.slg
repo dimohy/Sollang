@@ -909,6 +909,9 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
         }
     not (context -> preparedCodegenBoundaryReused(0))
         -> if {
+            runtimeModule! >= 0 or needsOwnedFileRuntime or needsDirectoryRuntime or needsEnvironmentRuntime
+                or needsProcessRuntime or needsStandardInputSourceTextRuntime or needsSocketCompletionRuntime
+                -> if { "declare dllimport i32 @GetLastError()" -> println }
             needsOwnedFileRuntime or needsSourceTextRuntime or needsProcessRuntime or runtimeModule! >= 0
                 -> if {
                     "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
@@ -922,8 +925,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                 "declare dllimport i32 @DeleteFileW(ptr)" -> println
                 not needsDirectoryRuntime and not usesTextOutput and not capturesParallelOutput and not needsEnvironmentRuntime and not needsProcessRuntime
                     -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
-                not needsDirectoryRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
-                    -> if { "declare dllimport i32 @GetLastError()" -> println }
             }
             capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
                 -> if {
@@ -944,7 +945,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                 "declare dllimport i32 @FindNextFileW(ptr, ptr)" -> println
                 "declare dllimport i32 @FindClose(ptr)" -> println
                 "declare dllimport void @SetLastError(i32)" -> println
-                "declare dllimport i32 @GetLastError()" -> println
                 "declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)" -> println
                 "declare dllimport i32 @GetFullPathNameW(ptr, i32, ptr, ptr)" -> println
                 "declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)" -> println
@@ -959,9 +959,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                     "declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)" -> println
                     "declare dllimport i32 @SetEvent(ptr)" -> println
                 }
-            needsSocketCompletionRuntime and not needsOwnedFileRuntime and not needsDirectoryRuntime
-                and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
-                -> if { "declare dllimport i32 @GetLastError()" -> println }
             needsArgumentsRuntime -> if {
                 "declare dllimport ptr @GetCommandLineW()" -> println
                 "declare dllimport ptr @CommandLineToArgvW(ptr, ptr)" -> println
@@ -974,7 +971,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                 "declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)" -> println
                 not needsDirectoryRuntime -> if {
                     "declare dllimport void @SetLastError(i32)" -> println
-                    "declare dllimport i32 @GetLastError()" -> println
                 }
                 not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime
                     -> if {
@@ -1008,8 +1004,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                     not needsOwnedFileRuntime -> if {
                         "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println
                     }
-                    not needsDirectoryRuntime and not needsEnvironmentRuntime
-                        -> if { "declare dllimport i32 @GetLastError()" -> println }
                 }
                 not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime and not needsEnvironmentRuntime
                     -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
@@ -1027,7 +1021,7 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
             needsDnsRuntime -> if { dnsRuntime.emitWindowsRuntime() }
             needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
             needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
-            needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
+            needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime(not usesTextOutput and not capturesParallelOutput and not needsStandardInputSourceTextRuntime) }
             needsProcessCapture -> if { processRuntime.emitWindowsProcessCaptureRuntime() }
             needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
             needsDirectoryRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime
@@ -1052,8 +1046,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                         -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
                     not needsOwnedFileRuntime and not needsProcessCapture
                         -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
-                    not needsDirectoryRuntime and not needsProcessCapture and not needsEnvironmentRuntime
-                        -> if { "declare dllimport i32 @GetLastError()" -> println }
                     llvmRuntime.emitWindowsStandardInputSourceText()
                 }
             }

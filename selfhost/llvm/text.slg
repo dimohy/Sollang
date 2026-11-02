@@ -140,10 +140,13 @@ emitCoreFunctionGroupsWithEntry context: ref emitterContext.EmitContext, state: 
                         -> while { entryEnd! + 1 => entryEnd! }
                     context.pointerBitWidth == 32 -> if {
                         "define i32 @sollang_start() {" -> println
-                    } else {
-                        usesArguments and context.expectedPathStyle != 1
-                            -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
-                    }
+                    } else { context.expectedPathStyle == 1 -> if {
+                            llvmRuntime.windowsEntryPoint() => entry
+                            "define i32 @$(entry)() {" -> println
+                        } else {
+                            usesArguments and context.expectedPathStyle != 1
+                                -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
+                    } }
                     "entry:" -> println
                     functionIndex! -> emitHoistedControlAllocas(functionIndex! + 1, entryEnd!, true, false, context, state)
                     functionIndex! -> emitHoistedReferenceArgumentAllocas(functionIndex! + 1, entryEnd!, context, state)

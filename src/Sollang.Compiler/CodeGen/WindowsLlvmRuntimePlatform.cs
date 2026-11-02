@@ -1,4 +1,5 @@
 using System.Text;
+using Sollang.Compiler.Shared;
 
 namespace Sollang.Compiler.CodeGen;
 
@@ -6,7 +7,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 {
     public override string TargetTriple => "x86_64-pc-windows-msvc";
 
-    public override string EntryPointName => "sollang_start";
+    public override string EntryPointName => WindowsLinkPolicy.EntryPoint();
 
     public override bool SupportsAsync => true;
 
@@ -2575,16 +2576,9 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %command_ok = icmp ne ptr %command, null
               br i1 %command_ok, label %handles, label %fail
 
-            handles:
-              %has_stdin_override = icmp ne ptr %stdin_override, null
-              %stdin_default = call ptr @GetStdHandle(i32 -10)
-              %stdin_source = select i1 %has_stdin_override, ptr %stdin_override, ptr %stdin_default
-              %has_stdout_override = icmp ne ptr %stdout_override, null
-              %stdout_default = call ptr @GetStdHandle(i32 -11)
-              %stdout_source = select i1 %has_stdout_override, ptr %stdout_override, ptr %stdout_default
-              %has_stderr_override = icmp ne ptr %stderr_override, null
-              %stderr_default = call ptr @GetStdHandle(i32 -12)
-              %stderr_source = select i1 %has_stderr_override, ptr %stderr_override, ptr %stderr_default
+            """);
+        functions.AppendLine(NativeRuntimePolicy.WindowsStandardHandles());
+        functions.AppendLine("""
               %stdin_handle = call ptr @sollang_inherit_windows_handle(ptr %stdin_source)
               %stdout_handle = call ptr @sollang_inherit_windows_handle(ptr %stdout_source)
               %stderr_handle = call ptr @sollang_inherit_windows_handle(ptr %stderr_source)
@@ -3446,32 +3440,9 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i32 1
             }
 
-            define internal i32 @sollang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
-            entry:
-              %exceeds_dword = icmp ugt i64 %len64, 4294967295
-              %bounded_len = select i1 %exceeds_dword, i64 4294967295, i64 %len64
-              %len = trunc i64 %bounded_len to i32
-              %ok = call i32 @ReadFile(ptr %stdin, ptr %data, i32 %len, ptr %read, ptr null)
-              %succeeded = icmp ne i32 %ok, 0
-              br i1 %succeeded, label %success, label %inspect_error
-
-            inspect_error:
-              %error = call i32 @GetLastError()
-              %broken_pipe = icmp eq i32 %error, 109
-              br i1 %broken_pipe, label %eof, label %failure
-
-            eof:
-              store i32 0, ptr %read, align 4
-              ret i32 1
-
-            success:
-              ret i32 1
-
-            failure:
-              ret i32 0
-            }
-
             """);
+
+        functions.AppendLine(NativeRuntimePolicy.LegacyWindowsReadFunction());
 
         if (UsesComputePool)
         {

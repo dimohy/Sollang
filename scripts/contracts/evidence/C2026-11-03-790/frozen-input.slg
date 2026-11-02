@@ -1,0 +1,40 @@
+# Verifies structured child-process execution and exit-status handling.
+import sys.process as process
+
+exitText code: Int -> Text => code -> when {
+    <= 0 => "exit 0"
+    else => "exit nonzero"
+}
+
+describe result: Result<process.ExitStatus, Text> -> Text {
+    result -> when {
+        Result<process.ExitStatus, Text>.Ok(status) => status -> succeeded -> if {
+            status -> exitCode -> exitText
+        } else {
+            "exit nonzero"
+        }
+        Result<process.ExitStatus, Text>.Err(error) => error
+    }
+}
+
+main {
+    process.arguments() => args
+    args -> len => count
+    count > 1 -> if {
+        args[2] => spaced
+        args[3] => unicode
+        "child $spaced" -> println
+        "child $unicode" -> println
+    } else {
+        process.command(args[0]) => command!
+        ["--child", "space value"; ~] => childArgs!
+        command! -> args(childArgs!)
+        command! -> arg("한글")
+        "argv $(command! -> argumentCount)" -> println
+        command! -> status -> describe => status
+        status -> println
+        process.command("sollang-definitely-missing-executable") => missingCommand
+        missingCommand -> status -> describe => missing
+        missing -> println
+    }
+}

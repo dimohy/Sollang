@@ -1,0 +1,184 @@
+namespace sollang.compiler.windows_linker
+
+import sys.process as process
+import sys.file as file
+import sys.path as paths
+import sys.runtime as runtime
+import sollang.compiler.windows_link_policy as windows_policy
+
+struct WindowsImportDefinition {
+    name: Text
+    library: Text
+    marker: Text
+    exports: Text
+}
+
+# The policy generator rejects changes that are not representable in SLG.
+# These views borrow the same immutable generated table as the C# consumer.
+windowsImportDefinitions: -> [WindowsImportDefinition; ~] {
+    windows_policy.importLibraries() => table
+    [WindowsImportDefinition; ~] => definitions!
+    UIntSize(0) => cursor!
+    cursor! < (table -> len) -> while {
+        cursor! => nameStart
+        (table -> byte(cursor!)) != ';' -> while { cursor! + 1 => cursor! }
+        table -> slice(nameStart, cursor! - nameStart) => name
+        cursor! + 1 => cursor!
+        cursor! => libraryStart
+        (table -> byte(cursor!)) != ';' -> while { cursor! + 1 => cursor! }
+        table -> slice(libraryStart, cursor! - libraryStart) => library
+        cursor! + 1 => cursor!
+        cursor! => markerStart
+        (table -> byte(cursor!)) != ';' -> while { cursor! + 1 => cursor! }
+        table -> slice(markerStart, cursor! - markerStart) => marker
+        cursor! + 1 => cursor!
+        cursor! => exportsStart
+        cursor! < (table -> len) and (table -> byte(cursor!)) != '|'
+            -> while { cursor! + 1 => cursor! }
+        table -> slice(exportsStart, cursor! - exportsStart) => exports
+        definitions! -> push(WindowsImportDefinition {
+            name: name, library: library, marker: marker, exports: exports
+        })
+        cursor! + 1 => cursor!
+    }
+    definitions!
+}
+
+definitionBytes definition: WindowsImportDefinition -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    definition.library => dll
+    Arena(0) => headerStorage!
+    "LIBRARY $dll\nEXPORTS\n" -> materialize(headerStorage!) => header
+    bytes! -> appendText(header)
+    UIntSize(0) => index!
+    index! < (definition.exports -> len) -> while {
+        definition.exports -> byte(index!) => value
+        value == ',' -> if { UInt8(10) } else { value } => rendered
+        bytes! -> push(rendered)
+        index! + 1 => index!
+    }
+    bytes!
+}
+
+createImportCore tool: Text, definitionPath: Text, libraryPath: Text, specification: Text, storage: mut Arena -> Result<Unit, Failure> uses File, Process {
+    [UInt8; ~] => bytes!
+    bytes! -> appendText(specification)
+    definitionPath -> file.openWrite -> when {
+        Err(error) {
+            "cannot open import definition '$definitionPath': $error" -> materialize(storage) => message
+            Result<Unit, Failure>.Err(Failure { message: message, unexpected: true }) -> return
+        }
+        Ok(writer) {
+            writer -> writeRangeAt(bytes!, 0, UIntSize(bytes! -> len), 0) -> when {
+                Err(error) {
+                    "cannot write import definition '$definitionPath': $error" -> materialize(storage) => message
+                    Result<Unit, Failure>.Err(Failure { message: message, unexpected: true }) -> return
+                }
+                Ok(count) {
+                    count != UIntSize(bytes! -> len) -> if {
+                        Result<Unit, Failure>.Err(Failure { message: "incomplete import definition write", unexpected: true }) -> return
+                    }
+                }
+            }
+            writer -> file.sync -> unless {
+                Result<Unit, Failure>.Err(Failure { message: "cannot sync import definition", unexpected: true }) -> return
+            }
+        }
+    }
+    Arena(0) => definitionStorage!
+    "/def:$definitionPath" -> materialize(definitionStorage!) => definitionArgument
+    Arena(0) => libraryStorage!
+    "/out:$libraryPath" -> materialize(libraryStorage!) => libraryArgument
+    [tool, "/nologo", "/machine:x64", definitionArgument, libraryArgument; ~] -> runTool(libraryPath, storage)
+}
+
+createImports tool: Text, llvmPath: Text, workDirectory: Text, libraries: mut [paths.Path; ~], storage: mut Arena -> Result<Unit, Failure> uses File, Process {
+    windowsImportDefinitions() -> each definition {
+        (definition.marker -> len) == 0 -> if { true } else {
+            llvmPath -> containsPrefixMarker(definition.marker) -> when {
+                Ok(required) { required }
+                Err(error) {
+                    "cannot inspect native LLVM imports: $error" -> materialize(storage) => message
+                    Result<Unit, Failure>.Err(Failure { message: message, unexpected: true }) -> return
+                }
+            }
+        } => required
+        required -> if {
+            Arena(0) => definitionStorage!
+            Arena(0) => libraryStorage!
+            definition.name => name
+            "$workDirectory/$name.def" -> materialize(definitionStorage!) => definitionPath
+            "$workDirectory/$name.lib" -> materialize(libraryStorage!) => libraryPath
+            definition -> definitionBytes => bytes
+            bytes -> file.borrowBytes => source
+            source -> slice(0, source -> len) => specification
+            tool -> createImportCore(definitionPath, libraryPath, specification, storage) -> when {
+                Ok {}
+                Err(failure) { Result<Unit, Failure>.Err(failure) -> return }
+            }
+            libraryPath -> paths.fromText(paths.nativeStyle()) => path
+            libraries -> push(path)
+        }
+    }
+    Result<Unit, Failure>.Ok
+}
+
+# Compatibility edges for the focused import probe and pre-integration CLI.
+# The full linker consumes the typed core and owns error presentation itself.
+public createWindowsImportLibraries tool: Text, llvmPath: Text, workDirectory: Text, libraries: mut [paths.Path; ~] -> Int uses Console, File, Process {
+    Arena(0) => storage!
+    tool -> createImports(llvmPath, workDirectory, libraries, storage!) -> when {
+        Ok { 0 }
+        Err(failure) { failure -> reportFailure
+            1 }
+    }
+}
+
+public createImportLibrary tool: Text, definitionPath: Text, libraryPath: Text, specification: Text -> Int uses Console, File, Process {
+    Arena(0) => storage!
+    tool -> createImportCore(definitionPath, libraryPath, specification, storage!) -> when {
+        Ok { 0 }
+        Err(failure) { failure -> reportFailure
+            1 }
+    }
+}
+
+# Match the reference Windows linker's bounded declaration-prefix scan.
+# A failed read is an error, never evidence that COM imports are unnecessary.
+public usesComInterop llvmPath: Text -> Result<Bool, Text> uses File {
+    llvmPath -> containsPrefixMarker("declare dllimport i32 @CoInitializeEx")
+}
+
+containsPrefixMarker llvmPath: Text, marker: Text -> Result<Bool, Text> uses File {
+    llvmPath -> file.openRead -> when {
+        Ok(reader) {
+            [UInt8; ~] => buffer!
+            0..<4096 -> each { buffer! -> push(0) }
+            UInt64(0) => offset!
+            UIntSize(0) => matched!
+            offset! < 1048576 -> while {
+                reader -> readIntoAt(buffer!, offset!) -> when {
+                    Ok(count) {
+                        count == 0 -> if { Result<Bool, Text>.Ok(false) -> return }
+                        0 => index!
+                        index! < Int(count) and offset! + UInt64(index!) < 1048576
+                            -> while {
+                                buffer![index!] => value
+                                value == (marker -> byte(matched!)) -> if {
+                                    matched! + 1 => matched!
+                                } else {
+                                    value == (marker -> byte(0)) -> if { 1 } else { 0 } => matched!
+                                }
+                                matched! == (marker -> len) -> if { Result<Bool, Text>.Ok(true) -> return }
+                                index! + 1 => index!
+                            }
+                        offset! + UInt64(count) => offset!
+                    }
+                    Err(error) { Result<Bool, Text>.Err(error) -> return }
+                }
+            }
+            Result<Bool, Text>.Ok(false)
+        }
+        Err(error) { Result<Bool, Text>.Err(error) }
+    }
+}

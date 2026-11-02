@@ -2223,6 +2223,13 @@ println -> sys.io.println
 readInt -> sys.io.readInt
 ```
 
+The legacy `readInt` prompt operation reads at most 64 input bytes, accepts
+ASCII decimal digits surrounded only by space, tab, CR, or LF, and narrows the
+parsed value to the legacy `Int` result. A sign, a non-whitespace suffix, empty
+input, or an input error terminates the process with status 1 after flushing
+the prompt. The Windows C# and self-host implementations use the same reader
+and parser template; this operation does not depend on the CRT `getchar` API.
+
 ### TCP, UDP, and QUIC
 
 `std.net.socket` is the portable public socket module for `windows-x64` and
@@ -3678,6 +3685,12 @@ view alone does not grant this authority.
 Binding a directly named owned payload to a new local transfers its cleanup
 obligation to that local. A fixed-storage value copy preserves the source
 obligation instead. Both compilers record this distinction before arm cleanup.
+Continuing control-flow branches compare the same ownership transfers whether
+an owner enters a `move` parameter or owned container storage. A terminal
+container insertion counts as a transfer of its inserted owner; the mutable
+container receiver remains borrowed. Mixing a transfer with a continuing path
+that retains the owner is rejected. A terminating path contributes no ownership
+state to the continuation.
 
 The same transfer rule applies when an aggregate containing a borrowed owned
 value enters owned container storage through `push`, `put`, heap insertion, or

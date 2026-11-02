@@ -4,91 +4,6 @@ import sys.process as process
 import sys.file as file
 import sys.path as paths
 import sys.runtime as runtime
-import sollang.compiler.windows_link_policy as windows_policy
-
-struct WindowsImportDefinition {
-    name: Text
-    library: Text
-    marker: Text
-    exports: Text
-}
-
-# The policy generator rejects changes that are not representable in SLG.
-# These views borrow the same immutable generated table as the C# consumer.
-windowsImportDefinitions: -> [WindowsImportDefinition; ~] {
-    windows_policy.importLibraries() => table
-    [WindowsImportDefinition; ~] => definitions!
-    UIntSize(0) => cursor!
-    cursor! < (table -> len) -> while {
-        cursor! => nameStart
-        (table -> byte(cursor!)) != ';' -> while { cursor! + 1 => cursor! }
-        table -> slice(nameStart, cursor! - nameStart) => name
-        cursor! + 1 => cursor!
-        cursor! => libraryStart
-        (table -> byte(cursor!)) != ';' -> while { cursor! + 1 => cursor! }
-        table -> slice(libraryStart, cursor! - libraryStart) => library
-        cursor! + 1 => cursor!
-        cursor! => markerStart
-        (table -> byte(cursor!)) != ';' -> while { cursor! + 1 => cursor! }
-        table -> slice(markerStart, cursor! - markerStart) => marker
-        cursor! + 1 => cursor!
-        cursor! => exportsStart
-        cursor! < (table -> len) and (table -> byte(cursor!)) != '|'
-            -> while { cursor! + 1 => cursor! }
-        table -> slice(exportsStart, cursor! - exportsStart) => exports
-        definitions! -> push(WindowsImportDefinition {
-            name: name, library: library, marker: marker, exports: exports
-        })
-        cursor! + 1 => cursor!
-    }
-    definitions!
-}
-
-# Caller claims a private work directory and retains its products until all
-# object/link consumers finish. Returned Path values own their storage.
-public createWindowsImportLibraries tool: Text, llvmPath: Text, workDirectory: Text, libraries: mut [paths.Path; ~] -> Int uses Console, File, Process {
-    windowsImportDefinitions() -> each definition {
-        (definition.marker -> len) == 0 -> if { true } else {
-            llvmPath -> containsPrefixMarker(definition.marker) -> when {
-                Ok(required) { required }
-                Err(error) {
-                    "sollang: cannot inspect native LLVM imports: $error" -> runtime.eprintln
-                    -1 -> return
-                }
-            }
-        } => required
-        required -> if {
-            Arena(0) => definitionPathStorage!
-            Arena(0) => libraryPathStorage!
-            definition.name => name
-            "$workDirectory/$name.def" -> materialize(definitionPathStorage!) => definitionPath
-            "$workDirectory/$name.lib" -> materialize(libraryPathStorage!) => libraryPath
-            [UInt8; ~] => bytes!
-            definition.library => dll
-            Arena(0) => headerStorage!
-            "LIBRARY $dll\nEXPORTS\n" -> materialize(headerStorage!) => header
-            UIntSize(0) => index!
-            index! < (header -> len) -> while {
-                bytes! -> push(header -> byte(index!))
-                index! + 1 => index!
-            }
-            UIntSize(0) => symbolIndex!
-            symbolIndex! < (definition.exports -> len) -> while {
-                definition.exports -> byte(symbolIndex!) => value
-                value == ',' -> if { UInt8(10) } else { value } => rendered
-                bytes! -> push(rendered)
-                symbolIndex! + 1 => symbolIndex!
-            }
-            bytes! -> file.borrowBytes => source
-            source -> slice(0, source -> len) => specification
-            tool -> createImportLibrary(definitionPath, libraryPath, specification) => code
-            code != 0 -> if { code -> return }
-            libraryPath -> paths.fromText(paths.Style.Windows) => path
-            libraries -> push(path)
-        }
-    }
-    0
-}
 
 public executablePath home: Text, name: Text, hostTarget: Int, storage: mut Arena -> Text {
     (home -> len) == 0 -> if { name -> return }
@@ -196,46 +111,6 @@ public linkLinux clang: Text, llvmPath: Text, objectPath: Text, output: Text, op
     0
 }
 
-# The caller claims the definition/library stage names. Match WindowsLinker's
-# explicit llvm-lib import generation instead of relying on CRT startup objects
-# to pull imports into a /noentry DLL.
-public createImportLibrary tool: Text, definitionPath: Text, libraryPath: Text, specification: Text -> Int uses Console, File, Process {
-    [UInt8; ~] => bytes!
-    UIntSize(0) => index!
-    index! < (specification -> len) -> while {
-        bytes! -> push(specification -> byte(index!))
-        index! + 1 => index!
-    }
-    definitionPath -> file.openWrite -> when {
-        Err(error) { "sollang: cannot open import definition '$definitionPath': $error" -> println
-            -1 -> return }
-        Ok(writer) {
-            writer -> writeRangeAt(bytes!, 0, UIntSize(bytes! -> len), 0) -> when {
-                Err(error) { "sollang: cannot write import definition '$definitionPath': $error" -> println
-                    -1 -> return }
-                Ok(count) { count != UIntSize(bytes! -> len) -> if {
-                        "sollang: incomplete import definition '$definitionPath' ($count bytes)" -> println
-                        -1 -> return
-                } }
-            }
-            writer -> file.sync -> unless {
-                "sollang: cannot sync import definition '$definitionPath'" -> println
-                -1 -> return
-            }
-        }
-    }
-    Arena(0) => definitionArgumentStorage!
-    Arena(0) => libraryArgumentStorage!
-    "/def:$definitionPath" -> materialize(definitionArgumentStorage!) => definitionArgument
-    "/out:$libraryPath" -> materialize(libraryArgumentStorage!) => libraryArgument
-    [tool, "/nologo", "/machine:x64", definitionArgument, libraryArgument; ~] => arguments
-    process.Command { argv: arguments, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } -> run -> when {
-        Ok(code) { code }
-        Err(error) { "sollang: cannot run import library tool '$tool': $error" -> println
-            -1 }
-    }
-}
-
 # An explicit CLI option owns precedence. When it is absent, use the same
 # process-level LLVM contract as the managed bootstrap compiler. Missing and
 # empty environment values deliberately remain empty so the caller can use
@@ -245,45 +120,5 @@ public llvmHome explicit: Text -> Text uses Environment {
     process.environment("SOLLANG_LLVM_HOME") -> when {
         Option<Text>.Some(value) => value
         Option<Text>.None => ""
-    }
-}
-
-# Match the reference Windows linker's bounded declaration-prefix scan.
-# A failed read is an error, never evidence that COM imports are unnecessary.
-public usesComInterop llvmPath: Text -> Result<Bool, Text> uses File {
-    llvmPath -> containsPrefixMarker("declare dllimport i32 @CoInitializeEx")
-}
-
-containsPrefixMarker llvmPath: Text, marker: Text -> Result<Bool, Text> uses File {
-    llvmPath -> file.openRead -> when {
-        Ok(reader) {
-            [UInt8; ~] => buffer!
-            0..<4096 -> each { buffer! -> push(0) }
-            UInt64(0) => offset!
-            UIntSize(0) => matched!
-            offset! < 1048576 -> while {
-                reader -> readIntoAt(buffer!, offset!) -> when {
-                    Ok(count) {
-                        count == 0 -> if { Result<Bool, Text>.Ok(false) -> return }
-                        0 => index!
-                        index! < Int(count) and offset! + UInt64(index!) < 1048576
-                            -> while {
-                                buffer![index!] => value
-                                value == (marker -> byte(matched!)) -> if {
-                                    matched! + 1 => matched!
-                                } else {
-                                    value == (marker -> byte(0)) -> if { 1 } else { 0 } => matched!
-                                }
-                                matched! == (marker -> len) -> if { Result<Bool, Text>.Ok(true) -> return }
-                                index! + 1 => index!
-                            }
-                        offset! + UInt64(count) => offset!
-                    }
-                    Err(error) { Result<Bool, Text>.Err(error) -> return }
-                }
-            }
-            Result<Bool, Text>.Ok(false)
-        }
-        Err(error) { Result<Bool, Text>.Err(error) }
     }
 }

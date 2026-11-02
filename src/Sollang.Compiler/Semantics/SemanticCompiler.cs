@@ -36,6 +36,8 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<FlowTarget> _resolvedContainerFlowTargets =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Expression, IReadOnlyList<string>> _ownedContainerMutationTransfers =
+        new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _validatingGenericSpecializations = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionBindings =
         new(ReferenceEqualityComparer.Instance);
@@ -11215,6 +11217,9 @@ internal sealed partial class SemanticCompiler
                 _resolvedContainerFlowTargets.Add(target);
                 if (containerFlowResult.Type == BoundType.Unit)
                 {
+                    // A mutation can also be a block's terminal expression,
+                    // without an enclosing ExpressionStatement to record it.
+                    GetOwnedContainerMutationConsumedSourceNames(expression, bindings);
                     return containerFlowResult;
                 }
 
@@ -18222,8 +18227,13 @@ internal sealed partial class SemanticCompiler
         }
         // Projected transfers retain the owner binding for live sibling fields.
         // Code generation tracks and rejects reuse of the exact moved paths.
-        return consumed.Where(static transfer => transfer.FieldPath.Count == 0)
+        var transferredOwners = consumed.Where(static transfer => transfer.FieldPath.Count == 0)
             .Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal).ToArray();
+        // Preserve the transfers selected while typing the mutation. Branch
+        // joins must count an insertion just as they count a move parameter;
+        // the container receiver itself remains borrowed.
+        _ownedContainerMutationTransfers[expression] = transferredOwners;
+        return transferredOwners;
     }
 
     private sealed record OwnedLiteralTransfer(string OwnerName, IReadOnlyList<string> FieldPath);
@@ -18685,6 +18695,12 @@ internal sealed partial class SemanticCompiler
         }
 
         if (isResult && !copyResult && expression is NameExpression name && name.Name == inputName)
+        {
+            return MoveInputDisposition.Transferred;
+        }
+
+        if (_ownedContainerMutationTransfers.TryGetValue(expression, out var mutationTransfers)
+            && mutationTransfers.Contains(inputName, StringComparer.Ordinal))
         {
             return MoveInputDisposition.Transferred;
         }

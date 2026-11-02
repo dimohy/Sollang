@@ -1,0 +1,457 @@
+namespace sollang.compiler.windows_linker
+
+import sys.process as process
+import sys.file as file
+import sys.path as paths
+import sys.runtime as runtime
+import sollang.compiler.windows_link_policy as policy
+import sollang.compiler.runtime.windows_poll as poll
+
+public struct Plan { public workers: Int, public partitions: Int }
+public struct Failure { public message: Text, public unexpected: Bool }
+
+public struct Request {
+    public clang: Text
+    public lldLink: Text
+    public llvmLib: Text
+    public llvmSplit: Text
+    public llvmPath: Text
+    public outputPath: Text
+    public workDirectory: Text
+    public optimization: Text
+    public maximumWorkers: Option<Int>
+    public processors: Int
+    public nativeJobs: Text
+    public sharedLibrary: Bool
+}
+
+# This is the .NET whitespace set used by IsNullOrWhiteSpace/TrimEnd, not
+# Windows NLS's wider numeric-prefix whitespace classification.
+whitespaceWidth value: Text, index: UIntSize -> UIntSize {
+    value -> byte(index) => first
+    first == 32 or (first >= 9 and first <= 13) -> if { 1 -> return }
+    first == 194 and index + 1 < (value -> len) -> if {
+        value -> byte(index + 1) => second
+        second == 133 or second == 160 -> if { 2 -> return }
+    }
+    index + 2 >= (value -> len) -> if { 0 -> return }
+    value -> byte(index + 1) => second
+    value -> byte(index + 2) => third
+    first == 225 and second == 154 and third == 128
+        -> if { 3 -> return }
+    first == 226 and second == 128 -> if {
+        (third >= 128 and third <= 138) or third == 168 or third == 169 or third == 175
+            -> if { 3 -> return }
+    }
+    first == 226 and second == 129 and third == 159
+        -> if { 3 -> return }
+    first == 227 and second == 128 and third == 128
+        -> if { 3 -> return }
+    0
+}
+
+isBlank value: Text -> Bool {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> whitespaceWidth(index!) => width
+        width == 0 -> if { false -> return }
+        index! + width => index!
+    }
+    true
+}
+
+trimEnd value: Text -> Text {
+    UIntSize(0) => index!
+    UIntSize(0) => kept!
+    index! < (value -> len) -> while {
+        value -> whitespaceWidth(index!) => width
+        width > 0 -> if { index! + width => index! } else {
+            index! + 1 => index!
+            index! => kept!
+        }
+    }
+    value -> slice(0, kept!)
+}
+
+# NumberStyles.Integer accepts ASCII surrounding whitespace in the measured
+# Int32 parser. An entirely Unicode-blank setting was handled before this call.
+positiveInteger value: Text -> Int {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => byte
+        byte == 32 or (byte >= 9 and byte <= 13) -> unless { break }
+        index! + 1 => index!
+    }
+    index! < (value -> len) and (value -> byte(index!)) == '+'
+        -> if { index! + 1 => index! }
+    index! => firstDigit
+    0 => parsed!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => byte
+        byte < '0' or byte > '9' -> if { break }
+        Int(byte - '0') => digit
+        parsed! > (2147483647 - digit) / 10 -> if { -1 -> return }
+        parsed! * 10 + digit => parsed!
+        index! + 1 => index!
+    }
+    index! == firstDigit or parsed! == 0 -> if { -1 -> return }
+    index! < (value -> len) -> while {
+        value -> byte(index!) => byte
+        byte == 32 or (byte >= 9 and byte <= 13) -> unless { -1 -> return }
+        index! + 1 => index!
+    }
+    parsed!
+}
+
+public jobLimit processors: Int, maximumWorkers: Option<Int>, nativeJobs: Text -> Result<Int, Text> {
+    processors > 0 -> if { processors } else { 1 } => available
+    maximumWorkers -> when {
+        Some(value) {
+            value < 1 -> if { Result<Int, Text>.Err("--jobs expects a positive integer") -> return }
+            value < available -> if { value } else { available } => workers
+            Result<Int, Text>.Ok(workers) -> return
+        }
+        None {}
+    }
+    nativeJobs -> isBlank -> if { Result<Int, Text>.Ok(available) -> return }
+    nativeJobs -> positiveInteger => requested
+    requested < 1 -> if { Result<Int, Text>.Err("SOLLANG_NATIVE_JOBS must be a positive integer") -> return }
+    requested < available -> if { requested } else { available } => workers
+    Result<Int, Text>.Ok(workers)
+}
+
+partitionPlan request: Request, workers: Int, llvmBytes: UInt64 -> Plan {
+    request.processors > 0 -> if { request.processors } else { 1 } => available
+    request.maximumWorkers -> when { Some(_) => available
+        None => workers } => maximumPartitions
+    llvmBytes == 0 -> if { UInt64(1) } else {
+        (llvmBytes - 1) / policy.targetBytesPerPartition() + 1
+    } => sizePartitions
+    sizePartitions < UInt64(available) -> if { Int(sizePartitions) } else { available } => sized
+    sized < maximumPartitions -> if { sized } else { maximumPartitions } => partitions
+    Plan { workers: workers, partitions: partitions }
+}
+
+arguments specification: Text, optimization: Text -> [Text; ~] {
+    [Text; ~] => result!
+    UIntSize(0) => start!
+    UIntSize(0) => index!
+    index! <= (specification -> len) -> while {
+        index! == (specification -> len) or (specification -> byte(index!)) == ';'
+            -> if {
+                specification -> slice(start!, index! - start!) => token
+                token == ":optimization:" -> if { optimization } else { token } => argument
+                result! -> push(argument)
+                index! + 1 => start!
+            }
+        index! + 1 => index!
+    }
+    result!
+}
+
+appendText bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+struct ToolTask {
+    child: process.Child
+    program: paths.Path
+    output: paths.Path
+    error: paths.Path
+}
+
+struct ToolOutcome {
+    program: paths.Path
+    output: paths.Path
+    error: paths.Path
+    code: Int
+}
+
+spawnTool argv: [Text; ~], logPrefix: Text -> Result<ToolTask, Text> uses Process {
+    argv[0] -> paths.fromText(paths.nativeStyle()) => program
+    Arena(0) => outputStorage!
+    "$logPrefix.stdout" -> materialize(outputStorage!) => outputText
+    outputText -> paths.fromText(paths.nativeStyle()) => output
+    Arena(0) => errorStorage!
+    "$logPrefix.stderr" -> materialize(errorStorage!) => errorText
+    errorText -> paths.fromText(paths.nativeStyle()) => error
+    process.Command {
+        argv: argv, workingDirectoryValue: "", hasWorkingDirectory: false
+        environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true
+        standardInput: process.Input.Inherit
+        standardOutput: process.Output.File(outputText), standardError: process.Output.File(errorText)
+    } -> spawn -> when {
+        Ok(child) { Result<ToolTask, Text>.Ok(ToolTask { child: child, program: program, output: output, error: error }) }
+        Err(error) { Result<ToolTask, Text>.Err(error) }
+    }
+}
+
+finishTool task: move ToolTask -> Result<ToolOutcome, Text> uses Process {
+    task.child -> wait -> when {
+        Ok(status) { Result<ToolOutcome, Text>.Ok(ToolOutcome {
+                program: task.program, output: task.output, error: task.error, code: status.code
+            }) }
+        Err(error) { Result<ToolOutcome, Text>.Err(error) }
+    }
+}
+
+fileName value: Text -> Text {
+    UIntSize(0) => start!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => byte
+        byte == '/' or byte == '\\' -> if { index! + 1 => start! }
+        index! + 1 => index!
+    }
+    value -> slice(start!, (value -> len) - start!)
+}
+
+outputStem value: Text -> Text {
+    value -> fileName => name
+    name -> len => end!
+    UIntSize(0) => index!
+    index! < (name -> len) -> while {
+        (name -> byte(index!)) == '.' -> if { index! => end! }
+        index! + 1 => index!
+    }
+    name -> slice(0, end!)
+}
+
+readLog path: Text, storage: mut Arena -> Result<Text, Text> uses File {
+    path -> file.openRead -> when {
+        Ok(value) { value }
+        Err(error) { Result<Text, Text>.Err(error) -> return }
+    } => reader
+    [UInt8; ~] => buffer!
+    0..<4096 -> each { buffer! -> push(0) }
+    [UInt8; ~] => bytes!
+    UInt64(0) => offset!
+    true -> while {
+        reader -> readIntoAt(buffer!, offset!) -> when {
+            Ok(count) { count }
+            Err(error) { Result<Text, Text>.Err(error) -> return }
+        } => count
+        count == 0 -> if { break }
+        0..<Int(count) -> each index { bytes! -> push(buffer![index]) }
+        offset! + UInt64(count) => offset!
+    }
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> materialize(storage) -> Result<Text, Text>.Ok
+}
+
+failureMessage outcome: ref ToolOutcome, storage: mut Arena -> Result<Text, Text> uses File {
+    outcome.program -> pathText -> fileName => name
+    Arena(0) => headerStorage!
+    "$name failed with exit code $(outcome.code)" -> materialize(headerStorage!) => header
+    outcome.output -> pathText -> readLog(storage) -> when {
+        Ok(value) { value -> trimEnd }
+        Err(error) { Result<Text, Text>.Err(error) -> return }
+    } => outputText
+    outcome.error -> pathText -> readLog(storage) -> when {
+        Ok(value) { value -> trimEnd }
+        Err(error) { Result<Text, Text>.Err(error) -> return }
+    } => errorText
+    [UInt8; ~] => bytes!
+    bytes! -> appendText(header)
+    (outputText -> len) > 0 -> if { bytes! -> push(10)
+        bytes! -> appendText(outputText) }
+    (errorText -> len) > 0 -> if { bytes! -> push(10)
+        bytes! -> appendText(errorText) }
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> materialize(storage) -> Result<Text, Text>.Ok
+}
+
+runTool argv: [Text; ~], logPrefix: Text, storage: mut Arena -> Result<Unit, Failure> uses File, Process {
+    argv -> spawnTool(logPrefix) -> when {
+        Ok(task) { task }
+        Err(error) { Result<Unit, Failure>.Err(Failure { message: error, unexpected: true }) -> return }
+    } -> finishTool -> when {
+        Ok(outcome) {
+            outcome.code == 0 -> if { Result<Unit, Failure>.Ok -> return }
+            outcome -> failureMessage(storage) -> when {
+                Ok(value) { value }
+                Err(error) { Result<Unit, Failure>.Err(Failure { message: error, unexpected: true }) -> return }
+            } => message
+            Result<Unit, Failure>.Err(Failure { message: message, unexpected: false })
+        }
+        Err(error) { Result<Unit, Failure>.Err(Failure { message: error, unexpected: true }) }
+    }
+}
+
+public reportFailure failure: Failure -> Unit uses Console {
+    failure.unexpected -> if {
+        "sollang: unexpected failure: $(failure.message)" -> runtime.eprintln
+    } else { "sollang: $(failure.message)" -> runtime.eprintln }
+}
+
+objectArguments request: Request, input: Text, output: Text, partition: Bool -> [Text; ~] {
+    [request.clang,; ~] => argv!
+    policy.objectArguments() -> arguments(request.optimization) -> each argument { argv! -> push(argument) }
+    partition -> if { argv! -> push("-x")
+        argv! -> push("ir") }
+    ["-c", input, "-o", output] -> each argument { argv! -> push(argument) }
+    argv!
+}
+
+compilePartitions request: Request, plan: Plan, objects: ref [paths.Path; ~], storage: mut Arena -> Result<Unit, Failure> uses Console, File, Process {
+    request.workDirectory => directory
+    request.outputPath -> outputStem => name
+    Arena(0) => bitcodeStorage!
+    "$directory/$name.partition-input.bc" -> materialize(bitcodeStorage!) => bitcode
+    Arena(0) => prefixStorage!
+    "$directory/$name.partition.bc" -> materialize(prefixStorage!) => prefix
+    [request.clang,; ~] => optimize!
+    policy.bitcodeArguments() -> arguments(request.optimization) -> each argument { optimize! -> push(argument) }
+    ["-c", request.llvmPath, "-o", bitcode] -> each argument { optimize! -> push(argument) }
+    optimize! -> runTool(bitcode, storage) -> when {
+        Ok {}
+        Err(failure) { Result<Unit, Failure>.Err(failure) -> return }
+    }
+    Arena(0) => countStorage!
+    "$(plan.partitions)" -> materialize(countStorage!) => count
+    [request.llvmSplit, "-j", count, "--round-robin", "-o", prefix, bitcode; ~]
+        -> runTool(prefix, storage) -> when {
+            Ok {}
+            Err(failure) { Result<Unit, Failure>.Err(failure) -> return }
+        }
+    [ToolTask; ~] => active!
+    [ToolOutcome; ~] => failures!
+    0 => next!
+    0 => completed!
+    false => stopClaims!
+    false => coordinationFailed!
+    (not stopClaims! and next! < plan.partitions) or (active! -> len) > 0
+        -> while {
+            not stopClaims! and next! < plan.partitions and (active! -> len) < plan.workers
+                -> while {
+                    Arena(0) => inputStorage!
+                    "$prefix$(next!)" -> materialize(inputStorage!) => input
+                    objects[next!] -> pathText => output
+                    request -> objectArguments(input, output, true) -> spawnTool(output) -> when {
+                        Ok(task) { active! -> push(task) }
+                        Err(_) { true => stopClaims!
+                            true => coordinationFailed! }
+                    }
+                    next! + 1 => next!
+                }
+            false => observed!
+            active! -> len => remaining!
+            remaining! > 0 -> while {
+                # Child is affine: poll one owned task outside the queue, then
+                # return an unfinished owner rather than aliasing an element.
+                active! -> take(0) => task!
+                task!.child -> tryWait -> when {
+                    Ok(status) { status -> when {
+                            Some(_) => true
+                            None => false
+                    } }
+                    Err(_) { true => stopClaims!
+                        true => coordinationFailed!
+                        true }
+                } => ready
+                ready -> if {
+                    true => observed!
+                    task! -> finishTool -> when {
+                        Ok(outcome) {
+                            outcome.code == 0 -> if {
+                                completed! + 1 => completed!
+                                "[native $(completed!)/$(plan.partitions)] optimized partition" -> println
+                            } else {
+                                failures! -> push(outcome)
+                                true => stopClaims!
+                            }
+                        }
+                        Err(_) { true => stopClaims!
+                            true => coordinationFailed! }
+                    }
+                } else { active! -> push(task!) }
+                remaining! - 1 => remaining!
+            }
+            not observed! and (active! -> len) > 0 -> if { poll.idle() }
+        }
+    coordinationFailed! -> if {
+        Result<Unit, Failure>.Err(Failure { message: "cannot coordinate LLVM child processes", unexpected: true }) -> return
+    }
+    (failures! -> len) > 0 -> if {
+        [UInt8; ~] => message!
+        message! -> appendText("One or more errors occurred.")
+        failures! -> each failure {
+            Arena(0) => failureStorage!
+            failure -> failureMessage(failureStorage!) -> when {
+                Ok(value) { value }
+                Err(error) { Result<Unit, Failure>.Err(Failure { message: error, unexpected: true }) -> return }
+            } => detail
+            message! -> appendText(" (")
+            message! -> appendText(detail)
+            message! -> push(')')
+        }
+        message! -> file.borrowBytes => source
+        source -> slice(0, source -> len) -> materialize(storage) => detail
+        Result<Unit, Failure>.Err(Failure { message: detail, unexpected: true }) -> return
+    }
+    Result<Unit, Failure>.Ok
+}
+
+compileObjects request: Request, plan: Plan, objects: mut [paths.Path; ~], storage: mut Arena -> Result<Unit, Failure> uses Console, File, Process {
+    request.workDirectory => directory
+    request.outputPath -> outputStem => name
+    plan.partitions == 1 -> if {
+        Arena(0) => objectStorage!
+        "$directory/$name.obj" -> materialize(objectStorage!) => output
+        request -> objectArguments(request.llvmPath, output, false) -> runTool(output, storage) -> when {
+            Ok {}
+            Err(failure) { Result<Unit, Failure>.Err(failure) -> return }
+        }
+        output -> paths.fromText(paths.nativeStyle()) => object
+        objects -> push(object)
+        Result<Unit, Failure>.Ok -> return
+    }
+    0..<plan.partitions -> each index {
+        Arena(0) => objectStorage!
+        "$directory/$name.partition.$index.obj" -> materialize(objectStorage!) => output
+        output -> paths.fromText(paths.nativeStyle()) => object
+        objects -> push(object)
+    }
+    request -> compilePartitions(plan, objects, storage)
+}
+
+public link request: Request, storage: mut Arena -> Result<Unit, Failure> uses Console, File, Process {
+    [paths.Path; ~] => libraries!
+    request.llvmLib -> createImports(request.llvmPath, request.workDirectory, libraries!, storage) -> when {
+        Ok {}
+        Err(failure) { Result<Unit, Failure>.Err(failure) -> return }
+    }
+    request.optimization == "-O0" -> if { Plan { workers: 1, partitions: 1 } } else {
+        request.processors -> jobLimit(request.maximumWorkers, request.nativeJobs) -> when {
+            Ok(value) { value }
+            Err(error) { Result<Unit, Failure>.Err(Failure { message: error, unexpected: false }) -> return }
+        } => workers
+        request.llvmPath -> paths.fromText(paths.nativeStyle()) -> query -> when {
+            Ok(information) { information.byteLength }
+            Err(error) {
+                Result<Unit, Failure>.Err(Failure { message: error, unexpected: true }) -> return
+            }
+        } => llvmBytes
+        request -> partitionPlan(workers, llvmBytes)
+    } => plan
+    [paths.Path; ~] => objects!
+    request -> compileObjects(plan, objects!, storage) -> when {
+        Ok {}
+        Err(failure) { Result<Unit, Failure>.Err(failure) -> return }
+    }
+    [request.lldLink,; ~] => argv!
+    policy.linkArguments() -> arguments("") -> each argument { argv! -> push(argument) }
+    request.sharedLibrary -> if { policy.libraryArguments() } else { policy.executableArguments() } => mode
+    mode -> arguments("") -> each argument { argv! -> push(argument) }
+    objects! -> each object { argv! -> push(object -> pathText) }
+    libraries! -> each library { argv! -> push(library -> pathText) }
+    request.outputPath => output
+    Arena(0) => outputStorage!
+    "/out:$output" -> materialize(outputStorage!) => outputArgument
+    argv! -> push(outputArgument)
+    argv! -> runTool(request.outputPath, storage)
+}

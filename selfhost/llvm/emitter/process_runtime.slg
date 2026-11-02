@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.emitter.process_runtime
 
+import sollang.compiler.llvm.runtime as llvmRuntime
+
 public emitProcessRuntimeCommon: -> Unit uses Console {
     """
     define internal ptr @sollang_process_copy_text(ptr %data, i64 %length) {
@@ -95,10 +97,10 @@ public emitProcessTypeRuntime: -> Unit uses Console {
     """ -> println
 }
 
-public emitWindowsProcessRuntime: -> Unit uses Console {
+public emitWindowsProcessRuntime declareStandardHandles: Bool -> Unit uses Console {
     true -> if { emitProcessRuntimeCommon() }
+    declareStandardHandles -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
     """
-    declare i64 @_get_osfhandle(i32)
     define internal i1 @sollang_process_windows_arg_needs_quotes(ptr %source, i32 %chars) {
     entry:
       %empty = icmp eq i32 %chars, 0
@@ -901,19 +903,9 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       %command = call ptr @sollang_process_join_windows_args(ptr %argv, i64 %count)
       %command_ok = icmp ne ptr %command, null
       br i1 %command_ok, label %handles, label %fail
-    handles:
-      %stdin_default_value = call i64 @_get_osfhandle(i32 0)
-      %stdin_default = inttoptr i64 %stdin_default_value to ptr
-      %has_stdin_override = icmp ne ptr %stdin_override, null
-      %stdin_source = select i1 %has_stdin_override, ptr %stdin_override, ptr %stdin_default
-      %stdout_default_value = call i64 @_get_osfhandle(i32 1)
-      %stdout_default = inttoptr i64 %stdout_default_value to ptr
-      %has_stdout_override = icmp ne ptr %stdout_override, null
-      %stdout_source = select i1 %has_stdout_override, ptr %stdout_override, ptr %stdout_default
-      %stderr_default_value = call i64 @_get_osfhandle(i32 2)
-      %stderr_default = inttoptr i64 %stderr_default_value to ptr
-      %has_stderr_override = icmp ne ptr %stderr_override, null
-      %stderr_source = select i1 %has_stderr_override, ptr %stderr_override, ptr %stderr_default
+    """ -> println
+    llvmRuntime.windowsStandardHandles() -> println
+    """
       %stdin_handle = call ptr @sollang_process_inherit_windows_handle(ptr %stdin_source)
       %stdout_handle = call ptr @sollang_process_inherit_windows_handle(ptr %stdout_source)
       %stderr_handle = call ptr @sollang_process_inherit_windows_handle(ptr %stderr_source)

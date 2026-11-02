@@ -441,8 +441,24 @@ def has_nested_output_owner(path: Path, output: Path) -> bool:
     return False
 
 
+def declared_input_paths(output: Path) -> set[str]:
+    """Pinned initial inputs remain fixtures even when their extension is LLVM."""
+    record_path = output / 'result.json'
+    if not record_path.is_file():
+        return set()
+    record = json.loads(record_path.read_text(encoding='utf-8-sig'))
+    paths = set()
+    for key in ('inputHashes', 'inputHashesStart'):
+        hashes = record.get(key)
+        if isinstance(hashes, dict):
+            paths.update(str(Path(path).resolve()).casefold() for path in hashes
+                         if Path(path).is_absolute())
+    return paths
+
+
 def generated_targets(repo: Path, directory: Path, preserve_compiler: bool) -> list[dict]:
     targets = []
+    inputs = declared_input_paths(directory)
     stack = [directory]
     while stack:
         parent = stack.pop()
@@ -461,6 +477,8 @@ def generated_targets(repo: Path, directory: Path, preserve_compiler: bool) -> l
                     continue
                 if st.st_nlink > 1:
                     raise ValueError('ARTIFACT_HARDLINK_SHARED')
+                if str(path.resolve()).casefold() in inputs:
+                    continue
                 in_cache = '.sollang-cache' in path.parts
                 if path.suffix.lower() in load_policy()['preservedExtensions']:
                     continue
@@ -2144,11 +2162,14 @@ def validate_plan(plan: dict) -> None:
         outputs[str(output)] = output
     if plan['files'] != len(plan['targets']) or plan['logicalBytes'] != sum(x['bytes'] for x in plan['targets']):
         raise ValueError('ARTIFACT_PLAN_COUNTS_INVALID')
+    input_fixtures = {name: declared_input_paths(output) for name, output in outputs.items()}
     for target in plan['targets']:
         path = assert_artifact_path(repo, Path(target['path']))
         output = outputs.get(target['output'])
         if output is None or output not in path.parents:
             raise ValueError('ARTIFACT_TARGET_WITHOUT_VERIFIED_OWNER')
+        if str(path.resolve()).casefold() in input_fixtures[str(output)]:
+            raise ValueError('ARTIFACT_INPUT_FIXTURE_PROTECTED')
         if has_nested_output_owner(path, output):
             raise ValueError('ARTIFACT_TARGET_NESTED_OUTPUT_OWNER')
         if any(row['output'] == str(output) and row['disposition'] in ('terminal-retention', 'linked-retention') for row in plan['completionRecords']):

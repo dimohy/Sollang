@@ -77,6 +77,11 @@ internal static class SelfHostPolicyTests
             Check("text-input-rejected", Rejected(nameof(InputText), "SELFHOST_POLICY_TEXT_SIGNATURE_REQUIRED"));
             Check("text-nonascii-rejected", Rejected(nameof(NonAsciiText), "SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED"));
             Check("text-control-rejected", Rejected(nameof(ControlText), "SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED"));
+            var integerInput = compiler.GetType("Sollang.Compiler.Shared.NativeRuntimePolicy", true)!;
+            Check("runtime-multiline-text-exported", Emit(integerInput.GetMethod("LegacyReadFunction")!)
+                .Contains("\\n", StringComparison.Ordinal));
+            Check("runtime-read-function-source-retained", Emit(integerInput.GetMethod("LegacyWindowsReadFunction")!)
+                .Contains("@GetLastError()", StringComparison.Ordinal));
 
             var keyPolicies = compiler.GetType("Sollang.Compiler.Shared.CodegenCacheKeyPolicy", true)!;
             var keyRule = compiler.GetType("Sollang.Compiler.Shared.CodegenKeyRule", true)!;
@@ -138,6 +143,14 @@ internal static class SelfHostPolicyTests
                 var target = Path.Combine(mirror, source);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.Copy(Path.Combine(root, source), target);
+                if (attribute.NamedArguments.Any(argument => argument.MemberName == "Region"))
+                {
+                    var output = (string)attribute.ConstructorArguments[1].Value!;
+                    var authoredTarget = Path.Combine(mirror, output);
+                    Directory.CreateDirectory(Path.GetDirectoryName(authoredTarget)!);
+                    File.Copy(Path.Combine(root, output), authoredTarget);
+                    File.AppendAllText(authoredTarget, "\n# retained authored suffix\n");
+                }
             }
             (int Exit, string Output) Sync(bool check)
             {
@@ -151,6 +164,22 @@ internal static class SelfHostPolicyTests
             }
             Check("generate", Sync(false).Exit == 0);
             Check("check", Sync(true).Exit == 0);
+            var regionPath = Path.Combine(mirror, "selfhost/llvm/runtime.slg");
+            var regionText = File.ReadAllText(regionPath);
+            Check("region-authored-content-preserved", regionText.Contains("# retained authored suffix", StringComparison.Ordinal));
+            File.WriteAllText(regionPath, regionText.Replace("# END generated NativeRuntime", "# changed generated content\n# END generated NativeRuntime", StringComparison.Ordinal));
+            Check("region-edited-projection-rejected", Sync(true).Exit != 0);
+            Check("region-repair-preserves-authored-content", Sync(false).Exit == 0 && Sync(true).Exit == 0
+                && File.ReadAllText(regionPath) == regionText);
+            File.AppendAllText(regionPath, "# BEGIN generated NativeRuntime\n");
+            var brokenRegion = Sync(false);
+            Check("region-duplicate-marker-rejected", brokenRegion.Exit != 0
+                && brokenRegion.Output.Contains("SELFHOST_POLICY_REGION_MARKERS_INVALID", StringComparison.Ordinal));
+            File.WriteAllText(regionPath, regionText.Replace("namespace sollang.compiler.llvm.runtime", "namespace wrong.module", StringComparison.Ordinal));
+            var wrongModule = Sync(false);
+            Check("region-wrong-module-rejected", wrongModule.Exit != 0
+                && wrongModule.Output.Contains("SELFHOST_POLICY_REGION_NAMESPACE_MISMATCH", StringComparison.Ordinal));
+            File.WriteAllText(regionPath, regionText);
             var first = attributes[0];
             var sourcePath = Path.Combine(mirror, (string)first.ConstructorArguments[2].Value!);
             var generatedPath = Path.Combine(mirror, (string)first.ConstructorArguments[1].Value!);
@@ -168,14 +197,14 @@ internal static class SelfHostPolicyTests
         catch (Exception error) { failure = error.ToString(); }
         finally { context.Unload(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new { status = failure is null ? "passed" : "failed",
-            completed = cases.Count, total = 50, cases, failure, runtimeProbeContract }, new JsonSerializerOptions { WriteIndented = true }));
+            completed = cases.Count, total = 57, cases, failure, runtimeProbeContract }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;
     }
 
     private static string WriteRuntimeProbe(Assembly compiler, string root, string directory)
     {
         string[] names = ["BorrowedTextReturnPolicy", "FunctionTypeBindingPolicy", "TypeNamePolicy",
-            "CodegenCachePolicy", "CodegenCacheKeyPolicy"];
+            "CodegenCachePolicy", "CodegenCacheKeyPolicy", "NativeRuntimePolicy"];
         var source = new System.Text.StringBuilder();
         var expected = new System.Text.StringBuilder();
         var dependencies = new List<string>();

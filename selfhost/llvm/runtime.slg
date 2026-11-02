@@ -758,7 +758,6 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
     functions -> emitLegacyIntegerRuntime(true)
     emitWindowsLegacyIntegerRuntime(declareIntegerRead, declareIntegerWrite, declareIntegerSeek)
     """
-    declare i32 @getchar()
     declare dllimport i32 @GetFileSizeEx(ptr, ptr)
     declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
     declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
@@ -767,6 +766,9 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
     declare dllimport void @GetSystemTimePreciseAsFileTime(ptr)
     @sollang_stage2_random_state = internal global i64 88172645463325252
     """ -> println
+    "%sollang.read_int_result = type { i64, i32 }" -> println
+    legacyReadFunction() -> println
+    legacyWindowsReadFunction() -> println
     "define void @sollang_$(functions.printRef.name)(%sollang.text %arg) {" -> println
     """
     entry:
@@ -791,45 +793,20 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
       call void @sollang_runtime_print(ptr %data, i64 %length, i1 false)
-      %value_slot = alloca i32, align 4
-      %started_slot = alloca i1, align 1
-      %negative_slot = alloca i1, align 1
-      store i32 0, ptr %value_slot, align 4
-      store i1 false, ptr %started_slot, align 1
-      store i1 false, ptr %negative_slot, align 1
-      br label %read
-    read:
-      %character = call i32 @getchar()
-      %eof = icmp eq i32 %character, -1
-      br i1 %eof, label %done, label %classify
-    classify:
-      %digit_low = icmp sge i32 %character, 48
-      %digit_high = icmp sle i32 %character, 57
-      %digit = and i1 %digit_low, %digit_high
-      br i1 %digit, label %append, label %non_digit
-    append:
-      %previous = load i32, ptr %value_slot, align 4
-      %scaled = mul i32 %previous, 10
-      %digit_value = sub i32 %character, 48
-      %updated = add i32 %scaled, %digit_value
-      store i32 %updated, ptr %value_slot, align 4
-      store i1 true, ptr %started_slot, align 1
-      br label %read
-    non_digit:
-      %started = load i1, ptr %started_slot, align 1
-      br i1 %started, label %done, label %prefix
-    prefix:
-      %minus = icmp eq i32 %character, 45
-      br i1 %minus, label %mark_negative, label %read
-    mark_negative:
-      store i1 true, ptr %negative_slot, align 1
-      br label %read
-    done:
-      %magnitude = load i32, ptr %value_slot, align 4
-      %negative = load i1, ptr %negative_slot, align 1
-      %negated = sub i32 0, %magnitude
-      %result = select i1 %negative, i32 %negated, i32 %magnitude
-      ret i32 %result
+      %stdin = call ptr @GetStdHandle(i32 -10)
+      %read = alloca i32, align 4
+      %result = call %sollang.read_int_result @sollang_read_i64(ptr %stdin, ptr %read)
+      %ok = extractvalue %sollang.read_int_result %result, 1
+      %succeeded = icmp ne i32 %ok, 0
+      br i1 %succeeded, label %success, label %failure
+    success:
+      %value = extractvalue %sollang.read_int_result %result, 0
+      %narrowed = trunc i64 %value to i32
+      ret i32 %narrowed
+    failure:
+      call void @sollang_runtime_flush_stdout()
+      call void @ExitProcess(i32 1)
+      unreachable
     }
     """ -> println
     "define void @sollang_$(functions.seedRandomRef.name)(i32 %arg) {" -> println
@@ -3649,3 +3626,32 @@ emitLinuxLegacyIntegerRuntime declareRead: Bool, declareWrite: Bool, declareSeek
     }
     """ -> println
 }
+
+# BEGIN generated NativeRuntime
+# Generated from src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs
+# source-sha256: 6904471F8DEE61257ECB6C5D5FCA5AAB6AE2FCDB704BDC799238F1A6BC5FEFD0
+
+public legacyReadFunction: -> Text {
+    "define internal %sollang.read_int_result @sollang_read_i64(ptr %stdin, ptr %read) #0 {\nentry:\n  %buf = alloca [64 x i8], align 1\n  %ok = call i32 @sollang_read_stdin(ptr %stdin, ptr %buf, i64 64, ptr %read)\n  %read_ok = icmp ne i32 %ok, 0\n  br i1 %read_ok, label %prepare, label %fail\n\nprepare:\n  %read32 = load i32, ptr %read, align 4\n  %len = zext i32 %read32 to i64\n  br label %skip\n\nskip:\n  %skip_idx = phi i64 [ 0, %prepare ], [ %skip_next, %skip_ws ]\n  %skip_has = icmp ult i64 %skip_idx, %len\n  br i1 %skip_has, label %skip_char, label %fail\n\nskip_char:\n  %skip_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %skip_idx\n  %skip_ch = load i8, ptr %skip_ptr, align 1\n  %skip_sp = icmp eq i8 %skip_ch, 32\n  %skip_tab = icmp eq i8 %skip_ch, 9\n  %skip_cr = icmp eq i8 %skip_ch, 13\n  %skip_lf = icmp eq i8 %skip_ch, 10\n  %skip_sp_tab = or i1 %skip_sp, %skip_tab\n  %skip_cr_lf = or i1 %skip_cr, %skip_lf\n  %skip_is_ws = or i1 %skip_sp_tab, %skip_cr_lf\n  br i1 %skip_is_ws, label %skip_ws, label %digit_entry\n\nskip_ws:\n  %skip_next = add i64 %skip_idx, 1\n  br label %skip\n\ndigit_entry:\n  %first_ge = icmp uge i8 %skip_ch, 48\n  %first_le = icmp ule i8 %skip_ch, 57\n  %first_digit = and i1 %first_ge, %first_le\n  br i1 %first_digit, label %digits, label %fail\n\ndigits:\n  %digit_idx = phi i64 [ %skip_idx, %digit_entry ], [ %digit_next, %digit_continue ]\n  %value = phi i64 [ 0, %digit_entry ], [ %value_next, %digit_continue ]\n  %digit_has = icmp ult i64 %digit_idx, %len\n  br i1 %digit_has, label %digit_char, label %success\n\ndigit_char:\n  %digit_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %digit_idx\n  %digit_ch = load i8, ptr %digit_ptr, align 1\n  %digit_ge = icmp uge i8 %digit_ch, 48\n  %digit_le = icmp ule i8 %digit_ch, 57\n  %is_digit = and i1 %digit_ge, %digit_le\n  br i1 %is_digit, label %digit_continue, label %trail_entry\n\ndigit_continue:\n  %digit64 = zext i8 %digit_ch to i64\n  %digit_value = sub i64 %digit64, 48\n  %value_x10 = mul i64 %value, 10\n  %value_next = add i64 %value_x10, %digit_value\n  %digit_next = add i64 %digit_idx, 1\n  br label %digits\n\ntrail_entry:\n  br label %trail\n\ntrail:\n  %trail_idx = phi i64 [ %digit_idx, %trail_entry ], [ %trail_next, %trail_ws ]\n  %trail_has = icmp ult i64 %trail_idx, %len\n  br i1 %trail_has, label %trail_char, label %success\n\ntrail_char:\n  %trail_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %trail_idx\n  %trail_ch = load i8, ptr %trail_ptr, align 1\n  %trail_sp = icmp eq i8 %trail_ch, 32\n  %trail_tab = icmp eq i8 %trail_ch, 9\n  %trail_cr = icmp eq i8 %trail_ch, 13\n  %trail_lf = icmp eq i8 %trail_ch, 10\n  %trail_sp_tab = or i1 %trail_sp, %trail_tab\n  %trail_cr_lf = or i1 %trail_cr, %trail_lf\n  %trail_is_ws = or i1 %trail_sp_tab, %trail_cr_lf\n  br i1 %trail_is_ws, label %trail_ws, label %fail\n\ntrail_ws:\n  %trail_next = add i64 %trail_idx, 1\n  br label %trail\n\nsuccess:\n  %success_value = phi i64 [ %value, %digits ], [ %value, %trail ]\n  %success0 = insertvalue %sollang.read_int_result poison, i64 %success_value, 0\n  %success1 = insertvalue %sollang.read_int_result %success0, i32 1, 1\n  ret %sollang.read_int_result %success1\n\nfail:\n  %fail0 = insertvalue %sollang.read_int_result poison, i64 0, 0\n  %fail1 = insertvalue %sollang.read_int_result %fail0, i32 0, 1\n  ret %sollang.read_int_result %fail1\n}"
+}
+
+public legacyWindowsReadFunction: -> Text {
+    "define internal i32 @sollang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {\nentry:\n  %exceeds_dword = icmp ugt i64 %len64, 4294967295\n  %bounded_len = select i1 %exceeds_dword, i64 4294967295, i64 %len64\n  %len = trunc i64 %bounded_len to i32\n  %ok = call i32 @ReadFile(ptr %stdin, ptr %data, i32 %len, ptr %read, ptr null)\n  %succeeded = icmp ne i32 %ok, 0\n  br i1 %succeeded, label %success, label %inspect_error\n\ninspect_error:\n  %error = call i32 @GetLastError()\n  %broken_pipe = icmp eq i32 %error, 109\n  br i1 %broken_pipe, label %eof, label %failure\n\neof:\n  store i32 0, ptr %read, align 4\n  ret i32 1\n\nsuccess:\n  ret i32 1\n\nfailure:\n  ret i32 0\n}"
+}
+
+public memoryFunctions: -> Text {
+    "define dso_local ptr @memset(ptr %dest, i32 %value, i64 %count) #0 {\nentry:\n  %byte = trunc i32 %value to i8\n  br label %loop\n\nloop:\n  %i = phi i64 [ 0, %entry ], [ %next, %body ]\n  %active = icmp ult i64 %i, %count\n  br i1 %active, label %body, label %done\n\nbody:\n  %slot = getelementptr i8, ptr %dest, i64 %i\n  store i8 %byte, ptr %slot, align 1\n  %next = add i64 %i, 1\n  br label %loop\n\ndone:\n  ret ptr %dest\n}\n\ndefine dso_local ptr @memcpy(ptr %dest, ptr %source, i64 %count) #0 {\nentry:\n  br label %loop\n\nloop:\n  %i = phi i64 [ 0, %entry ], [ %next, %body ]\n  %active = icmp ult i64 %i, %count\n  br i1 %active, label %body, label %done\n\nbody:\n  %src_slot = getelementptr i8, ptr %source, i64 %i\n  %dst_slot = getelementptr i8, ptr %dest, i64 %i\n  %byte = load i8, ptr %src_slot, align 1\n  store i8 %byte, ptr %dst_slot, align 1\n  %next = add i64 %i, 1\n  br label %loop\n\ndone:\n  ret ptr %dest\n}\n\ndefine dso_local ptr @memmove(ptr %dest, ptr %source, i64 %count) #0 {\nentry:\n  %same = icmp eq ptr %dest, %source\n  %empty = icmp eq i64 %count, 0\n  %done_early = or i1 %same, %empty\n  br i1 %done_early, label %done, label %choose_direction\n\nchoose_direction:\n  %forward = icmp ult ptr %dest, %source\n  br i1 %forward, label %forward_loop, label %backward_loop\n\nforward_loop:\n  %forward_i = phi i64 [ 0, %choose_direction ], [ %forward_next, %forward_body ]\n  %forward_active = icmp ult i64 %forward_i, %count\n  br i1 %forward_active, label %forward_body, label %done\n\nforward_body:\n  %forward_src = getelementptr i8, ptr %source, i64 %forward_i\n  %forward_dst = getelementptr i8, ptr %dest, i64 %forward_i\n  %forward_byte = load i8, ptr %forward_src, align 1\n  store i8 %forward_byte, ptr %forward_dst, align 1\n  %forward_next = add i64 %forward_i, 1\n  br label %forward_loop\n\nbackward_loop:\n  %backward_i = phi i64 [ %count, %choose_direction ], [ %backward_next, %backward_body ]\n  %backward_active = icmp ugt i64 %backward_i, 0\n  br i1 %backward_active, label %backward_body, label %done\n\nbackward_body:\n  %backward_next = sub i64 %backward_i, 1\n  %backward_src = getelementptr i8, ptr %source, i64 %backward_next\n  %backward_dst = getelementptr i8, ptr %dest, i64 %backward_next\n  %backward_byte = load i8, ptr %backward_src, align 1\n  store i8 %backward_byte, ptr %backward_dst, align 1\n  br label %backward_loop\n\ndone:\n  ret ptr %dest\n}"
+}
+
+public windowsEntryPoint: -> Text {
+    "sollang_start"
+}
+
+public windowsFloatingPointGlobal: -> Text {
+    "@_fltused = global i32 0"
+}
+
+public windowsStandardHandles: -> Text {
+    "handles:\n  %has_stdin_override = icmp ne ptr %stdin_override, null\n  %stdin_default = call ptr @GetStdHandle(i32 -10)\n  %stdin_source = select i1 %has_stdin_override, ptr %stdin_override, ptr %stdin_default\n  %has_stdout_override = icmp ne ptr %stdout_override, null\n  %stdout_default = call ptr @GetStdHandle(i32 -11)\n  %stdout_source = select i1 %has_stdout_override, ptr %stdout_override, ptr %stdout_default\n  %has_stderr_override = icmp ne ptr %stderr_override, null\n  %stderr_default = call ptr @GetStdHandle(i32 -12)\n  %stderr_source = select i1 %has_stderr_override, ptr %stderr_override, ptr %stderr_default"
+}
+# END generated NativeRuntime

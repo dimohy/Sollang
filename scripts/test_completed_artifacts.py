@@ -54,6 +54,44 @@ class ArtifactLifecycleTests(unittest.TestCase):
         self.output()
         self.assertEqual(self.plan()['files'], 3)  # Reuse requires explicit ownership.
 
+    def test_declared_llvm_input_preserved_and_intermediate_removed(self):
+        output = self.output()
+        fixture = output / 'input.ll'
+        fixture.write_text('fixture input', encoding='utf-8')
+        intermediate = output / 'produced.ll'
+        intermediate.write_text('generated intermediate', encoding='utf-8')
+        record = json.loads((output / 'result.json').read_text())
+        record['inputHashes'] = {str(fixture): hashlib.sha256(fixture.read_bytes()).hexdigest()}
+        (output / 'result.json').write_text(json.dumps(record), encoding='utf-8')
+        stamp = max(path.stat().st_mtime_ns for path in output.rglob('*') if path.is_file()) + 1000
+        os.utime(output / 'result.json', ns=(stamp, stamp))
+        plan = self.plan()
+        self.assertNotIn(str(fixture), [row['path'] for row in plan['targets']])
+        self.assertIn(str(intermediate), [row['path'] for row in plan['targets']])
+        self.assertEqual(self.execute(plan).returncode, 0)
+        self.assertEqual(fixture.read_text(), 'fixture input')
+        self.assertFalse(intermediate.exists())
+
+    def test_plan_cannot_delete_declared_input_fixture(self):
+        output = self.output()
+        fixture = output / 'input.ll'
+        fixture.write_text('fixture input', encoding='utf-8')
+        record = json.loads((output / 'result.json').read_text())
+        record['inputHashes'] = {str(fixture): hashlib.sha256(fixture.read_bytes()).hexdigest()}
+        (output / 'result.json').write_text(json.dumps(record), encoding='utf-8')
+        stamp = max(path.stat().st_mtime_ns for path in output.rglob('*') if path.is_file()) + 1000
+        os.utime(output / 'result.json', ns=(stamp, stamp))
+        plan = self.plan()
+        stat = fixture.stat()
+        plan['targets'].append({'path': str(fixture), 'output': str(output), 'bytes': stat.st_size,
+                                'modifiedNs': stat.st_mtime_ns,
+                                'sha256': hashlib.sha256(fixture.read_bytes()).hexdigest()})
+        plan['files'] += 1
+        plan['logicalBytes'] += stat.st_size
+        with patch.object(policy, 'windows_active_directories', return_value=set()):
+            with self.assertRaisesRegex(ValueError, 'ARTIFACT_INPUT_FIXTURE_PROTECTED'):
+                policy.validate_plan(plan)
+
     def test_parent_completion_does_not_own_nested_result(self):
         for status in ('passed', 'failed', 'running', 'cancelled'):
             with self.subTest(status=status):

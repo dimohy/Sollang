@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -167,7 +168,8 @@ internal sealed partial class LlvmEmitter
             || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesProcessExit(function.Body))
                 || function.BlockBody.Any(UsesProcessExit)
-                || function.Kind == BoundFunctionKind.RuntimeWriteScalar);
+                || function.Kind is BoundFunctionKind.RuntimeWriteScalar
+                    or BoundFunctionKind.RuntimeReadInt);
         _usesAsyncFile = _reachableFunctions.Any(function =>
             function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
@@ -874,7 +876,7 @@ internal sealed partial class LlvmEmitter
         EmitPlatformGlobalBlock(_platform.EmitGlobals);
         if (_platform is WindowsLlvmRuntimePlatform)
         {
-            EmitGlobalLine("@_fltused = global i32 0");
+            EmitGlobalLine(NativeRuntimePolicy.WindowsFloatingPointGlobal());
         }
         EmitGlobalLine("@sollang_random_state = internal global i64 88172645463393265");
         if (_usesAsyncDiagnostics)

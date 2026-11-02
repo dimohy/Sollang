@@ -46,7 +46,7 @@ internal static class SelfHostPolicyCompiler
         var outputs = new HashSet<string>(StringComparer.Ordinal);
         var policies = assembly.GetTypes().Select(type => (Type: type, Policy: type.GetCustomAttribute<SelfHostPolicyAttribute>()))
             .Where(item => item.Policy is not null).OrderBy(item => item.Policy!.Output, StringComparer.Ordinal).ToArray();
-        var pending = new List<(string Path, string Content, string Source, string Hash)>();
+        var pending = new List<(string Path, string Content, string Source, string Hash, string? OutputHash)>();
         foreach (var (type, value) in policies)
         {
             var policy = value!;
@@ -71,9 +71,32 @@ internal static class SelfHostPolicyCompiler
                 text.Append(RenderKeyRuleTypes());
             foreach (var method in methods) text.Append('\n').Append(RenderDecision(method));
             var content = SourceFormatter.Format(text.ToString()).ReplaceLineEndings("\n");
+            string? outputHash = null;
+            if (policy.Region is { } region)
+            {
+                if (!Identifier(region) || !File.Exists(output))
+                    throw new SollangException("SELFHOST_POLICY_REGION_INPUT_REQUIRED: " + policy.Output);
+                var authored = File.ReadAllText(output).ReplaceLineEndings("\n");
+                outputHash = Hash(authored);
+                var module = "namespace " + policy.Module + "\n";
+                if (!authored.StartsWith(module, StringComparison.Ordinal))
+                    throw new SollangException("SELFHOST_POLICY_REGION_NAMESPACE_MISMATCH: " + policy.Output);
+                var begin = "# BEGIN generated " + region + "\n";
+                var end = "# END generated " + region + "\n";
+                var start = authored.IndexOf(begin, StringComparison.Ordinal);
+                var finish = authored.IndexOf(end, StringComparison.Ordinal);
+                if ((start < 0) != (finish < 0) || (start >= 0 && (finish < start
+                    || authored.IndexOf(begin, start + begin.Length, StringComparison.Ordinal) >= 0
+                    || authored.IndexOf(end, finish + end.Length, StringComparison.Ordinal) >= 0)))
+                    throw new SollangException("SELFHOST_POLICY_REGION_MARKERS_INVALID: " + policy.Output);
+                var moduleStart = content.IndexOf(module, StringComparison.Ordinal);
+                var projection = begin + content.Remove(moduleStart, module.Length) + end;
+                content = start < 0 ? authored + "\n" + projection
+                    : authored[..start] + projection + authored[(finish + end.Length)..];
+            }
             var same = File.Exists(output) && File.ReadAllText(output).ReplaceLineEndings("\n") == content;
             if (check && !same) throw new SollangException("SELFHOST_POLICY_OUTPUT_DRIFT: " + policy.Output);
-            if (!check && !same) pending.Add((output, content, source, sourceHash));
+            if (!check && !same) pending.Add((output, content, source, sourceHash, outputHash));
         }
         foreach (var item in pending)
         {
@@ -84,6 +107,8 @@ internal static class SelfHostPolicyCompiler
                 File.WriteAllText(temporary, item.Content, new UTF8Encoding(false));
                 if (Hash(File.ReadAllText(item.Source).ReplaceLineEndings("\n")) != item.Hash)
                     throw new SollangException("SELFHOST_POLICY_SOURCE_CHANGED");
+                if (item.OutputHash is not null && Hash(File.ReadAllText(item.Path).ReplaceLineEndings("\n")) != item.OutputHash)
+                    throw new SollangException("SELFHOST_POLICY_OUTPUT_CHANGED");
                 File.Move(temporary, item.Path, overwrite: true);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
@@ -133,10 +158,13 @@ internal static class SelfHostPolicyCompiler
             || body.LocalVariables.Count != 0 || body.ExceptionHandlingClauses.Count != 0)
             throw new SollangException("SELFHOST_POLICY_TEXT_CONSTANT_REQUIRED: " + method.Name);
         var text = method.Module.ResolveString(BinaryPrimitives.ReadInt32LittleEndian(code.AsSpan(1, 4)));
-        if (text.Length > 4096 || text.Any(character => character < 32 || character > 126))
+        var multiline = method.DeclaringType?.GetCustomAttribute<SelfHostPolicyAttribute>()?.MultilineText == true;
+        if (multiline) text = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (text.Length > (multiline ? 16384 : 4096)
+            || text.Any(character => (character < 32 && !(multiline && character == '\n')) || character > 126))
             throw new SollangException("SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED: " + method.Name);
         var name = char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
-        return "public " + name + ": -> Text {\n    \"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"\n}\n";
+        return "public " + name + ": -> Text {\n    \"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n") + "\"\n}\n";
     }
 
     private static string RenderArithmetic(MethodInfo method)

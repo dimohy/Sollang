@@ -27,6 +27,8 @@ import sollang.compiler.cli_cpp_binding as cliCppBinding
 import sollang.compiler.cli_test as cliTest
 import sollang.compiler.compiler_version as compilerVersion
 import sollang.compiler.toolchain as toolchain
+import sollang.compiler.windows_linker as windowsLinker
+import sollang.compiler.runtime.windows_processors as windowsProcessors
 import sollang.compiler.stdlib_root as stdlibRoot
 import sollang.compiler.source_root as sourceRoot
 import sys.file as file
@@ -823,7 +825,7 @@ runCodegenUnits: -> Unit uses Console {
         }
 }
 
-buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
+buildWindows pathStart: UIntSize -> Unit uses Console, File, Process, Environment {
     sys.process.arguments() => arguments
     pathStart -> collectBuildPaths => sourcePaths
     [arguments[0], "windows"; ~] => emitArgv!
@@ -836,9 +838,10 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     emitCommand -> runToFile(arguments[2]) -> processCode => emitCode
 
     emitCode == 0 -> if {
-        [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3]; ~] => clangArgv
-        process.Command { argv: clangArgv, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
-        clangCommand -> run -> processCode => clangCode
+        arguments[4] -> executableDirectory -> executableDirectory => llvmHome
+        path.nativeStyle() -> when { Windows { 0 }
+            Posix { 1 } } => hostTarget
+        llvmHome -> linkNativeWindows(hostTarget, arguments[2], arguments[3], "-O1", "", false) => clangCode
         clangCode >= 0 -> if {
             "native build = $(clangCode)" -> println
         } else {
@@ -957,23 +960,54 @@ nativeClangPath llvmHome: Text, hostTarget: Int, storage: mut Arena -> Text {
     llvmHome -> toolchain.executablePath("clang", hostTarget, storage)
 }
 
-nativeLlvmLibPath llvmHome: Text, hostTarget: Int, storage: mut Arena -> Text {
-    llvmHome -> toolchain.executablePath("llvm-lib", hostTarget, storage)
+nativeWindowsToolsAvailable llvmHome: Text, hostTarget: Int -> Bool uses Console, File {
+    (llvmHome -> len) == 0 -> if { true -> return }
+    ["clang", "lld-link", "llvm-lib", "llvm-split"] -> each name {
+        Arena(0) => toolStorage!
+        llvmHome -> toolchain.executablePath(name, hostTarget, toolStorage!) => tool
+        tool -> path.fromText(path.nativeStyle()) -> cliProject.manifestFileExists
+            -> unless {
+                "sollang: LLVM tool was not found: $tool" -> runtime.eprintln
+                false -> return
+            }
+    }
+    true
 }
 
-appendWindowsNativeLibraries llvmPath: Text, argv: mut [Text; ~] -> Bool uses Console, File {
-    llvmPath -> toolchain.usesComInterop -> when {
-        Ok(required) {
-            argv -> push("-lshell32")
-            argv -> push("-lws2_32")
-            argv -> push("-lbcrypt")
-            required -> if { argv -> push("-lole32") }
-            true
+linkNativeWindows llvmHome: Text, hostTarget: Int, llvmPath: Text, output: Text, optimization: Text, jobs: Text, sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
+    Arena(0) => clangStorage!
+    llvmHome -> toolchain.executablePath("clang", hostTarget, clangStorage!) => clang
+    Arena(0) => linkerStorage!
+    llvmHome -> toolchain.executablePath("lld-link", hostTarget, linkerStorage!) => linker
+    Arena(0) => libraryStorage!
+    llvmHome -> toolchain.executablePath("llvm-lib", hostTarget, libraryStorage!) => library
+    Arena(0) => splitStorage!
+    llvmHome -> toolchain.executablePath("llvm-split", hostTarget, splitStorage!) => split
+    Arena(0) => workStorage!
+    "$llvmPath.slg-tmp" -> materialize(workStorage!) => work
+    work -> path.fromText(path.nativeStyle()) -> directory.create
+        -> unless {
+            "sollang: cannot create native link directory: $work" -> runtime.eprintln
+            -1 -> return
         }
-        Err(error) {
-            "sollang: cannot inspect native LLVM imports: $error" -> runtime.eprintln
-            false
-        }
+    (jobs -> len) == 0 -> if { Option<Int>.None } else {
+        jobs -> parsePositiveInt -> Option<Int>.Some
+    } => maximum
+    process.environment("SOLLANG_NATIVE_JOBS") -> when {
+        Some(value) => value
+        None => ""
+    } => nativeJobs
+    windowsLinker.Request {
+        clang: clang, lldLink: linker, llvmLib: library, llvmSplit: split
+        llvmPath: llvmPath, outputPath: output, workDirectory: work, optimization: optimization
+        maximumWorkers: maximum, processors: windowsProcessors.available()
+        nativeJobs: nativeJobs, sharedLibrary: sharedLibrary
+    } => request
+    Arena(0) => failureStorage!
+    request -> windowsLinker.link(failureStorage!) -> when {
+        Ok { 0 }
+        Err(failure) { failure -> windowsLinker.reportFailure
+            1 }
     }
 }
 
@@ -1039,6 +1073,7 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
     Arena(0) => interfaceStageNameStorage!
     Arena(0) => definitionStageNameStorage!
     Arena(0) => importStageNameStorage!
+    Arena(0) => linkStageNameStorage!
     0 => ordinal!
     ordinal! < 256 -> while {
         ".l$(ordinal!).ll.semantic" -> materialize(cacheStageNameStorage!) => cacheStageName
@@ -1047,10 +1082,11 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
         ".l$(ordinal!).ll.slglib.json" -> materialize(interfaceStageNameStorage!) => interfaceStageName
         ".l$(ordinal!).ll.ucrt.def" -> materialize(definitionStageNameStorage!) => definitionStageName
         ".l$(ordinal!).ll.ucrt.lib" -> materialize(importStageNameStorage!) => importStageName
+        ".l$(ordinal!).ll.slg-tmp" -> materialize(linkStageNameStorage!) => linkStageName
         false => existingCacheStage!
         existingEntries -> each entry {
             entry.name -> pathText => name
-            name == cacheStageName or name == codegenStageName or name == objectStageName or name == interfaceStageName or name == definitionStageName or name == importStageName
+            name == cacheStageName or name == codegenStageName or name == objectStageName or name == interfaceStageName or name == definitionStageName or name == importStageName or name == linkStageName
                 -> if { true => existingCacheStage! }
         }
         existingCacheStage! -> if {
@@ -1351,7 +1387,7 @@ validateNativeCodegenStage stage: Text -> Bool uses Console, File {
     }
 }
 
-executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
+executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
 
     process.arguments() => arguments
     arguments[0] -> executableDirectory => compilerDirectory
@@ -1396,22 +1432,13 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     "$llvmStage.semantic" -> materialize(cacheStageStorage!) => cacheStage
     Arena(0) => interfaceStageStorage!
     "$llvmStage.slglib.json" -> materialize(interfaceStageStorage!) => interfaceStage
-    Arena(0) => definitionStageStorage!
-    "$llvmStage.ucrt.def" -> materialize(definitionStageStorage!) => definitionStage
-    Arena(0) => importStageStorage!
-    "$llvmStage.ucrt.lib" -> materialize(importStageStorage!) => importStage
-    Arena(0) => importToolStorage!
-    llvmHome -> nativeLlvmLibPath(hostTarget, importToolStorage!) => importTool
-    sharedLibrary and target == 0 and (llvmHome -> len) > 0
-        -> if {
-            importTool -> path.fromText(path.nativeStyle()) => importToolPath
-            importToolPath -> cliProject.manifestFileExists
-                -> unless {
-                    "sollang: LLVM import library tool was not found: $importTool" -> runtime.eprintln
-                    llvmStage -> reportNativeBuildFailureStages(executableStage)
-                    -1 -> return
-                }
-        }
+    target == 0 -> if {
+        llvmHome -> nativeWindowsToolsAvailable(hostTarget)
+            -> unless {
+                llvmStage -> reportNativeBuildFailureStages(executableStage)
+                -1 -> return
+            }
+    }
     [Text; ~] => emitArgv!
     emitArgv! -> push(arguments[0])
     includeStdlibRoot -> if {
@@ -1468,28 +1495,7 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     } else { target == 1 -> if {
             clangPath -> toolchain.linkLinux(llvmStage, objectStage, executableStage, optimization, hostTarget, sharedLibrary)
         } else {
-            [clangPath, "-target", "x86_64-pc-windows-msvc", llvmStage, optimization, "-Wno-override-module", "-o", executableStage; ~] => clangArgv!
-            sharedLibrary -> if { clangArgv! -> push("-shared") }
-            clangArgv! -> push("-Xlinker")
-            sharedLibrary -> if { "/noentry" } else { "/subsystem:console" } => entryOption
-            clangArgv! -> push(entryOption)
-            sharedLibrary -> if {
-                "LIBRARY ucrtbase.dll\nEXPORTS\n_wspawnvp\nmemcpy\nstrlen\ngetchar\n" => specification
-                importTool -> toolchain.createImportLibrary(definitionStage, importStage, specification) => importCode
-                importCode != 0 -> if {
-                    llvmStage -> reportNativeBuildFailureStages(executableStage)
-                    importCode -> return
-                }
-                clangArgv! -> push("-lkernel32")
-                clangArgv! -> push(importStage)
-            }
-            llvmStage -> appendWindowsNativeLibraries(clangArgv!)
-                -> unless {
-                    llvmStage -> reportNativeBuildFailureStages(executableStage)
-                    -1 -> return
-                }
-            process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
-            clangCommand -> run -> processCode
+            llvmHome -> linkNativeWindows(hostTarget, llvmStage, executableStage, optimization, jobs, sharedLibrary)
     } } => clangCode
     clangCode != 0 -> if {
         "sollang: native linker failed with exit code $clangCode" -> println
@@ -1555,11 +1561,6 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
             -1 -> return
         }
     }
-    sharedLibrary and target == 0 and not keepTemps
-        -> if {
-            definitionStage -> removeNativeBuildStages(importStage)
-                -> unless { -1 -> return }
-        }
     target != 0 -> if {
         objectStage -> removeNativeBuildStage -> unless { -1 -> return }
     }
@@ -1568,7 +1569,7 @@ executeNativeBuildCore sources: [Text; ~], output: Text, llvmHome: Text, stdlibO
     0
 }
 
-executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
+executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, emitterMode: Text, emitterArguments: [Text; ~], includeStdlibRoot: Bool, sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     Arena(0) => interfacePathStorage!
     output -> nativeLibraryInterfacePath(target, interfacePathStorage!) => interfacePath
     Arena(0) => interfaceLockStorage!
@@ -1606,7 +1607,7 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
     result
 }
 
-executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, sharedLibrary: Bool -> Int uses Console, File, Process {
+executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool, sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     [Text; ~] => sourceTexts!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
@@ -1626,7 +1627,7 @@ executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Proce
     runCommand -> run -> processCode
 }
 
-runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
+runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     Arena(0) => outputStorage!
     (outputOption -> len) > 0 -> if {
         sources -> executeNativePathBuild(outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, sharedLibrary) => buildCode
@@ -1652,7 +1653,7 @@ runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Tex
     }
 }
 
-runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOption: Text, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
+runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOption: Text, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
     workspace.sourceDirectory -> cliLock.destinationAt(hostStyle) => destination
     Arena(0) => snapshotStorage!
@@ -1720,7 +1721,7 @@ runNativeWorkspaceProduct workspace: ref cliWorkspace.WorkspaceInput, productOpt
     sources.sources -> runNativePathCli(input.source, output, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
-runNativeProjectSourceGraph projectOption: Text, projectInput: cliProject.ProjectInput, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
+runNativeProjectSourceGraph projectOption: Text, projectInput: cliProject.ProjectInput, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
     [path.Path; ~] => graphRoots!
     [path.Path; ~] => packageManifests!
@@ -1746,7 +1747,7 @@ runNativeProjectSourceGraph projectOption: Text, projectInput: cliProject.Projec
     sources.sources -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
-runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
+runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     includeDependencies -> if {
         projectOption -> runNativeProjectSourceGraph(projectInput, locked, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary) -> return
     }
@@ -1755,7 +1756,7 @@ runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectIn
     productSources! -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary)
 }
 
-runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process {
+runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~], sharedLibrary: Bool -> Int uses Console, File, Process, Environment {
     includeDependencies -> if {
         projectOption -> runNativeProjectSourceGraph(projectInput, locked, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments, sharedLibrary) -> return
     }
@@ -2366,7 +2367,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
     }
 }
 
-runInternalCompilerCommand command: Text, pathStart: UIntSize -> Bool uses Console, File, Process {
+runInternalCompilerCommand command: Text, pathStart: UIntSize -> Bool uses Console, File, Process, Environment {
     command -> textEquals("llvm-codegen-units") -> if {
         runCodegenUnits()
         true -> return

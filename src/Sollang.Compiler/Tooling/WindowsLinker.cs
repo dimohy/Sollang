@@ -7,7 +7,6 @@ namespace Sollang.Compiler.Tooling;
 
 internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
-    private const long TargetBytesPerPartition = 1024 * 1024;
     public int? MaximumWorkers { get; init; }
 
     public void LinkLlvmIr(
@@ -25,29 +24,10 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             ? CompileSingleModule(llPath, objectPath, "-O0")
             : CompilePartitioned(llPath, workDir, outputName, optimizationLevel ?? "-O3");
 
-        var linkArguments = new List<string>
-        {
-            "/nologo",
-            "/machine:x64",
-            "/nodefaultlib",
-            "/opt:ref",
-            "/opt:icf",
-            "/fixed",
-            "/stack:8388608,65536",
-            "/merge:.rdata=.text",
-            "/merge:.pdata=.text",
-            "/merge:.xdata=.text",
-        };
-        if (sharedLibrary)
-        {
-            linkArguments.Add("/dll");
-            linkArguments.Add("/noentry");
-        }
-        else
-        {
-            linkArguments.Add("/subsystem:console");
-            linkArguments.Add("/entry:sollang_start");
-        }
+        var linkArguments = new List<string>(PolicyArguments(WindowsLinkPolicy.LinkArguments()));
+        linkArguments.AddRange(PolicyArguments(sharedLibrary
+            ? WindowsLinkPolicy.LibraryArguments()
+            : WindowsLinkPolicy.ExecutableArguments()));
         linkArguments.AddRange(objects);
         linkArguments.AddRange(importLibraries);
         linkArguments.Add("/out:" + outputPath);
@@ -58,8 +38,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
     {
         Run(toolchain.Clang,
         [
-            "-target", "x86_64-pc-windows-msvc", optimizationLevel,
-            "-fno-addrsig", "-mno-stack-arg-probe", "-Werror", "-Wno-override-module",
+            .. PolicyArguments(WindowsLinkPolicy.ObjectArguments(), optimizationLevel),
             "-c", llPath, "-o", objectPath
         ]);
         return [objectPath];
@@ -84,7 +63,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             1,
             (int)Math.Min(
                 processorCount,
-                ((llvmByteLength - 1) / TargetBytesPerPartition) + 1));
+                ((llvmByteLength - 1) / (long)WindowsLinkPolicy.TargetBytesPerPartition()) + 1));
         var partitionCount = Math.Min(maxPartitionCount, sizeBasedPartitionCount);
         if (partitionCount == 1)
         {
@@ -101,8 +80,8 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         // isolated partitions cannot recover those interprocedural opportunities.
         Run(toolchain.Clang,
         [
-            "-target", "x86_64-pc-windows-msvc", optimizationLevel, "-flto=full", "-emit-llvm",
-            "-Werror", "-Wno-override-module", "-c", llPath, "-o", bitcodePath
+            .. PolicyArguments(WindowsLinkPolicy.BitcodeArguments(), optimizationLevel),
+            "-c", llPath, "-o", bitcodePath
         ]);
         Run(toolchain.LlvmSplit,
         [
@@ -120,8 +99,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             var partitionPath = partitionPrefix + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
             Run(toolchain.Clang,
             [
-                "-target", "x86_64-pc-windows-msvc", optimizationLevel,
-                "-fno-addrsig", "-mno-stack-arg-probe", "-Werror", "-Wno-override-module",
+                .. PolicyArguments(WindowsLinkPolicy.ObjectArguments(), optimizationLevel),
                 "-x", "ir", "-c", partitionPath, "-o", objectPaths[index]
             ]);
             lock (progressGate)
@@ -132,6 +110,9 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         });
         return objectPaths;
     }
+
+    private static string[] PolicyArguments(string policy, string optimizationLevel = "") =>
+        policy.Split(';').Select(value => value == ":optimization:" ? optimizationLevel : value).ToArray();
 
     private int NativeJobLimit(int processorCount)
     {
