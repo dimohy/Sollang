@@ -722,6 +722,12 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                     astToIr! -> push(-1)
                     astMapIndex! + 1 => astMapIndex!
                 }
+                [Int; ~] => bindingIrBySymbol!
+                0 => bindingSymbolSeed!
+                bindingSymbolSeed! < sourceRange.symbolCount -> while {
+                    bindingIrBySymbol! -> push(-1)
+                    bindingSymbolSeed! + 1 => bindingSymbolSeed!
+                }
                 results! -> len => expressionIrStart
                 sourceRange.astStart + function.astNode => functionGlobalAst
                 frozenFunctionNodeStartsByAst[functionGlobalAst] => functionNodeStart
@@ -869,6 +875,9 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                         }
                                     results! -> len => bindingIr
                                     bindingIr => astToIr![bindingAstIndex]
+                                    bindingSymbol! >= 0 -> if {
+                                        bindingIr => bindingIrBySymbol![bindingSymbol!]
+                                    }
                                     bindingAst.payloadToken => bindingPayloadToken!
                                     bindingAst.kind == 48 -> if { bindingAst.secondaryToken => bindingPayloadToken! }
                                     results! -> push(TypedIrNode {
@@ -896,7 +905,7 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                         }
                     bindingNodePosition! + 1 => bindingNodePosition!
                 }
-                results! -> lowerOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
+                results! -> lowerOrdinaryFunctionExpressions(astToIr!, bindingIrBySymbol!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
 
                 results! -> finalizeOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, symbolIndex, functionIr, expressionIrStart, resultRootAst!, returnIr, functionResultOrigin!, functionResultModule!, functionResultSymbol!, functionResultTypeId!)
             }

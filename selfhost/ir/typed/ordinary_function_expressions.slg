@@ -192,7 +192,7 @@ returnedArmGenericFlowTypeId expressionAstIndex: Int, resultRootAst: Int, functi
     -1
 }
 
-lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], resolvedSymbolByAst: ref [Int; ~], resolvedQualifiedByAst: ref [Bool; ~], qualifiedFunctionPathByAst: ref [Bool; ~], qualifiedValueVariantIndexByAst: ref [Int; ~], localMemberByParentAst: ref [Bool; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceIndex: Int, symbolIndex: Int, functionIr: Int, resultRootAst: Int, returnIr: Int, functionResultTypeId: Int, functionNodeStart: Int, functionNodeEnd: Int, parameterSymbol: Int, parameterTypeId: Int -> Unit {
+lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], bindingIrBySymbol: ref [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], resolvedSymbolByAst: ref [Int; ~], resolvedQualifiedByAst: ref [Bool; ~], qualifiedFunctionPathByAst: ref [Bool; ~], qualifiedValueVariantIndexByAst: ref [Int; ~], localMemberByParentAst: ref [Bool; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceIndex: Int, symbolIndex: Int, functionIr: Int, resultRootAst: Int, returnIr: Int, functionResultTypeId: Int, functionNodeStart: Int, functionNodeEnd: Int, parameterSymbol: Int, parameterTypeId: Int -> Unit {
     prepared.package.ranges[sourceIndex] => sourceRange
     prepared.package.sources[sourceIndex] -> len => sourceLength
     prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
@@ -608,10 +608,9 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                             }
                     }
                 knownLocalBindingReference! -> if {
-                    nodes -> len => localBindingIrLimit
-                    0 => localBindingIrSearch!
-                    localBindingIrSearch! < localBindingIrLimit -> while {
-                        nodes[localBindingIrSearch!] => localBindingIr
+                    bindingIrBySymbol[knownLocalBindingSymbol!] => localBindingIrIndex
+                    localBindingIrIndex >= 0 -> if {
+                        nodes[localBindingIrIndex] => localBindingIr
                         localBindingIr.kind == 17
                             and localBindingIr.sourceModule == sourceIndex
                             and localBindingIr.symbol == knownLocalBindingSymbol!
@@ -621,7 +620,6 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                                 localBindingIr.typeSymbol => expressionTypeSymbol!
                                 localBindingIr.typeId => recursiveExpressionTypeId!
                             }
-                        localBindingIrSearch! + 1 => localBindingIrSearch!
                     }
                 }
             }
