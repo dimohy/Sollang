@@ -3693,6 +3693,10 @@ that retains the owner is rejected. A terminating path contributes no ownership
 state to the continuation.
 The same check applies to a discarded `Unit` expression at a function tail;
 an inconsistent transfer is a semantic diagnostic before LLVM generation.
+Function-return compatibility is checked first, so a mismatched declared
+return type retains its return-type diagnostic before ownership joins.
+The result of a terminal subject-control flow is the control's result, not
+an earlier subject whose type happens to match the declared return type.
 
 The same transfer rule applies when an aggregate containing a borrowed owned
 value enters owned container storage through `push`, `put`, heap insertion, or

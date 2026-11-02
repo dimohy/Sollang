@@ -317,6 +317,7 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
             -> if {
                 nodes[function.operand0] => functionBody!
                 -1 => finalTopLevelResult!
+                -1 => finalLinkedControl!
                 UIntSize(0) => finalTopLevelStart!
                 UIntSize(0) => finalTopLevelLength!
                 UIntSize(0) => finalTopLevelEnd!
@@ -326,6 +327,26 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
                     and nodes[finalTopLevelSearch!].kind != 11
                     -> while {
                         nodes[finalTopLevelSearch!] => finalTopLevelCandidate
+                        # A terminal subject flow returns its linked control, even when
+                        # that control disagrees with the declared function result.
+                        # Resolve this after contextual arm inference; selecting a child
+                        # by the declared type can otherwise return the input subject.
+                        finalTopLevelCandidate => finalFlow
+                        finalFlow.parent == function.operand0
+                            and finalFlow.astNode == functionBody!.astNode
+                            and finalFlow.kind == 9
+                            and finalFlow.opcode == -1
+                            and finalFlow.operand1 >= 0
+                            and finalFlow.operand1 < (nodes -> len)
+                            -> if {
+                                nodes[finalFlow.operand1] => finalFlowResult
+                                finalFlowResult.parent == finalTopLevelSearch!
+                                    and (finalFlowResult.kind == 18
+                                    or finalFlowResult.kind == 27
+                                    or finalFlowResult.kind == 33
+                                    or finalFlowResult.kind == 34)
+                                    -> if { finalFlow.operand1 => finalLinkedControl! }
+                            }
                         false => finalTopLevelTypeMatches!
                         function.typeId >= 0 and finalTopLevelCandidate.typeId == function.typeId
                             -> if { true => finalTopLevelTypeMatches! }
@@ -363,11 +384,13 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
                         finalTopLevelSearch! + 1 => finalTopLevelSearch!
                     }
                 finalTopLevelResult! >= 0 -> if { finalTopLevelResult! => functionBody!.operand0 }
+                finalLinkedControl! >= 0 -> if { finalLinkedControl! => functionBody!.operand0 }
                 functionBody!.operand0 >= 0 and functionBody!.operand0 < (nodes -> len)
                     -> if {
                         nodes[functionBody!.operand0] => directFunctionResult!
                         (directFunctionResult!.kind == 27 or directFunctionResult!.kind == 34)
                             and function.typeId >= 0
+                            and directFunctionResult!.typeId == function.typeId
                             -> if {
                                 function.typeId => directFunctionResult!.typeId
                                 function.typeKind => directFunctionResult!.typeKind

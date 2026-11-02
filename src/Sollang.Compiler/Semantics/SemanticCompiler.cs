@@ -2808,10 +2808,6 @@ internal sealed partial class SemanticCompiler
         if (function.Body is not null)
         {
             MarkFixedLengthCandidateRequiresGrowable(function.Body, function.ReturnType, bodyType);
-            if (bodyType == BoundType.Unit)
-            {
-                ValidateOwnedParameterConsumptionExpression(function.Body, scopedFunctions, bodyBindings);
-            }
         }
         // Explicit returns have already checked their payload against the declared
         // type. Only a reachable fallthrough contributes the final body value.
@@ -2822,6 +2818,10 @@ internal sealed partial class SemanticCompiler
                 function.Line,
                 function.Column,
                 $"function '{function.DeclarationName ?? function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
+        }
+        if (function.Body is not null && bodyType == BoundType.Unit)
+        {
+            ValidateOwnedParameterConsumptionExpression(function.Body, scopedFunctions, bodyBindings);
         }
         if (function.Body is not null && FunctionControlFlowFacts.MayReachContinuation(function))
         {
