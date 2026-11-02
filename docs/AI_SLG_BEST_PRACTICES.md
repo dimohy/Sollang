@@ -69,7 +69,7 @@ At user-block invocation and yield boundaries, evaluate inputs before binding
 roles and executing callback effects. Source offsets from different declarations
 cannot order these phases; preserve their data dependencies and lexical scopes.
 Generic user-block inputs infer parameters recursively through `Option`,
-`Result`, dictionary key/value types, growable arrays, and readonly references.
+`Result`, `Deque`, dictionary key/value types, growable arrays, and readonly references.
 Use ordinary addressable bindings for `ref T` inputs; a literal or temporary
 does not become borrowable merely because the call has a callback.
 

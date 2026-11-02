@@ -7720,6 +7720,17 @@ internal sealed partial class SemanticCompiler
                 typeTemplate[1..^4], elementType, function, inferredTypes, line, column);
             return;
         }
+        var dequePrefix = Shared.TypeNamePolicy.StableDequePrefix();
+        if (typeTemplate.StartsWith(dequePrefix, StringComparison.Ordinal)
+            && typeTemplate.EndsWith('>'))
+        {
+            if (!_types.IsDeque(actualType))
+                throw Error(line, column, $"expected a Deque but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[dequePrefix.Length..^1], _types.GetDequeElement(actualType),
+                function, inferredTypes, line, column);
+            return;
+        }
         if (typeTemplate.StartsWith("Option<", StringComparison.Ordinal)
             && typeTemplate.EndsWith('>')
             && _types.TryGetOptionValue(actualType, out var optionValue))

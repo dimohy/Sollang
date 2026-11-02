@@ -4110,16 +4110,60 @@ sealLateNominalMemberTypes results: mut [TypedIrNode; ~], prepared: ref semantic
 # Late call/control repairs can change exact producer types after the ordinary
 # reference pass. Keep this final fixed point outside the main lowering
 # declaration so the ordering contract does not grow that already-large stage.
+canCommitProducedBindingType binding: TypedIrNode, producedType: Int, types: ref [typeIds.SemanticType; ~] -> Bool {
+    binding.flags != 1 or binding.typeId < 0 -> if { true -> return }
+    binding.typeId >= (types -> len) or producedType < 0 or producedType >= (types -> len)
+        -> if { false -> return }
+    types[binding.typeId].containsParameter and not types[producedType].containsParameter
+}
+
 sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
+    # Generic call specialization can settle a receiver after initial lowering.
+    # Read results follow that concrete receiver before bindings copy their type.
+    0 => dequeReadIndex!
+    dequeReadIndex! < (results -> len) -> while {
+        results[dequeReadIndex!] => dequeRead!
+        dequeRead!.kind == 9 and dequeRead!.opcode <= -248 and dequeRead!.opcode >= -251
+            and dequeRead!.operand0 >= 0 and dequeRead!.operand0 < (results -> len)
+            -> if {
+                results[dequeRead!.operand0] => receiver
+                receiver.typeId => receiverTypeId!
+                receiver.kind == 5 and receiver.operand0 >= 0 and receiver.operand0 < (results -> len)
+                    and results[receiver.operand0].kind == 17
+                    -> if { results[receiver.operand0].typeId => receiverTypeId! }
+                receiverTypeId! >= 0 and receiverTypeId! < (frozenRecursiveSemanticTypes -> len)
+                    -> if {
+                        frozenRecursiveSemanticTypes[receiverTypeId!].kind == 8
+                            -> if { frozenRecursiveSemanticTypes[receiverTypeId!].first => receiverTypeId! }
+                        receiverTypeId! >= 0 and receiverTypeId! < (frozenRecursiveSemanticTypes -> len)
+                            -> if {
+                                frozenRecursiveSemanticTypes[receiverTypeId!] => receiverType
+                                receiverType.kind == 7 and receiverType.origin == 4 and receiverType.symbol == 6
+                                    and not receiverType.containsParameter and receiverType.first >= 0
+                                    -> if {
+                                        frozenRecursiveSemanticTypes[receiverType.first] => elementType
+                                        receiverType.first => dequeRead!.typeId
+                                        elementType.kind => dequeRead!.typeKind
+                                        elementType.origin => dequeRead!.typeOrigin
+                                        elementType.module => dequeRead!.typeModule
+                                        elementType.symbol => dequeRead!.typeSymbol
+                                        recursiveTypeFlags[receiverType.first] => dequeRead!.typeFlags
+                                        dequeRead! => results[dequeReadIndex!]
+                                    }
+                            }
+                    }
+            }
+        dequeReadIndex! + 1 => dequeReadIndex!
+    }
     [Int; ~] => changedTypeIndices!
     0 => bindingIndex!
     bindingIndex! < (results -> len) -> while {
         results[bindingIndex!] => binding!
         binding!.kind == 17
-            and (binding!.flags != 1 or binding!.typeId < 0)
             and binding!.operand0 >= 0
             and binding!.operand0 < (results -> len)
             and results[binding!.operand0].typeId >= 0
+            and (binding! -> canCommitProducedBindingType(results[binding!.operand0].typeId, frozenRecursiveSemanticTypes))
             -> if {
                 results[binding!.operand0] => value
                 binding!.typeId != value.typeId
@@ -4214,10 +4258,10 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
     arithmeticBindingIndex! < (results -> len) -> while {
         results[arithmeticBindingIndex!] => binding!
         binding!.kind == 17
-            and (binding!.flags != 1 or binding!.typeId < 0)
             and binding!.operand0 >= 0
             and binding!.operand0 < (results -> len)
             and results[binding!.operand0].typeId >= 0
+            and (binding! -> canCommitProducedBindingType(results[binding!.operand0].typeId, frozenRecursiveSemanticTypes))
             -> if {
                 results[binding!.operand0] => value
                 value.typeId => binding!.typeId

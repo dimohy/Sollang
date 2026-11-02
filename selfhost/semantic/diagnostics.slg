@@ -4085,32 +4085,35 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
         -> if {
             resolved.types[argument.mismatchExpectedTypeId] => expected
             resolved.types[argument.mismatchActualTypeId] => actual
-            expected.kind == 6 and actual.kind != 6 -> if {
-                argument.argumentAst => diagnosticAst!
-                argument.parameterOrdinal == 0 and argument.callAst >= 0
-                    -> if {
-                        package.ranges[argument.sourceModule] => range
-                        range.astStart + argument.callAst => globalCall
-                        package.nodes[globalCall].kind == 10 -> if {
-                            package -> semanticContext.indexDirectFlowTargetPathsByAst => paths
-                            paths[globalCall] => target
-                            target >= 0 -> if { target => diagnosticAst! }
+            expected.kind == 7 and expected.origin == 4 and expected.symbol == 6
+                and not (actual.kind == 7 and actual.origin == 4 and actual.symbol == 6) => dequeMismatch
+            (expected.kind == 6 and actual.kind != 6) or dequeMismatch
+                -> if {
+                    argument.argumentAst => diagnosticAst!
+                    argument.parameterOrdinal == 0 and argument.callAst >= 0
+                        -> if {
+                            package.ranges[argument.sourceModule] => range
+                            range.astStart + argument.callAst => globalCall
+                            package.nodes[globalCall].kind == 10 -> if {
+                                package -> semanticContext.indexDirectFlowTargetPathsByAst => paths
+                                paths[globalCall] => target
+                                target >= 0 -> if { target => diagnosticAst! }
+                            }
                         }
-                    }
-                NumericCallArgumentDiagnostic {
-                    code: 5
-                    sourceModule: argument.sourceModule
-                    argumentAst: diagnosticAst!
-                    callAst: argument.callAst
-                    targetSourceModule: argument.targetSourceModule
-                    functionSymbol: argument.functionSymbol
-                    parameterSymbol: argument.parameterSymbol
-                    parameterOrdinal: argument.parameterOrdinal
-                    genericParameterSymbol: -1
-                    expectedTypeId: argument.mismatchExpectedTypeId
-                    actualTypeId: argument.mismatchActualTypeId
-                } -> return
-            }
+                    NumericCallArgumentDiagnostic {
+                        code: dequeMismatch -> if { 9 } else { 5 }
+                        sourceModule: argument.sourceModule
+                        argumentAst: diagnosticAst!
+                        callAst: argument.callAst
+                        targetSourceModule: argument.targetSourceModule
+                        functionSymbol: argument.functionSymbol
+                        parameterSymbol: argument.parameterSymbol
+                        parameterOrdinal: argument.parameterOrdinal
+                        genericParameterSymbol: -1
+                        expectedTypeId: argument.mismatchExpectedTypeId
+                        actualTypeId: argument.mismatchActualTypeId
+                    } -> return
+                }
         }
     argument.status == 0 and argument.expectedTypeId >= 0
         and argument.expectedTypeId < (resolved.types -> len)

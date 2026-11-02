@@ -3072,8 +3072,10 @@ an effectful callback before emitting the unchanged value. `take<T>` and
 Generic parameters may also be inferred from additional arguments, allowing
 `scan<T, S>` to derive `S` directly from its initial accumulator.
 Ordinary generic calls and user-block calls share recursive inference for
-`Option<T>`, `Result<T, E>`, dictionary key/value types, growable arrays, and
-readonly references. Each argument contributes to the same inference environment;
+`Option<T>`, `Result<T, E>`, `Deque<T>`, dictionary key/value types, growable arrays,
+and readonly references. A Deque pattern infers its element only from a Deque;
+shared storage with an array does not make the two factories interchangeable.
+Each argument contributes to the same inference environment;
 conflicting occurrences of a parameter are rejected in argument order. A
 user-block source passed to `ref T` must have an addressable owner or reference,
 and code generation preserves that borrow rather than passing the value as `T`.
@@ -3549,6 +3551,9 @@ generic square-bracket spelling is not accepted.
 Generic call inference uses one environment across the primary and additional
 arguments. That complete environment specializes the input, additional-input,
 and return types before the call result is bound or read by a later expression.
+A provisional inferred binding type containing generic parameters commits the
+concrete producer type before it becomes a mutable storage contract. Once that
+contract is concrete, later normalization preserves its type.
 An explicit flow type argument seeds the environment before the primary input.
 When preceding inputs determine an additional parameter's concrete numeric
 type, its numeric literal or value-if branch literals use that context before
