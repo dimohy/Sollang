@@ -45,7 +45,7 @@ lowerFunctionRequests functionRequests: [FunctionLowerRequest; ~], useParallel: 
         }
     sequentialFunctionResults!
 }
-lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
+lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], functionOwnerByAst: ref [Int; ~] -> SourceTypedIr {
     [TypedIrNode; ~] => results!
     requestedSourceIndex => sourceIndex
     prepared.package.sources[sourceIndex] -> len => sourceLength
@@ -53,7 +53,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
     prepared.package.ranges[sourceIndex] => sourceRange
     prepared -> interpolationTokenMembership(sourceIndex) => interpolatedTokenBySource
     prepared -> canonicalInterpolationAstMembership(sourceIndex) => canonicalRootByAst
-    prepared -> prepareSourceLowerFacts(sourceIndex) => sourceFacts
+    prepared -> prepareSourceLowerFacts(sourceIndex, functionOwnerByAst) => sourceFacts
     [FunctionLowerRequest; ~] => sourceFunctionRequests!
     0 => sourceFunctionSymbolIndex!
     sourceFunctionSymbolIndex! < sourceRange.symbolCount
@@ -1393,18 +1393,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                 resolvedExpressionIrKindForAstKind(entryExpression.kind, entryExpressionIsBoolLiteral!, entryExpressionIsCallLike, contextualEntryNullaryOption!, entryExpressionIsPropertyCall!, contextualEntryStructLiteral!) => entryExpressionKind!
                                                 knownEntryLocalBindingReference! and entryExpression.kind == 16
                                                     -> if { 5 => entryExpressionKind! }
-                                                false => transparentEntryExpression!
-                                                entryExpression.kind >= 18 and entryExpression.kind <= 21
-                                                    -> if {
-                                                        0 => transparentEntryChildSearch!
-                                                        transparentEntryChildSearch! < sourceRange.astCount
-                                                            -> while {
-                                                                prepared.package.nodes[sourceRange.astStart + transparentEntryChildSearch!] => transparentEntryChild
-                                                                transparentEntryChild.parent == entryExpressionAst! and transparentEntryChild.start == entryExpression.start and transparentEntryChild.length == entryExpression.length
-                                                                    -> if { true => transparentEntryExpression! }
-                                                                transparentEntryChildSearch! + 1 => transparentEntryChildSearch!
-                                                            }
-                                                    }
+                                                sourceFacts.transparentEntryByAst[entryExpressionAst!] => transparentEntryExpression!
                                                 entryExpression.kind == 36 -> if {
                                                     0 => entryConstructorWrapperChildAst!
                                                     entryConstructorWrapperChildAst! < sourceRange.astCount

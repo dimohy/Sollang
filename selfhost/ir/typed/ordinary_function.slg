@@ -30,10 +30,12 @@ struct SourceLowerFacts {
     functionPathByAst: [Bool; ~]
     valueVariantByAst: [Int; ~]
     localMemberByAst: [Bool; ~]
+    transparentEntryByAst: [Bool; ~]
+    transparentFunctionByAst: [Bool; ~]
 }
 
 # One immutable source fact set is borrowed by entry and all function workers.
-prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int -> SourceLowerFacts {
+prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, functionOwnerByAst: ref [Int; ~] -> SourceLowerFacts {
     prepared.package.ranges[sourceIndex] => sourceRange
     prepared.package.sources[sourceIndex] -> slice(UIntSize(0), prepared.package.sources[sourceIndex] -> len) => source
     [resolution.ResolvedName; ~] => resolvedNames!
@@ -43,6 +45,8 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
     [Bool; ~] => resolvedQualifiedByAst!
     [Bool; ~] => qualifiedFunctionPathByAst!
     [Int; ~] => qualifiedValueVariantIndexByAst!
+    [Bool; ~] => transparentEntryByAst!
+    [Bool; ~] => transparentFunctionByAst!
     0 => resolvedNameIndexSeed!
     resolvedNameIndexSeed! < sourceRange.astCount
         -> while {
@@ -52,6 +56,8 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
             resolvedQualifiedByAst! -> push(false)
             qualifiedFunctionPathByAst! -> push(false)
             qualifiedValueVariantIndexByAst! -> push(-1)
+            transparentEntryByAst! -> push(false)
+            transparentFunctionByAst! -> push(false)
             resolvedNameIndexSeed! + 1 => resolvedNameIndexSeed!
         }
     0 => sourceNameOffset!
@@ -123,6 +129,29 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
                 }
             qualifiedIndexBuild! + 1 => qualifiedIndexBuild!
         }
+    # A precedence wrapper is transparent exactly when a direct child occupies
+    # its full source span. Function workers additionally preserve the frozen
+    # ownership filter, which excludes interpolation-owned AST nodes.
+    0 => transparentChildIndex!
+    transparentChildIndex! < sourceRange.astCount
+        -> while {
+            sourceRange.astStart + transparentChildIndex! => childGlobalAst
+            prepared.package.nodes[childGlobalAst] => child
+            child.parent >= 0 and child.parent < sourceRange.astCount
+                -> if {
+                    sourceRange.astStart + child.parent => parentGlobalAst
+                    prepared.package.nodes[parentGlobalAst] => parent
+                    parent.kind >= 18 and parent.kind <= 21
+                        and child.start == parent.start and child.length == parent.length
+                        -> if {
+                            true => transparentEntryByAst![child.parent]
+                            functionOwnerByAst[parentGlobalAst] >= 0
+                                and functionOwnerByAst[childGlobalAst] == functionOwnerByAst[parentGlobalAst]
+                                -> if { true => transparentFunctionByAst![child.parent] }
+                        }
+                }
+            transparentChildIndex! + 1 => transparentChildIndex!
+        }
     SourceLowerFacts {
         names: resolvedNames!
         symbolsByAst: resolvedSymbolByAst!
@@ -132,6 +161,8 @@ prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIn
         functionPathByAst: qualifiedFunctionPathByAst!
         valueVariantByAst: qualifiedValueVariantIndexByAst!
         localMemberByAst: localMemberByParentAst
+        transparentEntryByAst: transparentEntryByAst!
+        transparentFunctionByAst: transparentFunctionByAst!
     }
 }
 
@@ -925,7 +956,7 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                         }
                     bindingNodePosition! + 1 => bindingNodePosition!
                 }
-                results! -> lowerOrdinaryFunctionExpressions(astToIr!, bindingIrBySymbol!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
+                results! -> lowerOrdinaryFunctionExpressions(astToIr!, bindingIrBySymbol!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, sourceFacts.transparentFunctionByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
 
                 results! -> finalizeOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, symbolIndex, functionIr, expressionIrStart, resultRootAst!, returnIr, functionResultOrigin!, functionResultModule!, functionResultSymbol!, functionResultTypeId!)
             }
