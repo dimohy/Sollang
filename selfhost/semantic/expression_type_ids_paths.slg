@@ -781,6 +781,44 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
     changed!
 }
 
+# Index immutable coordinates, not inferred results. Preserve ascending
+# expression order and the caller's round-start limit; appended role facts
+# become candidates next round while existing type/status facts stay live.
+synchronizeCollectionSourceExpressions package: ref analysis.PackageAnalysis, expressions: ref [ExpressionTypeId; ~], limit: Int, indexed: Int, first: mut [Int; ~], last: mut [Int; ~], expressionIndices: mut [Int; ~], distances: mut [Int; ~], next: mut [Int; ~] -> Int {
+    (first -> len) == 0 -> if {
+        package.nodes -> each node { first -> push(-1)
+            last -> push(-1) }
+    }
+    indexed => expressionIndex!
+    expressionIndex! < limit -> while {
+        expressions[expressionIndex!] => expression
+        package.ranges[expression.sourceModule] => range
+        package.nodes[range.astStart + expression.astNode] => node
+        node.parent => ancestor!
+        1 => distance!
+        ancestor! >= 0 -> while {
+            range.astStart + ancestor! => globalAncestor
+            package.nodes[globalAncestor] => owner
+            owner.kind == 48 and owner.payloadToken >= 0
+                and node.start + node.length <= package.tokens[range.tokenStart + owner.payloadToken].span.start
+                -> if {
+                    Int(expressionIndices -> len) => entry
+                    expressionIndices -> push(expressionIndex!)
+                    distances -> push(distance!)
+                    next -> push(-1)
+                    last[globalAncestor] >= 0 -> if {
+                        entry => next[last[globalAncestor]]
+                    } else { entry => first[globalAncestor] }
+                    entry => last[globalAncestor]
+                }
+            owner.parent => ancestor!
+            distance! + 1 => distance!
+        }
+        expressionIndex! + 1 => expressionIndex!
+    }
+    limit
+}
+
 resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~], callbackArgumentIndex: ref CallArgumentBindingIndex -> Unit {
     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
     prepared.package -> indexResolvedNameReferences => nameReferences
@@ -1036,6 +1074,12 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
     [Int; ~] => inferredReturnLastByFunction!
     [Int; ~] => inferredReturnNextExpression!
     [Int; ~] => inferredReturnExpressionDistances!
+    [Int; ~] => collectionFirstExpressionByOwner!
+    [Int; ~] => collectionLastExpressionByOwner!
+    [Int; ~] => collectionSourceExpressions!
+    [Int; ~] => collectionSourceDistances!
+    [Int; ~] => collectionSourceNext!
+    0 => collectionIndexedExpressions!
     true => pathChanged!
     pathChanged! -> while {
         false => pathChanged!
@@ -1452,30 +1496,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
         # The intrinsic each role binds its block item to the source
         # collection's element type. Repeat this with the surrounding fixed
         # point because the collection can itself be a newly inferred local.
-        [Int; ~] => eachFirstExpressionBySource!
-        [Int; ~] => eachLastExpressionBySource!
-        0 => eachExpressionSourceSeed!
-        eachExpressionSourceSeed! < (prepared.package.ranges -> len)
-            -> while {
-                eachFirstExpressionBySource! -> push(-1)
-                eachLastExpressionBySource! -> push(-1)
-                eachExpressionSourceSeed! + 1 => eachExpressionSourceSeed!
-            }
-        [Int; ~] => eachNextExpressionInSource!
-        0 => eachExpressionIndexSeed!
-        eachExpressionIndexSeed! < (expressions -> len)
-            -> while {
-                expressions[eachExpressionIndexSeed!] => eachIndexedExpression
-                eachLastExpressionBySource![eachIndexedExpression.sourceModule] >= 0
-                    -> if {
-                        eachExpressionIndexSeed! => eachNextExpressionInSource![eachLastExpressionBySource![eachIndexedExpression.sourceModule]]
-                    } else {
-                        eachExpressionIndexSeed! => eachFirstExpressionBySource![eachIndexedExpression.sourceModule]
-                    }
-                eachExpressionIndexSeed! => eachLastExpressionBySource![eachIndexedExpression.sourceModule]
-                eachNextExpressionInSource! -> push(-1)
-                eachExpressionIndexSeed! + 1 => eachExpressionIndexSeed!
-            }
+        synchronizeCollectionSourceExpressions(prepared.package, expressions, Int(expressions -> len), collectionIndexedExpressions!, collectionFirstExpressionByOwner!, collectionLastExpressionByOwner!, collectionSourceExpressions!, collectionSourceDistances!, collectionSourceNext!) => collectionIndexedExpressions!
         0 => eachReferenceSource!
         eachReferenceSource! < (prepared.package.ranges -> len)
             -> while {
@@ -1495,34 +1516,26 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                     -1 => eachSourceExpression!
                                     UIntSize(0) => eachSourceEnd!
                                     1000000 => eachSourceDistance!
-                                    eachFirstExpressionBySource![eachReferenceSource!] => eachSourceSearch!
+                                    collectionFirstExpressionByOwner![eachReferenceRange.astStart + eachSymbol.astNode] => eachSourceSearch!
                                     eachSourceSearch! >= 0 -> while {
-                                        expressions[eachSourceSearch!] => eachSourceCandidate
+                                        collectionSourceExpressions![eachSourceSearch!] => eachCandidateIndex
+                                        expressions[eachCandidateIndex] => eachSourceCandidate
                                         eachSourceCandidate.sourceModule == eachReferenceSource!
                                             -> if {
                                                 prepared.package.nodes[eachReferenceRange.astStart + eachSourceCandidate.astNode] => eachSourceNode
                                                 eachSourceNode.start + eachSourceNode.length <= prepared.package.tokens[eachReferenceRange.tokenStart + eachRoleAst.payloadToken].span.start
                                                     -> if {
-                                                        eachSourceNode.parent => eachSourceAncestor!
-                                                        1 => eachDistance!
-                                                        false => belongsToEach!
-                                                        eachSourceAncestor! >= 0 and not belongsToEach!
-                                                            -> while {
-                                                                eachSourceAncestor! == eachSymbol.astNode -> if { true => belongsToEach! } else {
-                                                                    prepared.package.nodes[eachReferenceRange.astStart + eachSourceAncestor!].parent => eachSourceAncestor!
-                                                                    eachDistance! + 1 => eachDistance!
-                                                                }
-                                                            }
+                                                        collectionSourceDistances![eachSourceSearch!] => eachDistance
                                                         eachSourceNode.start + eachSourceNode.length => eachCandidateEnd
-                                                        belongsToEach! and (eachSourceExpression! < 0 or eachCandidateEnd > eachSourceEnd! or (eachCandidateEnd == eachSourceEnd! and eachDistance! < eachSourceDistance!))
+                                                        eachSourceExpression! < 0 or eachCandidateEnd > eachSourceEnd! or (eachCandidateEnd == eachSourceEnd! and eachDistance < eachSourceDistance!)
                                                             -> if {
-                                                                eachSourceSearch! => eachSourceExpression!
+                                                                eachCandidateIndex => eachSourceExpression!
                                                                 eachCandidateEnd => eachSourceEnd!
-                                                                eachDistance! => eachSourceDistance!
+                                                                eachDistance => eachSourceDistance!
                                                             }
                                                     }
                                             }
-                                        eachNextExpressionInSource![eachSourceSearch!] => eachSourceSearch!
+                                        collectionSourceNext![eachSourceSearch!] => eachSourceSearch!
                                     }
                                     eachSourceExpression! >= 0 and expressions[eachSourceExpression!].typeId >= 0 and expressions[eachSourceExpression!].typeId < (types -> len)
                                         -> if {

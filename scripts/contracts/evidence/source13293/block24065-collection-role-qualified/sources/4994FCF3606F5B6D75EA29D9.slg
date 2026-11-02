@@ -1,0 +1,24 @@
+# Proves that library-defined stateful stages persist across items and that
+# take cancels a nested flatMap pipeline after the final downstream value.
+import std.sequence
+
+main {
+    0 => scanned!
+
+    1..10
+        -> beforeEach outer {
+        }
+        -> flatMap(1..10) outer, inner {
+            outer * 10 + inner
+        }
+        -> tap value {
+            scanned! + 1 => scanned!
+        }
+        -> skip(3)
+        -> take(4)
+        -> each value {
+            "$value" -> println
+        }
+
+    "scanned=$(scanned!)" -> println
+}
