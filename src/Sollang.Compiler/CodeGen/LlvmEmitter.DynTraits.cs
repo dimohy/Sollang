@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -11,7 +11,7 @@ internal sealed partial class LlvmEmitter
     private void EmitDynTraitTables()
     {
         var conversions = _reachableDynTraitConversions
-            .DistinctBy(conversion => (conversion.DynType, conversion.ConcreteType))
+            .DistinctBy(DynTableKey)
             .OrderBy(conversion => conversion.DynType)
             .ThenBy(conversion => conversion.ConcreteType)
             .ToArray();
@@ -146,15 +146,9 @@ internal sealed partial class LlvmEmitter
     private static string DynMethodWrapperSymbol(BoundDynTraitConversion conversion, int methodIndex) =>
         DynSymbolPrefix(conversion) + "_method_" + methodIndex.ToString(CultureInfo.InvariantCulture);
 
-    private static string DynSymbolPrefix(BoundDynTraitConversion conversion)
-    {
-        var builder = new StringBuilder("sollang_dyn_");
-        foreach (var character in conversion.Trait.Name)
-        {
-            builder.Append(char.IsAsciiLetterOrDigit(character) ? character : '_');
-        }
-        builder.Append('_');
-        builder.Append(((int)conversion.ConcreteType).ToString(CultureInfo.InvariantCulture));
-        return builder.ToString();
-    }
+    private static ulong DynTableKey(BoundDynTraitConversion conversion) =>
+        DynTraitPolicy.DynTraitTableKey((ulong)(int)conversion.DynType, (ulong)(int)conversion.ConcreteType);
+
+    private static string DynSymbolPrefix(BoundDynTraitConversion conversion) =>
+        "sollang_dyn_" + DynTableKey(conversion).ToString(CultureInfo.InvariantCulture);
 }

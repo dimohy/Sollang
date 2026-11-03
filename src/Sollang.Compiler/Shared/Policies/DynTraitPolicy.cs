@@ -7,4 +7,7 @@ internal static class DynTraitPolicy
 {
     public static bool DynTraitMethodCompatible(bool readonlySelf, bool additionalInputs, bool intResult) =>
         readonlySelf && !additionalInputs && intResult;
+
+    public static ulong DynTraitTableKey(ulong traitTypeId, ulong concreteTypeId) =>
+        unchecked(traitTypeId * 4294967296UL + concreteTypeId);
 }

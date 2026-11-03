@@ -1529,6 +1529,29 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                                             source -> byte(flowToken.span.start + 2) => flowByte2
                                             flowByte0 == 108 and flowByte1 == 101 and flowByte2 == 110
                                                 -> if { 13 => builtinTypeId! }
+                                            flowByte0 == 100 and flowByte1 == 121 and flowByte2 == 110
+                                                -> if {
+                                                    # The argument names a trait; the flow produces
+                                                    # its registered dyn value before binding reads.
+                                                    syntaxChildren.firstChild[sourceRange.astStart + astIndex!] => dynArgument!
+                                                    dynArgument! >= 0 -> while {
+                                                        prepared.package.nodes[dynArgument!].kind == 12
+                                                            -> if {
+                                                                referenceIndexByTypeAst[dynArgument!] => dynReference
+                                                                dynReference >= 0 and references[dynReference].status == 0
+                                                                    -> if {
+                                                                        references[dynReference].typeId => traitTypeId
+                                                                        traitTypeId >= 0 and traitTypeId < (types -> len)
+                                                                            -> if {
+                                                                                types[traitTypeId] => traitType
+                                                                                types -> typeIds.dynTraitTypeId(traitType.module, traitType.symbol) => dynType
+                                                                                dynType >= 0 -> if { dynType => builtinTypeId! }
+                                                                            }
+                                                                    }
+                                                            }
+                                                        syntaxChildren.nextChild[dynArgument!] => dynArgument!
+                                                    }
+                                                }
                                         }
                                         flowToken.span.length == 4 -> if {
                                             source -> byte(flowToken.span.start) => flowByte0

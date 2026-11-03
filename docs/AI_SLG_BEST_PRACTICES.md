@@ -1894,6 +1894,19 @@ Parallel branch source ownership/shareability, input-mode, and target async/effe
 `FunctionTypeBindingPolicy`, together with its readonly-query name table.
 Keep source-fact discovery and diagnostic formatting in the typed adapters;
 regenerate the SLG policy through `selfhost-sync` when its C# methods change.
+Dyn table deduplication and symbol publication use the compiled
+`DynTraitPolicy.DynTraitTableKey` over committed trait/concrete type identities.
+The Native table-owner adapter consumes that generated rule; escaped trait
+spellings must not replace semantic identity.
+Dyn declaration lookup consumes prepared import edges with module identities
+in type registration, nominal resolution, lowering, dispatch sealing, and
+diagnostics. Expand aliases through normalized module tokens and preserve the
+remaining path; later binding names are outside the requested trait path.
+Commit a dyn conversion's flow result before inferring reads of its binding.
+Consume the canonical type-argument reference to select the registered dyn
+descriptor; a bare trait constraint must not become the binding's runtime type.
+Preserve that value fact through function metadata and LLVM emission instead
+of filtering an incorrectly typed value out of the registration inputs.
 Use the canonical materialized source type before that decision. Source and
 capture sharing checks use the same semantic type walk, committed fields, and
 canonical enum payload dependencies from the finalized type/reference facts.

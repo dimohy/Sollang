@@ -2256,6 +2256,12 @@ speaker! -> Speak.sound => value
 Namespaced trait declarations retain one canonical qualified name in dynamic
 type metadata and stable identities. Both the short trait qualifier and its
 canonical qualified name select the same dynamic dispatch target.
+Explicit and default import aliases expand their first path segment before
+trait lookup. They select the imported canonical declaration and do not create
+another dyn trait identity.
+The conversion result is the canonical dyn value type. Binding and reading that
+result preserves the dyn type; the trait named by its type argument remains a
+constraint identity rather than the runtime value type.
 
 `dyn<Trait>` is an affine two-pointer value containing an erased data pointer
 and a vtable pointer. Slot 0 is the erased drop function. Subsequent slots are
@@ -2266,6 +2272,10 @@ once. Reachable conversions of the same canonical trait and concrete type
 share one implementation table and its wrappers. Different trait or concrete
 type identities retain separate tables; unreachable conversions do not select
 a table.
+
+Table keys and emitted table symbols derive from the committed dyn trait and
+concrete type identities. Distinct qualified trait names remain distinct even
+when replacing namespace separators with underscores would give the same text.
 
 The implemented dyn-compatible subset requires a trait without associated
 types and synchronous, capture-free methods with readonly `self`, no additional

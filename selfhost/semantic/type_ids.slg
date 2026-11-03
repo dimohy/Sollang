@@ -303,62 +303,94 @@ nextDynPathToken package: ref analysis.PackageAnalysis, sourceIndex: Int, tokenI
     tokenIndex => cursor!
     cursor! < tokenEnd -> while {
         package.tokens[range.tokenStart + cursor!].kind => kind
-        kind == grammar.tokenIdIdentifier() or kind == grammar.tokenIdDot()
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment()
             -> if { cursor! -> return }
         cursor! + 1 => cursor!
     }
     tokenEnd
 }
 
-dynTraitPathMatches package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, firstNameToken: Int, tokenEnd: Int, traitSource: Int, traitSymbol: Int -> Bool {
+# Alias expansion retains every suffix segment, using the same normalized
+# module-token authority as ordinary import resolution.
+dynExpandedNamespaceMatches package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, traitSource: Int, prefix: modules.ModuleIdentity, suffixStartToken: Int, suffixEndToken: Int -> Bool {
     package.ranges[sourceIndex] => range
-    package.sources[sourceIndex] -> len => sourceLength
-    package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    package.sources[sourceIndex] -> slice(UIntSize(0), package.sources[sourceIndex] -> len) => source
+    [UInt64; ~] => requested!
+    modules.appendLogicalNameWords(source, prefix, range, package.tokens, requested!)
+    suffixStartToken < suffixEndToken -> if {
+        package.tokens[range.tokenStart + suffixStartToken].span.start => suffixStart
+        package.tokens[range.tokenStart + suffixEndToken].span.start => suffixEnd
+        modules.ModuleIdentity { sourceIndex: sourceIndex, pathHash: 0, pathStart: suffixStart, pathLength: suffixEnd - suffixStart, importCount: 0 } => suffix
+        modules.appendLogicalNameWords(source, suffix, range, package.tokens, requested!)
+    }
+    package.ranges[traitSource] => traitRange
+    package.sources[traitSource] -> slice(UIntSize(0), package.sources[traitSource] -> len) => traitText
+    [UInt64; ~] => declared!
+    modules.appendLogicalNameWords(traitText, identities[traitSource], traitRange, package.tokens, declared!)
+    (requested! -> len) != (declared! -> len) -> if { false -> return }
+    0 => word!
+    word! < (requested! -> len) -> while {
+        requested![word!] != declared![word!] -> if { false -> return }
+        word! + 1 => word!
+    }
+    true
+}
+
+dynTraitPathMatches package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], sourceIndex: Int, firstNameToken: Int, tokenEnd: Int, traitSource: Int, traitSymbol: Int -> Bool {
+    package.ranges[sourceIndex] => range
+    package.sources[sourceIndex] -> slice(UIntSize(0), package.sources[sourceIndex] -> len) => source
     package.ranges[traitSource] => traitRange
     package.symbols[traitRange.symbolStart + traitSymbol] => declaration
     package.tokens[traitRange.tokenStart + declaration.nameToken] => declaredName
     firstNameToken => lastNameToken!
-    firstNameToken => nameSearch!
-    nameSearch! < tokenEnd -> while {
-        package.tokens[range.tokenStart + nameSearch!].kind == grammar.tokenIdIdentifier()
-            -> if { nameSearch! => lastNameToken! }
-        nameSearch! + 1 => nameSearch!
-    }
+    -1 => lastDot!
+    package -> nextDynPathToken(sourceIndex, firstNameToken + 1, tokenEnd) => pathToken!
+    pathToken! < tokenEnd and package.tokens[range.tokenStart + pathToken!].kind == grammar.tokenIdDot()
+        -> while {
+            pathToken! => lastDot!
+            package -> nextDynPathToken(sourceIndex, pathToken! + 1, tokenEnd) => nameToken
+            nameToken >= tokenEnd -> if { false -> return }
+            package.tokens[range.tokenStart + nameToken].kind != grammar.tokenIdIdentifier()
+                -> if { false -> return }
+            nameToken => lastNameToken!
+            package -> nextDynPathToken(sourceIndex, nameToken + 1, tokenEnd) => pathToken!
+        }
+    pathToken! < tokenEnd and package.tokens[range.tokenStart + pathToken!].kind == grammar.tokenIdLess()
+        -> if { false -> return }
     package.tokens[range.tokenStart + lastNameToken!] => requestedName
     package.sources[traitSource] -> slice(declaredName.span.start, declaredName.span.length) => spelling
     SpanNameRequest { source: source, start: requestedName.span.start, length: requestedName.span.length, expected: spelling } -> spanNameIs
         -> unless { false -> return }
     firstNameToken == lastNameToken! -> if { true -> return }
-    identities[traitSource] => identity
-    identity.pathLength == 0 -> if { false -> return }
-    firstNameToken => requestedToken!
-    0 => moduleToken!
-    moduleToken! < traitRange.tokenCount -> while {
-        package.tokens[traitRange.tokenStart + moduleToken!] => token
-        token.span.start >= identity.pathStart and token.span.start < identity.pathStart + identity.pathLength
-            and (token.kind == grammar.tokenIdIdentifier() or token.kind == grammar.tokenIdDot())
+    package -> nextDynPathToken(sourceIndex, firstNameToken + 1, lastNameToken!) => firstDot
+    package.tokens[range.tokenStart + firstNameToken] => firstName
+    source -> slice(firstName.span.start, firstName.span.length) => prefixName
+    false => aliasSeen!
+    0 => importIndex!
+    importIndex! < (imports -> len) -> while {
+        imports[importIndex!] => edge
+        edge.sourceModule == sourceIndex and edge.aliasToken >= 0
             -> if {
-                package -> nextDynPathToken(sourceIndex, requestedToken!, lastNameToken!) => requestedToken!
-                requestedToken! >= lastNameToken! -> if { false -> return }
-                package.tokens[range.tokenStart + requestedToken!] => requested
-                package.sources[traitSource] -> slice(token.span.start, token.span.length) => part
-                requested.kind != token.kind
-                    or not (SpanNameRequest { source: source, start: requested.span.start, length: requested.span.length, expected: part } -> spanNameIs)
-                    -> if { false -> return }
-                requestedToken! + 1 => requestedToken!
+                package.tokens[range.tokenStart + edge.aliasToken] => alias
+                SpanNameRequest { source: source, start: alias.span.start, length: alias.span.length, expected: prefixName } -> spanNameIs
+                    -> if {
+                        true => aliasSeen!
+                        modules.ModuleIdentity { sourceIndex: sourceIndex, pathHash: edge.targetHash, pathStart: edge.pathStart, pathLength: edge.pathLength, importCount: 0 } => imported
+                        package -> dynExpandedNamespaceMatches(identities, sourceIndex, traitSource, imported, firstDot, lastDot!)
+                            -> if { true -> return }
+                    }
             }
-        moduleToken! + 1 => moduleToken!
+        importIndex! + 1 => importIndex!
     }
-    package -> nextDynPathToken(sourceIndex, requestedToken!, lastNameToken!) => requestedToken!
-    requestedToken! >= lastNameToken! -> if { false -> return }
-    package.tokens[range.tokenStart + requestedToken!].kind != grammar.tokenIdDot()
-        -> if { false -> return }
-    (package -> nextDynPathToken(sourceIndex, requestedToken! + 1, tokenEnd)) == lastNameToken!
+    aliasSeen! -> if { false -> return }
+    package.tokens[range.tokenStart + lastDot!].span.start => namespaceEnd
+    modules.ModuleIdentity { sourceIndex: sourceIndex, pathHash: 0, pathStart: firstName.span.start, pathLength: namespaceEnd - firstName.span.start, importCount: 0 } => canonical
+    package -> dynExpandedNamespaceMatches(identities, sourceIndex, traitSource, canonical, lastDot!, lastDot!)
 }
 
 # Match C# trait lookup before visibility: qualification disambiguates actual
 # declarations, and an import alias does not invent another trait identity.
-public resolveDynTrait package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, firstNameToken: Int, tokenEnd: Int -> DynTraitResolution {
+public resolveDynTrait package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], sourceIndex: Int, firstNameToken: Int, tokenEnd: Int -> DynTraitResolution {
     -1 => targetSource!
     -1 => targetSymbol!
     0 => count!
@@ -368,7 +400,7 @@ public resolveDynTrait package: ref analysis.PackageAnalysis, identities: ref [m
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
             package.symbols[range.symbolStart + symbolIndex!] => candidate
-            candidate.kind == 5 and (package -> dynTraitPathMatches(identities, sourceIndex, firstNameToken, tokenEnd, candidateSource!, symbolIndex!))
+            candidate.kind == 5 and (package -> dynTraitPathMatches(identities, imports, sourceIndex, firstNameToken, tokenEnd, candidateSource!, symbolIndex!))
                 -> if {
                     count! + 1 => count!
                     candidateSource! => targetSource!
@@ -1904,7 +1936,7 @@ public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref Semant
                                 0 => status!
                                 term.kind == 15 -> if {
                                     package.nodes[sourceRange.astStart + term.astNode] => dynAnnotation
-                                    package -> resolveDynTrait(identities, sourceIndex!, term.nameToken, dynAnnotation.firstToken + dynAnnotation.tokenCount) => resolvedTrait
+                                    package -> resolveDynTrait(identities, imports, sourceIndex!, term.nameToken, dynAnnotation.firstToken + dynAnnotation.tokenCount) => resolvedTrait
                                     16 => origin!
                                     resolvedTrait.targetSource => targetModule!
                                     resolvedTrait.targetSymbol => targetSymbol!
