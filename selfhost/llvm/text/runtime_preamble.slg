@@ -458,9 +458,6 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     false => usesArrayAllocation!
     false => usesArrayReallocation!
     false => usesArenaAllocation!
-    false => usesArenaConstruction!
-    false => usesRawArenaAllocation!
-    false => usesRawArenaAccess!
     false => usesTextMaterialize!
     false => usesCollectionCapacityTrap!
     false => usesBitSetCount!
@@ -498,13 +495,11 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             -> if {
                 true => usesDynamicArray!
                 allocationNode.opcode == -341 -> if {
-                    true => usesRawArenaAllocation!
                     true => usesArenaAllocation!
                     true => usesCollectionCapacityTrap!
                 }
                 allocationNode.opcode == -343 or allocationNode.opcode == -344
                     -> if {
-                        true => usesRawArenaAccess!
                         true => usesCollectionCapacityTrap!
                     }
             }
@@ -528,7 +523,6 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             and allocationNode.typeSymbol == 15
             and allocationNode.operand0 >= 0 -> if {
                 true => usesArenaAllocation!
-                true => usesArenaConstruction!
                 true => usesCollectionCapacityTrap!
             }
         arrayTypeSearch! + 1 => arrayTypeSearch!
@@ -636,7 +630,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     entryFeatures.usesComInterop => usesComInterop
     usesArrayAllocation! or usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations or usesComInterop or (context -> usesReachableOwnedFileRuntime(state))
         -> if { "declare void @llvm.trap()" -> println }
-    emitRawArenaRuntime(usesRawArenaAllocation!, usesRawArenaAccess!, usesArenaConstruction!)
+    context -> emitRawArenaRuntime(state)
     usesDictionary! -> if { "declare i16 @llvm.cttz.i16(i16, i1)" -> println }
     usesBitSetCount! -> if { "declare i64 @llvm.ctpop.i64(i64)" -> println }
     hasNativeDeclarations -> if {

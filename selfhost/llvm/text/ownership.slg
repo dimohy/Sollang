@@ -1049,7 +1049,7 @@ aggregateFieldCopiesFixedStorage aggregateIndex: Int, valueIndex: Int, fieldOrdi
         and valueIndex >= 0 and valueIndex < (context.ir -> len) and fieldOrdinal >= 0
         -> unless { false -> return }
     context.ir[aggregateIndex] => aggregate
-    aggregate.kind == 12 or aggregate.kind == 35
+    aggregate.kind == 12 or aggregate.kind == 35 or (aggregate.kind == 9 and aggregate.opcode == -27)
         -> unless { false -> return }
     valueIndex -> aggregateValueIndex(context, state) => sourceIndex
     context.ir[sourceIndex].kind == 5 or (sourceIndex -> namedStructFieldProjection(context))
@@ -1069,9 +1069,16 @@ aggregateFieldCopiesFixedStorage aggregateIndex: Int, valueIndex: Int, fieldOrdi
     }
     ownerTypeId! >= 0 and ownerTypeId! < (context.types -> len)
         -> unless { false -> return }
-    ownerTypeId! -> canonicalMemberFieldOrdinalIndex(fieldOrdinal, context) => fieldIndex
-    fieldIndex >= 0 -> unless { false -> return }
-    context.fields[fieldIndex].fieldType => targetTypeId
+    -1 => targetTypeId!
+    aggregate.kind == 9 and aggregate.opcode == -27
+        -> if {
+            context.types[ownerTypeId!].first => targetTypeId!
+        } else {
+            ownerTypeId! -> canonicalMemberFieldOrdinalIndex(fieldOrdinal, context) => fieldIndex
+            fieldIndex >= 0 -> unless { false -> return }
+            context.fields[fieldIndex].fieldType => targetTypeId!
+        }
+    targetTypeId! => targetTypeId
     targetTypeId >= 0 and targetTypeId < (context.types -> len)
         -> unless { false -> return }
     targetTypeId -> directCopyableFixedStructType(context)
@@ -2504,7 +2511,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
             -> if { true => supported! }
         dropType.kind == 9 -> if { true => supported! }
         dropType.kind == 1 and dropType.origin == 16 -> if { true => supported! }
-        dropType.kind == 1 and dropType.origin == 1 and (dropType.symbol == 17 or dropType.symbol == 18 or dropType.symbol == 24)
+        dropType.kind == 1 and dropType.origin == 1 and (dropType.symbol == 15 or dropType.symbol == 17 or dropType.symbol == 18 or dropType.symbol == 24)
             -> if { true => supported! }
         (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) or dropType.kind == 10
             -> if { true => supported! }
@@ -2851,6 +2858,12 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                         "  ret void" -> println
                     }
                 }
+                dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 15
+                    -> if {
+                        "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
+                        "  call void @sollang_free(ptr %data)" -> println
+                        "  ret void" -> println
+                    }
                 dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24
                     -> if {
                         "  call void @sollang_runtime_unmap_text(%sollang.source_text %value)" -> println

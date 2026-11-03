@@ -15,9 +15,13 @@ internal sealed partial class LlvmEmitter
             throw new SollangException("box values require heap allocation; wasm32-browser does not support them yet");
         }
 
+        if (CopiesFixedStorageField(expression.Value, definition.ElementType))
+            value = CopyFixedStorageValue(value);
         var pointer = EmitHeapAllocate(definition.Size.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var materialized = MaterializeAggregateValue(value);
         EmitStore(materialized.TypeName, materialized.ValueName, pointer, definition.Alignment);
+        if (!_program.Types.RequiresFixedStorageCopy(definition.ElementType))
+            RemoveOwnedLiteralSources(expression.Value, definition.ElementType);
         return new RuntimeBox(definition.Id, definition.ElementType, pointer);
     }
 }

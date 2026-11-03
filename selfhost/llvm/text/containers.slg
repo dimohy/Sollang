@@ -38,11 +38,22 @@ emitBoxIntrinsic boxIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
     context.ir[boxIndex] => boxNode
     context.types[boxNode.typeId].first => boxElementType
     boxNode.operand0 -> aggregateValueIndex(context, state) => boxValueIndex
+    boxIndex -> aggregateFieldCopiesFixedStorage(boxValueIndex, 0, context, state) => copyFixedValue
+    copyFixedValue -> if {
+        "  %v$(boxIndex -> valueNameId(state))_box_source = freeze " -> print
+        boxElementType -> writeSemanticTypeId(context, state)
+        " " -> print
+        boxValueIndex -> writeLoadedValue(ownerIndex, context, state)
+        "" -> println
+        "%v$(boxIndex -> valueNameId(state))_box_copy" -> emitCopyableFixedStorageValue("%v$(boxIndex -> valueNameId(state))_box_source", boxElementType, context, state)
+    }
     "  %v$(boxIndex -> valueNameId(state)) = call ptr @sollang_alloc(i64 $(context.typeSizes[boxElementType]))" -> println
     "  store " -> print
     boxElementType -> writeSemanticTypeId(context, state)
     " " -> print
-    boxValueIndex -> writeValue(ownerIndex, context, state)
+    copyFixedValue -> if {
+        "%v$(boxIndex -> valueNameId(state))_box_copy" -> print
+    } else { boxValueIndex -> writeLoadedValue(ownerIndex, context, state) }
     ", ptr %v$(boxIndex -> valueNameId(state)), align $(context.typeAligns[boxElementType])" -> println
 }
 
@@ -248,7 +259,7 @@ emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.Emi
         -> if {
             "icmp sge i64 %v$(arenaIndex -> valueNameId(state))_capacity_i64, 0" -> println
         } else { "and i1 true, true" -> println }
-    "  %v$(arenaIndex -> valueNameId(state))_data = call ptr @sollang_raw_arena_create(i64 %v$(arenaIndex -> valueNameId(state))_allocation, i1 %v$(arenaIndex -> valueNameId(state))_capacity_valid)" -> println
+    "  %v$(arenaIndex -> valueNameId(state))_data = call ptr @sollang_raw_arena_create_f$(request.ownerIndex)(i64 %v$(arenaIndex -> valueNameId(state))_allocation, i1 %v$(arenaIndex -> valueNameId(state))_capacity_valid)" -> println
     "  %v$(arenaIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %v$(arenaIndex -> valueNameId(state))_data, 0" -> println
     "  %v$(arenaIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %v$(arenaIndex -> valueNameId(state))_0, i64 0, 1" -> println
     "  %v$(arenaIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %v$(arenaIndex -> valueNameId(state))_1, i64 %v$(arenaIndex -> valueNameId(state))_allocation, 2" -> println
@@ -256,46 +267,84 @@ emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.Emi
 
 # Keep allocation and bounds-check blocks inside shared helpers. Caller CFG
 # predecessors remain unchanged, including calls nested in control regions.
-emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses Console {
+emitRawArenaRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    [Int; ~] => operations!
+    context.ir -> each node { operations! -> push(0) }
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        0 => operation!
+        node -> typedIr.isArenaConstructorCall -> if { 1 => operation! }
+        node.opcode == -341 -> if { 2 => operation! }
+        node.opcode == -343 -> if { 4 => operation! }
+        node.opcode == -344 -> if { 8 => operation! }
+        operation! > 0 -> if {
+            node.parent => owner!
+            owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+                -> while { context.ir[owner!].parent => owner! }
+            owner! >= 0 and (context.ir[owner!].kind == 11 or state.frozenReachableFunctions[owner!])
+                and operations![owner!] / operation! % 2 == 0
+                -> if { operations![owner!] + operation! => operations![owner!] }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    0 => ownerIndex!
+    ownerIndex! < (operations! -> len) -> while {
+        operations![ownerIndex!] => active
+        active > 0 -> if {
+            ownerIndex! -> emitRawArenaRuntimeForOwner(active / 2 % 2 == 1, active / 4 % 2 == 1, active / 8 % 2 == 1, active % 2 == 1, context, state)
+        }
+        ownerIndex! + 1 => ownerIndex!
+    }
+}
+
+emitRawArenaRuntimeForOwner ownerIndex: Int, allocate: Bool, store: Bool, load: Bool, construct: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     construct -> if {
+        "define ptr @sollang_raw_arena_create_f$(ownerIndex)(i64 %arena_capacity, i1 %size_valid) {" -> println
         """
-        define ptr @sollang_raw_arena_create(i64 %bytes, i1 %size_valid) {
         entry:
-          br i1 %size_valid, label %allocate, label %fail
+          br i1 %size_valid, label %allocate, label %capacity_negative
         allocate:
-          %data = call ptr @sollang_alloc(i64 %bytes)
+          %data = call ptr @sollang_alloc(i64 %arena_capacity)
           %allocated = icmp ne ptr %data, null
-          br i1 %allocated, label %done, label %fail
+          br i1 %allocated, label %done, label %allocation_failed
         done:
           ret ptr %data
-        fail:
-          call void @llvm.trap()
-          unreachable
+        capacity_negative:
+        """ -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_create", "capacity", "arena_capacity_negative", context, state)
+        "allocation_failed:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_create", "allocation", "allocation_failed", context, state)
+        """
         }
         """ -> println
     }
     allocate -> if {
+        "define i64 @sollang_raw_arena_alloc_f$(ownerIndex)(ptr %data_addr, ptr %used_addr, ptr %capacity_addr, i64 %bytes, i64 %alignment, i1 %bytes_valid, i1 %alignment_valid) {" -> println
         """
-        define i64 @sollang_raw_arena_alloc(ptr %data_addr, ptr %used_addr, ptr %capacity_addr, i64 %bytes, i64 %alignment, i1 %sizes_valid) {
         entry:
+          br i1 %bytes_valid, label %alignment_argument, label %bytes_negative
+        alignment_argument:
+          br i1 %alignment_valid, label %alignment_nonzero, label %alignment_negative
+        alignment_nonzero:
           %nonzero = icmp ne i64 %alignment, 0
+          br i1 %nonzero, label %alignment_power_of_two, label %alignment_zero
+        alignment_power_of_two:
           %minus_one = sub i64 %alignment, 1
           %bits = and i64 %alignment, %minus_one
-          %power_of_two = icmp eq i64 %bits, 0
-          %alignment_valid = and i1 %nonzero, %power_of_two
-          %valid = and i1 %sizes_valid, %alignment_valid
-          br i1 %valid, label %padding, label %fail
+          %arena_alignment_power_of_two = icmp eq i64 %bits, 0
+          br i1 %arena_alignment_power_of_two, label %padding, label %alignment_not_power_of_two
         padding:
           %used = load i64, ptr %used_addr, align 8
           %padded = add i64 %used, %minus_one
           %padding_valid = icmp uge i64 %padded, %used
-          br i1 %padding_valid, label %size, label %fail
+          br i1 %padding_valid, label %size, label %padding_overflow
         size:
           %mask = sub i64 0, %alignment
           %offset = and i64 %padded, %mask
           %end = add i64 %offset, %bytes
           %end_valid = icmp uge i64 %end, %offset
-          br i1 %end_valid, label %capacity, label %fail
+          br i1 %end_valid, label %capacity, label %size_overflow
         capacity:
           %old_capacity = load i64, ptr %capacity_addr, align 8
           %fits = icmp ule i64 %end, %old_capacity
@@ -306,7 +355,7 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
           %new_capacity = select i1 %doubled_enough, i64 %doubled, i64 %end
           %new_data = call ptr @sollang_alloc(i64 %new_capacity)
           %allocated = icmp ne ptr %new_data, null
-          br i1 %allocated, label %copy, label %fail
+          br i1 %allocated, label %copy, label %allocation_failed
         copy:
           %old_data = load ptr, ptr %data_addr, align 1
           call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %used, i1 false)
@@ -317,27 +366,54 @@ emitRawArenaRuntime allocate: Bool, access: Bool, construct: Bool -> Unit uses C
         done:
           store i64 %end, ptr %used_addr, align 8
           ret i64 %offset
-        fail:
-          call void @llvm.trap()
-          unreachable
-        }
+        bytes_negative:
         """ -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "bytes", "arena_bytes_negative", context, state)
+        "alignment_negative:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "alignment", "arena_alignment_negative", context, state)
+        "alignment_zero:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "zero", "arena_alignment_zero", context, state)
+        "alignment_not_power_of_two:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "power", "arena_alignment_not_power_of_two", context, state)
+        "padding_overflow:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "padding", "arena_padding_overflow", context, state)
+        "size_overflow:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "size", "arena_size_overflow", context, state)
+        "allocation_failed:" -> println
+        ownerIndex -> emitRuntimeTrapForOwner("arena_alloc", "allocation", "allocation_failed", context, state)
+        "}" -> println
     }
-    access -> if {
-        """
-        define ptr @sollang_raw_arena_at(ptr %data, i64 %used, i64 %offset) {
-        entry:
-          %in_bounds = icmp ult i64 %offset, %used
-          br i1 %in_bounds, label %valid, label %fail
-        valid:
-          %address = getelementptr i8, ptr %data, i64 %offset
-          ret ptr %address
-        fail:
-          call void @llvm.trap()
-          unreachable
-        }
-        """ -> println
+    store -> if { ownerIndex -> emitRawArenaAccessRuntime(true, context, state) }
+    load -> if { ownerIndex -> emitRawArenaAccessRuntime(false, context, state) }
+}
+
+emitRawArenaAccessRuntime ownerIndex: Int, store: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (store -> if { "store" } else { "load" }) => operation
+    (store -> if { "void" } else { "i8" }) => returnType
+    (store -> if { "arena_store_offset_negative" } else { "arena_load_offset_negative" }) => offsetCode
+    (store -> if { "arena_store_bounds" } else { "arena_load_bounds" }) => boundsCode
+    "define $(returnType) @sollang_raw_arena_$(operation)_f$(ownerIndex)(ptr %data, i64 %used, i64 %offset, i1 %offset_valid" -> print
+    store -> if { ", i8 %value" -> print }
+    ") {" -> println
+    "entry:" -> println
+    "  br i1 %offset_valid, label %bounds, label %offset_negative" -> println
+    "bounds:" -> println
+    "  %arena_$(operation)_in_bounds = icmp ult i64 %offset, %used" -> println
+    "  br i1 %arena_$(operation)_in_bounds, label %valid, label %out_of_bounds" -> println
+    "valid:" -> println
+    "  %address = getelementptr i8, ptr %data, i64 %offset" -> println
+    store -> if {
+        "  store i8 %value, ptr %address, align 1" -> println
+        "  ret void" -> println
+    } else {
+        "  %value = load i8, ptr %address, align 1" -> println
+        "  ret i8 %value" -> println
     }
+    "offset_negative:" -> println
+    ownerIndex -> emitRuntimeTrapForOwner("arena_access", "offset", offsetCode, context, state)
+    "out_of_bounds:" -> println
+    ownerIndex -> emitRuntimeTrapForOwner("arena_access", "bounds", boundsCode, context, state)
+    "}" -> println
 }
 
 writeRawArenaStorageAddress callIndex: Int, ordinal: Int, field: Int, state: ref CoreEmitterState -> Unit uses Console {
@@ -410,14 +486,13 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         }
         call.operand1 -> emitRawArenaSizeArgument(callIndex, 0, ownerIndex, context, state)
         alignmentIndex -> emitRawArenaSizeArgument(callIndex, 1, ownerIndex, context, state)
-        "  %v$(callIndex -> valueNameId(state))_arena_sizes_valid = and i1 %v$(callIndex -> valueNameId(state))_arena_valid0, %v$(callIndex -> valueNameId(state))_arena_valid1" -> println
-        "  %v$(callIndex -> valueNameId(state))_arena_offset = call i64 @sollang_raw_arena_alloc(ptr " -> print
+        "  %v$(callIndex -> valueNameId(state))_arena_offset = call i64 @sollang_raw_arena_alloc_f$(ownerIndex)(ptr " -> print
         callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 0, state)
         ", ptr " -> print
         callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 1, state)
         ", ptr " -> print
         callIndex -> writeRawArenaStorageAddress(borrowOrdinal, 2, state)
-        ", i64 %v$(callIndex -> valueNameId(state))_arena_size0, i64 %v$(callIndex -> valueNameId(state))_arena_size1, i1 %v$(callIndex -> valueNameId(state))_arena_sizes_valid)" -> println
+        ", i64 %v$(callIndex -> valueNameId(state))_arena_size0, i64 %v$(callIndex -> valueNameId(state))_arena_size1, i1 %v$(callIndex -> valueNameId(state))_arena_valid0, i1 %v$(callIndex -> valueNameId(state))_arena_valid1)" -> println
         "  %v$(callIndex -> valueNameId(state)) = " -> print
         context.pointerBitWidth == 32 -> if {
             "trunc i64 %v$(callIndex -> valueNameId(state))_arena_offset to i32" -> println
@@ -460,18 +535,17 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         return
     }
     call.operand1 -> emitRawArenaSizeArgument(callIndex, 0, ownerIndex, context, state)
-    "  %v$(callIndex -> valueNameId(state))_arena_byte = call ptr @sollang_raw_arena_at(ptr %v$(callIndex -> valueNameId(state))_arena_data, i64 %v$(callIndex -> valueNameId(state))_arena_used, i64 %v$(callIndex -> valueNameId(state))_arena_size0)" -> println
     signature.operation == 4 -> if {
-        "  %v$(callIndex -> valueNameId(state)) = load i8, ptr %v$(callIndex -> valueNameId(state))_arena_byte, align 1" -> println
+        "  %v$(callIndex -> valueNameId(state)) = call i8 @sollang_raw_arena_load_f$(ownerIndex)(ptr %v$(callIndex -> valueNameId(state))_arena_data, i64 %v$(callIndex -> valueNameId(state))_arena_used, i64 %v$(callIndex -> valueNameId(state))_arena_size0, i1 %v$(callIndex -> valueNameId(state))_arena_valid0)" -> println
     } else {
         context.ir[call.operand1].nextOperand => byteIndex
         byteIndex < 0 -> if {
             "; sollang internal error: raw Arena store has no byte operand" -> println
             process.exit(1)
         }
-        "  store i8 " -> print
+        "  call void @sollang_raw_arena_store_f$(ownerIndex)(ptr %v$(callIndex -> valueNameId(state))_arena_data, i64 %v$(callIndex -> valueNameId(state))_arena_used, i64 %v$(callIndex -> valueNameId(state))_arena_size0, i1 %v$(callIndex -> valueNameId(state))_arena_valid0, i8 " -> print
         byteIndex -> writeValue(ownerIndex, context, state)
-        ", ptr %v$(callIndex -> valueNameId(state))_arena_byte, align 1" -> println
+        ")" -> println
     }
 }
 

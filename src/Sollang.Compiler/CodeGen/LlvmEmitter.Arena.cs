@@ -90,20 +90,20 @@ internal sealed partial class LlvmEmitter
         var align = EmitArenaSizeArgument(alignment, "arena_alignment");
         var nonzero = NextTemp("arena_alignment_nonzero");
         EmitCompare(nonzero, "ne", "i64", align, "0");
-        EmitTrapUnless(nonzero, "arena_alignment_zero");
+        EmitTrapUnless(nonzero, "arena_alignment_zero", "arena_alignment_zero");
         var alignMinusOne = NextTemp("arena_alignment_minus_one");
         EmitBinary(alignMinusOne, "sub", "i64", align, "1");
         var alignBits = NextTemp("arena_alignment_bits");
         EmitBinary(alignBits, "and", "i64", align, alignMinusOne);
         var powerOfTwo = NextTemp("arena_alignment_power_of_two");
         EmitCompare(powerOfTwo, "eq", "i64", alignBits, "0");
-        EmitTrapUnless(powerOfTwo, "arena_alignment_not_power_of_two");
+        EmitTrapUnless(powerOfTwo, "arena_alignment_not_power_of_two", "arena_alignment_not_power_of_two");
 
         var padded = NextTemp("arena_padded");
         EmitBinary(padded, "add", "i64", arena.UsedName, alignMinusOne);
         var noPadOverflow = NextTemp("arena_padding_no_overflow");
         EmitCompare(noPadOverflow, "uge", "i64", padded, arena.UsedName);
-        EmitTrapUnless(noPadOverflow, "arena_padding_overflow");
+        EmitTrapUnless(noPadOverflow, "arena_padding_overflow", "arena_padding_overflow");
         var negativeAlign = NextTemp("arena_negative_alignment_mask");
         EmitBinary(negativeAlign, "sub", "i64", "0", align);
         var offset = NextTemp("arena_offset");
@@ -112,7 +112,7 @@ internal sealed partial class LlvmEmitter
         EmitBinary(end, "add", "i64", offset, byteCount);
         var noEndOverflow = NextTemp("arena_end_no_overflow");
         EmitCompare(noEndOverflow, "uge", "i64", end, offset);
-        EmitTrapUnless(noEndOverflow, "arena_size_overflow");
+        EmitTrapUnless(noEndOverflow, "arena_size_overflow", "arena_size_overflow");
 
         var fits = NextTemp("arena_fits");
         EmitCompare(fits, "ule", "i64", end, arena.CapacityName);
@@ -174,7 +174,7 @@ internal sealed partial class LlvmEmitter
     {
         var inBounds = NextTemp(prefix + "_in_bounds");
         EmitCompare(inBounds, "ult", "i64", offset, used);
-        EmitTrapUnless(inBounds, prefix + "_bounds");
+        EmitTrapUnless(inBounds, prefix + "_bounds", prefix + "_bounds");
     }
 
     private string EmitArenaSizeArgument(Expression expression, string prefix) =>
@@ -187,7 +187,7 @@ internal sealed partial class LlvmEmitter
         {
             var nonnegative = NextTemp(prefix + "_nonnegative");
             EmitCompare(nonnegative, "sge", llvmType, value.ValueName, "0");
-            EmitTrapUnless(nonnegative, prefix + "_negative");
+            EmitTrapUnless(nonnegative, prefix + "_negative", prefix + "_negative");
         }
         if (NumericBitWidth(value.Type) == 64)
         {

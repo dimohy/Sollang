@@ -4769,6 +4769,11 @@ ordinary structs remain inline values.
 Arena growth, including growth triggered by `materialize`, traps on allocation
 failure before copying used bytes, releasing old backing, or changing the
 arena's pointer and capacity.
+Where the target reports runtime diagnostics, Arena argument, alignment,
+overflow, and byte-access failures use stable codes such as
+`arena_alignment_not_power_of_two`, `arena_load_bounds`, and `arena_store_bounds`,
+prefixed by the source function identity. Internal LLVM block numbers do not
+form part of those codes.
 Boxed values use the same canonical size and alignment as inline values of
 their element type, after declared collection shapes have been registered.
 Aggregate alignment follows its fields independently of its total byte size.
@@ -4779,8 +4784,11 @@ Declaration order does not affect payload word counts or nested aggregate paddin
 For built-in types, `box` accepts `Int`, `Bool`, and `Text`. Other
 built-in types, including `Int8` and `UIntSize`, are rejected at the
 `box` expression. Eligible declared struct and enum types can also be boxed;
-the compiler's type registry decides their eligibility. Arrays and dictionaries
-and `BitSet<N>` are not boxable, including fixed, dynamic, and bounded storage forms.
+the compiler's type registry decides their eligibility. Boxing transfers owned
+operand storage into the new box; the source cannot retain a second owner.
+Readonly inputs may supply copyable values, but borrowed owned storage cannot
+be transferred into a box. Fixed inline storage keeps its value-copy contract.
+Arrays and dictionaries and `BitSet<N>` are not boxable, including fixed, dynamic, and bounded storage forms.
 Instantiated built-in generic types such as `Option<T>`, `Result<T, E>`, and
 `Set<T>` are likewise absent from the registered box types.
 In a generic function, a readonly `box T` input infers `T` from the boxed

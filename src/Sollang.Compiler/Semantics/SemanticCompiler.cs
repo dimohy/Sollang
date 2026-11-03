@@ -30,6 +30,8 @@ internal sealed partial class SemanticCompiler
     private readonly Dictionary<object, BoundDynTraitDispatch> _dynTraitDispatches = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<ProductExpression, BoundType> _productExpressionTypes =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoxExpression, BoundType> _boxExpressionTypes =
+        new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<PartitionExpression, (BoundType ElementType, bool IsEvent)> _partitionExpressionSources =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<StreamJoinExpression, BoundStreamJoin> _streamJoins =
@@ -5589,16 +5591,9 @@ internal sealed partial class SemanticCompiler
                     return;
                 case ExpressionStatement expressionStatement:
                     var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
-                    var flowAggregateSourceNames = expressionStatement.Expression is FlowExpression
-                        {
-                            Source: StructLiteralExpression flowAggregate
-                        }
-                        && _types.TryResolve(flowAggregate.TypeName, out var flowAggregateType)
-                            ? GetOwnedAggregateLiteralSourceNames(
-                                flowAggregate,
-                                bindings,
-                                flowAggregateType)
-                            : [];
+                    var flowAggregateSourceNames = expressionStatement.Expression is FlowExpression flowAggregate
+                        ? GetOwnedAggregateLiteralSourceNames(flowAggregate.Source, bindings)
+                        : [];
                     // Type the flow before classifying container transforms so
                     // an inherent method such as `value -> append(...)` has an
                     // authoritative resolved declaration and is not mistaken
@@ -9871,11 +9866,18 @@ internal sealed partial class SemanticCompiler
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false);
+        RejectBorrowedOwnedStorageTransfers(
+            GetOwnedStorageTransferSourceNames(expression.Value, bindings, elementType),
+            expression.Value.Line,
+            expression.Value.Column,
+            "box storage",
+            bindings);
         var box = _types.Boxes.FirstOrDefault(candidate => candidate.ElementType == elementType)
             ?? throw Error(
                 expression.Line,
                 expression.Column,
                 $"type {FormatType(elementType)} cannot be boxed in this slice");
+        _boxExpressionTypes[expression] = box.Id;
         return box.Id;
     }
 
@@ -17637,6 +17639,11 @@ internal sealed partial class SemanticCompiler
         var transferred = new List<OwnedLiteralTransfer>();
         switch (expression)
         {
+            case BoxExpression box
+                when (inferredAggregateType is { } boxType && _types.IsBox(boxType))
+                     || _boxExpressionTypes.TryGetValue(box, out boxType):
+                CollectOwnedLiteralSourceNames(box, boxType, bindings, transferred);
+                break;
             case StructLiteralExpression structure
                 when _types.TryResolve(structure.TypeName, out var structureType)
                      && _types.IsStruct(structureType):
@@ -18220,13 +18227,18 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         List<OwnedLiteralTransfer> consumed)
     {
-        if (!_types.ContainsOwnedStorage(expectedType))
+        if (!_types.ContainsOwnedStorage(expectedType) || _types.RequiresFixedStorageCopy(expectedType))
         {
+            return;
+        }
+        if (_types.IsBox(expectedType) && expression is BoxExpression box)
+        {
+            CollectOwnedLiteralSourceNames(box.Value, _types.GetBox(expectedType).ElementType, bindings, consumed);
             return;
         }
         if (expression is NameExpression name)
         {
-            if (bindings.TryGetValue(name.Name, out var sourceType) && sourceType == expectedType)
+            if (bindings.TryGetValue(name.Name, out var sourceType) && _types.ReadValueType(sourceType) == expectedType)
             {
                 consumed.Add(new OwnedLiteralTransfer(name.Name, []));
             }
@@ -18238,6 +18250,7 @@ internal sealed partial class SemanticCompiler
             var ownerName = parts[0].TrimEnd('!');
             if (bindings.TryGetValue(ownerName, out var projectedType))
             {
+                projectedType = _types.ReadValueType(projectedType);
                 var fieldPath = new List<string>();
                 foreach (var part in parts.Skip(1))
                 {

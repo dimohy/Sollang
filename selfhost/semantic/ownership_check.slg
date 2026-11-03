@@ -4863,7 +4863,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                     types[node.typeId].kind != 3 and types[node.typeId].kind != 12
                         -> if { aggregate! -> return }
                 }
-                (node.kind == 12 or node.kind == 14 or node.kind == 16 or node.kind == 35)
+                (node.kind == 12 or node.kind == 14 or node.kind == 16 or node.kind == 35
+                    or (node.kind == 9 and node.opcode == -27))
                     and (prepared -> semanticTypeContainsOwnedStorageCached(types, fields, ownedStorage, node.typeId))
                     -> unless { aggregate! -> return }
                 parent! => aggregate!
@@ -5471,9 +5472,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                     or moveSite.kind == 17
                     or moveSite.kind == 24
                     or moveSite.kind == 25
-                    or (moveSite.kind == 5
-                    and moveSite.typeKind == 4
-                    and moveSite.typeFlags / 2 % 2 == 1)
+                    or moveSite.kind == 5
                     -> if { true => consumes! }
             }
         consumes!
@@ -5582,7 +5581,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
         moved -> moveConsumesWholeBinding -> unless { false -> return }
         typed[moved.siteIr] => site
         moved.valueIr => sourceIndex!
-        not moved.awaited and site.kind == 5 and site.typeKind == 4 and site.typeFlags / 2 % 2 == 1
+        not moved.awaited and site.kind == 5
             -> if { moved.siteIr => sourceIndex! }
         sourceIndex! < 0 or sourceIndex! >= (typed -> len)
             -> if { false -> return }
@@ -6402,7 +6401,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                 ownedEscapeAncestor! >= 0 and ownedEscapeFunctionIr! < 0 and ownershipPreserved!
                     -> while {
                         typed[ownedEscapeAncestor!] => ownedEscapeParent
-                        (ownedEscapeParent.kind == 24 or ownedEscapeParent.kind == 25
+                        ((ownedEscapeParent.kind == 9 and ownedEscapeParent.opcode == -27)
+                            or ownedEscapeParent.kind == 24 or ownedEscapeParent.kind == 25
                             or (ownedEscapeParent.kind == 17
                             and not (ownedEscapeAncestor! -> materializedBlockInputIsBorrowed)
                             and (typed[ownedEscapeChild!].kind == 12
@@ -6414,6 +6414,10 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                 true => reachesOwnedStorage!
                                 ownedEscapeChild! => ownedEscapeStorageValueIr!
                                 ownedEscapeAncestor! => ownedEscapeStorageDestinationIr!
+                                # Box validation owns the diagnostic before an enclosing
+                                # literal or binding can replace its destination or span.
+                                ownedEscapeParent.kind == 9 and ownedEscapeParent.opcode == -27
+                                    -> if { false => ownershipPreserved! }
                                 ownedEscapeAncestor! => ownedEscapeChild!
                                 ownedEscapeParent.parent => ownedEscapeAncestor!
                             } else {
@@ -6548,7 +6552,11 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                 typed[ownedEscapeStorageDestinationIr!].kind == 24
                                                     -> if { 2 } else {
                                                         typed[ownedEscapeStorageDestinationIr!].kind == 17
-                                                            -> if { 3 } else { 0 }
+                                                            -> if { 3 } else {
+                                                                typed[ownedEscapeStorageDestinationIr!].kind == 9
+                                                                    and typed[ownedEscapeStorageDestinationIr!].opcode == -27
+                                                                    -> if { 4 } else { 0 }
+                                                            }
                                                     }
                                             }
                                     } else { ownedEscapeReturnKind }
