@@ -22,6 +22,7 @@ import sollang.compiler.syntax as syntax
 import sollang.compiler.diagnostics as syntaxDiagnostics
 import syntax.generated.slg as grammar
 import sys.file as file
+import sys.text as text
 
 # Error() retains the source namespace, including interpolation inference in main.
 # The fallback belongs only to a source without a declared namespace.
@@ -2572,7 +2573,62 @@ emitBorrowedTextReturnDiagnostic context: ref emitterContext.EmitContext -> Bool
     true
 }
 
+parallelCaptureBindingName bindingIndex: Int, context: ref emitterContext.EmitContext -> Text {
+    context.ir[bindingIndex] => binding
+    context.ranges[binding.sourceModule] => range
+    context.tokens[range.tokenStart + binding.payloadToken] => token
+    context.sources[binding.sourceModule] -> slice(token.span.start, token.span.length)
+}
+
+firstParallelBranchCapture context: ref emitterContext.EmitContext -> Int {
+    -1 => selected!
+    0 => index!
+    index! < (context.ownershipDiagnostics -> len)
+        -> while {
+            context.ownershipDiagnostics[index!] => candidate
+            (candidate.code == 18 or candidate.code == 19)
+                and candidate.expectedOrigin >= 0 and candidate.expectedModule >= 0
+                -> if {
+                    selected! < 0 -> if { index! => selected! } else {
+                        context.ownershipDiagnostics[selected!] => previous
+                        candidate.expectedOrigin < previous.expectedOrigin
+                            -> if { index! => selected! } else {
+                                candidate.expectedOrigin == previous.expectedOrigin
+                                    -> if {
+                                        candidate.expectedModule -> parallelCaptureBindingName(context) => name
+                                        previous.expectedModule -> parallelCaptureBindingName(context) => previousName
+                                        (name -> text.compareOrdinal(previousName)) < 0
+                                            -> if { index! => selected! }
+                                    }
+                            }
+                    }
+                }
+            index! + 1 => index!
+        }
+    selected!
+}
+
+emitParallelBranchCapture diagnostic: ownershipCheck.OwnershipDiagnostic, context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.ir[diagnostic.expectedOrigin] => branch
+    context.ranges[branch.sourceModule] => range
+    context.nodes[range.astStart + branch.astNode] => branchAst
+    context -> emitInitializerSemanticPrefixAtOffset(branch.sourceModule, branch.astNode, branchAst.start)
+    diagnostic.expectedModule -> parallelCaptureBindingName(context) => name
+    diagnostic.code == 18 -> if {
+        "parallel branch cannot capture mutable binding '$(name)!'" -> println
+    } else {
+        "parallel branch cannot capture non-sendable binding '$name' of type " -> print
+        context.ir[diagnostic.expectedModule].typeId -> emitBoxOperandTypeName(context)
+        println()
+    }
+}
+
 public emitOwnershipDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+    context -> firstParallelBranchCapture => branchCapture
+    branchCapture >= 0 -> if {
+        context.ownershipDiagnostics[branchCapture] -> emitParallelBranchCapture(context)
+        return
+    }
     0 => diagnosticIndex!
     diagnosticIndex! < (context.ownershipDiagnostics -> len)
         -> while {

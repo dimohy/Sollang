@@ -835,12 +835,14 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                             and recursiveTypes.references[roleResultReferenceIndex!].typeId >= 0
                                             -> if { recursiveTypes.references[roleResultReferenceIndex!].typeId => bindingCanonicalTypeId! }
                                     }
-                                sourceFacts.bindingSymbolByAst[bindingAstIndex] => bindingSymbol!
+                                sourceFacts.bindingSymbolByAst[bindingAstIndex] => bindingSymbol
                                 # A mutable rebind inside a stream callback refers
                                 # to the existing outer slot. Its callback-local
                                 # symbol can have no standalone inferred type, so
-                                # recover canonical identity from the nearest prior
-                                # binding with the same source name.
+                                # recover its canonical type from the nearest prior
+                                # binding with the same source name. Keep the new
+                                # semantic symbol: references and captures use it;
+                                # mutable storage roots are resolved separately.
                                 bindingAst.flags == 1 and bindingAst.payloadToken >= 0
                                     -> if {
                                         prepared.package.tokens[sourceRange.tokenStart + bindingAst.payloadToken] => mutableBindingName
@@ -859,24 +861,23 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                                                 -> if { false => previousBindingEqual! }
                                                             previousBindingByte! + 1 => previousBindingByte!
                                                         }
-                                                    previousBindingEqual! and (previousBinding.symbol -> priorMutableBindingVisible(bindingSymbol!, sourceIndex, prepared))
+                                                    previousBindingEqual! and (previousBinding.symbol -> priorMutableBindingVisible(bindingSymbol, sourceIndex, prepared))
                                                         -> if {
-                                                            previousBinding.symbol => bindingSymbol!
                                                             previousBinding.typeId => bindingCanonicalTypeId!
                                                             0 => previousBindingSearch!
                                                         }
                                                 }
                                         }
                                     }
-                                bindingSymbol! >= 0 -> if {
-                                    prepared.package.symbols[sourceRange.symbolStart + bindingSymbol!] => declaredBindingSymbol
+                                bindingSymbol >= 0 -> if {
+                                    prepared.package.symbols[sourceRange.symbolStart + bindingSymbol] => declaredBindingSymbol
                                     -1 => bindingDeclaredReferenceIndex!
                                     declaredBindingSymbol.typeNode >= 0 and declaredBindingSymbol.typeNode < sourceRange.astCount
                                         -> if { recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + declaredBindingSymbol.typeNode] => bindingDeclaredReferenceIndex! }
                                     bindingDeclaredReferenceIndex! >= 0
                                         -> if { recursiveTypes.references[bindingDeclaredReferenceIndex!].typeId => bindingCanonicalTypeId! }
                                 }
-                                bindingSymbol! >= 0 -> if {
+                                bindingSymbol >= 0 -> if {
                                     -1 => bindingOrigin!
                                     -1 => bindingModule!
                                     -1 => bindingSymbolType!
@@ -909,9 +910,9 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                             bindingCanonicalType.second >= 0 -> if { frozenRecursiveSemanticTypes[bindingCanonicalType.second].symbol => bindingSymbolType! }
                                         }
                                     }
-                                    bindingOrigin! == 13 and bindingSymbol! >= 0
+                                    bindingOrigin! == 13 and bindingSymbol >= 0
                                         -> if {
-                                            prepared.package.symbols[sourceRange.symbolStart + bindingSymbol!] => declaredBinding
+                                            prepared.package.symbols[sourceRange.symbolStart + bindingSymbol] => declaredBinding
                                             0 => declaredBindingTypeSearch!
                                             declaredBindingTypeSearch! < (prepared.nominal -> len)
                                                 -> while {
@@ -926,8 +927,8 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                         }
                                     results! -> len => bindingIr
                                     bindingIr => astToIr![bindingAstIndex]
-                                    bindingSymbol! >= 0 -> if {
-                                        bindingIr => bindingIrBySymbol![bindingSymbol!]
+                                    bindingSymbol >= 0 -> if {
+                                        bindingIr => bindingIrBySymbol![bindingSymbol]
                                     }
                                     bindingAst.payloadToken => bindingPayloadToken!
                                     bindingAst.kind == 48 -> if { bindingAst.secondaryToken => bindingPayloadToken! }
@@ -936,7 +937,7 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                         parent: returnIr
                                         sourceModule: sourceIndex
                                         astNode: bindingAstIndex
-                                        symbol: bindingSymbol!
+                                        symbol: bindingSymbol
                                         targetModule: sourceIndex
                                         typeOrigin: bindingOrigin!
                                         typeModule: bindingModule!

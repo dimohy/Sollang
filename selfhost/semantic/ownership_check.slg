@@ -9011,7 +9011,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     0 => parallelCandidateIndex!
     not hasParallelCall! and parallelCandidateIndex! < (typed -> len)
         -> while {
-            typed[parallelCandidateIndex!].kind == 6 and (typed[parallelCandidateIndex!].opcode == -207 or typed[parallelCandidateIndex!].opcode == -209)
+            typed[parallelCandidateIndex!].kind == 38
+                or (typed[parallelCandidateIndex!].kind == 6 and (typed[parallelCandidateIndex!].opcode == -207 or typed[parallelCandidateIndex!].opcode == -209))
                 -> if { true => hasParallelCall! }
             parallelCandidateIndex! + 1 => parallelCandidateIndex!
         }
@@ -9059,6 +9060,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         -> if { true => parallelCallHasSourceAst! }
                 }
             false => parallelCallHasSyntax!
+            parallelCall.kind == 38 and parallelCallHasSourceAst!
+                -> if { true => parallelCallHasSyntax! }
             parallelCall.kind == 6
                 and (parallelCall.opcode == -207 or parallelCall.opcode == -209)
                 and parallelCallHasSourceAst!
@@ -9076,7 +9079,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                     -> if {
                         prepared.package.tokens[parallelRange.tokenStart + parallelAst.payloadToken] => parallelName
                         false => isParallel!
-                        parallelCall.opcode == -209 -> if { true => isParallel! } else { parallelName.span.length == 8 => isParallel! }
+                        parallelCall.kind == 38 or parallelCall.opcode == -209
+                            -> if { true => isParallel! } else { parallelName.span.length == 8 => isParallel! }
                         "parallel" => parallelText
                         UIntSize(0) => parallelNameByte!
                         parallelCall.opcode == -207 and isParallel! and parallelNameByte! < parallelName.span.length
@@ -9086,7 +9090,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                 parallelNameByte! + 1 => parallelNameByte!
                             }
                         isParallel! -> if {
-                            parallelCall.operand1 >= 0 and parallelCall.operand1 < (typed -> len)
+                            parallelCall.kind != 38 and parallelCall.operand1 >= 0 and parallelCall.operand1 < (typed -> len)
                                 and not (prepared -> parallelResultSourceTextSupported(types, typed[parallelCall.operand1].typeId, parallelCall.opcode == -209))
                                 -> if {
                                     diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
@@ -9107,105 +9111,106 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                             [Int; ~] => reportedMutableCaptures!
                             [Int; ~] => reportedNonSendableCaptures!
                             0 => captureUseIndex!
-                            captureUseIndex! < (typed -> len) -> while {
-                                typed[captureUseIndex!] => captureUse
-                                captureUse.kind == 5 and captureUse.sourceModule == parallelCall.sourceModule and captureUse.astNode >= 0
-                                    -> if {
-                                        prepared.package.nodes[parallelRange.astStart + captureUse.astNode] => captureUseAst
-                                        captureUseAst.parent => captureAncestor!
-                                        false => insideParallel!
-                                        captureAncestor! >= 0 and not insideParallel!
-                                            -> while {
-                                                captureAncestor! == parallelCall.astNode -> if { true => insideParallel! } else { prepared.package.nodes[parallelRange.astStart + captureAncestor!].parent => captureAncestor! }
-                                            }
-                                        # The role source precedes its `parallel` token and
-                                        # stays in the parent scope; only the trailing block
-                                        # is a concurrently executed callback.
-                                        insideParallel! and captureUseAst.start >= parallelName.span.start + parallelName.span.length
-                                            -> if {
-                                                -1 => captureBindingIndex!
-                                                captureUse.operand0 >= 0 and captureUse.operand0 < (typed -> len)
-                                                    -> if {
-                                                        typed[captureUse.operand0] => directCaptureBinding
-                                                        directCaptureBinding.kind == 10 or directCaptureBinding.kind == 17
-                                                            -> if { captureUse.operand0 => captureBindingIndex! }
-                                                    }
-                                                captureBindingIndex! < 0 -> if {
-                                                    captureUse.sourceModule -> parallelDeclaration(captureUse.symbol, parallelBindingBySymbol!) => captureBindingIndex!
+                            parallelCall.kind != 38 and captureUseIndex! < (typed -> len)
+                                -> while {
+                                    typed[captureUseIndex!] => captureUse
+                                    captureUse.kind == 5 and captureUse.sourceModule == parallelCall.sourceModule and captureUse.astNode >= 0
+                                        -> if {
+                                            prepared.package.nodes[parallelRange.astStart + captureUse.astNode] => captureUseAst
+                                            captureUseAst.parent => captureAncestor!
+                                            false => insideParallel!
+                                            captureAncestor! >= 0 and not insideParallel!
+                                                -> while {
+                                                    captureAncestor! == parallelCall.astNode -> if { true => insideParallel! } else { prepared.package.nodes[parallelRange.astStart + captureAncestor!].parent => captureAncestor! }
                                                 }
-                                                captureBindingIndex! >= 0 -> if {
-                                                    typed[captureBindingIndex!] => captureBinding
-                                                    false => bindingInsideParallel!
-                                                    captureBinding.astNode >= 0 -> if {
-                                                        prepared.package.nodes[parallelRange.astStart + captureBinding.astNode].parent => bindingAncestor!
-                                                        bindingAncestor! >= 0 and not bindingInsideParallel!
-                                                            -> while {
-                                                                bindingAncestor! == parallelCall.astNode -> if { true => bindingInsideParallel! } else { prepared.package.nodes[parallelRange.astStart + bindingAncestor!].parent => bindingAncestor! }
-                                                            }
+                                            # The role source precedes its `parallel` token and
+                                            # stays in the parent scope; only the trailing block
+                                            # is a concurrently executed callback.
+                                            insideParallel! and captureUseAst.start >= parallelName.span.start + parallelName.span.length
+                                                -> if {
+                                                    -1 => captureBindingIndex!
+                                                    captureUse.operand0 >= 0 and captureUse.operand0 < (typed -> len)
+                                                        -> if {
+                                                            typed[captureUse.operand0] => directCaptureBinding
+                                                            directCaptureBinding.kind == 10 or directCaptureBinding.kind == 17
+                                                                -> if { captureUse.operand0 => captureBindingIndex! }
+                                                        }
+                                                    captureBindingIndex! < 0 -> if {
+                                                        captureUse.sourceModule -> parallelDeclaration(captureUse.symbol, parallelBindingBySymbol!) => captureBindingIndex!
                                                     }
-                                                    not bindingInsideParallel! -> if {
-                                                        captureBinding.flags == 1 -> if {
-                                                            false => mutableCaptureReported!
-                                                            0 => reportedMutableIndex!
-                                                            reportedMutableIndex! < (reportedMutableCaptures! -> len)
+                                                    captureBindingIndex! >= 0 -> if {
+                                                        typed[captureBindingIndex!] => captureBinding
+                                                        false => bindingInsideParallel!
+                                                        captureBinding.astNode >= 0 -> if {
+                                                            prepared.package.nodes[parallelRange.astStart + captureBinding.astNode].parent => bindingAncestor!
+                                                            bindingAncestor! >= 0 and not bindingInsideParallel!
                                                                 -> while {
-                                                                    reportedMutableCaptures![reportedMutableIndex!] == captureBindingIndex!
-                                                                        -> if { true => mutableCaptureReported! }
-                                                                    reportedMutableIndex! + 1 => reportedMutableIndex!
+                                                                    bindingAncestor! == parallelCall.astNode -> if { true => bindingInsideParallel! } else { prepared.package.nodes[parallelRange.astStart + bindingAncestor!].parent => bindingAncestor! }
                                                                 }
-                                                            not mutableCaptureReported! -> if {
-                                                                reportedMutableCaptures! -> push(captureBindingIndex!)
-                                                                diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
-                                                                    code: 18
-                                                                    sourceModule: captureUse.sourceModule
-                                                                    functionSymbol: -1
-                                                                    expectedOrigin: -1
-                                                                    expectedModule: -1
-                                                                    expectedSymbol: -1
-                                                                    actualOrigin: captureBinding.typeOrigin
-                                                                    actualModule: captureBinding.typeModule
-                                                                    actualSymbol: captureBinding.typeSymbol
-                                                                    actualBuiltin: captureBinding.typeSymbol
-                                                                    readonlyReferencePath: -1
-                                                                    span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
-                                                                })
-                                                            }
-                                                        } else {
-                                                            not (captureBindingIndex! -> captureBindingIsParallelShareable)
-                                                                -> if {
-                                                                    false => nonSendableCaptureReported!
-                                                                    0 => reportedNonSendableIndex!
-                                                                    reportedNonSendableIndex! < (reportedNonSendableCaptures! -> len)
-                                                                        -> while {
-                                                                            reportedNonSendableCaptures![reportedNonSendableIndex!] == captureBindingIndex!
-                                                                                -> if { true => nonSendableCaptureReported! }
-                                                                            reportedNonSendableIndex! + 1 => reportedNonSendableIndex!
-                                                                        }
-                                                                    not nonSendableCaptureReported! -> if {
-                                                                        reportedNonSendableCaptures! -> push(captureBindingIndex!)
-                                                                        diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
-                                                                            code: 19
-                                                                            sourceModule: captureUse.sourceModule
-                                                                            functionSymbol: -1
-                                                                            expectedOrigin: -1
-                                                                            expectedModule: -1
-                                                                            expectedSymbol: -1
-                                                                            actualOrigin: captureBinding.typeOrigin
-                                                                            actualModule: captureBinding.typeModule
-                                                                            actualSymbol: captureBinding.typeSymbol
-                                                                            actualBuiltin: captureBinding.typeSymbol
-                                                                            readonlyReferencePath: -1
-                                                                            span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
-                                                                        })
+                                                        }
+                                                        not bindingInsideParallel! -> if {
+                                                            captureBinding.flags == 1 -> if {
+                                                                false => mutableCaptureReported!
+                                                                0 => reportedMutableIndex!
+                                                                reportedMutableIndex! < (reportedMutableCaptures! -> len)
+                                                                    -> while {
+                                                                        reportedMutableCaptures![reportedMutableIndex!] == captureBindingIndex!
+                                                                            -> if { true => mutableCaptureReported! }
+                                                                        reportedMutableIndex! + 1 => reportedMutableIndex!
                                                                     }
+                                                                not mutableCaptureReported! -> if {
+                                                                    reportedMutableCaptures! -> push(captureBindingIndex!)
+                                                                    diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
+                                                                        code: 18
+                                                                        sourceModule: captureUse.sourceModule
+                                                                        functionSymbol: -1
+                                                                        expectedOrigin: -1
+                                                                        expectedModule: -1
+                                                                        expectedSymbol: -1
+                                                                        actualOrigin: captureBinding.typeOrigin
+                                                                        actualModule: captureBinding.typeModule
+                                                                        actualSymbol: captureBinding.typeSymbol
+                                                                        actualBuiltin: captureBinding.typeSymbol
+                                                                        readonlyReferencePath: -1
+                                                                        span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
+                                                                    })
                                                                 }
+                                                            } else {
+                                                                not (captureBindingIndex! -> captureBindingIsParallelShareable)
+                                                                    -> if {
+                                                                        false => nonSendableCaptureReported!
+                                                                        0 => reportedNonSendableIndex!
+                                                                        reportedNonSendableIndex! < (reportedNonSendableCaptures! -> len)
+                                                                            -> while {
+                                                                                reportedNonSendableCaptures![reportedNonSendableIndex!] == captureBindingIndex!
+                                                                                    -> if { true => nonSendableCaptureReported! }
+                                                                                reportedNonSendableIndex! + 1 => reportedNonSendableIndex!
+                                                                            }
+                                                                        not nonSendableCaptureReported! -> if {
+                                                                            reportedNonSendableCaptures! -> push(captureBindingIndex!)
+                                                                            diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
+                                                                                code: 19
+                                                                                sourceModule: captureUse.sourceModule
+                                                                                functionSymbol: -1
+                                                                                expectedOrigin: -1
+                                                                                expectedModule: -1
+                                                                                expectedSymbol: -1
+                                                                                actualOrigin: captureBinding.typeOrigin
+                                                                                actualModule: captureBinding.typeModule
+                                                                                actualSymbol: captureBinding.typeSymbol
+                                                                                actualBuiltin: captureBinding.typeSymbol
+                                                                                readonlyReferencePath: -1
+                                                                                span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
+                                                                            })
+                                                                        }
+                                                                    }
+                                                            }
                                                         }
                                                     }
                                                 }
-                                            }
-                                    }
-                                captureUseIndex! + 1 => captureUseIndex!
-                            }
+                                        }
+                                    captureUseIndex! + 1 => captureUseIndex!
+                                }
 
                             # Calls inside a parallel callback may delegate to local
                             # helpers. Follow that call graph so a helper cannot hide
@@ -9225,7 +9230,19 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                 nestedParallelAncestor! == parallelCall.astNode
                                                     -> if { true => nestedCallInsideParallel! } else { prepared.package.nodes[parallelRange.astStart + nestedParallelAncestor!].parent => nestedParallelAncestor! }
                                             }
-                                        nestedCallInsideParallel! and nestedParallelCallAst.start >= parallelName.span.start + parallelName.span.length
+                                        # A named branch schedules its direct target stages.
+                                        # Additional arguments execute in the caller, and
+                                        # their local calls are not worker capture roots.
+                                        parallelCall.kind == 38 -> if {
+                                            false => nestedCallInsideParallel!
+                                            nestedParallelCallAst.kind == 77 and nestedParallelCallAst.parent >= 0
+                                                -> if {
+                                                    prepared.package.nodes[parallelRange.astStart + nestedParallelCallAst.parent] => targetArm
+                                                    targetArm.kind == 75 and targetArm.parent == parallelCall.astNode
+                                                        -> if { true => nestedCallInsideParallel! }
+                                                }
+                                        }
+                                        nestedCallInsideParallel! and (parallelCall.kind == 38 or nestedParallelCallAst.start >= parallelName.span.start + parallelName.span.length)
                                             -> if {
                                                 -1 => nestedTargetFunction!
                                                 nestedParallelCall.targetModule -> parallelDeclaration(nestedParallelCall.symbol, parallelFunctionBySymbol!) => nestedTargetFunction!
@@ -9287,8 +9304,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                                             code: 18
                                                                             sourceModule: functionCaptureNode.sourceModule
                                                                             functionSymbol: typed[captureFunctionIr].symbol
-                                                                            expectedOrigin: -1
-                                                                            expectedModule: -1
+                                                                            expectedOrigin: parallelCall.kind == 38 -> if { parallelIrIndex! } else { -1 }
+                                                                            expectedModule: parallelCall.kind == 38 -> if { functionCaptureBindingIndex! } else { -1 }
                                                                             expectedSymbol: -1
                                                                             actualOrigin: functionCaptureBinding.typeOrigin
                                                                             actualModule: functionCaptureBinding.typeModule
@@ -9317,8 +9334,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                                                     code: 19
                                                                                     sourceModule: functionCaptureNode.sourceModule
                                                                                     functionSymbol: typed[captureFunctionIr].symbol
-                                                                                    expectedOrigin: -1
-                                                                                    expectedModule: -1
+                                                                                    expectedOrigin: parallelCall.kind == 38 -> if { parallelIrIndex! } else { -1 }
+                                                                                    expectedModule: parallelCall.kind == 38 -> if { functionCaptureBindingIndex! } else { -1 }
                                                                                     expectedSymbol: -1
                                                                                     actualOrigin: functionCaptureBinding.typeOrigin
                                                                                     actualModule: functionCaptureBinding.typeModule
