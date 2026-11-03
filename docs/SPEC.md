@@ -1151,6 +1151,16 @@ parameter base likewise use the declared enum identities, preserving shape
 geometry, interning order and parameter ordinals. The `TypeId` declaration also
 supplies reference identity names and values to the self-host compiler through
 the compiled-policy exporter.
+Compiled runtime text definitions preserve their constant values in both
+compilers. A quote or interpolation marker in a constant remains literal data
+in the generated source. The exporter uses valid raw-string delimiters for
+those values and retains the existing bounded ASCII and opt-in multiline
+contracts. Raw-string formatting preserves the value for every supported
+delimiter width, including shorter quote runs and whitespace inside multiline
+literals. Runtime mouse workers, terminal parsing, bounded queue operations,
+context allocation and lifecycle cleanup consume the same compiled definitions
+on Windows and Linux. Platform adapters retain declaration ownership, including
+the Linux `write` declaration when text output has not already declared it.
 Predeclared task identities come from a compiled binding catalog shared by the
 managed type-table constructor and self-host prepared registration. The initial
 `Task<Int>` shape reuses `TaskInt`, including repeated and nested task roots,

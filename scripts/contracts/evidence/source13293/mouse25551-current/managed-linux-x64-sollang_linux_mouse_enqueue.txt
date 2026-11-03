@@ -1,0 +1,85 @@
+define internal void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 %delta, i32 %button, i32 %kind) {
+entry:
+br label %queue_lock
+queue_lock:
+%lock_address = getelementptr i8, ptr %context, i64 24
+%lock_result = cmpxchg ptr %lock_address, i32 0, i32 1 acquire monotonic, align 4
+%lock_acquired = extractvalue { i32, i1 } %lock_result, 1
+br i1 %lock_acquired, label %queue_state, label %queue_lock
+queue_state:
+%capacity = load i32, ptr %context, align 4
+%policy_address = getelementptr i8, ptr %context, i64 4
+%policy = load i32, ptr %policy_address, align 4
+%count_address = getelementptr i8, ptr %context, i64 16
+%count = load i32, ptr %count_address, align 4
+%full = icmp uge i32 %count, %capacity
+br i1 %full, label %overflow, label %write
+overflow:
+%drop_newest = icmp eq i32 %policy, 0
+br i1 %drop_newest, label %unlock_drop, label %not_drop_newest
+not_drop_newest:
+%coalesce = icmp eq i32 %policy, 2
+%is_move = icmp eq i32 %kind, 0
+%coalesce_move = and i1 %coalesce, %is_move
+br i1 %coalesce_move, label %replace_move_check, label %drop_oldest
+replace_move_check:
+%tail_address0 = getelementptr i8, ptr %context, i64 12
+%tail0 = load i32, ptr %tail_address0, align 4
+%tail_plus_capacity = add i32 %tail0, %capacity
+%last_unwrapped = sub i32 %tail_plus_capacity, 1
+%last_index = urem i32 %last_unwrapped, %capacity
+%last_index64 = zext i32 %last_index to i64
+%last_offset = mul i64 %last_index64, 20
+%buffer_address0 = getelementptr i8, ptr %context, i64 40
+%buffer0 = load ptr, ptr %buffer_address0, align 8
+%last_record = getelementptr i8, ptr %buffer0, i64 %last_offset
+%last_kind_address = getelementptr i8, ptr %last_record, i64 16
+%last_kind = load i32, ptr %last_kind_address, align 4
+%last_is_move = icmp eq i32 %last_kind, 0
+br i1 %last_is_move, label %replace_move, label %unlock_drop
+replace_move:
+store i32 %x, ptr %last_record, align 4
+%last_y = getelementptr i8, ptr %last_record, i64 4
+store i32 %y, ptr %last_y, align 4
+br label %unlock_signal
+drop_oldest:
+%head_address = getelementptr i8, ptr %context, i64 8
+%head = load i32, ptr %head_address, align 4
+%next_head_unwrapped = add i32 %head, 1
+%next_head = urem i32 %next_head_unwrapped, %capacity
+store i32 %next_head, ptr %head_address, align 4
+%reduced_count = sub i32 %count, 1
+store i32 %reduced_count, ptr %count_address, align 4
+br label %write
+write:
+%tail_address = getelementptr i8, ptr %context, i64 12
+%tail = load i32, ptr %tail_address, align 4
+%tail64 = zext i32 %tail to i64
+%offset = mul i64 %tail64, 20
+%buffer_address = getelementptr i8, ptr %context, i64 40
+%buffer = load ptr, ptr %buffer_address, align 8
+%slot = getelementptr i8, ptr %buffer, i64 %offset
+store i32 %x, ptr %slot, align 4
+%slot_y = getelementptr i8, ptr %slot, i64 4
+store i32 %y, ptr %slot_y, align 4
+%slot_delta = getelementptr i8, ptr %slot, i64 8
+store i32 %delta, ptr %slot_delta, align 4
+%slot_button = getelementptr i8, ptr %slot, i64 12
+store i32 %button, ptr %slot_button, align 4
+%slot_kind = getelementptr i8, ptr %slot, i64 16
+store i32 %kind, ptr %slot_kind, align 4
+%next_tail_unwrapped = add i32 %tail, 1
+%next_tail = urem i32 %next_tail_unwrapped, %capacity
+store i32 %next_tail, ptr %tail_address, align 4
+%current_count = load i32, ptr %count_address, align 4
+%next_count = add i32 %current_count, 1
+store i32 %next_count, ptr %count_address, align 4
+br label %unlock_signal
+unlock_drop:
+store atomic i32 0, ptr %lock_address release, align 4
+ret void
+unlock_signal:
+store atomic i32 0, ptr %lock_address release, align 4
+call void @sollang_linux_mouse_signal(ptr %context)
+ret void
+}

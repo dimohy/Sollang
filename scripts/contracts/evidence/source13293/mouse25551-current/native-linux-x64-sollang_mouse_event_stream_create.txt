@@ -1,0 +1,96 @@
+define internal ptr @sollang_mouse_event_stream_create(i32 %requested_capacity, i32 %overflow) {
+entry:
+%capacity_low = icmp slt i32 %requested_capacity, 2
+%capacity_high = icmp sgt i32 %requested_capacity, 65536
+%capacity_invalid = or i1 %capacity_low, %capacity_high
+%overflow_invalid = icmp ugt i32 %overflow, 2
+%invalid = or i1 %capacity_invalid, %overflow_invalid
+br i1 %invalid, label %fail, label %tty
+tty:
+%interactive = call i32 @isatty(i32 0)
+%is_tty = icmp ne i32 %interactive, 0
+br i1 %is_tty, label %allocate_context, label %fail
+allocate_context:
+%context = call ptr @sollang_alloc(i64 64)
+%context_ok = icmp ne ptr %context, null
+br i1 %context_ok, label %allocate_buffer, label %fail
+allocate_buffer:
+%capacity64 = zext i32 %requested_capacity to i64
+%buffer_bytes = mul i64 %capacity64, 20
+%buffer = call ptr @sollang_alloc(i64 %buffer_bytes)
+%buffer_ok = icmp ne ptr %buffer, null
+br i1 %buffer_ok, label %allocate_termios, label %free_context
+allocate_termios:
+%original = call ptr @sollang_alloc(i64 64)
+%original_ok = icmp ne ptr %original, null
+br i1 %original_ok, label %read_termios, label %free_buffer
+read_termios:
+%got_termios = call i32 @tcgetattr(i32 0, ptr %original)
+%termios_ok = icmp eq i32 %got_termios, 0
+br i1 %termios_ok, label %configure_termios, label %free_termios
+configure_termios:
+%current = alloca [64 x i8], align 8
+call void @llvm.memcpy.p0.p0.i64(ptr %current, ptr %original, i64 64, i1 false)
+%lflag_address = getelementptr i8, ptr %current, i64 12
+%lflag = load i32, ptr %lflag_address, align 4
+%raw_lflag = and i32 %lflag, -11
+store i32 %raw_lflag, ptr %lflag_address, align 4
+%vtime = getelementptr i8, ptr %current, i64 22
+store i8 0, ptr %vtime, align 1
+%vmin = getelementptr i8, ptr %current, i64 23
+store i8 1, ptr %vmin, align 1
+%set_termios = call i32 @tcsetattr(i32 0, i32 0, ptr %current)
+%termios_set = icmp eq i32 %set_termios, 0
+br i1 %termios_set, label %create_event, label %free_termios
+create_event:
+%event_fd = call i32 @eventfd(i32 0, i32 0)
+%event_ok = icmp sge i32 %event_fd, 0
+br i1 %event_ok, label %initialize, label %restore
+initialize:
+store i32 %requested_capacity, ptr %context, align 4
+%policy_address = getelementptr i8, ptr %context, i64 4
+store i32 %overflow, ptr %policy_address, align 4
+%head_address = getelementptr i8, ptr %context, i64 8
+store i32 0, ptr %head_address, align 4
+%tail_address = getelementptr i8, ptr %context, i64 12
+store i32 0, ptr %tail_address, align 4
+%count_address = getelementptr i8, ptr %context, i64 16
+store i32 0, ptr %count_address, align 4
+%cancel_address = getelementptr i8, ptr %context, i64 20
+store atomic i32 0, ptr %cancel_address release, align 4
+%lock_address = getelementptr i8, ptr %context, i64 24
+store atomic i32 0, ptr %lock_address release, align 4
+%event_address = getelementptr i8, ptr %context, i64 28
+store i32 %event_fd, ptr %event_address, align 4
+%buffer_address = getelementptr i8, ptr %context, i64 40
+store ptr %buffer, ptr %buffer_address, align 8
+%termios_address = getelementptr i8, ptr %context, i64 48
+store ptr %original, ptr %termios_address, align 8
+%enabled = call i64 @write(i32 1, ptr @sollang_mouse_enable, i64 16)
+%thread_slot = alloca i64, align 8
+%created = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_mouse_worker, ptr %context)
+%thread_ok = icmp eq i32 %created, 0
+br i1 %thread_ok, label %ready, label %close_event
+ready:
+%thread = load i64, ptr %thread_slot, align 8
+%thread_address = getelementptr i8, ptr %context, i64 32
+store i64 %thread, ptr %thread_address, align 8
+ret ptr %context
+close_event:
+%closed_event = call i32 @close(i32 %event_fd)
+br label %restore
+restore:
+%restored = call i32 @tcsetattr(i32 0, i32 0, ptr %original)
+br label %free_termios
+free_termios:
+call void @sollang_free(ptr %original)
+br label %free_buffer
+free_buffer:
+call void @sollang_free(ptr %buffer)
+br label %free_context
+free_context:
+call void @sollang_free(ptr %context)
+br label %fail
+fail:
+ret ptr null
+}

@@ -1923,6 +1923,17 @@ Concurrent stream joins use the same compiled-definition path for platform
 declarations, synchronization helpers, worker bodies and lifecycle cleanup.
 Keep the worker/lifecycle split within the bounded multiline limit and preserve
 cancel, join and destruction order across both compiler consumers.
+Mouse input workers and lifecycle bodies also use compiled definitions. Keep
+platform declarations in the adapter, including Linux's conditional `write`
+declaration; do not copy context sizes, terminal parsing, overflow or cancellation
+branches into a separate SLG body.
+Export constants containing quotes or interpolation markers as raw literals,
+with a delimiter wider than any contained quote run. Verify the parsed value
+against the compiled constant; escaped source spelling alone is insufficient.
+Keep boundary quotes, leading newlines and whitespace-only lines as data; use
+non-whitespace padding and a static text slice when raw-string normalization
+would alter them. Formatters track the complete raw delimiter width and preserve
+literal whitespace, including the opening line, in both implementations.
 Regenerate that region through `selfhost-sync`; do not copy or edit its LLVM
 strings. Region markers and the module namespace must be valid before writing,
 and an authored-output change detected during generation aborts publication.

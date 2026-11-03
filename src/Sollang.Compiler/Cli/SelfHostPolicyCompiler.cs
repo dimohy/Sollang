@@ -187,12 +187,38 @@ internal static class SelfHostPolicyCompiler
             throw new SollangException("SELFHOST_POLICY_TEXT_CONSTANT_REQUIRED: " + method.Name);
         var text = method.Module.ResolveString(BinaryPrimitives.ReadInt32LittleEndian(code.AsSpan(1, 4)));
         var multiline = method.DeclaringType?.GetCustomAttribute<SelfHostPolicyAttribute>()?.MultilineText == true;
+        return RenderTextValue(method.Name, text, multiline);
+    }
+
+    internal static string RenderTextValue(string methodName, string text, bool multiline)
+    {
+        if (!Identifier(methodName)) throw new SollangException("SELFHOST_POLICY_NAME_INVALID");
         if (multiline) text = text.Replace("\r\n", "\n", StringComparison.Ordinal);
         if (text.Length > (multiline ? 16384 : 4096)
             || text.Any(character => (character < 32 && !(multiline && character == '\n')) || character > 126))
-            throw new SollangException("SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED: " + method.Name);
-        var name = char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
-        return "public " + name + ": -> Text {\n    \"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n") + "\"\n}\n";
+            throw new SollangException("SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED: " + methodName);
+        var name = char.ToLowerInvariant(methodName[0]) + methodName[1..];
+        string literal;
+        if (text.Contains('"') || text.Contains('$'))
+        {
+            var longestQuoteRun = 0;
+            var quoteRun = 0;
+            foreach (var character in text)
+            {
+                quoteRun = character == '"' ? quoteRun + 1 : 0;
+                longestQuoteRun = Math.Max(longestQuoteRun, quoteRun);
+            }
+            var delimiter = new string('"', Math.Max(3, longestQuoteRun + 1));
+            // Non-whitespace sentinels keep every value inline, including leading
+            // newlines and boundary quotes. The static slice owns no new storage.
+            literal = delimiter + "x" + text + "x" + delimiter
+                + " -> slice(1, " + text.Length.ToString(CultureInfo.InvariantCulture) + ")";
+        }
+        else
+        {
+            literal = "\"" + text.Replace("\\", "\\\\").Replace("\n", "\\n") + "\"";
+        }
+        return "public " + name + ": -> Text {\n    " + literal + "\n}\n";
     }
 
     private static string RenderArithmetic(MethodInfo method)

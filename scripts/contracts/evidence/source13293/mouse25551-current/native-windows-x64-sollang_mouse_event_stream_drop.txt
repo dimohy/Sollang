@@ -1,0 +1,36 @@
+define internal void @sollang_mouse_event_stream_drop(ptr %context, i1 %destroy) {
+entry:
+%cancel_address = getelementptr i8, ptr %context, i64 32
+store atomic i32 1, ptr %cancel_address release, align 4
+%thread_address = getelementptr i8, ptr %context, i64 40
+%thread = load ptr, ptr %thread_address, align 8
+%cancelled = call i32 @CancelSynchronousIo(ptr %thread)
+%event_address = getelementptr i8, ptr %context, i64 48
+%event = load ptr, ptr %event_address, align 8
+%signalled = call i32 @SetEvent(ptr %event)
+br i1 %destroy, label %join_worker, label %cancelled_only
+cancelled_only:
+ret void
+join_worker:
+%cancel_pending = call i32 @CancelSynchronousIo(ptr %thread)
+%joined = call i32 @WaitForSingleObject(ptr %thread, i32 1)
+switch i32 %joined, label %join_failed [
+i32 0, label %cleanup
+i32 258, label %join_worker
+]
+join_failed:
+call void @llvm.trap()
+unreachable
+cleanup:
+%thread_closed = call i32 @CloseHandle(ptr %thread)
+%event_closed = call i32 @CloseHandle(ptr %event)
+%input = load ptr, ptr %context, align 8
+%mode_slot = getelementptr i8, ptr %context, i64 8
+%original = load i32, ptr %mode_slot, align 4
+%restored = call i32 @SetConsoleMode(ptr %input, i32 %original)
+%buffer_address = getelementptr i8, ptr %context, i64 56
+%buffer = load ptr, ptr %buffer_address, align 8
+call void @sollang_free(ptr %buffer)
+call void @sollang_free(ptr %context)
+ret void
+}

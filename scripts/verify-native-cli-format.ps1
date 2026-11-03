@@ -109,27 +109,27 @@ function Assert-Result {
     }
 }
 
-Write-Host "[native format 1/17] Format stdin."
+Write-Host "[native format 1/19] Format stdin."
 $result = Invoke-Format @("--stdin") "stdin-unformatted" $unformatted
 Assert-Result $result 0 $expectedFormatted "" "stdin formatting"
 
-Write-Host "[native format 2/17] Preserve formatter idempotence."
+Write-Host "[native format 2/19] Preserve formatter idempotence."
 $result = Invoke-Format @("--stdin") "stdin-formatted" $formatted
 Assert-Result $result 0 $expectedFormatted "" "stdin idempotence"
 
-Write-Host "[native format 3/17] Remove a whole multiline control-condition parenthesis pair."
+Write-Host "[native format 3/19] Remove a whole multiline control-condition parenthesis pair."
 $result = Invoke-Format @("--stdin") "stdin-multiline-parentheses" $multilineParentheses
 Assert-Result $result 0 $expectedMultilineParentheses "" "multiline control-parenthesis formatting"
 
-Write-Host "[native format 4/17] Preserve multiline control-parenthesis formatter idempotence."
+Write-Host "[native format 4/19] Preserve multiline control-parenthesis formatter idempotence."
 $result = Invoke-Format @("--stdin") "stdin-multiline-parentheses-formatted" $multilineParenthesesFormatted
 Assert-Result $result 0 $expectedMultilineParentheses "" "multiline control-parenthesis idempotence"
 
-Write-Host "[native format 5/17] Accept formatted input in check mode."
+Write-Host "[native format 5/19] Accept formatted input in check mode."
 $result = Invoke-Format @("--check", (Get-CompilerPath $formatted)) "check-formatted" ""
 Assert-Result $result 0 "" "" "formatted check"
 
-Write-Host "[native format 6/17] Reject unformatted input in check mode without mutation."
+Write-Host "[native format 6/19] Reject unformatted input in check mode without mutation."
 $checkCopy = Join-Path $artifacts "check-unformatted.slg"
 Copy-Item -LiteralPath $unformatted -Destination $checkCopy -Force
 $before = [IO.File]::ReadAllBytes($checkCopy)
@@ -140,7 +140,7 @@ if ([Convert]::ToHexString($before) -ne [Convert]::ToHexString($after)) {
     throw "format --check mutated its input"
 }
 
-Write-Host "[native format 7/17] Replace an unformatted file atomically."
+Write-Host "[native format 7/19] Replace an unformatted file atomically."
 $rewriteCopy = Join-Path $artifacts "rewrite.slg"
 Copy-Item -LiteralPath $unformatted -Destination $rewriteCopy -Force
 $result = Invoke-Format @((Get-CompilerPath $rewriteCopy)) "rewrite" ""
@@ -153,50 +153,61 @@ if (Test-Path -LiteralPath "$rewriteCopy.sollang-format.tmp") {
     throw "atomic formatter replacement left its staging file behind"
 }
 
-Write-Host "[native format 8/17] Report an unexpected character."
+Write-Host "[native format 8/19] Report an unexpected character."
 $result = Invoke-Format @("--stdin") "invalid-character" $invalidCharacter
 Assert-Result $result 1 "" "sollang: lex error at 1:8: unexpected character '@'`n" "unexpected-character diagnostic"
 
-Write-Host "[native format 9/17] Report an unterminated string."
+Write-Host "[native format 9/19] Report an unterminated string."
 $result = Invoke-Format @("--stdin") "unterminated-string" $unterminatedString
 Assert-Result $result 1 "" "sollang: lex error at 1:8: unterminated string literal`n" "unterminated-string diagnostic"
 
-Write-Host "[native format 10/17] Report a missing closing brace."
+Write-Host "[native format 10/19] Report a missing closing brace."
 $result = Invoke-Format @("--stdin") "missing-brace" $missingBrace
 Assert-Result $result 1 "" "sollang: parse error at 2:1: expected RightBrace`n" "missing-brace diagnostic"
 
-Write-Host "[native format 11/17] Require an input."
+Write-Host "[native format 11/19] Require an input."
 $result = Invoke-Format @() "missing-input" ""
 Assert-Result $result 1 "" "sollang: usage: sollang format [--check] <source.slg> ... | --stdin`n" "missing-input diagnostic"
 
-Write-Host "[native format 12/17] Reject unknown options."
+Write-Host "[native format 12/19] Reject unknown options."
 $result = Invoke-Format @("--unknown") "unknown-option" ""
 Assert-Result $result 1 "" "sollang: unknown format option '--unknown'`n" "unknown-option diagnostic"
 
-Write-Host "[native format 13/17] Reject stdin/check conflicts."
+Write-Host "[native format 13/19] Reject stdin/check conflicts."
 $result = Invoke-Format @("--stdin", "--check") "stdin-check-conflict" $formatted
 Assert-Result $result 1 "" "sollang: format --stdin cannot be combined with paths or --check`n" "stdin/check conflict diagnostic"
 
 $rawTrailingWhitespace = Join-Path $fixtures "native-format-raw-trailing-whitespace.slg"
 $expectedRawTrailingWhitespace = [IO.File]::ReadAllText($rawTrailingWhitespace).Replace("`r`n", "`n")
-Write-Host "[native format 14/17] Preserve trailing whitespace inside multiline raw strings."
+Write-Host "[native format 14/19] Preserve trailing whitespace inside multiline raw strings."
 $result = Invoke-Format @("--stdin") "raw-trailing-whitespace" $rawTrailingWhitespace
 Assert-Result $result 0 $expectedRawTrailingWhitespace "" "raw literal whitespace preservation"
 
-Write-Host "[native format 15/17] Preserve raw literal formatter idempotence."
+Write-Host "[native format 15/19] Preserve raw literal formatter idempotence."
 $rawFormatted = Join-Path $artifacts "raw-trailing-whitespace.stdout.txt"
 $result = Invoke-Format @("--stdin") "raw-trailing-whitespace-idempotence" $rawFormatted
 Assert-Result $result 0 $expectedRawTrailingWhitespace "" "raw literal whitespace idempotence"
 
 $unicodeKeywordPrefix = Join-Path $fixtures "native-format-unicode-keyword-prefix.slg"
 $expectedUnicodeKeywordPrefix = [IO.File]::ReadAllText($unicodeKeywordPrefix).Replace("`r`n", "`n")
-Write-Host "[native format 16/17] Keep Unicode identifier prefixes out of continuation keywords."
+Write-Host "[native format 16/19] Keep Unicode identifier prefixes out of continuation keywords."
 $result = Invoke-Format @("--stdin") "unicode-keyword-prefix" $unicodeKeywordPrefix
 Assert-Result $result 0 $expectedUnicodeKeywordPrefix "" "Unicode continuation keyword identity"
 
-Write-Host "[native format 17/17] Preserve Unicode identifier formatter idempotence."
+Write-Host "[native format 17/19] Preserve Unicode identifier formatter idempotence."
 $unicodeFormatted = Join-Path $artifacts "unicode-keyword-prefix.stdout.txt"
 $result = Invoke-Format @("--stdin") "unicode-keyword-prefix-idempotence" $unicodeFormatted
 Assert-Result $result 0 $expectedUnicodeKeywordPrefix "" "Unicode continuation keyword idempotence"
 
-Write-Host "Native format CLI verification passed (17/17)."
+$wideRawDelimiter = Join-Path $fixtures "native-format-wide-raw-delimiter.slg"
+$expectedWideRawDelimiter = [IO.File]::ReadAllText($wideRawDelimiter).Replace("`r`n", "`n")
+Write-Host "[native format 18/19] Preserve shorter quote runs inside wide raw delimiters."
+$result = Invoke-Format @("--stdin") "wide-raw-delimiter" $wideRawDelimiter
+Assert-Result $result 0 $expectedWideRawDelimiter "" "wide raw delimiter value preservation"
+
+Write-Host "[native format 19/19] Preserve wide raw delimiter formatter idempotence."
+$wideFormatted = Join-Path $artifacts "wide-raw-delimiter.stdout.txt"
+$result = Invoke-Format @("--stdin") "wide-raw-delimiter-idempotence" $wideFormatted
+Assert-Result $result 0 $expectedWideRawDelimiter "" "wide raw delimiter idempotence"
+
+Write-Host "Native format CLI verification passed (19/19)."

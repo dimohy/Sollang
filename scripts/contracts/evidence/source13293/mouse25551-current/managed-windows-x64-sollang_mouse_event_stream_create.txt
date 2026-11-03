@@ -1,0 +1,84 @@
+define internal ptr @sollang_mouse_event_stream_create(i32 %requested_capacity, i32 %overflow) {
+entry:
+%capacity_low = icmp slt i32 %requested_capacity, 2
+%capacity_high = icmp sgt i32 %requested_capacity, 65536
+%capacity_invalid = or i1 %capacity_low, %capacity_high
+%overflow_invalid = icmp ugt i32 %overflow, 2
+%invalid = or i1 %capacity_invalid, %overflow_invalid
+br i1 %invalid, label %fail, label %input_handle
+input_handle:
+%input = call ptr @GetStdHandle(i32 -10)
+%valid = icmp ne ptr %input, inttoptr (i64 -1 to ptr)
+br i1 %valid, label %mode, label %fail
+mode:
+%original_address = alloca i32, align 4
+%got_mode = call i32 @GetConsoleMode(ptr %input, ptr %original_address)
+%mode_ok = icmp ne i32 %got_mode, 0
+br i1 %mode_ok, label %allocate_context, label %fail
+allocate_context:
+%context = call ptr @sollang_alloc(i64 80)
+%allocated = icmp ne ptr %context, null
+br i1 %allocated, label %allocate_buffer, label %fail
+allocate_buffer:
+%capacity64 = zext i32 %requested_capacity to i64
+%buffer_bytes = mul i64 %capacity64, 20
+%buffer = call ptr @sollang_alloc(i64 %buffer_bytes)
+%buffer_allocated = icmp ne ptr %buffer, null
+br i1 %buffer_allocated, label %create_event, label %free_context
+create_event:
+%event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+%event_ok = icmp ne ptr %event, null
+br i1 %event_ok, label %initialize, label %free_buffer
+initialize:
+%original = load i32, ptr %original_address, align 4
+%with_mouse = or i32 %original, 144
+%interactive = and i32 %with_mouse, -65
+%enabled = call i32 @SetConsoleMode(ptr %input, i32 %interactive)
+%enabled_ok = icmp ne i32 %enabled, 0
+br i1 %enabled_ok, label %initialize_context, label %close_event
+initialize_context:
+store ptr %input, ptr %context, align 8
+%mode_slot = getelementptr i8, ptr %context, i64 8
+store i32 %original, ptr %mode_slot, align 4
+%capacity_slot = getelementptr i8, ptr %context, i64 12
+store i32 %requested_capacity, ptr %capacity_slot, align 4
+%overflow_slot = getelementptr i8, ptr %context, i64 16
+store i32 %overflow, ptr %overflow_slot, align 4
+%head_slot = getelementptr i8, ptr %context, i64 20
+store i32 0, ptr %head_slot, align 4
+%tail_slot = getelementptr i8, ptr %context, i64 24
+store i32 0, ptr %tail_slot, align 4
+%count_slot = getelementptr i8, ptr %context, i64 28
+store i32 0, ptr %count_slot, align 4
+%cancel_slot = getelementptr i8, ptr %context, i64 32
+store atomic i32 0, ptr %cancel_slot release, align 4
+%event_slot = getelementptr i8, ptr %context, i64 48
+store ptr %event, ptr %event_slot, align 8
+%buffer_slot = getelementptr i8, ptr %context, i64 56
+store ptr %buffer, ptr %buffer_slot, align 8
+%buttons_slot = getelementptr i8, ptr %context, i64 64
+store i32 0, ptr %buttons_slot, align 4
+%lock_slot = getelementptr i8, ptr %context, i64 68
+store atomic i32 0, ptr %lock_slot release, align 4
+%thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_mouse_event_worker, ptr %context, i32 0, ptr null)
+%thread_ok = icmp ne ptr %thread, null
+br i1 %thread_ok, label %ready, label %restore
+ready:
+%thread_slot = getelementptr i8, ptr %context, i64 40
+store ptr %thread, ptr %thread_slot, align 8
+ret ptr %context
+restore:
+%restored_after_thread = call i32 @SetConsoleMode(ptr %input, i32 %original)
+br label %close_event
+close_event:
+%event_closed = call i32 @CloseHandle(ptr %event)
+br label %free_buffer
+free_buffer:
+call void @sollang_free(ptr %buffer)
+br label %free_context
+free_context:
+call void @sollang_free(ptr %context)
+br label %fail
+fail:
+ret ptr null
+}

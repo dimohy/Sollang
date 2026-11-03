@@ -79,7 +79,7 @@ internal static class SourceFormatter
         var result = new StringBuilder(normalized.Length + 1);
         var depth = 0;
         var continuationBlockDepths = new List<int>();
-        var inTripleString = false;
+        var rawDelimiterWidth = 0;
         var tripleStringIndentDelta = 0;
 
         var logicalLineCount = lines.Length;
@@ -91,23 +91,24 @@ internal static class SourceFormatter
         for (var index = 0; index < logicalLineCount; index++)
         {
             var original = lines[index];
-            if (inTripleString)
+            if (rawDelimiterWidth > 0)
             {
                 var adjusted = ShiftIndentation(original, tripleStringIndentDelta);
                 result.AppendLine(adjusted);
-                ScanLine(adjusted, ref inTripleString, out _, out _);
-                if (!inTripleString) tripleStringIndentDelta = 0;
+                ScanLine(adjusted, ref rawDelimiterWidth, out _, out _);
+                if (rawDelimiterWidth == 0) tripleStringIndentDelta = 0;
                 continue;
             }
 
-            var trimmed = original.Trim();
+            var content = original.TrimStart();
+            var trimmed = content.TrimEnd();
             if (trimmed.Length == 0)
             {
                 result.AppendLine();
                 continue;
             }
 
-            ScanLine(trimmed, ref inTripleString, out var opens, out var closes);
+            ScanLine(content, ref rawDelimiterWidth, out var opens, out var closes);
             var leadingCloses = CountLeadingClosingBraces(trimmed);
             var lineDepth = Math.Max(0, depth - leadingCloses) + continuationBlockDepths.Count;
             var isContinuation = IsContinuation(trimmed);
@@ -115,8 +116,8 @@ internal static class SourceFormatter
             {
                 lineDepth++;
             }
-            result.Append(' ', lineDepth * 4).AppendLine(trimmed.TrimEnd());
-            if (inTripleString && IsMultilineRawStringOpening(trimmed))
+            result.Append(' ', lineDepth * 4).AppendLine(rawDelimiterWidth > 0 ? content : trimmed);
+            if (rawDelimiterWidth > 0 && IsMultilineRawStringOpening(content))
             {
                 var originalIndentation = original.Length - original.TrimStart().Length;
                 tripleStringIndentDelta = lineDepth * 4 - originalIndentation;
@@ -243,7 +244,7 @@ internal static class SourceFormatter
         return count;
     }
 
-    private static void ScanLine(string line, ref bool inTripleString, out int opens, out int closes)
+    private static void ScanLine(string line, ref int rawDelimiterWidth, out int opens, out int closes)
     {
         opens = 0;
         closes = 0;
@@ -251,14 +252,20 @@ internal static class SourceFormatter
         var escaped = false;
         for (var index = 0; index < line.Length; index++)
         {
-            if (index + 2 < line.Length && line.AsSpan(index, 3).SequenceEqual("\"\"\""))
+            var character = line[index];
+            var quotes = 0;
+            if (character == '"')
+                while (index + quotes < line.Length && line[index + quotes] == '"') quotes++;
+            if (rawDelimiterWidth > 0)
             {
-                inTripleString = !inTripleString;
-                index += 2;
+                if (quotes >= rawDelimiterWidth)
+                {
+                    index += rawDelimiterWidth - 1;
+                    rawDelimiterWidth = 0;
+                }
+                else if (quotes > 0) index += quotes - 1;
                 continue;
             }
-            if (inTripleString) continue;
-            var character = line[index];
             if (!inString && character == '#') break;
             if (inString)
             {
@@ -267,7 +274,12 @@ internal static class SourceFormatter
                 else if (character == '"') inString = false;
                 continue;
             }
-            if (character == '"') inString = true;
+            if (quotes >= 3)
+            {
+                rawDelimiterWidth = quotes;
+                index += quotes - 1;
+            }
+            else if (character == '"') inString = true;
             else if (character == '{') opens++;
             else if (character == '}') closes++;
         }

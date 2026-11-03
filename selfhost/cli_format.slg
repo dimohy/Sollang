@@ -17,7 +17,7 @@ struct LineSpan {
 }
 
 struct ScanResult {
-    tripleString: Bool
+    rawDelimiterWidth: UIntSize
     opens: Int
     closes: Int
 }
@@ -304,8 +304,8 @@ leadingClosingBraces source: file.SourceText, line: LineSpan -> Int {
     count!
 }
 
-scanLine source: file.SourceText, line: LineSpan, tripleString: Bool -> ScanResult {
-    tripleString => inTriple!
+scanLine source: file.SourceText, line: LineSpan, rawDelimiterWidth: UIntSize -> ScanResult {
+    rawDelimiterWidth => delimiterWidth!
     false => inString!
     false => escaped!
     0 => opens!
@@ -313,44 +313,46 @@ scanLine source: file.SourceText, line: LineSpan, tripleString: Bool -> ScanResu
     UIntSize(0) => index!
     index! < line.length -> while {
         source -> byte(line.start + index!) => current
-        index! + 2 < line.length
-            and current == 34
-            and (source -> byte(line.start + index! + 1)) == 34
-            and (source -> byte(line.start + index! + 2)) == 34
-            -> if {
-                not inTriple! => inTriple!
-                index! + 3 => index!
+        UIntSize(0) => quotes!
+        current == 34 -> if {
+            index! + quotes! < line.length
+                and (source -> byte(line.start + index! + quotes!)) == 34
+                -> while { quotes! + 1 => quotes! }
+        }
+        delimiterWidth! > 0 -> if {
+            quotes! >= delimiterWidth! -> if {
+                index! + delimiterWidth! => index!
+                0 => delimiterWidth!
             } else {
-                not inTriple! -> if {
-                    not inString! and current == 35 -> if {
-                        line.length => index!
+                quotes! > 0 -> if { index! + quotes! => index! } else { index! + 1 => index! }
+            }
+        } else {
+            not inString! and current == 35 -> if {
+                line.length => index!
+            } else {
+                inString! -> if {
+                    escaped! -> if {
+                        false => escaped!
                     } else {
-                        inString! -> if {
-                            escaped! -> if {
-                                false => escaped!
-                            } else {
-                                current == 92 -> if {
-                                    true => escaped!
-                                } else {
-                                    current == 34 -> if { false => inString! }
-                                }
-                            }
-                        } else {
-                            current == 34 -> if {
-                                true => inString!
-                            } else {
-                                current == 123 -> if { opens! + 1 => opens! }
-                                current == 125 -> if { closes! + 1 => closes! }
-                            }
+                        current == 92 -> if { true => escaped! } else { current == 34 -> if { false => inString! } }
+                    }
+                    index! + 1 => index!
+                } else {
+                    quotes! >= 3 -> if {
+                        quotes! => delimiterWidth!
+                        index! + quotes! => index!
+                    } else {
+                        current == 34 -> if { true => inString! } else {
+                            current == 123 -> if { opens! + 1 => opens! }
+                            current == 125 -> if { closes! + 1 => closes! }
                         }
                         index! + 1 => index!
                     }
-                } else {
-                    index! + 1 => index!
                 }
             }
+        }
     }
-    ScanResult { tripleString: inTriple!, opens: opens!, closes: closes! }
+    ScanResult { rawDelimiterWidth: delimiterWidth!, opens: opens!, closes: closes! }
 }
 
 sourceLines source: file.SourceText -> [LineSpan; ~] {
@@ -400,7 +402,7 @@ public format source: file.SourceText -> FormatResult {
     [Int; ~] => continuationBlockDepths!
     0 => continuationCount!
     0 => depth!
-    false => inTripleString!
+    UIntSize(0) => rawDelimiterWidth!
     0 => tripleStringIndentDelta!
     0 => controlIndex!
     0 => lineIndex!
@@ -408,7 +410,7 @@ public format source: file.SourceText -> FormatResult {
         lines[lineIndex!] => original
         controlIndex! < (controlArrows -> len) and controlArrows[controlIndex!] < original.start
             -> while { controlIndex! + 1 => controlIndex! }
-        inTripleString! -> if {
+        rawDelimiterWidth! > 0 -> if {
             original.start => rawStart!
             original.length => rawLength!
             tripleStringIndentDelta! > 0 and rawLength! > 0
@@ -429,15 +431,18 @@ public format source: file.SourceText -> FormatResult {
             }
             output! -> appendSource(normalizedSource, rawStart!, rawLength!)
             output! -> push(10)
-            normalizedSource -> scanLine(original, inTripleString!) => scan
-            scan.tripleString => inTripleString!
-            not inTripleString! -> if { 0 => tripleStringIndentDelta! }
+            normalizedSource -> scanLine(original, rawDelimiterWidth!) => scan
+            scan.rawDelimiterWidth => rawDelimiterWidth!
+            rawDelimiterWidth! == 0 -> if { 0 => tripleStringIndentDelta! }
         } else {
             normalizedSource -> trimLine(original) => trimmed
             trimmed.length == 0 -> if {
                 output! -> push(10)
             } else {
-                normalizedSource -> scanLine(trimmed, inTripleString!) => scan
+                LineSpan { start: trimmed.start, length: original.start + original.length - trimmed.start } => content
+                normalizedSource -> scanLine(content, rawDelimiterWidth!) => scan
+                trimmed => formattedLine!
+                scan.rawDelimiterWidth > 0 -> if { content => formattedLine! }
                 normalizedSource -> leadingClosingBraces(trimmed) => leadingCloses
                 depth! - leadingCloses => baseDepth!
                 baseDepth! < 0 -> if { 0 => baseDepth! }
@@ -450,7 +455,7 @@ public format source: file.SourceText -> FormatResult {
                     and controlArrows[controlIndex!] >= trimmed.start
                     and controlArrows[controlIndex!] < trimmed.start + trimmed.length
                     -> if { Int(controlArrows[controlIndex!] - trimmed.start) => arrow! }
-                output! -> appendFormattedLine(normalizedSource, trimmed, (baseDepth! + continuationCount! + 1) * 4, arrow!) => inlineControlContinuation
+                output! -> appendFormattedLine(normalizedSource, formattedLine!, (baseDepth! + continuationCount! + 1) * 4, arrow!) => inlineControlContinuation
                 output! -> push(10)
                 depth! + scan.opens - scan.closes => depth!
                 depth! < 0 -> if { 0 => depth! }
@@ -468,11 +473,11 @@ public format source: file.SourceText -> FormatResult {
                             }
                         continuationCount! + 1 => continuationCount!
                     }
-                scan.tripleString and (normalizedSource -> multilineRawOpening(trimmed))
+                scan.rawDelimiterWidth > 0 and (normalizedSource -> multilineRawOpening(content))
                     -> if {
                         lineDepth! * 4 - Int(trimmed.start - original.start) => tripleStringIndentDelta!
                     }
-                scan.tripleString => inTripleString!
+                scan.rawDelimiterWidth => rawDelimiterWidth!
             }
         }
         lineIndex! + 1 => lineIndex!

@@ -1,0 +1,111 @@
+define internal ptr @sollang_linux_mouse_worker(ptr %context) {
+entry:
+%button_value = alloca i32, align 4
+%x_value = alloca i32, align 4
+%y_value = alloca i32, align 4
+br label %seek_escape
+seek_escape:
+%escape = call i32 @sollang_linux_mouse_read_byte(ptr %context)
+%escape_closed = icmp slt i32 %escape, 0
+br i1 %escape_closed, label %done, label %check_escape
+check_escape:
+%is_escape = icmp eq i32 %escape, 27
+br i1 %is_escape, label %expect_bracket, label %seek_escape
+expect_bracket:
+%bracket = call i32 @sollang_linux_mouse_read_byte(ptr %context)
+%is_bracket = icmp eq i32 %bracket, 91
+br i1 %is_bracket, label %expect_less, label %seek_escape
+expect_less:
+%less = call i32 @sollang_linux_mouse_read_byte(ptr %context)
+%is_less = icmp eq i32 %less, 60
+br i1 %is_less, label %button_start, label %seek_escape
+button_start:
+store i32 0, ptr %button_value, align 4
+br label %button_digit
+button_digit:
+%button_char = call i32 @sollang_linux_mouse_read_byte(ptr %context)
+%button_is_digit_low = icmp sge i32 %button_char, 48
+%button_is_digit_high = icmp sle i32 %button_char, 57
+%button_is_digit = and i1 %button_is_digit_low, %button_is_digit_high
+br i1 %button_is_digit, label %button_accumulate, label %button_separator
+button_accumulate:
+%button_old = load i32, ptr %button_value, align 4
+%button_times_ten = mul i32 %button_old, 10
+%button_digit_value = sub i32 %button_char, 48
+%button_next = add i32 %button_times_ten, %button_digit_value
+store i32 %button_next, ptr %button_value, align 4
+br label %button_digit
+button_separator:
+%button_has_separator = icmp eq i32 %button_char, 59
+br i1 %button_has_separator, label %x_start, label %seek_escape
+x_start:
+store i32 0, ptr %x_value, align 4
+br label %x_digit
+x_digit:
+%x_char = call i32 @sollang_linux_mouse_read_byte(ptr %context)
+%x_is_digit_low = icmp sge i32 %x_char, 48
+%x_is_digit_high = icmp sle i32 %x_char, 57
+%x_is_digit = and i1 %x_is_digit_low, %x_is_digit_high
+br i1 %x_is_digit, label %x_accumulate, label %x_separator
+x_accumulate:
+%x_old = load i32, ptr %x_value, align 4
+%x_times_ten = mul i32 %x_old, 10
+%x_digit_value = sub i32 %x_char, 48
+%x_next = add i32 %x_times_ten, %x_digit_value
+store i32 %x_next, ptr %x_value, align 4
+br label %x_digit
+x_separator:
+%x_has_separator = icmp eq i32 %x_char, 59
+br i1 %x_has_separator, label %y_start, label %seek_escape
+y_start:
+store i32 0, ptr %y_value, align 4
+br label %y_digit
+y_digit:
+%y_char = call i32 @sollang_linux_mouse_read_byte(ptr %context)
+%y_is_digit_low = icmp sge i32 %y_char, 48
+%y_is_digit_high = icmp sle i32 %y_char, 57
+%y_is_digit = and i1 %y_is_digit_low, %y_is_digit_high
+br i1 %y_is_digit, label %y_accumulate, label %finish_event
+y_accumulate:
+%y_old = load i32, ptr %y_value, align 4
+%y_times_ten = mul i32 %y_old, 10
+%y_digit_value = sub i32 %y_char, 48
+%y_next = add i32 %y_times_ten, %y_digit_value
+store i32 %y_next, ptr %y_value, align 4
+br label %y_digit
+finish_event:
+%is_press = icmp eq i32 %y_char, 77
+%is_release = icmp eq i32 %y_char, 109
+%valid_final = or i1 %is_press, %is_release
+br i1 %valid_final, label %classify, label %seek_escape
+classify:
+%raw_button = load i32, ptr %button_value, align 4
+%raw_x = load i32, ptr %x_value, align 4
+%raw_y = load i32, ptr %y_value, align 4
+%x = sub i32 %raw_x, 1
+%y = sub i32 %raw_y, 1
+%wheel_bit = and i32 %raw_button, 64
+%is_wheel = icmp ne i32 %wheel_bit, 0
+br i1 %is_wheel, label %wheel, label %non_wheel
+wheel:
+%wheel_direction = and i32 %raw_button, 1
+%wheel_down = icmp ne i32 %wheel_direction, 0
+%delta = select i1 %wheel_down, i32 -120, i32 120
+call void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 %delta, i32 -1, i32 3)
+br label %seek_escape
+non_wheel:
+%motion_bit = and i32 %raw_button, 32
+%is_motion = icmp ne i32 %motion_bit, 0
+br i1 %is_motion, label %move, label %button
+move:
+call void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 0, i32 -1, i32 0)
+br label %seek_escape
+button:
+%button_index = and i32 %raw_button, 3
+%kind = select i1 %is_release, i32 2, i32 1
+call void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 0, i32 %button_index, i32 %kind)
+br label %seek_escape
+done:
+call void @sollang_linux_mouse_signal(ptr %context)
+ret ptr null
+}

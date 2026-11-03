@@ -1,0 +1,28 @@
+define internal i32 @sollang_linux_mouse_read_byte(ptr %context) {
+entry:
+%poll_record = alloca [8 x i8], align 4
+%byte = alloca i8, align 1
+store i32 0, ptr %poll_record, align 4
+%events = getelementptr i8, ptr %poll_record, i64 4
+store i16 1, ptr %events, align 2
+br label %wait
+wait:
+%cancel_address = getelementptr i8, ptr %context, i64 20
+%cancelled = load atomic i32, ptr %cancel_address acquire, align 4
+%active = icmp eq i32 %cancelled, 0
+br i1 %active, label %poll, label %closed
+poll:
+%ready = call i32 @poll(ptr %poll_record, i64 1, i32 50)
+%has_input = icmp sgt i32 %ready, 0
+br i1 %has_input, label %read_byte, label %wait
+read_byte:
+%read_count = call i64 @read(i32 0, ptr %byte, i64 1)
+%read_ok = icmp eq i64 %read_count, 1
+br i1 %read_ok, label %got_value, label %wait
+got_value:
+%raw = load i8, ptr %byte, align 1
+%byte_value = zext i8 %raw to i32
+ret i32 %byte_value
+closed:
+ret i32 -1
+}

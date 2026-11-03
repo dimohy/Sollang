@@ -1,0 +1,26 @@
+define internal void @sollang_mouse_event_stream_drop(ptr %context, i1 %destroy) {
+entry:
+%cancel_address = getelementptr i8, ptr %context, i64 20
+store atomic i32 1, ptr %cancel_address release, align 4
+call void @sollang_linux_mouse_signal(ptr %context)
+br i1 %destroy, label %join_worker, label %cancelled_only
+cancelled_only:
+ret void
+join_worker:
+%thread_address = getelementptr i8, ptr %context, i64 32
+%thread = load i64, ptr %thread_address, align 8
+%joined = call i32 @pthread_join(i64 %thread, ptr null)
+%disabled = call i64 @write(i32 1, ptr @sollang_mouse_disable, i64 16)
+%termios_address = getelementptr i8, ptr %context, i64 48
+%original = load ptr, ptr %termios_address, align 8
+%restored = call i32 @tcsetattr(i32 0, i32 0, ptr %original)
+%event_address = getelementptr i8, ptr %context, i64 28
+%event_fd = load i32, ptr %event_address, align 4
+%closed_event = call i32 @close(i32 %event_fd)
+%buffer_address = getelementptr i8, ptr %context, i64 40
+%buffer = load ptr, ptr %buffer_address, align 8
+call void @sollang_free(ptr %original)
+call void @sollang_free(ptr %buffer)
+call void @sollang_free(ptr %context)
+ret void
+}

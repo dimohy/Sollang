@@ -8,7 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
-        const int expectedTestCount = 78;
+        const int expectedTestCount = 84;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -185,13 +185,47 @@ internal static class SelfHostPolicyTests
 
             var textPolicy = compiler.GetType("Sollang.Compiler.Shared.TypeNamePolicy", true)!.GetMethod("BuiltinNames")!;
             Check("compiled-text-catalog-exported", Emit(textPolicy).Contains((string)textPolicy.Invoke(null, null)!, StringComparison.Ordinal));
-            Check("text-literal-escaped", Emit(typeof(SelfHostPolicyTests).GetMethod(nameof(EscapedText), BindingFlags.NonPublic | BindingFlags.Static)!)
-                .Contains("a\\\"b\\\\c", StringComparison.Ordinal));
+            bool ExactTextSource(string emitted, string expected)
+            {
+                var formatted = (string)compiler.GetType("Sollang.Compiler.Cli.SourceFormatter", true)!
+                    .GetMethod("Format")!.Invoke(null, [emitted])!;
+                var lexerType = compiler.GetType("Sollang.Compiler.Lexing.Lexer", true)!;
+                var lexer = Activator.CreateInstance(lexerType, [formatted]);
+                var tokens = (System.Collections.IEnumerable)lexerType.GetMethod("Lex")!.Invoke(lexer, null)!;
+                var token = tokens.Cast<object>().Single(value => value.GetType().GetProperty("Kind")!
+                    .GetValue(value)!.ToString() == "String");
+                var tokenType = token.GetType();
+                var parser = compiler.GetType("Sollang.Compiler.Parsing.StringLiteralParser", true)!;
+                var raw = (bool)tokenType.GetProperty("IsRawString")!.GetValue(token)!;
+                var actual = raw
+                    ? (string)parser.GetMethod("NormalizeRawString", BindingFlags.NonPublic | BindingFlags.Static)!
+                        .Invoke(null, [token])!
+                    : (string)parser.GetMethod("DecodeEscapes", BindingFlags.NonPublic | BindingFlags.Static)!
+                        .Invoke(null, [tokenType.GetProperty("Text")!.GetValue(token)])!;
+                if (raw)
+                {
+                    if (actual.Length < 2 || actual[0] != 'x' || actual[^1] != 'x'
+                        || !formatted.Contains("-> slice(1, " + expected.Length + ")", StringComparison.Ordinal)) return false;
+                    actual = actual[1..^1];
+                }
+                return actual == expected && (raw || !expected.Contains('"') && !expected.Contains('$'));
+            }
+            bool ExactTextLiteral(MethodInfo method) => ExactTextSource(Emit(method), (string)method.Invoke(null, null)!);
+            bool ExactMultilineText(string value) => ExactTextSource(RenderTextValue(compiler, "Value", value), value);
+            MethodInfo TextMethod(string name) => typeof(SelfHostPolicyTests)
+                .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!;
+            Check("text-quoted-literal-parses-exactly", ExactTextLiteral(TextMethod(nameof(EscapedText))));
+            Check("text-interpolation-markers-stay-literal", ExactTextLiteral(TextMethod(nameof(InterpolationText))));
+            Check("text-boundary-quotes-stay-literal", ExactTextLiteral(TextMethod(nameof(BoundaryQuoteText))));
+            Check("text-repeated-quotes-stay-literal", ExactTextLiteral(TextMethod(nameof(RepeatedQuoteText))));
+            Check("text-leading-newline-whitespace-preserved", ExactMultilineText("\n  \n$"));
+            Check("text-multiline-quote-runs-preserved", ExactMultilineText("first\n  left\"\"\"right\n  tail"));
             Check("text-call-rejected", Rejected(nameof(CallText), "SELFHOST_POLICY_TEXT_CONSTANT_REQUIRED"));
             Check("text-input-rejected", Rejected(nameof(InputText), "SELFHOST_POLICY_TEXT_SIGNATURE_REQUIRED"));
             Check("text-nonascii-rejected", Rejected(nameof(NonAsciiText), "SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED"));
             Check("text-control-rejected", Rejected(nameof(ControlText), "SELFHOST_POLICY_TEXT_LITERAL_UNSUPPORTED"));
             var integerInput = compiler.GetType("Sollang.Compiler.Shared.NativeRuntimePolicy", true)!;
+            Check("runtime-quoted-multiline-parses-exactly", ExactTextLiteral(integerInput.GetMethod("MouseLinuxWorkerFunctions")!));
             Check("runtime-multiline-text-exported", Emit(integerInput.GetMethod("LegacyReadFunction")!)
                 .Contains("\\n", StringComparison.Ordinal));
             Check("runtime-read-function-source-retained", Emit(integerInput.GetMethod("LegacyWindowsReadFunction")!)
@@ -718,17 +752,36 @@ storageBindingSpan schema: Text, fixedLength: Bool, index: Int, part: Int -> Int
         }
         source.Append("}\n");
         var sourcePath = Path.Combine(directory, "runtime-policy-probe.slg");
-        File.WriteAllText(sourcePath, source.ToString());
+        File.WriteAllText(sourcePath, source.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        var literalValues = new[] { "a\"b\\c", "$name $(value) \\n", "\"quoted\"", "left\"\"\"right",
+            "\n  \n$", "first  \n  left\"\"\"right\n  tail" };
+        var literalSource = new System.Text.StringBuilder();
+        for (var index = 0; index < literalValues.Length; index++)
+            literalSource.Append(RenderTextValue(compiler, "Value" + index, literalValues[index])).Append('\n');
+        literalSource.Append("main {\n");
+        var literalExpected = new System.Text.StringBuilder();
+        for (var index = 0; index < literalValues.Length; index++)
+        {
+            literalSource.Append("    \"case:").Append(index).Append("\" -> println\n    value")
+                .Append(index).Append("() -> println\n");
+            literalExpected.Append("case:").Append(index).Append('\n').Append(literalValues[index]).Append('\n');
+        }
+        literalSource.Append("    \"end\" -> println\n}\n");
+        literalExpected.Append("end");
+        var literalPath = Path.Combine(directory, "literal-policy-probe.slg");
+        File.WriteAllText(literalPath, literalSource.ToString());
         var contractPath = Path.Combine(directory, "runtime-policy-contract.json");
         File.WriteAllText(contractPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
-            formatCheckSources = new[] { sourcePath, Path.Combine(root, "selfhost/semantic/reference_type_ids.slg"),
+            formatCheckSources = new[] { sourcePath, literalPath, Path.Combine(root, "selfhost/semantic/reference_type_ids.slg"),
                 Path.Combine(root, "selfhost/semantic/type_name_policy.slg") },
             policyModules = names,
             scope = "Generated policies against compiled CSharp method results; exhaustive boolean inputs, UInt64 boundary products and every declared cache-key rule",
-            cases = new[] { new { id = "shared-policy-runtime", source = sourcePath,
-                additionalSources = dependencies, exit = 0, stderr = "", stdout = expected.ToString().TrimEnd('\r', '\n') } }
+            cases = new object[] { new { id = "shared-policy-runtime", source = sourcePath,
+                additionalSources = dependencies, exit = 0, stderr = "", stdout = expected.ToString().TrimEnd('\r', '\n') },
+                new { id = "literal-policy-values", source = literalPath, additionalSources = Array.Empty<string>(),
+                    exit = 0, stderr = "", stdout = literalExpected.ToString() } }
         }, new JsonSerializerOptions { WriteIndented = true }));
         return contractPath;
     }
@@ -748,7 +801,15 @@ storageBindingSpan schema: Text, fixedLength: Bool, index: Int, part: Int -> Int
     [Flags] private enum FlagIdentity { Zero, One }
     private enum EmptyIdentity { }
 
+    private static string RenderTextValue(Assembly compiler, string name, string value) =>
+        (string)compiler.GetType("Sollang.Compiler.Cli.SelfHostPolicyCompiler", true)!
+            .GetMethod("RenderTextValue", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [name, value, true])!;
+
     private static string EscapedText() => "a\"b\\c";
+    private static string InterpolationText() => "$name $(value) \\n";
+    private static string BoundaryQuoteText() => "\"quoted\"";
+    private static string RepeatedQuoteText() => "left\"\"\"right";
     private static string CallText() => string.Concat(Environment.NewLine, "x");
     private static string InputText(string value) => value;
     private static string NonAsciiText() => "한글";

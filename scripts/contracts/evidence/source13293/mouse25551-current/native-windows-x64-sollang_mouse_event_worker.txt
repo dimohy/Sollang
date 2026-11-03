@@ -1,0 +1,155 @@
+define internal i32 @sollang_mouse_event_worker(ptr %context) {
+entry:
+%input = load ptr, ptr %context, align 8
+%record = alloca [20 x i8], align 4
+%read = alloca i32, align 4
+br label %wait
+wait:
+%cancel_address = getelementptr i8, ptr %context, i64 32
+%cancelled = load atomic i32, ptr %cancel_address acquire, align 4
+%active = icmp eq i32 %cancelled, 0
+br i1 %active, label %read_input, label %done
+read_input:
+%ok = call i32 @ReadConsoleInputW(ptr %input, ptr %record, i32 1, ptr %read)
+%read_ok = icmp ne i32 %ok, 0
+br i1 %read_ok, label %inspect, label %closed
+inspect:
+%event_type = load i16, ptr %record, align 2
+%is_mouse = icmp eq i16 %event_type, 2
+br i1 %is_mouse, label %mouse, label %wait
+mouse:
+%x_slot = getelementptr i8, ptr %record, i64 4
+%x16 = load i16, ptr %x_slot, align 2
+%x = sext i16 %x16 to i32
+%y_slot = getelementptr i8, ptr %record, i64 6
+%y16 = load i16, ptr %y_slot, align 2
+%y = sext i16 %y16 to i32
+%buttons_address = getelementptr i8, ptr %record, i64 8
+%buttons = load i32, ptr %buttons_address, align 4
+%flags_address = getelementptr i8, ptr %record, i64 16
+%flags = load i32, ptr %flags_address, align 4
+%wheel_bits = and i32 %flags, 12
+%is_wheel = icmp ne i32 %wheel_bits, 0
+br i1 %is_wheel, label %wheel, label %non_wheel
+wheel:
+%wheel_delta = ashr i32 %buttons, 16
+br label %enqueue
+non_wheel:
+%previous_address = getelementptr i8, ptr %context, i64 64
+%previous = load i32, ptr %previous_address, align 4
+%changed = xor i32 %previous, %buttons
+store i32 %buttons, ptr %previous_address, align 4
+%has_change = icmp ne i32 %changed, 0
+br i1 %has_change, label %button_change, label %move
+button_change:
+%changed0 = and i32 %changed, 1
+%is0 = icmp ne i32 %changed0, 0
+%changed1 = and i32 %changed, 4
+%is1 = icmp ne i32 %changed1, 0
+%changed2 = and i32 %changed, 2
+%is2 = icmp ne i32 %changed2, 0
+%button12 = select i1 %is2, i32 2, i32 3
+%button1 = select i1 %is1, i32 1, i32 %button12
+%button_index = select i1 %is0, i32 0, i32 %button1
+%pressed_bits = and i32 %buttons, %changed
+%pressed = icmp ne i32 %pressed_bits, 0
+%button_kind = select i1 %pressed, i32 1, i32 2
+br label %enqueue
+move:
+br label %enqueue
+enqueue:
+%delta = phi i32 [ %wheel_delta, %wheel ], [ 0, %button_change ], [ 0, %move ]
+%button = phi i32 [ -1, %wheel ], [ %button_index, %button_change ], [ -1, %move ]
+%kind = phi i32 [ 3, %wheel ], [ %button_kind, %button_change ], [ 0, %move ]
+br label %queue_lock
+queue_lock:
+%lock_address = getelementptr i8, ptr %context, i64 68
+%lock_result = cmpxchg ptr %lock_address, i32 0, i32 1 acquire monotonic, align 4
+%lock_acquired = extractvalue { i32, i1 } %lock_result, 1
+br i1 %lock_acquired, label %queue_state, label %queue_lock
+queue_state:
+%capacity_address = getelementptr i8, ptr %context, i64 12
+%capacity = load i32, ptr %capacity_address, align 4
+%head_address = getelementptr i8, ptr %context, i64 20
+%head = load i32, ptr %head_address, align 4
+%tail_address = getelementptr i8, ptr %context, i64 24
+%tail = load i32, ptr %tail_address, align 4
+%count_address = getelementptr i8, ptr %context, i64 28
+%count = load i32, ptr %count_address, align 4
+%full = icmp uge i32 %count, %capacity
+br i1 %full, label %overflow, label %write
+overflow:
+%policy_address = getelementptr i8, ptr %context, i64 16
+%policy = load i32, ptr %policy_address, align 4
+%drop_newest = icmp eq i32 %policy, 0
+br i1 %drop_newest, label %unlock_drop, label %not_drop_newest
+not_drop_newest:
+%coalesce = icmp eq i32 %policy, 2
+%is_move = icmp eq i32 %kind, 0
+%coalesce_move = and i1 %coalesce, %is_move
+br i1 %coalesce_move, label %replace_move_check, label %drop_oldest
+replace_move_check:
+%last_tail_unwrapped = add i32 %tail, %capacity
+%last_tail = sub i32 %last_tail_unwrapped, 1
+%last_index = urem i32 %last_tail, %capacity
+%last_index64 = zext i32 %last_index to i64
+%last_offset = mul i64 %last_index64, 20
+%buffer_address0 = getelementptr i8, ptr %context, i64 56
+%buffer0 = load ptr, ptr %buffer_address0, align 8
+%last_record = getelementptr i8, ptr %buffer0, i64 %last_offset
+%last_kind_address = getelementptr i8, ptr %last_record, i64 16
+%last_kind = load i32, ptr %last_kind_address, align 4
+%last_is_move = icmp eq i32 %last_kind, 0
+br i1 %last_is_move, label %replace_move, label %unlock_drop
+replace_move:
+store i32 %x, ptr %last_record, align 4
+%last_y = getelementptr i8, ptr %last_record, i64 4
+store i32 %y, ptr %last_y, align 4
+br label %signal
+drop_oldest:
+%next_head_unwrapped = add i32 %head, 1
+%next_head = urem i32 %next_head_unwrapped, %capacity
+store i32 %next_head, ptr %head_address, align 4
+%reduced_count = sub i32 %count, 1
+store i32 %reduced_count, ptr %count_address, align 4
+br label %write
+write:
+%index64 = zext i32 %tail to i64
+%offset = mul i64 %index64, 20
+%buffer_address = getelementptr i8, ptr %context, i64 56
+%buffer = load ptr, ptr %buffer_address, align 8
+%slot = getelementptr i8, ptr %buffer, i64 %offset
+store i32 %x, ptr %slot, align 4
+%slot_y = getelementptr i8, ptr %slot, i64 4
+store i32 %y, ptr %slot_y, align 4
+%slot_delta = getelementptr i8, ptr %slot, i64 8
+store i32 %delta, ptr %slot_delta, align 4
+%slot_button = getelementptr i8, ptr %slot, i64 12
+store i32 %button, ptr %slot_button, align 4
+%slot_kind = getelementptr i8, ptr %slot, i64 16
+store i32 %kind, ptr %slot_kind, align 4
+%next_tail_unwrapped = add i32 %tail, 1
+%next_tail = urem i32 %next_tail_unwrapped, %capacity
+store i32 %next_tail, ptr %tail_address, align 4
+%current_count = load i32, ptr %count_address, align 4
+%next_count = add i32 %current_count, 1
+store i32 %next_count, ptr %count_address, align 4
+br label %signal
+unlock_drop:
+store atomic i32 0, ptr %lock_address release, align 4
+br label %wait
+signal:
+store atomic i32 0, ptr %lock_address release, align 4
+%event_address = getelementptr i8, ptr %context, i64 48
+%event = load ptr, ptr %event_address, align 8
+%signalled = call i32 @SetEvent(ptr %event)
+br label %wait
+closed:
+store atomic i32 1, ptr %cancel_address release, align 4
+%closed_event_address = getelementptr i8, ptr %context, i64 48
+%closed_event = load ptr, ptr %closed_event_address, align 8
+%closed_signalled = call i32 @SetEvent(ptr %closed_event)
+br label %done
+done:
+ret i32 0
+}
