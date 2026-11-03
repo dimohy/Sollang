@@ -51,7 +51,13 @@ appendDeclarationPathBytes source: Text, range: analysis.SourceAnalysisRange, to
 public appendAffineDeclarationNameBytes package: ref analysis.PackageAnalysis, sourceModule: Int, declaration: Int, bytes: mut [UInt8; ~] -> Bool {
     package.ranges[sourceModule] => range
     package.symbols[range.symbolStart + declaration] => symbol
-    symbol.astNode => node!
+    package -> appendAbiDeclarationNameBytes(sourceModule, symbol.astNode, symbol.nameToken, bytes)
+}
+
+# ABI block aliases own both affine type names and native function names.
+public appendAbiDeclarationNameBytes package: ref analysis.PackageAnalysis, sourceModule: Int, astNode: Int, nameToken: Int, bytes: mut [UInt8; ~] -> Bool {
+    package.ranges[sourceModule] => range
+    astNode => node!
     0 => depth!
     node! >= 0 and node! < range.astCount and depth! < range.astCount
         -> while {
@@ -64,7 +70,7 @@ public appendAffineDeclarationNameBytes package: ref analysis.PackageAnalysis, s
                     index! < alias.length -> while { bytes -> push(source -> byte(alias.start + index!))
                         index! + 1 => index! }
                     bytes -> push('.')
-                    package.tokens[range.tokenStart + symbol.nameToken].span => name
+                    package.tokens[range.tokenStart + nameToken].span => name
                     UIntSize(0) => nameIndex!
                     nameIndex! < name.length -> while { bytes -> push(source -> byte(name.start + nameIndex!))
                         nameIndex! + 1 => nameIndex! }

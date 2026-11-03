@@ -5370,6 +5370,15 @@ functionUsesReservedSysPath prepared: ref semanticContext.SemanticSnapshot, rang
 
 # Canonical declaration spelling ignores namespace/name trivia, preserves case,
 # and includes the full dotted function path. The same builder renders errors.
+# Match the parser's ABI alias before applying an ordinary namespace prefix.
+public appendFunctionDeclarationIdentity package: ref analysis.PackageAnalysis, identity: modules.ModuleIdentity, sourceModule: Int, astNode: Int, nameToken: Int, bytes: mut [UInt8; ~] -> Unit {
+    package -> modules.appendAbiDeclarationNameBytes(sourceModule, astNode, nameToken, bytes)
+        -> if { return }
+    package.ranges[sourceModule] => range
+    package.sources[sourceModule] -> slice(0, package.sources[sourceModule] -> len) => source
+    source -> appendFunctionDeclarationName(package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, nameToken, bytes)
+}
+
 public appendFunctionDeclarationName source: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int, namespaceStart: UIntSize, namespaceLength: UIntSize, nameToken: Int, bytes: mut [UInt8; ~] -> Unit {
     namespaceLength > 0 -> if {
         tokenStart => index!
@@ -5452,8 +5461,7 @@ functionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredE
                         -> if {
                             declarationNames! -> len => nameStart
                             prepared.modules[range.sourceModule] => identity
-                            prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => declarationSource
-                            declarationSource -> appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, declarationNames!)
+                            prepared.package -> appendFunctionDeclarationIdentity(identity, range.sourceModule, symbol.astNode, symbol.nameToken, declarationNames!)
                             (declarationNames! -> len) - nameStart => nameLength
                             UInt64(0) => hash!
                             nameStart => byteIndex!

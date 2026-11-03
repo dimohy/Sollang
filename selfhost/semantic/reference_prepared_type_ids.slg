@@ -2,6 +2,7 @@ namespace sollang.compiler.semantic.reference_prepared_type_ids
 
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.diagnostics as diagnostics
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_name_policy as typeNames
@@ -390,11 +391,16 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
         0 => index!
         index! < range.symbolCount -> while {
             prepared.package.symbols[range.symbolStart + index!] => symbol
-            (symbol.kind == 3 or symbol.kind == 4)
-                and symbol.flags / 512 % 2 == 0 and symbol.flags / 65536 % 2 == 0
+            symbol.kind == 3 or symbol.kind == 4
                 -> if {
                     UIntSize(strings! -> len) => start
-                    source -> diagnostics.appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, strings!)
+                    symbol.flags / 512 % 2 == 1 or symbol.flags / 65536 % 2 == 1
+                        -> if {
+                            not modules.appendAffineDeclarationNameBytes(prepared.package, range.sourceModule, index!, strings!)
+                                -> if { Result<synthetic.Identities, Error>.Err(Error.InvalidSource) -> return }
+                        } else {
+                            source -> diagnostics.appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, strings!)
+                        }
                     declarations! -> len => declarationBySymbol![range.symbolStart + index!]
                     declarations! -> push(nominal.NominalDeclaration { kind: symbol.kind, nameStart: start, nameLength: UIntSize(strings! -> len) - start })
                 }
@@ -415,7 +421,7 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
     0 => typeIndex!
     semantic.types -> each type {
         -1 => seed!
-        type.kind == 1 -> if {
+        type.kind == 1 or type.kind == 9 -> if {
             type.origin == 1 and type.symbol >= 0 and type.symbol < 26
                 -> if {
                     typeIds.builtinTypeName(type.symbol) -> typeNames.builtinEnumName -> nominal.enumValue => seed!

@@ -1873,6 +1873,12 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
+Reference metadata registers ordinary and affine native/COM nominal declarations
+in the same struct-before-enum order as C#. Affine names come from their owning
+ABI block alias; the named-box catalog and nominal identity seeds include the
+same declarations. Do not skip an affine declaration to make cache capture pass.
+Function collision checks and their diagnostics use this same ABI alias owner;
+ordinary functions keep their namespace-qualified identity.
 Public library ABI type admission and C names use TypeNamePolicy compiled
 bindings in both backends and interface validators. Preserve declared-name
 rejection separately from bound-type naming, including source alias diagnostics.

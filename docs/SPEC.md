@@ -1167,6 +1167,10 @@ The compatibility reader retains its platform storage behind the same read ABI;
 socket-only IO does not acquire a file worker merely to share completion logic.
 Platform IO signals and file-worker lifecycle bodies use compiled definition
 groups; file and socket-only shutdown share the IO teardown implementation.
+Compiler metadata preserves affine native/COM declarations in nominal and
+named-box identity registration, with the same order and alias-qualified names
+as ordinary C# type-definition registration. Native/COM function declaration
+identity uses its ABI block alias for duplicate checks and error names.
 Public library scalar ABI admission and names share compiled type bindings;
 source declaration spellings retain their own validation and diagnostic order.
 Checked intrinsic values obey the same source evaluation order as ordinary
