@@ -434,6 +434,10 @@ internal abstract class LlvmRuntimePlatform
             functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileTaskCancelFunction());
             functions.AppendLine();
+            functions.AppendLine(NativeRuntimePolicy.AsyncFileOpenTaskStartFunction());
+            functions.AppendLine();
+            functions.AppendLine(NativeRuntimePolicy.AsyncFileBufferTaskStartFunction());
+            functions.AppendLine();
         }
         else
         {

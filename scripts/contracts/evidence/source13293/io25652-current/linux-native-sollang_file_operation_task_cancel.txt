@@ -1,0 +1,18 @@
+define internal void @sollang_file_operation_task_cancel(ptr %control) {
+entry:
+%explicit_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 19
+%explicit = load i32, ptr %explicit_slot, align 4
+%owns_handle = icmp ne i32 %explicit, 0
+br i1 %owns_handle, label %close_handle, label %destroy_context
+close_handle:
+%handle_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 17
+%handle = load i64, ptr %handle_slot, align 8
+call void @sollang_platform_close_owned_file(i64 %handle)
+store i32 0, ptr %explicit_slot, align 4
+br label %destroy_context
+destroy_context:
+%context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0
+%context = load ptr, ptr %context_slot, align 8
+call void @sollang_free(ptr %context)
+ret void
+}

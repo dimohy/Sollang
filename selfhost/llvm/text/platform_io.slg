@@ -2363,6 +2363,131 @@ nominalFieldType ownerType: Int, ordinal: Int, context: ref emitterContext.EmitC
     fieldType!
 }
 
+fileTaskResultType producerIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ir[producerIndex].typeId => typeId
+    context.types[typeId] => type
+    type.kind == 7 and type.origin == 4 and type.symbol == 2
+        -> if { type.first } else { typeId }
+}
+
+# The result and optional diagnostic header precede both transferred owners.
+# Call setup, result completion and cancellation consume this same layout.
+fileBufferTaskLayout producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> (fileType: Int, bufferType: Int, fileOffset: Int, bufferOffset: Int, size: Int) {
+    producerIndex -> fileTaskResultType(context) => resultType
+    context.types[resultType].first => successType
+    nominalFieldType(successType, 0, context) => fileType
+    nominalFieldType(successType, 1, context) => bufferType
+    context.typeSizes[resultType] -> runtimeTaskContextSize(context, state) => resultSize
+    context.typeAligns[fileType] => fileAlign
+    (resultSize + fileAlign - 1) / fileAlign * fileAlign => fileOffset
+    context.typeAligns[bufferType] => bufferAlign
+    (fileOffset + context.typeSizes[fileType] + bufferAlign - 1) / bufferAlign * bufferAlign => bufferOffset
+    (fileType: fileType, bufferType: bufferType, fileOffset: fileOffset, bufferOffset: bufferOffset, size: bufferOffset + context.typeSizes[bufferType])
+}
+
+writeFilePathValue pathIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[pathIndex] => path
+    path.kind == 2 -> if {
+        path -> sourceToken(context, state) => pathToken
+        TextLiteralRequest { sourceModule: path.sourceModule, token: pathToken } -> textLiteralLength(context, state) => length
+        "{ ptr @sollang_str_" -> print
+        pathIndex -> stringGlobalName(state) -> print
+        ", i64 $length }" -> print
+    } else { pathIndex -> writeValue(ownerIndex, context, state) }
+}
+
+emitAsyncFileOpenCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    request.callIndex -> fileTaskResultType(context) => resultType
+    context.typeSizes[resultType] => resultSize
+    resultSize -> runtimeTaskContextSize(context, state) => allocationSize
+    request.callIndex -> socketCallArgument(0, context, state) => pathIndex
+    "  %v$(request.callIndex -> valueNameId(state))_file_path = extractvalue %sollang.text " -> print
+    pathIndex -> writeFilePathValue(request.ownerIndex, context, state)
+    ", 0" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_path_length = extractvalue %sollang.text " -> print
+    pathIndex -> writeFilePathValue(request.ownerIndex, context, state)
+    ", 1" -> println
+    "  %v$(request.callIndex -> valueNameId(state)) = call %sollang.task @sollang_file_open_task_start(i64 $allocationSize, ptr %v$(request.callIndex -> valueNameId(state))_file_path, i64 %v$(request.callIndex -> valueNameId(state))_file_path_length, i32 " -> print
+    context.ir[request.callIndex].opcode == typedIr.asyncFileOpenWriteOpcode()
+        -> if { llvmRuntime.asyncFileOpenWriteOperation() -> print } else { llvmRuntime.asyncFileOpenReadOperation() -> print }
+    ", ptr @sollang_task_result_complete_n$(request.callIndex))" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_open_handle = extractvalue %sollang.task %v$(request.callIndex -> valueNameId(state)), 0" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_open_context = extractvalue %sollang.task %v$(request.callIndex -> valueNameId(state)), 1" -> println
+    "  store " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    " zeroinitializer, ptr %v$(request.callIndex -> valueNameId(state))_file_open_context, align $(context.typeAligns[resultType])" -> println
+    "v$(request.callIndex -> valueNameId(state))_file_open" -> emitRuntimeTaskDiagnosticContext("%v$(request.callIndex -> valueNameId(state))_file_open_handle", "%v$(request.callIndex -> valueNameId(state))_file_open_context", resultSize, request.ownerIndex, context, state)
+}
+
+emitAsyncFileBufferCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    request.callIndex -> fileBufferTaskLayout(context, state) => layout
+    request.callIndex -> fileTaskResultType(context) => resultType
+    request.callIndex -> socketCallArgument(0, context, state) => fileIndex
+    request.callIndex -> socketCallArgument(1, context, state) => bufferIndex
+    context.ir[request.callIndex].opcode == typedIr.asyncFileWriteBufferOpcode() => writing
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_source = extractvalue " -> print
+    fileIndex -> writeSocketReceiverType(context, state)
+    " " -> print
+    fileIndex -> writeSocketReceiverValue(request.ownerIndex, context, state)
+    ", 0" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_data = extractvalue " -> print
+    bufferIndex -> writeSocketReceiverType(context, state)
+    " " -> print
+    bufferIndex -> writeSocketReceiverValue(request.ownerIndex, context, state)
+    ", 0" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_length = extractvalue " -> print
+    bufferIndex -> writeSocketReceiverType(context, state)
+    " " -> print
+    bufferIndex -> writeSocketReceiverValue(request.ownerIndex, context, state)
+    ", 1" -> println
+    writing and context.pointerBitWidth == 32 -> if {
+        2 => ordinal!
+        ordinal! <= 3 -> while {
+            "  %v$(request.callIndex -> valueNameId(state))_file_buffer_arg$(ordinal!) = zext i32 " -> print
+            request.callIndex -> socketCallArgument(ordinal!, context, state) -> writeValue(request.ownerIndex, context, state)
+            " to i64" -> println
+            ordinal! + 1 => ordinal!
+        }
+    }
+    "  %v$(request.callIndex -> valueNameId(state)) = call %sollang.task @sollang_file_buffer_task_start(i64 $(layout.size), ptr @sollang_file_buffer_cancel_n$(request.callIndex), ptr @sollang_task_result_complete_n$(request.callIndex), i64 %v$(request.callIndex -> valueNameId(state))_file_buffer_source, ptr %v$(request.callIndex -> valueNameId(state))_file_buffer_data, i64 %v$(request.callIndex -> valueNameId(state))_file_buffer_length, i64 " -> print
+    writing -> if {
+        context.pointerBitWidth == 32 -> if { "%v$(request.callIndex -> valueNameId(state))_file_buffer_arg2" -> print } else {
+            request.callIndex -> socketCallArgument(2, context, state) -> writeValue(request.ownerIndex, context, state)
+        }
+        ", i64 " -> print
+        context.pointerBitWidth == 32 -> if { "%v$(request.callIndex -> valueNameId(state))_file_buffer_arg3" -> print } else {
+            request.callIndex -> socketCallArgument(3, context, state) -> writeValue(request.ownerIndex, context, state)
+        }
+    } else { "0, i64 %v$(request.callIndex -> valueNameId(state))_file_buffer_length" -> print }
+    ", i64 " -> print
+    writing -> if { 4 } else { 2 } => offsetOrdinal
+    request.callIndex -> socketCallArgument(offsetOrdinal, context, state) -> writeValue(request.ownerIndex, context, state)
+    ", i1 " -> print
+    request.callIndex -> socketCallArgument(offsetOrdinal + 1, context, state) -> writeValue(request.ownerIndex, context, state)
+    ", i32 " -> print
+    writing -> if { llvmRuntime.asyncFileWriteBufferOperation() -> print } else { llvmRuntime.asyncFileReadBufferOperation() -> print }
+    ")" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_handle = extractvalue %sollang.task %v$(request.callIndex -> valueNameId(state)), 0" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_context = extractvalue %sollang.task %v$(request.callIndex -> valueNameId(state)), 1" -> println
+    "  store " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    " zeroinitializer, ptr %v$(request.callIndex -> valueNameId(state))_file_buffer_context, align $(context.typeAligns[resultType])" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_file_owner = getelementptr i8, ptr %v$(request.callIndex -> valueNameId(state))_file_buffer_context, i64 $(layout.fileOffset)" -> println
+    "  store " -> print
+    layout.fileType -> writeSemanticTypeId(context, state)
+    " " -> print
+    fileIndex -> writeSocketReceiverValue(request.ownerIndex, context, state)
+    ", ptr %v$(request.callIndex -> valueNameId(state))_file_buffer_file_owner, align $(context.typeAligns[layout.fileType])" -> println
+    "  %v$(request.callIndex -> valueNameId(state))_file_buffer_buffer_owner = getelementptr i8, ptr %v$(request.callIndex -> valueNameId(state))_file_buffer_context, i64 $(layout.bufferOffset)" -> println
+    "  store " -> print
+    layout.bufferType -> writeSemanticTypeId(context, state)
+    " " -> print
+    bufferIndex -> writeSocketReceiverValue(request.ownerIndex, context, state)
+    ", ptr %v$(request.callIndex -> valueNameId(state))_file_buffer_buffer_owner, align $(context.typeAligns[layout.bufferType])" -> println
+    "v$(request.callIndex -> valueNameId(state))_file_buffer" -> emitRuntimeTaskDiagnosticContext("%v$(request.callIndex -> valueNameId(state))_file_buffer_handle", "%v$(request.callIndex -> valueNameId(state))_file_buffer_context", context.typeSizes[resultType], request.ownerIndex, context, state)
+    request.callIndex -> emitCompletedPatternBindingTransferMarks(context, state)
+}
+
 emitAsyncFileScalarCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
     call.typeId < 0 or call.typeId >= (context.types -> len)
@@ -2643,7 +2768,14 @@ emitFileDurabilityCall request: WhileValueRequest, context: ref emitterContext.E
 emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
     call.opcode -> typedIr.isAsyncFileOpcode -> if {
-        request -> emitAsyncFileScalarCall(context, state)
+        call.opcode -> typedIr.isAsyncFileOpenOpcode -> if {
+            request -> emitAsyncFileOpenCall(context, state)
+        } else {
+            call.opcode -> typedIr.isAsyncFileBufferOpcode
+                -> if {
+                    request -> emitAsyncFileBufferCall(context, state)
+                } else { request -> emitAsyncFileScalarCall(context, state) }
+        }
         return
     }
     (call.opcode == -316 or call.opcode == -317 or call.opcode == -318)

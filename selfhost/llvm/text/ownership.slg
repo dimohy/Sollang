@@ -82,6 +82,10 @@ enumMatchOwnsSubject subjectIndex: Int, context: ref emitterContext.EmitContext,
     producerType >= 0 and producerType < (context.types -> len)
         and context.types[producerType].kind == 8
         -> if { false -> return }
+    # Await yields a fresh result owner, independently of the consumed Task.
+    # Ordinary reads keep their existing named or borrowed cleanup authority.
+    producer.kind == 5 and (producerIndex -> isAwaitSourceNode(context))
+        -> if { true -> return }
     producer.kind == 5 and producer.operand0 < 0 -> if {
         producerIndex => functionIndex!
         functionIndex! >= 0 and context.ir[functionIndex!].kind != 0

@@ -1,0 +1,90 @@
+import sys.file as file
+import sys.process as process
+
+bytes: -> [UInt8; ~] {
+    [UInt8; ~] => values!
+    values! -> push(65)
+    values! -> push(66)
+    values!
+}
+
+main {
+    process.arguments() => arguments
+    arguments[1] => path
+    file.openWriteAsync(path) -> await -> when {
+        Result<file.FileWriter, Text>.Ok(writer) {
+            writer -> writeRangeAtAsync(bytes(), 0, 2, 0, false) -> await -> when {
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Ok(success) { "write=$(success.count),$(success.buffer -> len)" -> println }
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Err(failure) { "unexpected-write" -> println }
+            }
+        }
+        Result<file.FileWriter, Text>.Err(error) { "unexpected-open-write" -> println }
+    }
+    file.openReadAsync(path) -> await -> when {
+        Result<file.File, Text>.Ok(reader) {
+            reader -> readIntoAtAsync(bytes(), 0, false) -> await -> when {
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Ok(success) { "read=$(success.count),$(success.buffer[0]),$(success.buffer[1]),$(success.end)" -> println }
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Err(failure) { "unexpected-read" -> println }
+            }
+        }
+        Result<file.File, Text>.Err(error) { "unexpected-open-read" -> println }
+    }
+    file.openRead(path) -> when {
+        Result<file.File, Text>.Ok(reader) {
+            reader -> readIntoAtAsync(bytes(), 2, false) -> await -> when {
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Ok(success) { "eof=$(success.count),$(success.end)" -> println }
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Err(failure) { "unexpected-eof" -> println }
+            }
+        }
+        Result<file.File, Text>.Err(error) { "unexpected-eof-open" -> println }
+    }
+    file.openRead(path) -> when {
+        Result<file.File, Text>.Ok(reader) {
+            [UInt8; ~] => empty
+            reader -> readIntoAtAsync(empty, 0, false) -> await -> when {
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Ok(success) { "empty=$(success.count),$(success.end)" -> println }
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Err(failure) { "unexpected-empty" -> println }
+            }
+        }
+        Result<file.File, Text>.Err(error) { "unexpected-empty-open" -> println }
+    }
+    file.openWrite(path) -> when {
+        Result<file.FileWriter, Text>.Ok(writer) {
+            writer -> writeRangeAtAsync(bytes(), 3, 2, 0, false) -> await -> when {
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Ok(success) { "unexpected-range" -> println }
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Err(failure) {
+                    failure.error -> when {
+                        InvalidRange { "range=$(failure.buffer -> len)" -> println }
+                        else { "unexpected-range-kind" -> println }
+                    }
+                }
+            }
+        }
+        Result<file.FileWriter, Text>.Err(error) { "unexpected-range-open" -> println }
+    }
+    file.openWrite(path) -> when {
+        Result<file.FileWriter, Text>.Ok(writer) {
+            writer -> writeRangeAtAsync(bytes(), 3, 2, 0, true) -> await -> when {
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Ok(success) { "unexpected-cancel-range" -> println }
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Err(failure) {
+                    failure.error -> when {
+                        Cancelled { "cancel-range=$(failure.buffer -> len)" -> println }
+                        else { "unexpected-cancel-range-kind" -> println }
+                    }
+                }
+            }
+        }
+        Result<file.FileWriter, Text>.Err(error) { "unexpected-cancel-range-open" -> println }
+    }
+    file.openRead(path) -> when {
+        Result<file.File, Text>.Ok(reader) {
+            reader -> readIntoAtAsync(bytes(), 0, false) => pending
+            pending -> cancel
+            "cancel-task=true" -> println
+        }
+        Result<file.File, Text>.Err(error) { "unexpected-cancel-task-open" -> println }
+    }
+    file.openReadAsync(path) => pendingOpen
+    pendingOpen -> cancel
+    "cancel-open=true" -> println
+}

@@ -360,6 +360,183 @@ emitCompletedFileWrite namePrefix: Text, resultTypeId: Int, context: ref emitter
     " %$(namePrefix)_file_write_result, ptr %$(namePrefix)_task_context, align 8" -> println
 }
 
+emitFileTaskResultStorage namePrefix: Text, resultType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  %$(namePrefix)_file_result = alloca " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    ", align $(context.typeAligns[resultType])" -> println
+    "  store " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    " zeroinitializer, ptr %$(namePrefix)_file_result, align $(context.typeAligns[resultType])" -> println
+    "  %$(namePrefix)_file_tag = getelementptr " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_result, i32 0, i32 0" -> println
+    "  %$(namePrefix)_file_payload = getelementptr " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_result, i32 0, i32 1" -> println
+}
+
+emitFileTaskResultStore namePrefix: Text, resultType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  %$(namePrefix)_file_result_value = load " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_result, align $(context.typeAligns[resultType])" -> println
+    "  store " -> print
+    resultType -> writeSemanticTypeId(context, state)
+    " %$(namePrefix)_file_result_value, ptr %$(namePrefix)_task_context, align $(context.typeAligns[resultType])" -> println
+}
+
+emitCompletedFileOpen namePrefix: Text, resultType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.types[resultType].first => fileType
+    namePrefix -> emitFileTaskResultStorage(resultType, context, state)
+    "  %$(namePrefix)_file_handle_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 17" -> println
+    "  %$(namePrefix)_file_handle = load i64, ptr %$(namePrefix)_file_handle_slot, align 8" -> println
+    "  %$(namePrefix)_file_ok_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 15" -> println
+    "  %$(namePrefix)_file_ok_value = load i32, ptr %$(namePrefix)_file_ok_slot, align 4" -> println
+    "  %$(namePrefix)_file_ok = icmp ne i32 %$(namePrefix)_file_ok_value, 0" -> println
+    "  %$(namePrefix)_file_ownership_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 19" -> println
+    "  store i32 0, ptr %$(namePrefix)_file_ownership_slot, align 4" -> println
+    "  br i1 %$(namePrefix)_file_ok, label %file_open_$(namePrefix)_ok, label %file_open_$(namePrefix)_error" -> println
+    "file_open_$(namePrefix)_ok:" -> println
+    "  %$(namePrefix)_file_owner = insertvalue " -> print
+    fileType -> writeSemanticTypeId(context, state)
+    " zeroinitializer, i64 %$(namePrefix)_file_handle, 0" -> println
+    "  store " -> print
+    fileType -> writeSemanticTypeId(context, state)
+    " %$(namePrefix)_file_owner, ptr %$(namePrefix)_file_payload, align $(context.typeAligns[fileType])" -> println
+    "  br label %file_open_$(namePrefix)_ready" -> println
+    "file_open_$(namePrefix)_error:" -> println
+    "  store i32 1, ptr %$(namePrefix)_file_tag, align 4" -> println
+    "  %$(namePrefix)_file_error0 = insertvalue %sollang.text zeroinitializer, ptr @sollang_file_error_io, 0" -> println
+    "  %$(namePrefix)_file_error = insertvalue %sollang.text %$(namePrefix)_file_error0, i64 2, 1" -> println
+    "  store %sollang.text %$(namePrefix)_file_error, ptr %$(namePrefix)_file_payload, align 8" -> println
+    "  br label %file_open_$(namePrefix)_ready" -> println
+    "file_open_$(namePrefix)_ready:" -> println
+    namePrefix -> emitFileTaskResultStore(resultType, context, state)
+}
+
+emitFileBufferOwnerLoads namePrefix: Text, producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    producerIndex -> fileBufferTaskLayout(context, state) => layout
+    "  %$(namePrefix)_file_owner_slot = getelementptr i8, ptr %$(namePrefix)_task_context, i64 $(layout.fileOffset)" -> println
+    "  %$(namePrefix)_file_owner = load " -> print
+    layout.fileType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_owner_slot, align $(context.typeAligns[layout.fileType])" -> println
+    "  %$(namePrefix)_buffer_owner_slot = getelementptr i8, ptr %$(namePrefix)_task_context, i64 $(layout.bufferOffset)" -> println
+    "  %$(namePrefix)_buffer_owner = load " -> print
+    layout.bufferType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_buffer_owner_slot, align $(context.typeAligns[layout.bufferType])" -> println
+}
+
+emitFileTaskPayloadField namePrefix: Text, variantName: Text, payloadType: Int, ordinal: Int, fieldType: Int, value: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  %$(namePrefix)_$(variantName)_field$ordinal = getelementptr " -> print
+    payloadType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_payload, i32 0, i32 $ordinal" -> println
+    "  store " -> print
+    fieldType -> writeSemanticTypeId(context, state)
+    " $value, ptr %$(namePrefix)_$(variantName)_field$ordinal, align $(context.typeAligns[fieldType])" -> println
+}
+
+emitCompletedFileBuffer namePrefix: Text, producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    producerIndex -> fileTaskResultType(context) => resultType
+    producerIndex -> fileBufferTaskLayout(context, state) => layout
+    context.types[resultType].first => successType
+    context.types[resultType].second => failureType
+    nominalFieldType(failureType, 2, context) => errorType
+    nominalFieldType(successType, 2, context) => countType
+    namePrefix -> emitFileTaskResultStorage(resultType, context, state)
+    namePrefix -> emitFileBufferOwnerLoads(producerIndex, context, state)
+    "  %$(namePrefix)_file_count_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 14" -> println
+    "  %$(namePrefix)_file_count = load i64, ptr %$(namePrefix)_file_count_slot, align 8" -> println
+    "  %$(namePrefix)_file_ok_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 15" -> println
+    "  %$(namePrefix)_file_ok_value = load i32, ptr %$(namePrefix)_file_ok_slot, align 4" -> println
+    "  %$(namePrefix)_file_ok = icmp ne i32 %$(namePrefix)_file_ok_value, 0" -> println
+    "  br i1 %$(namePrefix)_file_ok, label %file_buffer_$(namePrefix)_ok, label %file_buffer_$(namePrefix)_error" -> println
+    "file_buffer_$(namePrefix)_ok:" -> println
+    namePrefix -> emitFileTaskPayloadField("ok", successType, 0, layout.fileType, "%$(namePrefix)_file_owner", context, state)
+    namePrefix -> emitFileTaskPayloadField("ok", successType, 1, layout.bufferType, "%$(namePrefix)_buffer_owner", context, state)
+    context.pointerBitWidth == 32 -> if {
+        "  %$(namePrefix)_file_count_sized = trunc i64 %$(namePrefix)_file_count to i32" -> println
+        namePrefix -> emitFileTaskPayloadField("ok", successType, 2, countType, "%$(namePrefix)_file_count_sized", context, state)
+    } else { namePrefix -> emitFileTaskPayloadField("ok", successType, 2, countType, "%$(namePrefix)_file_count", context, state) }
+    context.ir[producerIndex].opcode == typedIr.asyncFileReadBufferOpcode()
+        -> if {
+            "  %$(namePrefix)_buffer_length = extractvalue " -> print
+            layout.bufferType -> writeSemanticTypeId(context, state)
+            " %$(namePrefix)_buffer_owner, 1" -> println
+            "  %$(namePrefix)_file_empty = icmp eq i64 %$(namePrefix)_file_count, 0" -> println
+            "  %$(namePrefix)_buffer_nonempty = icmp ne i64 %$(namePrefix)_buffer_length, 0" -> println
+            "  %$(namePrefix)_file_end = and i1 %$(namePrefix)_file_empty, %$(namePrefix)_buffer_nonempty" -> println
+            nominalFieldType(successType, 3, context) => endType
+            namePrefix -> emitFileTaskPayloadField("ok", successType, 3, endType, "%$(namePrefix)_file_end", context, state)
+        }
+    "  br label %file_buffer_$(namePrefix)_ready" -> println
+    "file_buffer_$(namePrefix)_error:" -> println
+    "  store i32 1, ptr %$(namePrefix)_file_tag, align 4" -> println
+    namePrefix -> emitFileTaskPayloadField("error", failureType, 0, layout.fileType, "%$(namePrefix)_file_owner", context, state)
+    namePrefix -> emitFileTaskPayloadField("error", failureType, 1, layout.bufferType, "%$(namePrefix)_buffer_owner", context, state)
+    "  %$(namePrefix)_file_error_slot = alloca " -> print
+    errorType -> writeSemanticTypeId(context, state)
+    ", align $(context.typeAligns[errorType])" -> println
+    "  store " -> print
+    errorType -> writeSemanticTypeId(context, state)
+    " zeroinitializer, ptr %$(namePrefix)_file_error_slot, align $(context.typeAligns[errorType])" -> println
+    "  %$(namePrefix)_file_operation_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 20" -> println
+    "  %$(namePrefix)_file_operation = load i32, ptr %$(namePrefix)_file_operation_slot, align 4" -> println
+    "  %$(namePrefix)_file_cancelled = icmp eq i32 %$(namePrefix)_file_operation, 8" -> println
+    "  %$(namePrefix)_file_invalid_range = icmp eq i32 %$(namePrefix)_file_operation, 7" -> println
+    "  %$(namePrefix)_file_uncancelled_kind = select i1 %$(namePrefix)_file_invalid_range, i32 1, i32 0" -> println
+    "  %$(namePrefix)_file_error_kind = select i1 %$(namePrefix)_file_cancelled, i32 2, i32 %$(namePrefix)_file_uncancelled_kind" -> println
+    "  %$(namePrefix)_file_error_tag = getelementptr " -> print
+    errorType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_error_slot, i32 0, i32 0" -> println
+    "  store i32 %$(namePrefix)_file_error_kind, ptr %$(namePrefix)_file_error_tag, align 4" -> println
+    "  %$(namePrefix)_file_error_io = icmp eq i32 %$(namePrefix)_file_error_kind, 0" -> println
+    "  br i1 %$(namePrefix)_file_error_io, label %file_buffer_$(namePrefix)_io, label %file_buffer_$(namePrefix)_error_ready" -> println
+    "file_buffer_$(namePrefix)_io:" -> println
+    "  %$(namePrefix)_file_error_payload = getelementptr " -> print
+    errorType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_error_slot, i32 0, i32 1" -> println
+    "  %$(namePrefix)_file_io0 = insertvalue %sollang.text zeroinitializer, ptr @sollang_file_error_io, 0" -> println
+    "  %$(namePrefix)_file_io = insertvalue %sollang.text %$(namePrefix)_file_io0, i64 2, 1" -> println
+    "  store %sollang.text %$(namePrefix)_file_io, ptr %$(namePrefix)_file_error_payload, align 8" -> println
+    "  br label %file_buffer_$(namePrefix)_error_ready" -> println
+    "file_buffer_$(namePrefix)_error_ready:" -> println
+    "  %$(namePrefix)_file_error_value = load " -> print
+    errorType -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_error_slot, align $(context.typeAligns[errorType])" -> println
+    namePrefix -> emitFileTaskPayloadField("error", failureType, 2, errorType, "%$(namePrefix)_file_error_value", context, state)
+    "  br label %file_buffer_$(namePrefix)_ready" -> println
+    "file_buffer_$(namePrefix)_ready:" -> println
+    namePrefix -> emitFileTaskResultStore(resultType, context, state)
+}
+
+emitFileBufferCancelFunction producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    producerIndex -> fileBufferTaskLayout(context, state) => layout
+    "define internal void @sollang_file_buffer_cancel_n$producerIndex(ptr %control) {" -> println
+    "entry:" -> println
+    "  %cancel_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
+    "  %cancel_task_context = load ptr, ptr %cancel_context_slot, align 8" -> println
+    "  %cancel_ownership_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 19" -> println
+    "  %cancel_ownership = load i32, ptr %cancel_ownership_slot, align 4" -> println
+    "  %cancel_owns_duplicate = icmp ne i32 %cancel_ownership, 0" -> println
+    "  br i1 %cancel_owns_duplicate, label %close_duplicate, label %drop_owners" -> println
+    "close_duplicate:" -> println
+    "  %cancel_handle_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 17" -> println
+    "  %cancel_handle = load i64, ptr %cancel_handle_slot, align 8" -> println
+    "  call void @sollang_platform_close_owned_file(i64 %cancel_handle)" -> println
+    "  store i32 0, ptr %cancel_ownership_slot, align 4" -> println
+    "  br label %drop_owners" -> println
+    "drop_owners:" -> println
+    "cancel" -> emitFileBufferOwnerLoads(producerIndex, context, state)
+    "  call void @sollang_drop_t$(layout.fileType)(" -> print
+    layout.fileType -> writeSemanticTypeId(context, state)
+    " %cancel_file_owner)" -> println
+    "  call void @sollang_drop_t$(layout.bufferType)(" -> print
+    layout.bufferType -> writeSemanticTypeId(context, state)
+    " %cancel_buffer_owner)" -> println
+    "  call void @sollang_free(ptr %cancel_task_context)" -> println
+    "  ret void" -> println
+    "}" -> println
+}
+
 # Both explicit await and scoped discard join before rebuilding runtime results.
 # Each cleanup edge supplies its own SSA prefix; result storage stays Task-owned.
 emitCompletedRuntimeTaskResult resultIndex: Int, producerIndex: Int, namePrefix: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -367,6 +544,10 @@ emitCompletedRuntimeTaskResult resultIndex: Int, producerIndex: Int, namePrefix:
         -> if { namePrefix -> emitCompletedFileRead(context.ir[resultIndex], context, state) }
     context.ir[producerIndex].opcode == typedIr.asyncFileWriteOpcode()
         -> if { namePrefix -> emitCompletedFileWrite(context.ir[resultIndex].typeId, context, state) }
+    context.ir[producerIndex].opcode -> typedIr.isAsyncFileOpenOpcode
+        -> if { namePrefix -> emitCompletedFileOpen(producerIndex -> fileTaskResultType(context), context, state) }
+    context.ir[producerIndex].opcode -> typedIr.isAsyncFileBufferOpcode
+        -> if { namePrefix -> emitCompletedFileBuffer(producerIndex, context, state) }
     context.ir[producerIndex].opcode -> typedIr.isSocketCompletionDequeueOpcode
         -> if { context.ir[resultIndex].typeId -> emitCompletedSocketDequeue(producerIndex, namePrefix, context, state) }
 }
@@ -401,6 +582,8 @@ emitRuntimeTaskResultCompletionFunctions context: ref emitterContext.EmitContext
                 producerIndex! -> emitCompletedRuntimeTaskResult(producerIndex!, "completed", context, state)
                 "  ret void" -> println
                 "}" -> println
+                producer.opcode -> typedIr.isAsyncFileBufferOpcode
+                    -> if { producerIndex! -> emitFileBufferCancelFunction(context, state) }
             }
         producerIndex! + 1 => producerIndex!
     }

@@ -1,0 +1,47 @@
+define internal i1 @sollang_io_drain_completions() {
+entry:
+%batch = atomicrmw xchg ptr @sollang_io_completion_head, ptr null acq_rel
+%has_batch = icmp ne ptr %batch, null
+br i1 %has_batch, label %clear_signal, label %none
+clear_signal:
+call void @sollang_platform_io_clear_completion()
+br label %reverse
+reverse:
+%current = phi ptr [ %batch, %clear_signal ], [ %next, %reverse_one ]
+%reversed = phi ptr [ null, %clear_signal ], [ %current, %reverse_one ]
+%has_current = icmp ne ptr %current, null
+br i1 %has_current, label %reverse_one, label %drain
+reverse_one:
+%current_next_slot = getelementptr %sollang.task_control, ptr %current, i32 0, i32 16
+%next = load ptr, ptr %current_next_slot, align 8
+store ptr %reversed, ptr %current_next_slot, align 8
+br label %reverse
+drain:
+%control = phi ptr [ %reversed, %reverse ], [ %control_next, %continue ]
+%has_control = icmp ne ptr %control, null
+br i1 %has_control, label %inspect, label %done
+inspect:
+%control_next_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 16
+%control_next = load ptr, ptr %control_next_slot, align 8
+store ptr null, ptr %control_next_slot, align 8
+%phase_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 12
+%phase = load atomic i32, ptr %phase_slot acquire, align 4
+%cancelled = icmp eq i32 %phase, 3
+br i1 %cancelled, label %destroy_cancelled, label %wake
+destroy_cancelled:
+%cancel_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 6
+%cancel = load ptr, ptr %cancel_slot, align 8
+call void %cancel(ptr %control)
+call void @sollang_free(ptr %control)
+br label %continue
+wake:
+call void @sollang_task_enqueue_ready(ptr %control)
+br label %continue
+continue:
+%remaining = atomicrmw sub ptr @sollang_io_outstanding, i64 1 acq_rel
+br label %drain
+done:
+ret i1 true
+none:
+ret i1 false
+}

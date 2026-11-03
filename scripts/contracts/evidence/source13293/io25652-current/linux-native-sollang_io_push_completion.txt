@@ -1,0 +1,13 @@
+define internal void @sollang_io_push_completion(ptr %control) {
+entry:
+%next_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 16
+br label %push
+push:
+%head = load atomic ptr, ptr @sollang_io_completion_head acquire, align 8
+store ptr %head, ptr %next_slot, align 8
+%exchange = cmpxchg ptr @sollang_io_completion_head, ptr %head, ptr %control release monotonic
+%pushed = extractvalue { ptr, i1 } %exchange, 1
+br i1 %pushed, label %done, label %push
+done:
+ret void
+}

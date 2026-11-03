@@ -5,6 +5,117 @@ namespace Sollang.Compiler.Shared;
     "src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs", MultilineText = true, Region = "NativeRuntime")]
 internal static class NativeRuntimePolicy
 {
+    internal const string AsyncFileOpenReadMethod = "openReadAsync";
+    internal const string AsyncFileOpenWriteMethod = "openWriteAsync";
+    internal const string AsyncFileReadBufferMethod = "readIntoAtAsync";
+    internal const string AsyncFileWriteBufferMethod = "writeRangeAtAsync";
+    internal const string AsyncFileOpenReadQualified = "sys.file." + AsyncFileOpenReadMethod;
+    internal const string AsyncFileOpenWriteQualified = "sys.file." + AsyncFileOpenWriteMethod;
+    internal const string AsyncFileReadBufferQualified = "sys.file.File." + AsyncFileReadBufferMethod;
+    internal const string AsyncFileWriteBufferQualified = "sys.file.FileWriter." + AsyncFileWriteBufferMethod;
+
+    public static string AsyncFileOpenReadName() => AsyncFileOpenReadMethod;
+    public static string AsyncFileOpenWriteName() => AsyncFileOpenWriteMethod;
+    public static string AsyncFileReadBufferName() => AsyncFileReadBufferMethod;
+    public static string AsyncFileWriteBufferName() => AsyncFileWriteBufferMethod;
+    public static ulong AsyncFileOpenReadOperation() => 3UL;
+    public static ulong AsyncFileOpenWriteOperation() => 4UL;
+    public static ulong AsyncFileReadBufferOperation() => 5UL;
+    public static ulong AsyncFileWriteBufferOperation() => 6UL;
+
+    public static string AsyncFileOpenTaskStartFunction() =>
+        """
+        define internal %sollang.task @sollang_file_open_task_start(i64 %context_size, ptr %path, i64 %length, i32 %operation, ptr %complete) #0 {
+        entry:
+          %allocation_size = add i64 %context_size, %length
+          %context = call ptr @sollang_alloc(i64 %allocation_size)
+          %allocated = icmp ne ptr %context, null
+          br i1 %allocated, label %initialize, label %allocation_failed
+        allocation_failed:
+          call void @llvm.trap()
+          unreachable
+        initialize:
+          %owned_path = getelementptr i8, ptr %context, i64 %context_size
+          call void @llvm.memcpy.p0.p0.i64(ptr %owned_path, ptr %path, i64 %length, i1 false)
+          %handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @sollang_free, ptr @sollang_file_operation_task_cancel, ptr %context)
+          %started = icmp ne ptr %handle, null
+          br i1 %started, label %ready, label %start_failed
+        start_failed:
+          call void @sollang_free(ptr %context)
+          call void @llvm.trap()
+          unreachable
+        ready:
+          %size_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 11
+          store i32 0, ptr %size_slot, align 4
+          %data_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 13
+          store ptr %owned_path, ptr %data_slot, align 8
+          %file_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 17
+          store i64 -1, ptr %file_slot, align 8
+          %length_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 18
+          store i64 %length, ptr %length_slot, align 8
+          %ownership_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 19
+          store i32 2, ptr %ownership_slot, align 4
+          %operation_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 20
+          store i32 %operation, ptr %operation_slot, align 4
+          %complete_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 22
+          store ptr %complete, ptr %complete_slot, align 8
+          %task0 = insertvalue %sollang.task poison, ptr %handle, 0
+          %task = insertvalue %sollang.task %task0, ptr %context, 1
+          ret %sollang.task %task
+        }
+        """;
+
+    public static string AsyncFileBufferTaskStartFunction() =>
+        """
+        define internal %sollang.task @sollang_file_buffer_task_start(i64 %context_size, ptr %cancel, ptr %complete, i64 %source_handle, ptr %data, i64 %buffer_length, i64 %input_offset, i64 %length, i64 %offset, i1 %cancelled, i32 %requested_operation) #0 {
+        entry:
+          %context = call ptr @sollang_alloc(i64 %context_size)
+          %allocated = icmp ne ptr %context, null
+          br i1 %allocated, label %initialize, label %allocation_failed
+        allocation_failed:
+          call void @llvm.trap()
+          unreachable
+        initialize:
+          %handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @sollang_free, ptr %cancel, ptr %context)
+          %started = icmp ne ptr %handle, null
+          br i1 %started, label %ready, label %start_failed
+        start_failed:
+          call void @sollang_free(ptr %context)
+          call void @llvm.trap()
+          unreachable
+        ready:
+          %offset_in_bounds = icmp ule i64 %input_offset, %buffer_length
+          %remaining = sub i64 %buffer_length, %input_offset
+          %length_in_bounds = icmp ule i64 %length, %remaining
+          %range_valid = and i1 %offset_in_bounds, %length_in_bounds
+          %valid_operation = select i1 %range_valid, i32 %requested_operation, i32 7
+          %operation = select i1 %cancelled, i32 8, i32 %valid_operation
+          %length_fits = icmp ule i64 %length, 2147483647
+          %bounded_length = select i1 %length_fits, i64 %length, i64 2147483647
+          %size = trunc i64 %bounded_length to i32
+          %size_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 11
+          store i32 %size, ptr %size_slot, align 4
+          %pointer = getelementptr i8, ptr %data, i64 %input_offset
+          %pointer_value = ptrtoint ptr %pointer to i64
+          %data_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 13
+          store i64 %pointer_value, ptr %data_slot, align 8
+          %owned_handle = call i64 @sollang_platform_duplicate_owned_file(i64 %source_handle)
+          %file_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 17
+          store i64 %owned_handle, ptr %file_slot, align 8
+          %offset_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 18
+          store i64 %offset, ptr %offset_slot, align 8
+          %ownership_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 19
+          store i32 1, ptr %ownership_slot, align 4
+          %operation_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 20
+          store i32 %operation, ptr %operation_slot, align 4
+          %complete_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 22
+          store ptr %complete, ptr %complete_slot, align 8
+          %task0 = insertvalue %sollang.task poison, ptr %handle, 0
+          %task = insertvalue %sollang.task %task0, ptr %context, 1
+          ret %sollang.task %task
+        }
+        """;
+
     public static string WindowsEntryPoint() => WindowsLinkPolicy.EntryPointName;
     public static string WindowsFloatingPointGlobal() => "@_fltused = global i32 0";
 

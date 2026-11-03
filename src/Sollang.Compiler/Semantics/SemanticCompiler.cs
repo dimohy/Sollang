@@ -3413,7 +3413,7 @@ internal sealed partial class SemanticCompiler
                 "sys.file.File",
                 BoundFunctionKind.RuntimeOpenFile,
                 isAsync: false),
-            "sys.file.openReadAsync" => RequireOpenFileSignature(
+            NativeRuntimePolicy.AsyncFileOpenReadQualified => RequireOpenFileSignature(
                 function,
                 inputType,
                 returnType,
@@ -3427,7 +3427,7 @@ internal sealed partial class SemanticCompiler
                 "sys.file.FileWriter",
                 BoundFunctionKind.RuntimeOpenWriteFile,
                 isAsync: false),
-            "sys.file.openWriteAsync" => RequireOpenFileSignature(
+            NativeRuntimePolicy.AsyncFileOpenWriteQualified => RequireOpenFileSignature(
                 function,
                 inputType,
                 returnType,
@@ -3441,9 +3441,9 @@ internal sealed partial class SemanticCompiler
             "sys.file.removePath" => RequireFilePathStatusSignature(
                 function, inputType, returnType, BoundFunctionKind.RuntimeRemoveFile),
             "sys.file.File.readIntoAt" => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: false),
-            "sys.file.File.readIntoAtAsync" => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: true),
+            NativeRuntimePolicy.AsyncFileReadBufferQualified => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: true),
             "sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: false),
-            "sys.file.FileWriter.writeRangeAtAsync" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: true),
+            NativeRuntimePolicy.AsyncFileWriteBufferQualified => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: true),
             "std.net.socket.Reactor.waitInto" => RequireSocketReactorWaitSignature(function, inputType, returnType),
             "std.net.socket.completionReactor" => RequireSocketCompletionCreateSignature(function, inputType, returnType),
             "std.net.socket.CompletionReactor.registerStream" => RequireSocketCompletionRegisterSignature(function, inputType, returnType),

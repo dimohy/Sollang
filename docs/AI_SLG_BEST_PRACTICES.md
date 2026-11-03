@@ -1718,6 +1718,8 @@ ownership and result emission all observe one join.
 Publish the producer's Task ownership at both the call and its canonical
 same-span source. The joined payload remains a separate value; it must not
 erase the Task fact used to admit an immediate await or cancel consumer.
+An owned enum returned by await is a fresh subject owner. Its selected payload
+keeps the ordinary match-arm cleanup and transfer rules after the Task is joined.
 
 Suspension is structured: live values move into the coroutine frame, owned
 results transfer exactly once, and leaving scope joins or cleans up outstanding
@@ -1940,6 +1942,11 @@ functions follow that same compiled-definition path. Preserve the optional
 file-worker boundary for socket-only IO. Keep the compatibility reader's
 platform ABI adapter separate from its shared worker and use the canonical
 completion-drain declaration in every caller.
+Async file open and owned-buffer calls also share the compiled Task-start
+definitions, intrinsic names and operation values used by C#. Keep typed
+context layout in one adapter shared by setup, completion and cancellation.
+Move both owners into a buffer Task; return them on success or failure, and
+drop them on Task cancellation after the native request stops using them.
 File-path literals use the frozen string-global name selected by the existing
 name table. Keep that identity for both pointer and length operands; an IR
 index is not an emitted global name.

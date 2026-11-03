@@ -4,6 +4,7 @@ import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
+import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.composite_types as compositeTypes
@@ -79,9 +80,7 @@ public isFileRuntimeOpcode opcode: Int -> Bool {
         or opcode == -311
         or opcode == -312
         or (opcode <= -313 and opcode >= -318)
-        or opcode == -319
-        or opcode == -320
-        or opcode == asyncFileWriteOpcode()
+        or (opcode -> isAsyncFileOpcode)
 }
 
 public isFileResultOpcode opcode: Int -> Bool {
@@ -98,7 +97,19 @@ public isAsyncFileReadOpcode opcode: Int -> Bool => opcode == -319 or opcode == 
 
 public asyncFileWriteOpcode: -> Int => -346
 
-public isAsyncFileOpcode opcode: Int -> Bool => (opcode -> isAsyncFileReadOpcode) or opcode == asyncFileWriteOpcode()
+public asyncFileOpenReadOpcode: -> Int => -347
+public asyncFileOpenWriteOpcode: -> Int => -348
+public asyncFileReadBufferOpcode: -> Int => -349
+public asyncFileWriteBufferOpcode: -> Int => -350
+
+public isAsyncFileOpenOpcode opcode: Int -> Bool => opcode == asyncFileOpenReadOpcode() or opcode == asyncFileOpenWriteOpcode()
+
+public isAsyncFileBufferOpcode opcode: Int -> Bool => opcode == asyncFileReadBufferOpcode() or opcode == asyncFileWriteBufferOpcode()
+
+public isAsyncFileOpcode opcode: Int -> Bool {
+    (opcode -> isAsyncFileReadOpcode) or opcode == asyncFileWriteOpcode()
+        or (opcode -> isAsyncFileOpenOpcode) or (opcode -> isAsyncFileBufferOpcode)
+}
 
 # Syntax shape, not provisional semantic availability, decides whether
 # operators exist in Typed IR. Both entry and ordinary-function lowering use
@@ -646,6 +657,14 @@ public isRawArenaMutationOpcode opcode: Int -> Bool {
 
 intrinsicOpcode request: IntrinsicNameRequest -> Int {
     -1 => opcode!
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, llvmRuntime.asyncFileOpenReadName())
+        -> if { asyncFileOpenReadOpcode() => opcode! }
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, llvmRuntime.asyncFileOpenWriteName())
+        -> if { asyncFileOpenWriteOpcode() => opcode! }
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, llvmRuntime.asyncFileReadBufferName())
+        -> if { asyncFileReadBufferOpcode() => opcode! }
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, llvmRuntime.asyncFileWriteBufferName())
+        -> if { asyncFileWriteBufferOpcode() => opcode! }
     request.source -> sourceMatches(request.token.span.start, request.token.span.length, "repeat")
         -> if { repeatOpcode() => opcode! }
     request.source -> sourceMatches(request.token.span.start, request.token.span.length, "append")

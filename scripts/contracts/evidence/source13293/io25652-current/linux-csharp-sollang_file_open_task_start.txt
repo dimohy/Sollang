@@ -1,0 +1,38 @@
+define internal %sollang.task @sollang_file_open_task_start(i64 %context_size, ptr %path, i64 %length, i32 %operation, ptr %complete) {
+entry:
+%allocation_size = add i64 %context_size, %length
+%context = call ptr @sollang_alloc(i64 %allocation_size)
+%allocated = icmp ne ptr %context, null
+br i1 %allocated, label %initialize, label %allocation_failed
+allocation_failed:
+call void @llvm.trap()
+unreachable
+initialize:
+%owned_path = getelementptr i8, ptr %context, i64 %context_size
+call void @llvm.memcpy.p0.p0.i64(ptr %owned_path, ptr %path, i64 %length, i1 false)
+%handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @sollang_free, ptr @sollang_file_operation_task_cancel, ptr %context)
+%started = icmp ne ptr %handle, null
+br i1 %started, label %ready, label %start_failed
+start_failed:
+call void @sollang_free(ptr %context)
+call void @llvm.trap()
+unreachable
+ready:
+%size_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 11
+store i32 0, ptr %size_slot, align 4
+%data_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 13
+store ptr %owned_path, ptr %data_slot, align 8
+%file_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 17
+store i64 -1, ptr %file_slot, align 8
+%length_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 18
+store i64 %length, ptr %length_slot, align 8
+%ownership_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 19
+store i32 2, ptr %ownership_slot, align 4
+%operation_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 20
+store i32 %operation, ptr %operation_slot, align 4
+%complete_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 22
+store ptr %complete, ptr %complete_slot, align 8
+%task0 = insertvalue %sollang.task poison, ptr %handle, 0
+%task = insertvalue %sollang.task %task0, ptr %context, 1
+ret %sollang.task %task
+}
