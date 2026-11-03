@@ -456,9 +456,61 @@ def declared_input_paths(output: Path) -> set[str]:
     return paths
 
 
+def msbuild_cache_roots(repo: Path, output: Path) -> set[Path]:
+    """Attribute obj caches to a completed build of a pinned project input."""
+    record_path = output / 'result.json'
+    if not record_path.is_file():
+        return set()
+    record = json.loads(record_path.read_text(encoding='utf-8-sig'))
+    if not isinstance(record, dict) or not completed(record) or record.get('processesStopped') is not True:
+        return set()
+    processes = record.get('processes', [])
+    if not isinstance(processes, list):
+        return set()
+    hashes = {}
+    for key in ('inputHashesStart', 'inputHashes'):
+        values = record.get(key)
+        if isinstance(values, dict):
+            hashes.update({str(Path(p).resolve()).casefold(): h for p, h in values.items()
+                           if isinstance(p, str) and Path(p).is_absolute()})
+    roots = set()
+    for process in processes:
+        if not isinstance(process, dict):
+            continue
+        args = process.get('command')
+        if (not isinstance(args, list) or len(args) < 3 or not all(isinstance(arg, str) for arg in args)
+                or Path(args[0]).name.casefold() not in ('dotnet', 'dotnet.exe') or args[1] != 'build'
+                or type(process.get('exit')) is not int or process['exit'] != 0
+                or process.get('shutdownConfirmed') is not True):
+            continue
+        projects = [arg for arg in args[2:] if not arg.startswith('-') and arg.casefold().endswith('.csproj')]
+        if len(projects) != 1:
+            continue
+        project = (repo / projects[0]).resolve()
+        expected = hashes.get(str(project).casefold())
+        if (not isinstance(expected, str) or re.fullmatch(r'[0-9a-fA-F]{64}', expected) is None
+                or not project.is_file() or hashlib.sha256(project.read_bytes()).hexdigest().casefold() != expected.casefold()):
+            continue
+        artifact_options = [i for i, arg in enumerate(args) if arg == '--artifacts-path']
+        if artifact_options:
+            if len(artifact_options) != 1 or artifact_options[0] + 1 >= len(args):
+                continue
+            cache = (repo / args[artifact_options[0] + 1] / 'obj').resolve()
+        else:
+            cache = (project.parent / 'obj').resolve()
+        if cache.is_relative_to(output.resolve()) and cache != output.resolve():
+            roots.add(cache)
+    return roots
+
+
+def is_msbuild_cache(path: Path, roots: set[Path]) -> bool:
+    return path.suffix.casefold() == '.cache' and any(path.resolve().is_relative_to(root) for root in roots)
+
+
 def generated_targets(repo: Path, directory: Path, preserve_compiler: bool) -> list[dict]:
     targets = []
     inputs = declared_input_paths(directory)
+    msbuild_roots = msbuild_cache_roots(repo, directory)
     stack = [directory]
     while stack:
         parent = stack.pop()
@@ -479,7 +531,7 @@ def generated_targets(repo: Path, directory: Path, preserve_compiler: bool) -> l
                     raise ValueError('ARTIFACT_HARDLINK_SHARED')
                 if str(path.resolve()).casefold() in inputs:
                     continue
-                in_cache = '.sollang-cache' in path.parts
+                in_cache = '.sollang-cache' in path.parts or is_msbuild_cache(path, msbuild_roots)
                 if path.suffix.lower() in load_policy()['preservedExtensions']:
                     continue
                 if not in_cache and not GENERATED.search(entry.name):
@@ -2163,6 +2215,7 @@ def validate_plan(plan: dict) -> None:
     if plan['files'] != len(plan['targets']) or plan['logicalBytes'] != sum(x['bytes'] for x in plan['targets']):
         raise ValueError('ARTIFACT_PLAN_COUNTS_INVALID')
     input_fixtures = {name: declared_input_paths(output) for name, output in outputs.items()}
+    msbuild_roots = {name: msbuild_cache_roots(repo, output) for name, output in outputs.items()}
     for target in plan['targets']:
         path = assert_artifact_path(repo, Path(target['path']))
         output = outputs.get(target['output'])
@@ -2176,7 +2229,7 @@ def validate_plan(plan: dict) -> None:
             raise ValueError('ARTIFACT_TERMINAL_OUTPUT_PROTECTED')
         if json.loads((output / 'result.json').read_text(encoding='utf-8-sig')).get('pendingConsumerProtection') and not any(part.endswith('.slg-tmp') for part in path.parts) and not any(row['output'] == str(output) and row['disposition'] == 'consumer-retired' for row in plan['completionRecords']):
             raise ValueError('ARTIFACT_PENDING_CONSUMER_PROTECTED')
-        in_cache = '.sollang-cache' in path.parts
+        in_cache = '.sollang-cache' in path.parts or is_msbuild_cache(path, msbuild_roots[str(output)])
         if path.suffix.lower() in load_policy()['preservedExtensions'] or (not in_cache and not GENERATED.search(path.name)):
             raise ValueError('ARTIFACT_TARGET_NOT_GENERATED')
         if str(output) in protected and (path == output / 'compiler.exe' or in_cache):

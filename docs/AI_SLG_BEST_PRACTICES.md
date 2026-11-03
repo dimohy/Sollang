@@ -2198,6 +2198,13 @@ Initial files pinned in a result's input hashes remain input fixtures even when
 their extension is `.ll` or `.bc`. The cleanup planner and executor must protect
 them while removing newly produced intermediates.
 
+For dedicated .NET probes, pin the project file and record the exact `dotnet
+build` command, successful exit, and confirmed process shutdown. MSBuild
+`.cache` files qualify for common cleanup only inside that project's owned
+`obj` directory or an explicit `--artifacts-path` `obj` directory within the
+verified output. Unproven caches, declared inputs, and caches outside that
+output remain protected; a directory name alone does not establish ownership.
+
 For a long-running focused step, use the common `VerificationExecution` runner
 with an explicit `SlowStepDiagnostics` plan. Set the stage, soft time limit,
 unchanged hard timeout, sampling interval, and sample budget before launching.
