@@ -1528,7 +1528,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(waitedLabel);
         if (task.RuntimeFunction is null)
         {
-            var completionSlot = TaskControlField(task.HandleName, 22, "erased_task_completion_slot");
+            var completionSlot = TaskControlField(task.HandleName, (int)NativeRuntimePolicy.TaskResultCompletionField(), "erased_task_completion_slot");
             var completion = NextTemp("erased_task_completion");
             EmitLoad(completion, "ptr", completionSlot, 8);
             var needsCompletion = NextTemp("erased_task_needs_completion");
@@ -1551,7 +1551,7 @@ internal sealed partial class LlvmEmitter
         if (task.RuntimeFunction is null)
         {
             resultAddress = NextTemp("erased_task_result_address");
-            EmitLoad(resultAddress, "ptr", TaskControlField(task.HandleName, 21, "erased_task_result_slot"), 8);
+            EmitLoad(resultAddress, "ptr", TaskControlField(task.HandleName, (int)NativeRuntimePolicy.TaskResultAddressField(), "erased_task_result_slot"), 8);
         }
         else
         {
@@ -1615,11 +1615,11 @@ internal sealed partial class LlvmEmitter
         string handle, string context, BoundType? inputType, BoundType resultType, BoundFunction? function)
     {
         var result = AsyncContextField(context, inputType, resultType, AsyncResultField, "task_stored_result_address");
-        EmitStore("ptr", result, TaskControlField(handle, 21, "task_stored_result_slot"), 8);
+        EmitStore("ptr", result, TaskControlField(handle, (int)NativeRuntimePolicy.TaskResultAddressField(), "task_stored_result_slot"), 8);
         var completion = function is not null && HasDeferredTaskResult(function)
             ? $"@{TaskResultCompletionSymbol(function)}"
             : "null";
-        EmitStore("ptr", completion, TaskControlField(handle, 22, "task_stored_completion_slot"), 8);
+        EmitStore("ptr", completion, TaskControlField(handle, (int)NativeRuntimePolicy.TaskResultCompletionField(), "task_stored_completion_slot"), 8);
     }
 
     private static bool HasDeferredTaskResult(BoundFunction function) => function.Kind is

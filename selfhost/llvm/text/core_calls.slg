@@ -165,7 +165,7 @@ emitScopedTaskDrop bindingIndex: Int, ownerIndex: Int, regionIndex: Int, beforeA
         -> if {
             "  %scope_task$(edgeIndex)_$(bindingIndex)_result = load " -> print
             producer.typeId -> writeSemanticTypeId(context, state)
-            ", ptr %scope_task$(edgeIndex)_$(bindingIndex)_task_context, align " -> print
+            ", ptr %scope_task$(edgeIndex)_$(bindingIndex)_task_result_address, align " -> print
             producer -> storageAlign(context, state) -> writeDecimalLine
             "  call void @sollang_drop_t$(producer.typeId)(" -> print
             producer.typeId -> writeSemanticTypeId(context, state)
@@ -317,7 +317,7 @@ emitCompletedFileRead namePrefix: Text, awaited: typedIr.TypedIrNode, context: r
     ", ptr %$(namePrefix)_file_result_slot, align 8" -> println
     "  store " -> print
     awaited.typeId -> writeSemanticTypeId(context, state)
-    " %$(namePrefix)_file_result, ptr %$(namePrefix)_task_context, align 8" -> println
+    " %$(namePrefix)_file_result, ptr %$(namePrefix)_task_result_address, align 8" -> println
 }
 
 # Scalar writes succeed only after the worker reports a full transfer.
@@ -357,7 +357,7 @@ emitCompletedFileWrite namePrefix: Text, resultTypeId: Int, context: ref emitter
     ", ptr %$(namePrefix)_file_write_result_slot, align 8" -> println
     "  store " -> print
     resultTypeId -> writeSemanticTypeId(context, state)
-    " %$(namePrefix)_file_write_result, ptr %$(namePrefix)_task_context, align 8" -> println
+    " %$(namePrefix)_file_write_result, ptr %$(namePrefix)_task_result_address, align 8" -> println
 }
 
 emitFileTaskResultStorage namePrefix: Text, resultType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -381,7 +381,7 @@ emitFileTaskResultStore namePrefix: Text, resultType: Int, context: ref emitterC
     ", ptr %$(namePrefix)_file_result, align $(context.typeAligns[resultType])" -> println
     "  store " -> print
     resultType -> writeSemanticTypeId(context, state)
-    " %$(namePrefix)_file_result_value, ptr %$(namePrefix)_task_context, align $(context.typeAligns[resultType])" -> println
+    " %$(namePrefix)_file_result_value, ptr %$(namePrefix)_task_result_address, align $(context.typeAligns[resultType])" -> println
 }
 
 emitCompletedFileOpen namePrefix: Text, resultType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -554,8 +554,13 @@ emitCompletedRuntimeTaskResult resultIndex: Int, producerIndex: Int, namePrefix:
 
 # Result adapters travel with the Task control, including erased aggregate fields.
 # Storage preserves async scheduling; normalization runs only after a successful join.
+emitTaskResultAddress namePrefix: Text -> Unit uses Console {
+    "  %$(namePrefix)_result_address_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 $(llvmRuntime.taskResultAddressField())" -> println
+    "  %$(namePrefix)_task_result_address = load ptr, ptr %$(namePrefix)_result_address_slot, align 8" -> println
+}
+
 emitJoinedTaskResultCompletion namePrefix: Text -> Unit uses Console {
-    "  %$(namePrefix)_completion_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 22" -> println
+    "  %$(namePrefix)_completion_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 $(llvmRuntime.taskResultCompletionField())" -> println
     "  %$(namePrefix)_completion = load ptr, ptr %$(namePrefix)_completion_slot, align 8" -> println
     "  %$(namePrefix)_needs_completion = icmp ne ptr %$(namePrefix)_completion, null" -> println
     "  br i1 %$(namePrefix)_needs_completion, label %task_result_$(namePrefix)_complete, label %task_result_$(namePrefix)_ready" -> println
@@ -564,6 +569,7 @@ emitJoinedTaskResultCompletion namePrefix: Text -> Unit uses Console {
     "  store ptr null, ptr %$(namePrefix)_completion_slot, align 8" -> println
     "  br label %task_result_$(namePrefix)_ready" -> println
     "task_result_$(namePrefix)_ready:" -> println
+    namePrefix -> emitTaskResultAddress
 }
 
 emitRuntimeTaskResultCompletionFunctions context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -579,6 +585,7 @@ emitRuntimeTaskResultCompletionFunctions context: ref emitterContext.EmitContext
                 "  %completed_task_handle = getelementptr i8, ptr %control, i64 0" -> println
                 "  %completed_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
                 "  %completed_task_context = load ptr, ptr %completed_context_slot, align 8" -> println
+                "completed" -> emitTaskResultAddress
                 producerIndex! -> emitCompletedRuntimeTaskResult(producerIndex!, "completed", context, state)
                 "  ret void" -> println
                 "}" -> println
@@ -612,7 +619,7 @@ emitAwaitTaskValue nodeIndex: Int, context: ref emitterContext.EmitContext, stat
                     nodeIndex -> writeMemberStorageValueName(context, state)
                     " = load " -> print
                     awaited.typeId -> writeSemanticTypeId(context, state)
-                    ", ptr %v$(nodeIndex -> valueNameId(state))_task_context, align " -> print
+                    ", ptr %v$(nodeIndex -> valueNameId(state))_task_result_address, align " -> print
                     awaited -> storageAlign(context, state) -> writeDecimalLine
                     awaited -> boundedArrayValueTypeId(context, state) => awaitedBoundedType
                     "v$(nodeIndex -> valueNameId(state))" -> emitStoredBoundedValueHandle(awaitedBoundedType, context, state)

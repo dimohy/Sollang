@@ -5,6 +5,9 @@ namespace Sollang.Compiler.Shared;
     "src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs", MultilineText = true, Region = "NativeRuntime")]
 internal static class NativeRuntimePolicy
 {
+    public static ulong TaskResultAddressField() => 21UL;
+    public static ulong TaskResultCompletionField() => 22UL;
+
     internal const string AsyncFileOpenReadMethod = "openReadAsync";
     internal const string AsyncFileOpenWriteMethod = "openWriteAsync";
     internal const string AsyncFileReadBufferMethod = "readIntoAtAsync";
