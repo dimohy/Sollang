@@ -13,6 +13,10 @@ internal static class BuiltinTypeDefinitions
 
     public static Dictionary<string, TypeId> PredefinedTypeNames() => new(PredefinedNames, StringComparer.Ordinal);
 
+    public static Dictionary<TypeId, TypeId> PredeclaredTasks() =>
+        ReadTypeBindings(Shared.TypeNamePolicy.PredeclaredTaskBindings())
+            .ToDictionary(pair => IdentityNames[pair.Key], pair => pair.Value);
+
     public static TypeId? IntrinsicNominal(string name, bool enumeration) =>
         (enumeration ? IntrinsicEnums : IntrinsicStructs).TryGetValue(name, out var type) ? type : null;
 

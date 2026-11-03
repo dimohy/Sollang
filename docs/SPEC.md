@@ -1151,6 +1151,12 @@ parameter base likewise use the declared enum identities, preserving shape
 geometry, interning order and parameter ordinals. The `TypeId` declaration also
 supplies reference identity names and values to the self-host compiler through
 the compiled-policy exporter.
+Predeclared task identities come from a compiled binding catalog shared by the
+managed type-table constructor and self-host prepared registration. The initial
+`Task<Int>` shape reuses `TaskInt`, including repeated and nested task roots,
+without advancing the synthetic allocation counter. Unreserved payload types
+and distinct stream kinds retain ordinary ordered interning. The catalog names
+enum members rather than copying their numeric identities.
 Identity enum projections require nonnegative `Int32` members without flags
 semantics; aliases retain their input values and use the compiled enum's
 canonical name on output. Unknown values retain numeric identity diagnostics,

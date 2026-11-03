@@ -22,6 +22,8 @@ internal static class TypeNamePolicy
     public static string PredefinedTypeBindings() =>
         "Unit:Unit|Text:Text|Int:Int|Int8:Int8|Int16:Int16|Int:Int32|Int64:Int64|Int64:Long|UInt8:UInt8|UInt16:UInt16|UInt32:UInt32|UInt64:UInt64|Size:Size|UIntSize:UIntSize|CodePoint:CodePoint|Range:Range|Range:std.sequence.Range|Arena:Arena|SourceText:SourceText|Arguments:Arguments|MappedBytes:MappedBytes|MutableMappedBytes:MutableMappedBytes|Float32:Float|Float32:Float32|Float64:Float64|Float64:Double|Bool:Bool|IntSlice:[Int]|DynamicIntArray:[Int; ~]|IntDictionary:{Int: Int}|DynamicUInt8Array:[UInt8; ~]";
 
+    public static string PredeclaredTaskBindings() => "TaskInt:Int";
+
     public static string OptionVariantNames() => "None|Some";
     public static string ResultVariantNames() => "Ok|Err";
     public static string RuntimeResultAliasNames() => "sys.directory.RawResult|sys.directory.ReadResult";

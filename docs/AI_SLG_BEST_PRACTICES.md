@@ -1881,6 +1881,11 @@ that catalog and the generated enum projection. Keep parser builtin vocabulary
 and SLG semantic symbol coordinates distinct from C# `TypeId` values. Runtime
 alias identities and the generic-parameter base use enum member lookups; retain
 their shape geometry, ordering and generic ordinals.
+Predeclared task bindings use a compiled `TaskEnumMember:ValueEnumMember`
+catalog. Both the C# type-table constructor and SLG prepared registration
+reserve those shapes before allocating task roots. Repeated and nested tasks
+reuse their canonical value identities; an unreserved payload retains normal
+allocation order. Do not copy a task ID or omit its reservation in SLG.
 Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate

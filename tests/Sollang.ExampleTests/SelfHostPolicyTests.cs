@@ -8,7 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
-        const int expectedTestCount = 71;
+        const int expectedTestCount = 74;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -104,6 +104,18 @@ internal static class SelfHostPolicyTests
                 && Convert.ToInt32(independent["Long"]) == Convert.ToInt32(independent["Int64"])
                 && Convert.ToInt32(independent["Float"]) == Convert.ToInt32(independent["Float32"])
                 && Convert.ToInt32(independent["Double"]) == Convert.ToInt32(independent["Float64"]));
+            var table = CreateTypeTable(compiler);
+            var tableType = table.GetType();
+            var taskFactory = tableType.GetMethod("GetOrAddTask")!;
+            var intType = Enum.Parse(typeId, "Int");
+            var taskType = taskFactory.Invoke(table, [intType])!;
+            Check("task-predeclared-identity", taskType.Equals(Enum.Parse(typeId, "TaskInt")));
+            Check("task-repeat-does-not-allocate", taskFactory.Invoke(table, [intType])!.Equals(taskType)
+                && Convert.ToInt32(tableType.GetMethod("GetOrAddTask")!.Invoke(table, [Enum.Parse(typeId, "Int64")]))
+                    == Convert.ToInt32(tableType.GetMethod("GetOrAddTask")!.Invoke(CreateTypeTable(compiler), [Enum.Parse(typeId, "Int64")])));
+            var inverse = new object?[] { taskType, null };
+            Check("task-predeclared-inverse", (bool)tableType.GetMethod("TryGetTaskValue")!.Invoke(table, inverse)!
+                && intType.Equals(inverse[1]));
             var actual = compiler.GetType("Sollang.Compiler.Shared.BorrowedTextReturnPolicy", true)!
                 .GetMethod("RequiresOriginCheck", BindingFlags.Public | BindingFlags.Static)!;
             var original = Emit(actual);
@@ -273,6 +285,20 @@ internal static class SelfHostPolicyTests
         return failure is null ? 0 : 1;
     }
 
+    private static object CreateTypeTable(Assembly compiler)
+    {
+        var constructor = compiler.GetType("Sollang.Compiler.Semantics.TypeDefinitionTable", true)!.GetConstructors().Single();
+        var parameters = constructor.GetParameters();
+        if (parameters.Length != 9 || parameters[5].Name != "pointerSize")
+            throw new InvalidOperationException("TypeDefinitionTable constructor contract changed.");
+        var arguments = new object?[parameters.Length];
+        for (var index = 0; index < 5; index++)
+            arguments[index] = Activator.CreateInstance(typeof(Dictionary<,>)
+                .MakeGenericType(parameters[index].ParameterType.GetGenericArguments()));
+        arguments[5] = 8;
+        return constructor.Invoke(arguments);
+    }
+
     private static string WriteRuntimeProbe(Assembly compiler, string root, string directory)
     {
         var source = new System.Text.StringBuilder();
@@ -294,6 +320,33 @@ internal static class SelfHostPolicyTests
             dependencies.Add(Path.Combine(root, (string)attribute.ConstructorArguments[1].Value!));
         }
         dependencies.Add(Path.Combine(root, "selfhost/semantic/type_name_policy.slg"));
+        dependencies.Add(Path.Combine(root, "selfhost/semantic/reference_synthetic_type_ids.slg"));
+        source.Append("import sollang.compiler.semantic.reference_synthetic_type_ids as synthetic\n");
+        source.Append("""
+
+taskRegistrationValue index: Int -> Int {
+    [
+    synthetic.Recipe { kind: synthetic.Kind.Named, first: -1, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Named, first: -1, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Task, first: 0, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Task, first: 1, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Dynamic, first: 3, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Task, first: 0, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Stream, first: 0, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.EventStream, first: 0, second: -1, length: 0 },
+    synthetic.Recipe { kind: synthetic.Kind.Task, first: 2, second: -1, length: 0 }; ~] => recipes
+    [referenceIds.enumValue("Int"), referenceIds.enumValue("Int64"), -1, -1, -1, -1, -1, -1, -1; ~] => seeds
+    seeds -> synthetic.predeclaredTasks => aliases
+    [2, 3, 4, 5, 6, 7, 8; ~] => roots
+    recipes -> synthetic.register(seeds, aliases, roots, referenceIds.enumValue("FirstUserDefined") + 1) -> when {
+        Err(_) { -1 }
+        Ok(registered) {
+            index < 7 -> if { registered.ids[index + 2] } else { registered.nextTypeId }
+        }
+    }
+}
+
+""");
         source.Append("\nmain {\n");
         for (var index = 0; index < types.Length; index++)
         {
@@ -486,6 +539,33 @@ internal static class SelfHostPolicyTests
             AppendValue("BuiltinTypeDefinitions.Predefined:" + name,
                 "referenceIds.enumValue(typeNames.builtinEnumName(\"" + name + "\"))",
                 value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        var taskTable = CreateTypeTable(compiler);
+        var taskMethod = taskTable.GetType().GetMethod("GetOrAddTask")!;
+        var taskIdType = compiler.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+        object Task(string name) => taskMethod.Invoke(taskTable, [Enum.Parse(taskIdType, name)])!;
+        var intTask = Task("Int");
+        var longTask = Task("Int64");
+        var taskSequence = new[] {
+            intTask, longTask,
+            taskTable.GetType().GetMethod("GetOrAddDynamicArray")!.Invoke(taskTable, [longTask])!,
+            Task("Int"),
+            taskTable.GetType().GetMethod("GetOrAddStream")!.Invoke(taskTable, [Enum.Parse(taskIdType, "Int")])!,
+            taskTable.GetType().GetMethod("GetOrAddEventStream")!.Invoke(taskTable, [Enum.Parse(taskIdType, "Int")])!,
+            taskMethod.Invoke(taskTable, [intTask])!, Task("Bool")
+        };
+        for (var index = 0; index < taskSequence.Length; index++)
+            AppendValue("TypeDefinitionTable.TaskRegistration:" + index, "taskRegistrationValue(" + index + ")",
+                Convert.ToInt32(taskSequence[index]).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var taskBindings = (System.Collections.IDictionary)compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+            .GetMethod("PredeclaredTasks")!.Invoke(null, null)!;
+        foreach (var name in Enum.GetNames(taskIdType).Concat(["", "int", "IntExtra", "missing"]))
+        {
+            var value = Enum.IsDefined(taskIdType, name) ? Enum.Parse(taskIdType, name) : null;
+            AppendValue("BuiltinTypeDefinitions.PredeclaredTask:" + name,
+                "referenceIds.enumValue(typeNames.taskEnumName(\"" + name + "\"))",
+                (value is not null && taskBindings.Contains(value) ? Convert.ToInt32(taskBindings[value]) : -1)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         void AppendValue(string label, string call, string value)
         {

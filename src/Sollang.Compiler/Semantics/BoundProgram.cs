@@ -601,8 +601,11 @@ internal sealed partial class TypeDefinitionTable
             _resultsByTypes.TryAdd((ok, error), definition.Id);
             _resultTypes.TryAdd(definition.Id, (ok, error));
         }
-        _tasksByValue.Add(TypeId.Int, TypeId.TaskInt);
-        _taskValues.Add(TypeId.TaskInt, TypeId.Int);
+        foreach (var (value, task) in BuiltinTypeDefinitions.PredeclaredTasks())
+        {
+            _tasksByValue.Add(value, task);
+            _taskValues.Add(task, value);
+        }
         _nextParametricTypeId = _names.Values
             .Concat(_boxes.Keys)
             .Concat(_references.Keys)

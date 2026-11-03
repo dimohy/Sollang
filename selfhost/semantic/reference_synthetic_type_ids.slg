@@ -1,5 +1,8 @@
 namespace sollang.compiler.semantic.reference_synthetic_type_ids
 
+import sollang.compiler.semantic.type_name_policy as typeNames
+import sollang.compiler.semantic.reference_type_ids as nominal
+
 # Reference compiler compatibility for ordered synthetic shape interning.
 # Callers retain declaration traversal order and supply nominal/builtin seeds.
 # Product field chains carry exact label identities without allocating TypeIds.
@@ -26,6 +29,19 @@ public struct Identities {
 }
 
 public enum Error { InvalidType, InvalidShape, Cycle, TypeIdOverflow }
+
+public predeclaredTasks values: ref [Int; ~] -> [Shape; ~] {
+    [Shape; ~] => shapes!
+    values -> each value {
+        value >= 0 -> if {
+            nominal.enumName(value) -> typeNames.taskEnumName -> nominal.enumValue => identity
+            identity >= 0 -> if {
+                shapes! -> push(Shape { kind: Kind.Task, first: value, second: -1, length: 0, identity: identity })
+            }
+        }
+    }
+    shapes!
+}
 
 kindKey kind: Kind -> Int => kind -> when {
     Named => 0
