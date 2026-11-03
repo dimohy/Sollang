@@ -94,18 +94,8 @@ internal sealed partial class LlvmEmitter
         $"public library function '{function.Name}' {role} type '{type}' is not ABI-safe; "
         + "use Unit or a fixed-width numeric scalar");
 
-    private static bool IsLibraryAbiType(BoundType type) => type is
-        BoundType.Unit
-        or BoundType.Int8
-        or BoundType.Int16
-        or BoundType.Int
-        or BoundType.Int64
-        or BoundType.UInt8
-        or BoundType.UInt16
-        or BoundType.UInt32
-        or BoundType.UInt64
-        or BoundType.Float32
-        or BoundType.Float64;
+    private static bool IsLibraryAbiType(BoundType type) =>
+        BuiltinTypeDefinitions.LibraryAbiTypeName(type) is not null;
 
     private void EmitLibraryExport(BoundFunction function, string symbol)
     {
@@ -211,19 +201,7 @@ internal sealed partial class LlvmEmitter
             .ToLowerInvariant();
     }
 
-    private static string LibraryAbiTypeName(BoundType type) => type switch
-    {
-        BoundType.Unit => "Unit",
-        BoundType.Int8 => "Int8",
-        BoundType.Int16 => "Int16",
-        BoundType.Int => "Int32",
-        BoundType.Int64 => "Int64",
-        BoundType.UInt8 => "UInt8",
-        BoundType.UInt16 => "UInt16",
-        BoundType.UInt32 => "UInt32",
-        BoundType.UInt64 => "UInt64",
-        BoundType.Float32 => "Float32",
-        BoundType.Float64 => "Float64",
-        _ => throw new SollangException($"type '{type}' is not a fixed-width library ABI type")
-    };
+    private static string LibraryAbiTypeName(BoundType type) =>
+        BuiltinTypeDefinitions.LibraryAbiTypeName(type)
+        ?? throw new SollangException($"type '{type}' is not a fixed-width library ABI type");
 }

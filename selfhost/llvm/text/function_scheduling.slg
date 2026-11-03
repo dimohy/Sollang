@@ -306,6 +306,10 @@ isSourceBindingCapture node: typedIr.TypedIrNode, context: ref emitterContext.Em
 }
 
 isSchedulingValueCapture node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    # Intrinsic calls have the same source evaluation boundary as ordinary
+    # calls. Their checked values must not execute before an earlier control
+    # can return. Only the transparent value-flow wrapper has no evaluation.
+    node.kind == 9 and node.opcode != -1 -> if { true -> return }
     # A source binding snapshots its initializer before the next source unit.
     # This also orders a reused frame slot's last read before later writes.
     # Synthetic role/producer aliases retain their separate scheduling rules.
@@ -992,7 +996,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                                     # become its own earlier-effect barrier.
                                     context.ir[effectAncestor!].kind == 17
                                         or schedulingValueCaptures![effectAncestor! - expressionStart]
-                                        or (((context.ir[effectAncestor!].kind == 6 and not (context.ir[effectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[effectAncestor!] -> typedIr.isConsoleRuntimeCall)) and (scheduleNode.kind == 15 or scheduleNode.kind == 6 or schedulingSuspensions![scheduleCandidate! - expressionStart]))
+                                        or (((context.ir[effectAncestor!].kind == 6 and not (context.ir[effectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[effectAncestor!] -> typedIr.isConsoleRuntimeCall)) and (scheduleNode.kind == 15 or scheduleNode.kind == 6 or schedulingValueCaptures![scheduleCandidate! - expressionStart] or schedulingSuspensions![scheduleCandidate! - expressionStart]))
                                         -> if {
                                             effectAncestor! => effectOrderingIndex!
                                             context.ir[effectAncestor!].parent => effectAncestor!

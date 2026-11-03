@@ -337,10 +337,7 @@ internal static class SollangLibraryManifest
 
     private static void ValidateAbiType(string? type, string function, string role)
     {
-        if (type is null or "Unit"
-            or "Int8" or "Int16" or "Int32" or "Int64"
-            or "UInt8" or "UInt16" or "UInt32" or "UInt64"
-            or "Float32" or "Float64")
+        if (type is null || BuiltinTypeDefinitions.IsLibraryAbiTypeName(type))
         {
             return;
         }

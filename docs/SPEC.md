@@ -1167,6 +1167,11 @@ The compatibility reader retains its platform storage behind the same read ABI;
 socket-only IO does not acquire a file worker merely to share completion logic.
 Platform IO signals and file-worker lifecycle bodies use compiled definition
 groups; file and socket-only shutdown share the IO teardown implementation.
+Public library scalar ABI admission and names share compiled type bindings;
+source declaration spellings retain their own validation and diagnostic order.
+Checked intrinsic values obey the same source evaluation order as ordinary
+call operands; an earlier guard may return before their checks execute.
+Library metadata type spans are checked as bytes before constructing Text.
 Compute pool scheduling and memory output-sink functions share compiled runtime
 definitions. Direct and thread-local callback output remain explicit ABI adapters.
 Async open and owned-buffer Task creation consume the same compiled runtime

@@ -1873,6 +1873,14 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
+Public library ABI type admission and C names use TypeNamePolicy compiled
+bindings in both backends and interface validators. Preserve declared-name
+rejection separately from bound-type naming, including source alias diagnostics.
+Materialized intrinsic calls and their enclosing call operands keep source
+evaluation order across earlier guards, just as ordinary calls do. Transparent
+value-flow wrappers do not create an evaluation boundary.
+Check metadata type spans as bytes before constructing Text; an in-bounds span
+can still split a UTF8 scalar. Keep ordinary metadata rejection on that path.
 Identity enums use the same attribute and generated-region mechanism. The
 exporter reads the compiled enum fields rather than a copied name/number table.
 This representation requires nonnegative `Int32` values, at least one member,

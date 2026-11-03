@@ -3,6 +3,8 @@ namespace sollang.compiler.llvm.text
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.semantic.library_interfaces as libraryInterfaces
+import sollang.compiler.semantic.type_name_policy as typeNamePolicy
+import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.symbols as symbols
@@ -93,22 +95,9 @@ libraryExportRejection kind: LibraryExportErrorKind, functionIndex: Int, paramet
 
 public libraryAbiType node: typedIr.TypedIrNode -> Result<Text, Unit> {
     node.typeKind == 1 and node.typeOrigin == 1 -> if {
-        node.typeSymbol -> when {
-            == 0 { Result<Text, Unit>.Ok("Unit") -> return }
-            == 2 { Result<Text, Unit>.Ok("Int32") -> return }
-            == 3 { Result<Text, Unit>.Ok("Int8") -> return }
-            == 4 { Result<Text, Unit>.Ok("Int16") -> return }
-            == 5 { Result<Text, Unit>.Ok("Int32") -> return }
-            == 6 { Result<Text, Unit>.Ok("Int64") -> return }
-            == 7 { Result<Text, Unit>.Ok("Int64") -> return }
-            == 8 { Result<Text, Unit>.Ok("UInt8") -> return }
-            == 9 { Result<Text, Unit>.Ok("UInt16") -> return }
-            == 10 { Result<Text, Unit>.Ok("UInt32") -> return }
-            == 11 { Result<Text, Unit>.Ok("UInt64") -> return }
-            == 20 { Result<Text, Unit>.Ok("Float32") -> return }
-            == 21 { Result<Text, Unit>.Ok("Float64") -> return }
-            else { }
-        }
+        node.typeSymbol -> typeIds.builtinEnumName => enumName
+        typeNamePolicy.libraryAbiTypeBindings() -> typeNamePolicy.libraryAbiName(enumName) => name
+        name != "" -> if { Result<Text, Unit>.Ok(name) -> return }
     }
     Result<Text, Unit>.Err
 }
@@ -159,9 +148,7 @@ libraryDeclaredType functionIndex: Int, ordinal: Int, context: ref emitterContex
 libraryDeclaredAbiSafe bytes: ref [UInt8; ~] -> Bool {
     bytes -> file.borrowBytes => owner
     owner -> slice(UIntSize(0), owner -> len) => value
-    value == "Unit" or value == "Int8" or value == "Int16" or value == "Int32" or value == "Int64"
-        or value == "UInt8" or value == "UInt16" or value == "UInt32" or value == "UInt64"
-        or value == "Float32" or value == "Float64"
+    value -> typeNamePolicy.libraryAbiDeclaredName
 }
 
 libraryDeclaresEffects functionIndex: Int, context: ref emitterContext.EmitContext -> Bool {
@@ -341,11 +328,10 @@ appendLibraryDeclarationName source: Text, range: analysis.SourceAnalysisRange, 
 }
 
 libraryBoundTypeName node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, mapping: ref Result<referenceSynthetic.Identities, referencePrepared.Error> -> Result<referenceIds.TypeName, Unit> {
-    node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol >= 0 and node.typeSymbol <= 25
-        -> if {
-            ["Unit", "Text", "Int", "Int8", "Int16", "Int", "Int64", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float32", "Float32", "Float64", "Float64", "Bool", "SourceText", "Range"] => names
-            Result<referenceIds.TypeName, Unit>.Ok(referenceIds.TypeName.Named(names[node.typeSymbol])) -> return
-        }
+    node.typeKind == 1 and node.typeOrigin == 1 -> if {
+        node.typeSymbol -> typeIds.builtinEnumName => name
+        name != "" -> if { Result<referenceIds.TypeName, Unit>.Ok(referenceIds.TypeName.Named(name)) -> return }
+    }
     node.typeKind == 1 and node.typeOrigin == 3 -> if {
         context.ranges[node.typeModule] => range
         context.symbols[range.symbolStart + node.typeSymbol] => generic

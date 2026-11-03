@@ -11,6 +11,17 @@ internal static class BuiltinTypeDefinitions
     private static readonly IReadOnlyDictionary<string, TypeId> IntrinsicEnums =
         ReadTypeBindings(Shared.TypeNamePolicy.IntrinsicEnumDefinitions());
 
+    private static readonly IReadOnlyDictionary<TypeId, string> LibraryAbiNames =
+        ReadTypeBindings(Shared.TypeNamePolicy.LibraryAbiTypeBindings())
+            .ToDictionary(pair => pair.Value, pair => pair.Key);
+    private static readonly IReadOnlySet<string> LibraryAbiSpellings =
+        LibraryAbiNames.Values.ToHashSet(StringComparer.Ordinal);
+
+    public static string? LibraryAbiTypeName(TypeId type) =>
+        LibraryAbiNames.GetValueOrDefault(type);
+
+    public static bool IsLibraryAbiTypeName(string name) => LibraryAbiSpellings.Contains(name);
+
     public static Dictionary<string, TypeId> PredefinedTypeNames() => new(PredefinedNames, StringComparer.Ordinal);
 
     public static Dictionary<TypeId, TypeId> PredeclaredTasks() =>

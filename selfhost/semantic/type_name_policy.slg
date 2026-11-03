@@ -32,6 +32,27 @@ public intrinsicEnumName name: Text, enumeration: Bool -> Text {
 
 public builtinEnumName name: Text -> Text { predefinedTypeBindings() -> typeBindingMember(name) }
 
+# The compiled bindings own both semantic identities and public C ABI spellings.
+public libraryAbiName schema: Text, enumName: Text -> Text {
+    UIntSize(0) => start!
+    start! < (schema -> len) -> while {
+        start! => end!
+        end! < (schema -> len) and (schema -> byte(end!)) != '|'
+            -> while { end! + 1 => end! }
+        start! => colon!
+        colon! < end! and (schema -> byte(colon!)) != ':'
+            -> while { colon! + 1 => colon! }
+        colon! < end! and (schema -> slice(start!, colon! - start!)) == enumName
+            -> if { schema -> slice(colon! + 1, end! - colon! - 1) -> return }
+        end! + 1 => start!
+    }
+    ""
+}
+
+public libraryAbiDeclaredName name: Text -> Bool {
+    (libraryAbiTypeBindings() -> typeBindingMember(name)) != ""
+}
+
 public taskEnumName valueEnumName: Text -> Text { predeclaredTaskBindings() -> typeBindingMember(valueEnumName) }
 
 public enum StorageBindingError { InvalidDefinition }

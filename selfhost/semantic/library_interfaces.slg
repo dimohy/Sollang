@@ -1,6 +1,7 @@
 namespace sollang.compiler.semantic.library_interfaces
 
 import sys.file as file
+import sollang.compiler.semantic.type_name_policy as typeNamePolicy
 import std.crypto.sha256 as sha256
 import std.text.json as json
 import std.text.json.error as jsonErrors
@@ -207,12 +208,14 @@ qualifiedMatches source: Text, qualified: MetadataSpan, name: MetadataSpan -> Bo
 }
 
 abiSafe source: Text, span: MetadataSpan -> Bool {
-    (source -> spanIs(span, "Unit"))
-        or (source -> spanIs(span, "Int8")) or (source -> spanIs(span, "Int16"))
-        or (source -> spanIs(span, "Int32")) or (source -> spanIs(span, "Int64"))
-        or (source -> spanIs(span, "UInt8")) or (source -> spanIs(span, "UInt16"))
-        or (source -> spanIs(span, "UInt32")) or (source -> spanIs(span, "UInt64"))
-        or (source -> spanIs(span, "Float32")) or (source -> spanIs(span, "Float64"))
+    # Compiled policy text is ASCII. Reject non-ASCII bytes before making Text;
+    # a structurally valid metadata span can start inside a UTF8 scalar.
+    UIntSize(0) => index!
+    index! < span.length -> while {
+        (source -> byte(span.start + index!)) >= 128 -> if { false -> return }
+        index! + 1 => index!
+    }
+    source -> slice(span.start, span.length) -> typeNamePolicy.libraryAbiDeclaredName
 }
 
 validationIssue status: Int, exportIndex: Int, parameterIndex: Int -> ValidationIssue => ValidationIssue { status: status, exportIndex: exportIndex, parameterIndex: parameterIndex }
