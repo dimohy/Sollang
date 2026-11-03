@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 
 namespace Sollang.Compiler.CodeGen;
 
@@ -142,14 +143,7 @@ internal sealed partial class LlvmEmitter
 
     private string LibraryExportCallArguments(BoundFunction function)
     {
-        var arguments = new List<string>
-        {
-            "ptr null",
-            "ptr null",
-            "ptr null",
-            "ptr null",
-            "ptr null"
-        };
+        var arguments = FunctionRuntimeContext.Arguments(static _ => "null").ToList();
         if (function.InputType is { } inputType)
         {
             arguments.Add($"{LlvmType(inputType)} %it");

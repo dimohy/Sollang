@@ -666,7 +666,7 @@ internal sealed partial class LlvmEmitter
 
     private string ParameterListForFunction(BoundFunction function)
     {
-        var runtimeContext = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters();
+        var runtimeContext = FunctionRuntimeContext.Parameters;
         var parameters = new[]
             {
                 _usesAsyncDiagnostics && function.IsAsync ? "ptr %diagnostic_context" : string.Empty,

@@ -356,14 +356,14 @@ internal sealed partial class LlvmEmitter
         EmitAsyncFunctionContextStore(
             context,
             function,
-            5,
+            AsyncInputField,
             reactorValue.TypeName,
             reactorValue.ValueName,
             RuntimeAlignment(reactor.Type));
         EmitAsyncFunctionContextStore(
             context,
             function,
-            6,
+            AsyncResultField,
             AsyncStorageLlvmType(function.ReturnType),
             "zeroinitializer",
             RuntimeAlignment(function.ReturnType));
@@ -1437,7 +1437,7 @@ internal sealed partial class LlvmEmitter
             reactorAggregate,
             context,
             function,
-            5,
+            AsyncInputField,
             AsyncStorageLlvmType(function.InputType),
             RuntimeAlignment(function.InputType!.Value));
         var reactor = new RuntimeStruct(function.InputType.Value, reactorAggregate);

@@ -54,7 +54,7 @@ internal sealed partial class LlvmEmitter
         var receiverLlvmType = LlvmType(receiverType);
         var inputLlvmType = LlvmType(inputType);
         var parameters = ParameterListForFunction(function);
-        var arguments = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters() + ", "
+        var arguments = FunctionRuntimeContext.Parameters + ", "
             + $"{receiverLlvmType} %it, {inputLlvmType} %arg_0";
 
         EmitStructFunction(function, portableSymbol);

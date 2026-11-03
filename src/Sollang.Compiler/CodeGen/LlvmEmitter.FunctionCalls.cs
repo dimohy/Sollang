@@ -1937,7 +1937,7 @@ internal sealed partial class LlvmEmitter
 
     private string FunctionCallArgumentList(BoundFunction function, RuntimeValue? argument, IReadOnlyList<RuntimeValue>? additionalArguments = null)
     {
-        var runtimeContext = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters();
+        var runtimeContext = FunctionRuntimeContext.Parameters;
         var explicitArguments = string.Join(", ", new[]
             {
                 _usesAsyncDiagnostics && function.IsAsync

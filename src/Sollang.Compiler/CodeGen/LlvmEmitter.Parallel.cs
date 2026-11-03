@@ -1,6 +1,7 @@
 using System.Globalization;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -301,7 +302,9 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine("  %read = load ptr, ptr %read_slot, align 8");
         EmitFunctionLine("  %ok_state_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 10");
         EmitFunctionLine("  %ok_state = load ptr, ptr %ok_state_slot, align 8");
-        EmitFunctionLine($"  %mapped = call {LlvmType(resultType)} {SymbolForFunction(target)}(ptr %stdin, ptr %sink_stdout, ptr %written, ptr %read, ptr %ok_state, {string.Join(", ", captureArguments)})");
+        var runtimeArguments = string.Join(", ", FunctionRuntimeContext.Arguments(
+            static slot => slot == FunctionRuntimeContextSlot.stdout ? "%sink_stdout" : $"%{slot}"));
+        EmitFunctionLine($"  %mapped = call {LlvmType(resultType)} {SymbolForFunction(target)}({runtimeArguments}, {string.Join(", ", captureArguments)})");
         EmitFunctionLine("  %output_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 2");
         EmitFunctionLine("  %output = load ptr, ptr %output_slot, align 8");
         EmitFunctionLine($"  %output_offset = mul i64 %index, {outputSize.ToString(CultureInfo.InvariantCulture)}");

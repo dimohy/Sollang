@@ -1544,7 +1544,7 @@ internal sealed partial class LlvmEmitter
             DiagnosticHeaderName = first.DiagnosticHeaderName is null
                 ? null
                 : AsyncContextField(
-                    context, first.InputType, first.ResultType, 10, "async_phi_task_diagnostic_header")
+                    context, first.InputType, first.ResultType, AsyncAdditionalParameterStart, "async_phi_task_diagnostic_header")
         };
     }
 

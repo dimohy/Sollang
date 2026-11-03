@@ -259,14 +259,14 @@ internal sealed partial class LlvmEmitter
             context,
             null,
             BoundType.Unit,
-            6,
+            AsyncResultField,
             "sleep_result_address");
         EmitStore("i8", "0", resultAddress, 1);
         string? diagnosticHeader = null;
         if (_usesAsyncDiagnostics)
         {
             diagnosticHeader = AsyncContextField(
-                context, null, BoundType.Unit, 10, "sleep_diagnostic_header");
+                context, null, BoundType.Unit, AsyncAdditionalParameterStart, "sleep_diagnostic_header");
             EmitInitializeAsyncDiagnosticHeader(diagnosticHeader, _currentAsyncDiagnosticHeader);
         }
         var handle = NextTemp("sleep_handle");
@@ -1150,12 +1150,12 @@ internal sealed partial class LlvmEmitter
         var context = NextTemp(prefix + "_context");
         EmitAssign(context, $"extractvalue %sollang.task {task}, 1");
         var fileValue = MaterializeAggregateValue(file);
-        EmitAsyncFunctionContextStore(context, function, 5,
+        EmitAsyncFunctionContextStore(context, function, AsyncInputField,
             fileValue.TypeName, fileValue.ValueName, RuntimeAlignment(file.Type));
         var bufferValue = MaterializeAggregateValue(buffer);
-        EmitAsyncFunctionContextStore(context, function, 10,
+        EmitAsyncFunctionContextStore(context, function, AsyncAdditionalParameterStart,
             bufferValue.TypeName, bufferValue.ValueName, RuntimeAlignment(buffer.Type));
-        EmitAsyncFunctionContextStore(context, function, 6,
+        EmitAsyncFunctionContextStore(context, function, AsyncResultField,
             AsyncStorageLlvmType(function.ReturnType), "zeroinitializer",
             RuntimeAlignment(function.ReturnType));
         return CreateRuntimeTask(
@@ -1227,7 +1227,7 @@ internal sealed partial class LlvmEmitter
             fileAggregate,
             context,
             function,
-            5,
+            AsyncInputField,
             AsyncStorageLlvmType(function.InputType),
             RuntimeAlignment(function.InputType!.Value));
         var file = new RuntimeStruct(function.InputType.Value, fileAggregate);
@@ -1237,7 +1237,7 @@ internal sealed partial class LlvmEmitter
             bufferAggregate,
             context,
             function,
-            10,
+            AsyncAdditionalParameterStart,
             AsyncStorageLlvmType(bufferType),
             RuntimeAlignment(bufferType));
         var buffer = (RuntimeDynamicInlineArray)DematerializeAggregateValue(bufferType, bufferAggregate);
