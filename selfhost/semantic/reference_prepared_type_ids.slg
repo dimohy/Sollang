@@ -4,6 +4,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.diagnostics as diagnostics
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_name_policy as typeNames
 import sollang.compiler.semantic.type_registration as registration
 import sollang.compiler.semantic.reference_type_ids as nominal
 import sollang.compiler.semantic.reference_synthetic_type_ids as synthetic
@@ -117,7 +118,7 @@ genericIdentity prepared: ref semanticContext.SemanticSnapshot, module: Int, sym
             -> if { ordinal! + 1 => ordinal! }
         index! + 1 => index!
     }
-    512 + ordinal!
+    nominal.enumValue("GenericParameter") + ordinal!
 }
 
 productLabels prepared: ref semanticContext.SemanticSnapshot, semantic: ref typeIds.SemanticTypeSet -> (components: [Int; ~], fields: [Int; ~]) {
@@ -408,7 +409,6 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
         Err(error) { Result<synthetic.Identities, Error>.Err(Error.Nominal(error)) -> return }
         Ok(boxed) { boxed }
     } => boxed
-    [0, 1, 2, 4, 5, 2, 6, 6, 7, 8, 9, 10, 11, 12, 13, 15, 14, 16, 17, 18, 18, 19, 19, 3, 31, 43] => builtins
     [Int; ~] => seeds!
     [synthetic.Recipe; ~] => recipes!
     prepared -> productLabels(semantic) => labels
@@ -416,8 +416,10 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
     semantic.types -> each type {
         -1 => seed!
         type.kind == 1 -> if {
-            type.origin == 1 and type.symbol >= 0 and type.symbol < (builtins -> len)
-                -> if { builtins[type.symbol] => seed! }
+            type.origin == 1 and type.symbol >= 0 and type.symbol < 26
+                -> if {
+                    typeIds.builtinTypeName(type.symbol) -> typeNames.builtinEnumName -> nominal.enumValue => seed!
+                }
             (type.origin == 0 or type.origin == 2) and type.module >= 0 and type.module < (prepared.package.ranges -> len)
                 -> if {
                     prepared.package.ranges[type.module] => range
@@ -536,16 +538,16 @@ registerCurrent prepared: ref semanticContext.SemanticSnapshot, semantic: ref ty
     # These canonical runtime aliases are reserved by BuildTypeDefinitions
     # before all field roots, and share their IDs with Result annotations.
     [
-    synthetic.Shape { kind: synthetic.Kind.Dictionary, first: 2, second: 2, length: 0, identity: 25 },
-    synthetic.Shape { kind: synthetic.Kind.Slice, first: 2, second: -1, length: 0, identity: 20 },
-    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 2, second: -1, length: 0, identity: 23 },
-    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 7, second: -1, length: 0, identity: 36 },
-    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: 39, second: -1, length: 0, identity: 40 },
-    synthetic.Shape { kind: synthetic.Kind.Fixed, first: 7, second: -1, length: 12, identity: 47 },
-    synthetic.Shape { kind: synthetic.Kind.Fixed, first: 7, second: -1, length: 16, identity: 48 },
-    synthetic.Shape { kind: synthetic.Kind.Fixed, first: 7, second: -1, length: 32, identity: 49 },
-    synthetic.Shape { kind: synthetic.Kind.Result, first: 37, second: 1, length: 0, identity: 41 },
-    synthetic.Shape { kind: synthetic.Kind.Result, first: 40, second: 1, length: 0, identity: 42 }; ~] => aliases
+    synthetic.Shape { kind: synthetic.Kind.Dictionary, first: nominal.enumValue("Int"), second: nominal.enumValue("Int"), length: 0, identity: nominal.enumValue("IntDictionary") },
+    synthetic.Shape { kind: synthetic.Kind.Slice, first: nominal.enumValue("Int"), second: -1, length: 0, identity: nominal.enumValue("IntSlice") },
+    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: nominal.enumValue("Int"), second: -1, length: 0, identity: nominal.enumValue("DynamicIntArray") },
+    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: nominal.enumValue("UInt8"), second: -1, length: 0, identity: nominal.enumValue("DynamicUInt8Array") },
+    synthetic.Shape { kind: synthetic.Kind.Dynamic, first: nominal.enumValue("DirectoryEntry"), second: -1, length: 0, identity: nominal.enumValue("DynamicDirectoryEntryArray") },
+    synthetic.Shape { kind: synthetic.Kind.Fixed, first: nominal.enumValue("UInt8"), second: -1, length: 12, identity: nominal.enumValue("FixedUInt8Array12") },
+    synthetic.Shape { kind: synthetic.Kind.Fixed, first: nominal.enumValue("UInt8"), second: -1, length: 16, identity: nominal.enumValue("FixedUInt8Array16") },
+    synthetic.Shape { kind: synthetic.Kind.Fixed, first: nominal.enumValue("UInt8"), second: -1, length: 32, identity: nominal.enumValue("FixedUInt8Array32") },
+    synthetic.Shape { kind: synthetic.Kind.Result, first: nominal.enumValue("DirectoryRaw"), second: nominal.enumValue("Text"), length: 0, identity: nominal.enumValue("DirectoryRawResult") },
+    synthetic.Shape { kind: synthetic.Kind.Result, first: nominal.enumValue("DynamicDirectoryEntryArray"), second: nominal.enumValue("Text"), length: 0, identity: nominal.enumValue("DirectoryReadResult") }; ~] => aliases
     [Int; ~] => references!
     prepared.package.nodes -> each node { references! -> push(-1) }
     semantic.references -> each reference {

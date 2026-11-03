@@ -1874,6 +1874,13 @@ declaration kind. An intrinsic reuses its declared enum identity without
 advancing the ordinary allocation counter. Keep struct-before-enum traversal
 and ordinary unmatched-name allocation unchanged; do not add compiler-specific
 intrinsic spelling lists.
+The predefined type-name bindings use a separate compiled catalog in the same
+row format. C# creates a fresh mutable name dictionary for each compilation;
+SLG compatibility identities resolve their canonical semantic spelling through
+that catalog and the generated enum projection. Keep parser builtin vocabulary
+and SLG semantic symbol coordinates distinct from C# `TypeId` values. Runtime
+alias identities and the generic-parameter base use enum member lookups; retain
+their shape geometry, ordering and generic ordinals.
 Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate

@@ -1141,7 +1141,14 @@ names share compiled catalogs mapping exact qualified names to `TypeId` member
 names. Registration selects the catalog by declaration kind, retains ordinal
 case-sensitive matching, and reuses an intrinsic identity without advancing
 the ordinary type allocation counter. Unmatched declarations retain their
-normal allocation order. The C# `TypeId` declaration also
+normal allocation order. The predefined-name binding catalog likewise uses
+declared enum identities.
+Each managed compilation receives its own mutable copy of these bindings;
+aliases retain their spelling, order and case-sensitive resolution. Self-host
+compatibility seeding uses the same bindings and generated enum values rather
+than a second numeric type-ID table. Runtime alias identities and the generic
+parameter base likewise use the declared enum identities, preserving shape
+geometry, interning order and parameter ordinals. The `TypeId` declaration also
 supplies reference identity names and values to the self-host compiler through
 the compiled-policy exporter.
 Identity enum projections require nonnegative `Int32` members without flags

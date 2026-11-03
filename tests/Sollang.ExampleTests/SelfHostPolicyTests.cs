@@ -8,7 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
-        const int expectedTestCount = 68;
+        const int expectedTestCount = 71;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -86,6 +86,24 @@ internal static class SelfHostPolicyTests
                     .All(name => intrinsicFactory.Invoke(null, [name, row.Enumeration]) is null))
                 && intrinsicFactory.Invoke(null, ["", false]) is null
                 && intrinsicFactory.Invoke(null, ["missing", true]) is null);
+            var predefinedFactory = compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+                .GetMethod("PredefinedTypeNames", BindingFlags.Public | BindingFlags.Static)!;
+            var predefined = (System.Collections.IDictionary)predefinedFactory.Invoke(null, null)!;
+            var predefinedRows = ((string)namePolicy.GetMethod("PredefinedTypeBindings")!.Invoke(null, null)!)
+                .Split('|').Select(row => row.Split(':', 2)).ToArray();
+            Check("predefined-compiled-bindings-and-order", predefined.Count == predefinedRows.Length
+                && predefined.Keys.Cast<string>().SequenceEqual(predefinedRows.Select(row => row[1]))
+                && predefinedRows.All(row => Convert.ToInt32(predefined[row[1]]) == Convert.ToInt32(Enum.Parse(typeId, row[0]))));
+            predefined["Int"] = Enum.Parse(typeId, "Bool");
+            predefined["__probe__"] = Enum.Parse(typeId, "Int");
+            var independent = (System.Collections.IDictionary)predefinedFactory.Invoke(null, null)!;
+            Check("predefined-compilation-copies-isolated", !independent.Contains("__probe__")
+                && Convert.ToInt32(independent["Int"]) == Convert.ToInt32(Enum.Parse(typeId, "Int")));
+            Check("predefined-alias-and-case-contract", !independent.Contains("int") && !independent.Contains("IntExtra")
+                && Convert.ToInt32(independent["Int32"]) == Convert.ToInt32(independent["Int"])
+                && Convert.ToInt32(independent["Long"]) == Convert.ToInt32(independent["Int64"])
+                && Convert.ToInt32(independent["Float"]) == Convert.ToInt32(independent["Float32"])
+                && Convert.ToInt32(independent["Double"]) == Convert.ToInt32(independent["Float64"]));
             var actual = compiler.GetType("Sollang.Compiler.Shared.BorrowedTextReturnPolicy", true)!
                 .GetMethod("RequiresOriginCheck", BindingFlags.Public | BindingFlags.Static)!;
             var original = Emit(actual);
@@ -457,6 +475,17 @@ internal static class SelfHostPolicyTests
             AppendValue("BuiltinTypeDefinitions.IntrinsicNominal:" + flag + ":" + name,
                 "referenceIds.enumValue(typeNames.intrinsicEnumName(\"" + name + "\", " + flag + "))",
                 (value is null ? -1 : Convert.ToInt32(value)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        var predefinedFactory = compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+            .GetMethod("PredefinedTypeNames", BindingFlags.Public | BindingFlags.Static)!;
+        var predefined = (System.Collections.IDictionary)predefinedFactory.Invoke(null, null)!;
+        foreach (var name in predefined.Keys.Cast<string>().SelectMany(name =>
+                new[] { name, name + "Extra", name.ToLowerInvariant() }).Concat(["", "missing"]).Distinct(StringComparer.Ordinal))
+        {
+            var value = predefined.Contains(name) ? Convert.ToInt32(predefined[name]) : -1;
+            AppendValue("BuiltinTypeDefinitions.Predefined:" + name,
+                "referenceIds.enumValue(typeNames.builtinEnumName(\"" + name + "\"))",
+                value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         void AppendValue(string label, string call, string value)
         {

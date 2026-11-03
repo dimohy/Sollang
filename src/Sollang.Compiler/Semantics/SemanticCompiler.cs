@@ -15505,40 +15505,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlyList<StructDeclaration> structDeclarations,
         IReadOnlyList<EnumDeclaration> enumDeclarations)
     {
-        var names = new Dictionary<string, TypeId>(StringComparer.Ordinal)
-        {
-            ["Unit"] = BoundType.Unit,
-            ["Text"] = BoundType.Text,
-            ["Int"] = BoundType.Int,
-            ["Int8"] = BoundType.Int8,
-            ["Int16"] = BoundType.Int16,
-            ["Int32"] = BoundType.Int,
-            ["Int64"] = BoundType.Int64,
-            ["Long"] = BoundType.Int64,
-            ["UInt8"] = BoundType.UInt8,
-            ["UInt16"] = BoundType.UInt16,
-            ["UInt32"] = BoundType.UInt32,
-            ["UInt64"] = BoundType.UInt64,
-            ["Size"] = BoundType.Size,
-            ["UIntSize"] = BoundType.UIntSize,
-            ["CodePoint"] = BoundType.CodePoint,
-            ["Range"] = BoundType.Range,
-            ["std.sequence.Range"] = BoundType.Range,
-            ["Arena"] = BoundType.Arena,
-            ["SourceText"] = BoundType.SourceText,
-            ["Arguments"] = BoundType.Arguments,
-            ["MappedBytes"] = BoundType.MappedBytes,
-            ["MutableMappedBytes"] = BoundType.MutableMappedBytes,
-            ["Float"] = BoundType.Float32,
-            ["Float32"] = BoundType.Float32,
-            ["Float64"] = BoundType.Float64,
-            ["Double"] = BoundType.Float64,
-            ["Bool"] = BoundType.Bool,
-            ["[Int]"] = BoundType.IntSlice,
-            ["[Int; ~]"] = BoundType.DynamicIntArray,
-            ["{Int: Int}"] = BoundType.IntDictionary,
-            ["[UInt8; ~]"] = TypeId.DynamicUInt8Array
-        };
+        var names = BuiltinTypeDefinitions.PredefinedTypeNames();
         var structTypes = new Dictionary<StructDeclaration, TypeId>(ReferenceEqualityComparer.Instance);
         var enumTypes = new Dictionary<EnumDeclaration, TypeId>(ReferenceEqualityComparer.Instance);
         var nextTypeId = (int)TypeId.FirstUserDefined;
