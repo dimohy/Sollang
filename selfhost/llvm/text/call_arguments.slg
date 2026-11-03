@@ -851,7 +851,7 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
                         "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
                     }
                 }
-            context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> nextCallRuntimeArgument(callIndex, ordinal, context, state) -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
         }
 }
 callBoundedValueParameterTypeId callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -1040,7 +1040,7 @@ emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordin
         -> if {
             chainSeparator -> if { ", " -> print }
             argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal, context, state)
-            context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, true, context, state)
+            argumentIndex -> nextCallRuntimeArgument(callIndex, ordinal, context, state) -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, true, context, state)
         }
 }
 branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -1072,6 +1072,22 @@ branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, st
         }
     flowIndex!
 }
+# Allocation, conversion and call emission must visit the same logical inputs.
+# An implicit branch input precedes the explicit list without rewriting its
+# shared producer's nextOperand link.
+callRuntimeArgumentHead callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    callIndex -> branchStageFlowIndex(context, state) => implicitInput
+    implicitInput >= 0 -> if { implicitInput -> return }
+    context.ir[callIndex].operand0
+}
+
+nextCallRuntimeArgument argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    argumentIndex < 0 -> if { -1 -> return }
+    ordinal == 0 and (callIndex -> branchStageFlowIndex(context, state)) >= 0
+        -> if { context.ir[callIndex].operand0 -> return }
+    context.ir[argumentIndex].nextOperand
+}
+
 emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[callIndex] => call
     false => hasLeadingArgument!
@@ -1082,14 +1098,7 @@ emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
             ") %native_result_slot_$(callIndex)" -> print
             true => hasLeadingArgument!
         }
-    callIndex -> branchStageFlowIndex(context, state) => branchFlowIndex
-    branchFlowIndex >= 0 -> if {
-        hasLeadingArgument! -> if { ", " -> print }
-        branchFlowIndex -> writeCallArgument(callIndex, ownerIndex, 0, context, state)
-        call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 1, true, context, state)
-    } else {
-        call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!, context, state)
-    }
+    callIndex -> callRuntimeArgumentHead(context, state) -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!, context, state)
     call -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
     nativeTryOutputType > 0 -> if {
         (callIndex -> callTargetParameter(0, context, state)) >= 0

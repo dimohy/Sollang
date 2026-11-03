@@ -2579,13 +2579,13 @@ emitFormattingCallAllocas callIndex: Int, ownerIndex: Int, context: ref emitterC
             return
         }
     call.kind == 6 or call.kind == 9 -> if {
-        call.operand0 => argumentIndex!
+        callIndex -> callRuntimeArgumentHead(context, state) => argumentIndex!
         0 => ordinal!
         argumentIndex! -> isEmittedTextArgument(callIndex, ordinal!, context, state)
             -> while {
                 argumentIndex! -> transientTextOperandSource(callIndex, ordinal!, context, state)
                     -> emitTransientIntegerTextAllocas(callIndex, ownerIndex, ordinal!, context, state)
-                context.ir[argumentIndex!].nextOperand => argumentIndex!
+                argumentIndex! -> nextCallRuntimeArgument(callIndex, ordinal!, context, state) => argumentIndex!
                 ordinal! + 1 => ordinal!
             }
     }
@@ -2596,7 +2596,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
     callIndex! < endIndex -> while {
         context.ir[callIndex!] => call
         call.kind == 6 or call.kind == 9 -> if {
-            call.operand0 => argumentIndex!
+            callIndex! -> callRuntimeArgumentHead(context, state) => argumentIndex!
             0 => ordinal!
             argumentIndex! >= 0
                 and (callIndex! -> callTargetParameter(ordinal!, context, state)) >= 0
@@ -2685,7 +2685,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                                     referenceStorageType! -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
                                 }
                         }
-                    context.ir[argumentIndex!].nextOperand => argumentIndex!
+                    argumentIndex! -> nextCallRuntimeArgument(callIndex!, ordinal!, context, state) => argumentIndex!
                     ordinal! + 1 => ordinal!
                 }
             callIndex! -> callArgumentIndex(context, state) => interpolationArgumentIndex!
@@ -2839,7 +2839,7 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                         ", i64 0" -> println
                     }
             }
-            context.ir[argumentIndex].nextOperand -> emitReferenceArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> nextCallRuntimeArgument(callIndex, ordinal, context, state) -> emitReferenceArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
         }
 }
 emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -2935,7 +2935,7 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                         ", i64 0" -> println
                     }
             }
-            context.ir[argumentIndex].nextOperand -> emitWhileReferenceArgumentValues(callIndex, whileIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> nextCallRuntimeArgument(callIndex, ordinal, context, state) -> emitWhileReferenceArgumentValues(callIndex, whileIndex, ownerIndex, ordinal + 1, context, state)
         }
 }
 emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -3091,7 +3091,7 @@ emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: 
                     argumentIndex -> aggregateValueIndex(context, state) => mutableValueIndex
                     "callmut$(callIndex)_arg$(ordinal)" -> emitMutableBorrowPlace(mutableParameterIndex, mutableValueIndex, ownerIndex, context, state)
                 }
-            context.ir[argumentIndex].nextOperand -> emitMutableBorrowArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> nextCallRuntimeArgument(callIndex, ordinal, context, state) -> emitMutableBorrowArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
         }
 }
 emitCurrentMutableParameterValueAt prefix: Text, valueIndex: Int, parameterOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -3415,7 +3415,7 @@ emitTransientTextArguments argumentIndex: Int, callIndex: Int, ownerIndex: Int, 
     argumentIndex -> isEmittedTextArgument(callIndex, ordinal, context, state)
         -> if {
             argumentIndex -> emitTransientTextOperand(callIndex, ownerIndex, ordinal, context, state)
-            context.ir[argumentIndex].nextOperand -> emitTransientTextArguments(callIndex, ownerIndex, ordinal + 1, context, state)
+            argumentIndex -> nextCallRuntimeArgument(callIndex, ordinal, context, state) -> emitTransientTextArguments(callIndex, ownerIndex, ordinal + 1, context, state)
         }
 }
 isValueComparison node: typedIr.TypedIrNode -> Bool {
@@ -3579,16 +3579,16 @@ emitDiagnosticParentCallValue request: CallEnvironmentRequest, context: ref emit
 
 emitCallEnvironmentValues request: CallEnvironmentRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request -> emitDiagnosticParentCallValue(context, state)
-    context.ir[request.callIndex].operand0 -> emitTransientTextArguments(request.callIndex, request.callerIndex, 0, context, state)
-    context.ir[request.callIndex].operand0 -> emitReferenceArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
-    context.ir[request.callIndex].operand0 -> emitMutableBorrowArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
+    request.callIndex -> callRuntimeArgumentHead(context, state) -> emitTransientTextArguments(request.callIndex, request.callerIndex, 0, context, state)
+    request.callIndex -> callRuntimeArgumentHead(context, state) -> emitReferenceArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
+    request.callIndex -> callRuntimeArgumentHead(context, state) -> emitMutableBorrowArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
     request -> emitCallCaptureEnvironmentValues(context, state)
 }
 emitWhileCallEnvironmentValues request: CallEnvironmentRequest, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request -> emitDiagnosticParentCallValue(context, state)
-    context.ir[request.callIndex].operand0 -> emitTransientTextArguments(request.callIndex, request.callerIndex, 0, context, state)
-    context.ir[request.callIndex].operand0 -> emitWhileReferenceArgumentValues(request.callIndex, whileIndex, request.callerIndex, 0, context, state)
-    context.ir[request.callIndex].operand0 -> emitMutableBorrowArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
+    request.callIndex -> callRuntimeArgumentHead(context, state) -> emitTransientTextArguments(request.callIndex, request.callerIndex, 0, context, state)
+    request.callIndex -> callRuntimeArgumentHead(context, state) -> emitWhileReferenceArgumentValues(request.callIndex, whileIndex, request.callerIndex, 0, context, state)
+    request.callIndex -> callRuntimeArgumentHead(context, state) -> emitMutableBorrowArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
     request -> emitCallCaptureEnvironmentValues(context, state)
 }
 emitCallCaptureEnvironmentValues request: CallEnvironmentRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {

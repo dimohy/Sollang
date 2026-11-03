@@ -1572,6 +1572,17 @@ otherwise return `Stream`. Keep these wrapper types across function boundaries.
 These operators are lazy. Bounded buffering, backpressure, completion, and
 cancellation remain observable; never replace them with an unbounded queue.
 
+### Preserve a value through a side flow
+
+Use a readonly `tap` target to inspect an affine value before continuing:
+
+```sollang
+values -> tap audit => kept
+```
+
+The new binding `kept` owns the preserved value and its cleanup. Use that name
+after the binding; the former owner name has been consumed.
+
 ### Request overlap explicitly
 
 Use `parallel branch` only when the work is independent enough to overlap:

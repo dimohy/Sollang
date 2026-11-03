@@ -6061,6 +6061,12 @@ getName() => name
 name -> greeting => message
 ```
 
+The `value -> tap target` form evaluates its side flow and yields the original
+value. When a terminal tap of a named affine source is bound to a new name,
+that binding takes the source's cleanup obligation and the former name is
+consumed. A readonly side target borrows the source while it runs; the final
+owner is dropped exactly once. A plain affine alias binding remains invalid.
+
 Function targets in a value-flow statement should omit empty parentheses:
 
 ```sollang

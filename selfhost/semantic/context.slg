@@ -521,11 +521,60 @@ public indexedCallArgumentAsts package: ref analysis.PackageAnalysis, call: call
 }
 
 
+# A junction's first stage receives the value before branch/tap. Later stages
+# receive the preceding target in the same arm; nested argument calls cannot
+# become that input. Publish it through the ordinary parameter binding path.
+junctionTargetInputAst package: ref analysis.PackageAnalysis, sourceModule: Int, targetAst: Int, firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool -> Int {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + targetAst] => target
+    target.kind != 77 or target.parent < 0 -> if { -1 -> return }
+    package.nodes[range.astStart + target.parent] => parent
+    parent.kind != 75 and parent.kind != 76 -> if { -1 -> return }
+    -1 => previous!
+    range.astStart => search!
+    indexed -> if { firstChildByAst[range.astStart + target.parent] => search! }
+    search! >= 0 and search! < range.astStart + range.astCount
+        -> while {
+            package.nodes[search!] => candidate
+            candidate.parent == target.parent and candidate.kind == 77
+                and candidate.start < target.start
+                and (previous! < 0 or candidate.start > package.nodes[previous!].start)
+                -> if { search! => previous! }
+            indexed -> if { nextSiblingByAst[search!] => search! } else { search! + 1 => search! }
+        }
+    previous! >= 0 -> if { previous! -> return }
+    target.parent => junctionAst!
+    parent.kind == 75 -> if {
+        parent.parent => junctionAst!
+        junctionAst! < 0 -> if { -1 -> return }
+        package.nodes[range.astStart + junctionAst!] => junction
+        junction.kind != 73 and junction.kind != 74 -> if { -1 -> return }
+    }
+    package.nodes[range.astStart + junctionAst!] => junction
+    junction.parent < 0 -> if { -1 -> return }
+    range.astStart => search!
+    indexed -> if { firstChildByAst[range.astStart + junction.parent] => search! }
+    search! >= 0 and search! < range.astStart + range.astCount
+        -> while {
+            package.nodes[search!] => candidate
+            candidate.parent == junction.parent and candidate.kind != 12
+                and candidate.start < junction.start
+                and (previous! < 0 or candidate.start > package.nodes[previous!].start)
+                -> if { search! => previous! }
+            indexed -> if { nextSiblingByAst[search!] => search! } else { search! + 1 => search! }
+        }
+    previous!
+}
+
 collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool, receiverByCallAst: ref [Int; ~], indexedReceivers: Bool -> [Int; ~] {
     [Int; ~] => arguments!
     package.ranges[call.sourceModule] => range
     range.astStart + call.callAst => globalCall
     package.nodes[globalCall] => node
+    node.kind == 77 -> if {
+        package -> junctionTargetInputAst(call.sourceModule, call.callAst, firstChildByAst, nextSiblingByAst, indexed) => input
+        input >= 0 -> if { arguments! -> push(input) }
+    }
     node.kind != 10 and node.parent >= 0 -> if {
         package.nodes[range.astStart + node.parent] => parent
         # Parentheses can offset the source call's start. Its AST identity,

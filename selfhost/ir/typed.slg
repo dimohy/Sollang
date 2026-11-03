@@ -1662,6 +1662,26 @@ public functionDeclarationIrs ir: ref [TypedIrNode; ~] -> [Int; ~] {
     functions!
 }
 
+# A terminal tap is the completed initializer, not a direct copy of its source.
+# Preserve the same value edge in entry and ordinary-function lowering.
+finalizeTapValueBinding nodes: mut [TypedIrNode; ~], tapIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    nodes[tapIndex] => tap
+    tap.parent < 0 or tap.sourceModule < 0 or tap.astNode < 0
+        -> if { return }
+    prepared.package.ranges[tap.sourceModule] => range
+    prepared.package.nodes[range.astStart + tap.astNode] => tapAst
+    tapAst.parent < 0 -> if { return }
+    prepared.package.nodes[range.astStart + tapAst.parent] => flowAst
+    flowAst.kind != 10 or flowAst.start + flowAst.length != tapAst.start + tapAst.length
+        -> if { return }
+    nodes[tap.parent] => binding!
+    binding!.kind != 17 or binding!.typeId != tap.typeId
+        or (tap.parent -> isBorrowedBlockInputBinding(nodes, prepared.package.ranges, prepared.package.symbols))
+        -> if { return }
+    tapIndex => binding!.operand0
+    binding! => nodes[tap.parent]
+}
+
 finalizeStreamJoinValue nodes: mut [TypedIrNode; ~], joinIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Unit {
     nodes[joinIndex] => join
     join.parent < 0 -> if { return }
@@ -1988,6 +2008,18 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
             and (ir[site.operand0] -> ownedMoveArgument(ir, prepared, types))
             and not (prepared -> semanticContext.typeRequiresFixedStorageCopy(types, site.typeId))
             -> if { movedValueIrs! -> push(site.operand0) }
+        # A rebound tap transfers its preserved source, rather than duplicating
+        # the source owner's drop. Side-flow borrows finish before this binding.
+        site.kind == 17 and site.operand0 >= 0 and ir[site.operand0].kind == 36
+            and not (siteIndex! -> isBorrowedBlockInputBinding(ir, prepared.package.ranges, prepared.package.symbols))
+            and not (prepared -> semanticContext.typeRequiresFixedStorageCopy(types, site.typeId))
+            -> if {
+                site.operand0 => preservedSource!
+                preservedSource! >= 0 and ir[preservedSource!].kind == 36
+                    -> while { ir[preservedSource!].operand0 => preservedSource! }
+                preservedSource! >= 0 and (ir[preservedSource!] -> ownedMoveArgument(ir, prepared, types))
+                    -> if { movedValueIrs! -> push(preservedSource!) }
+            }
         # Scalar-only nominal fields are copyable values. A direct field
         # binding becomes a partial move when the field owns heap storage or a
         # unique resource handle and therefore carries a drop obligation.
