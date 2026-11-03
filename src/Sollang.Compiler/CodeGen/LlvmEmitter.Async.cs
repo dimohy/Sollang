@@ -1,6 +1,7 @@
 using System.Globalization;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -80,7 +81,7 @@ internal sealed partial class LlvmEmitter
             EmitAsyncCancelFunction(function, cfgSuspendPlan);
 
             ClearLocalState();
-            EmitFunctionLine($"define internal %sollang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitLabel("entry");
             var context = NextTemp("async_context");
             EmitCall(context, "ptr", "sollang_alloc", $"i64 {AsyncContextSize(function)}");

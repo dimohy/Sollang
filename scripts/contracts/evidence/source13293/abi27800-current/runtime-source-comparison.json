@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "status": "compared-before-slg-edit",
+  "csharpFirst": "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27762-csharp-original\\result.json",
+  "additionalCSharpProofs": [
+    "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27763-csharp-controls\\result.json",
+    "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27764-csharp-oracles\\result.json"
+  ],
+  "observedAtUtc": "2026-11-03T21:50:43.769860+00:00",
+  "sourceHashesBeforeConsumerEdit": {
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs": "6F413CE04D37C13FDF41BC558BADDA484A5145C5F44832A34915DF080BF34B69",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs": "D905DA1B22D4F6AC877796B43AC523A1AD349D1DF9EFE266389729DB44D9ADEB",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.CpuCrypto.cs": "5B12F9DA538089F8A7B43786A24889DE3F52630A70A63E8E8A078076012F9BBF",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Library.cs": "7D1DCB7E16549148141D068C570B49372550011E55A066601F2F58F867009D0D",
+    "src/Sollang.Compiler/Shared/Policies/FunctionRuntimeContextPolicy.cs": "7FFD0C6783A8F45ACEC75923ED1A5D374477B2F44BE190FBDB1D59863C58550F",
+    "selfhost/llvm/text/functions.slg": "815F77115F04F602BC24F638E09C89618BCE3564A79D4E222ADC9418C2D8738B",
+    "selfhost/llvm/text/library_exports.slg": "6148A5C29FCC9E8A4E083999226C2A718645A66B3282A17E4E6B9C1B4591FB8A",
+    "selfhost/llvm/text/core_prepare.slg": "F297CD7F6DC97381CCFDF42B95A223A4BB9238D68F599DEA057D23C40A8267FB",
+    "src/Sollang.Compiler/Tooling/WindowsLinker.cs": "875FCC8061D61A9491642200838F4ECAEB378CFF8F7749DD3AEABED6DAFDB702",
+    "selfhost/llvm/runtime.slg": "12961C7B411C1042A08623BD2DDDD692226BDDA8720398398DBC39A667DCC907",
+    "selfhost/llvm/text/runtime_resolution.slg": "780595F4D316E9F25DF00DA9FB06A6820408E954FD1D5591CB0D3985BD3E235C",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeHelpers.cs": "CFF163F6250DBF5486C27E811F8CC2F6A0BFAAC3FF35053081B047FC93573D0D"
+  },
+  "decisions": [
+    {
+      "topic": "ordinary private definition",
+      "csharp": "All 12 FunctionDeclarations emission paths use generated FunctionDefinitionPrefix, preserving define internal. CPU selected user function and async factory use it too.",
+      "slg": "functions.slg ordinary definition around1293 and async factory around1090 currently print define without internal; these two sites will consume functionDefinitionPrefix. emitFunctionNamed also emits the async worker, which is private in CSharp."
+    },
+    {
+      "topic": "external wrappers",
+      "csharp": "Library.cs defines exported wrappers separately and calls private SymbolForFunction bodies.",
+      "slg": "library_exports.slg likewise defines dllexport/protected wrapper symbols separately. Keep exported wrapper definitions unchanged; only the called user body becomes private."
+    },
+    {
+      "topic": "external declarations",
+      "csharp": "Private function definition policy does not apply to external/native ABI declarations.",
+      "slg": "core_prepare.slg unresolved external declarations remain declare, not internal; do not edit declarations through a blanket textual replacement."
+    },
+    {
+      "topic": "parallel LLVM partitions",
+      "csharp": "WindowsLinker optimizes the full module to bitcode, then llvm-split partitions it. Internal linkage is already supported by the same compiler build path.",
+      "slg": "Actual checked emitted LLVM will be assembled and linked, rather than proving linkage from source strings only."
+    },
+    {
+      "topic": "runtime intrinsic alias wrappers",
+      "csharp": "CSharp function definitions and runtime helper bodies are private/internal. Existing CSharp ordinary/captured/dyn/async/AES12 plus common LLVM2 passed.",
+      "slg": "runtime.slg has separate declaration-named runtime wrapper headers that hardcode define. runtime_resolution.slg has the only RuntimeFunctionSymbols constructor across canonical/probe/regression sources. Add definitionPrefix metadata from the generated policy, replacing only those wrapper header prefixes. Keep entry/export/native declarations intact.",
+      "observedFailure": "abi27771 checked emitted LLVM shows 17 global runtime wrappers; original check is retained, not weakened."
+    }
+  ],
+  "requiredNativePreflights": [
+    "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27774-stdlib\\result.json"
+  ],
+  "sourceEmitterBudget": {
+    "output": "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27775-emitter",
+    "maximumBuilds": 1,
+    "timeoutSeconds": 180,
+    "parentPlan": "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27772-budget-extension.json",
+    "parentMaximumBuilds": 2,
+    "priorBuildsUsed": 1
+  },
+  "claimsGateComplete": false,
+  "previousSourceComparison": "artifacts\\scratch\\resume-20261006-owner-continuation22\\abi27766-source-comparison.json"
+}

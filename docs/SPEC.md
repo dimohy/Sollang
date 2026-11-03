@@ -2020,6 +2020,11 @@ Omitted primary input types are constrained by all calls in that lexical scope;
 omitted return types are constrained by tail expressions and explicit returns.
 All constraints must agree. Local functions lower to private LLVM functions
 with stable local symbols and explicit capture parameters.
+LLVM implementation bodies for Sollang declarations, including intrinsic
+adapters, async factories and workers, and CPU dispatch bodies, use `internal`
+linkage. Raw Arena helpers generated for a lexical owner are internal too.
+Entry points and library ABI export wrappers retain their required external
+linkage.
 Stored field reads constrain an omitted signature through the receiver's
 canonical declared field type, including nested fields and readonly receivers.
 An inferred product receiver preserves its ordered field labels and positional

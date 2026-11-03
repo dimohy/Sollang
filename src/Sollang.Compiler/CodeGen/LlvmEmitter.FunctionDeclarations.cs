@@ -179,7 +179,7 @@ internal sealed partial class LlvmEmitter
         {
             var llvmType = LlvmType(function.ReturnType);
             var symbol = symbolOverride ?? SymbolForFunction(function);
-            EmitFunctionLine($"define internal {llvmType} {symbol}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}{llvmType} {symbol}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -220,7 +220,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.int_slice {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.int_slice {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -291,7 +291,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal ptr {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}ptr {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -323,7 +323,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal void {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}void {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -359,7 +359,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.text {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.text {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -400,7 +400,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal i64 {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}i64 {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -435,7 +435,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal i1 {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}i1 {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -470,7 +470,7 @@ internal sealed partial class LlvmEmitter
         try
         {
             var llvmType = LlvmType(function.ReturnType);
-            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}{llvmType} {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -511,7 +511,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -554,7 +554,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -592,7 +592,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.int_dictionary {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.int_dictionary {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -635,7 +635,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.int_dictionary {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.int_dictionary {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";

@@ -136,7 +136,7 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine("}");
         EmitFunctionLine();
 
-        EmitFunctionLine($"define internal {returnType} {symbol}({parameters}) {{");
+        EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}{returnType} {symbol}({parameters}) {{");
         EmitFunctionLine("entry:");
         EmitFunctionLine("  %selected = load atomic ptr, ptr @sollang_aes128_selected monotonic, align 8");
         EmitFunctionLine($"  %result = tail call {returnType} %selected({arguments})");

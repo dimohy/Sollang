@@ -1,5 +1,6 @@
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -14,7 +15,7 @@ internal sealed partial class LlvmEmitter
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %sollang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
