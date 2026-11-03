@@ -2846,68 +2846,7 @@ semanticTypeContainsReadonlyReference prepared: ref semanticContext.SemanticSnap
     prepared -> semanticTypeContainsBorrowKind(types, typeId, 8)
 }
 semanticTypeIsSourceText prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
-    false => sourceText!
-    typeId >= 0 and typeId < (types -> len)
-        -> if {
-            types[typeId] => candidate
-            candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
-                -> if {
-                    true => sourceText!
-                } else {
-                    candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
-                        -> if {
-                            candidate.module => sourceModule!
-                            candidate.origin == 2 and candidate.module >= 0 and candidate.module < (prepared.modules -> len)
-                                -> if {
-                                    prepared.modules[candidate.module].sourceIndex => sourceModule!
-                                }
-                            false => fileNamespace!
-                            0 => moduleIndex!
-                            moduleIndex! < (prepared.modules -> len) -> while {
-                                prepared.modules[moduleIndex!] => identity
-                                identity.sourceIndex == sourceModule! -> if {
-                                    identity.pathLength == 8 => sameNamespace!
-                                    "sys.file" => expectedNamespace
-                                    UIntSize(0) => namespaceByte!
-                                    sameNamespace! and namespaceByte! < identity.pathLength
-                                        -> while {
-                                            (prepared.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!))
-                                                -> if {
-                                                    false => sameNamespace!
-                                                }
-                                            namespaceByte! + 1 => namespaceByte!
-                                        }
-                                    sameNamespace! -> if { true => fileNamespace! }
-                                }
-                                moduleIndex! + 1 => moduleIndex!
-                            }
-                            fileNamespace! and sourceModule! >= 0 and sourceModule! < (prepared.package.ranges -> len)
-                                -> if {
-                                    prepared.package.ranges[sourceModule!] => sourceRange
-                                    candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
-                                        -> if {
-                                            prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
-                                            declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0
-                                                -> if {
-                                                    prepared.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
-                                                    name.span.length == 10 => sameName!
-                                                    "SourceText" => expectedName
-                                                    UIntSize(0) => nameByte!
-                                                    sameName! and nameByte! < name.span.length -> while {
-                                                        (prepared.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
-                                                            -> if {
-                                                                false => sameName!
-                                                            }
-                                                        nameByte! + 1 => nameByte!
-                                                    }
-                                                    sameName! -> if { true => sourceText! }
-                                                }
-                                        }
-                                }
-                        }
-                }
-        }
-    sourceText!
+    prepared -> semanticContext.typeIsSourceText(types, typeId)
 }
 
 parallelResultSourceTextSupported prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], resultTypeId: Int, fallible: Bool -> Bool {
@@ -4611,86 +4550,14 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     # resumes. SourceText is an immutable shared view here (Sync-like), not an
     # async ownership transfer (Send-like). Other affine runtime owners remain
     # rejected, including Arena, Arguments, and mapped byte views.
-    parallelTypeIsSourceText typeId: Int -> Bool {
-        prepared -> semanticTypeIsSourceText(types, typeId)
-    }
     captureBindingIsParallelShareable bindingIndex: Int -> Bool {
         typed[bindingIndex] => binding
-        [Int; ~] => pendingTypes!
-        [Int; ~] => visitedTypes!
-        true => shareable!
+        binding -> typedIr.isTaskOwnerValue(typed, prepared)
+            -> if { false -> return }
         binding.typeId >= 0 -> if {
-            pendingTypes! -> push(binding.typeId)
-        } else {
-            binding.typeOrigin == 1 and (binding.typeSymbol == 15 or binding.typeSymbol == 17 or binding.typeSymbol == 18)
-                -> if { false => shareable! }
+            prepared -> semanticContext.typeIsParallelShareable(types, fields, binding.typeId) -> return
         }
-        0 => pendingTypeIndex!
-        shareable! and pendingTypeIndex! < (pendingTypes! -> len)
-            -> while {
-                pendingTypes![pendingTypeIndex!] => pendingTypeId
-                false => typeVisited!
-                0 => visitedTypeIndex!
-                visitedTypeIndex! < (visitedTypes! -> len) -> while {
-                    visitedTypes![visitedTypeIndex!] == pendingTypeId
-                        -> if { true => typeVisited! }
-                    visitedTypeIndex! + 1 => visitedTypeIndex!
-                }
-                not typeVisited! -> if {
-                    visitedTypes! -> push(pendingTypeId)
-                    pendingTypeId < 0 or pendingTypeId >= (types -> len)
-                        -> if {
-                            false => shareable!
-                        } else {
-                            types[pendingTypeId] => pendingType
-                            # SourceText owns its mapping but exposes only an immutable
-                            # view. Structured parallel joins before the owner can be
-                            # moved or destroyed. Identity is verified before generic
-                            # status rejection because an imported SourceText can
-                            # retain unresolved storage status with this safe ABI.
-                            pendingTypeId -> parallelTypeIsSourceText -> unless {
-                                pendingType.status != 0 -> if { false => shareable! } else {
-                                    pendingType.kind == 1 -> if {
-                                        pendingType.origin == 1 -> if {
-                                            pendingType.symbol == 15 or pendingType.symbol == 17 or pendingType.symbol == 18
-                                                -> if { false => shareable! }
-                                        } else {
-                                            pendingType.origin == 0 or pendingType.origin == 2
-                                                -> if {
-                                                    0 => fieldIndex!
-                                                    fieldIndex! < (prepared.semantic.fields -> len)
-                                                        -> while {
-                                                            prepared.semantic.fields[fieldIndex!] => field
-                                                            field.status == 0 and field.ownerType == pendingTypeId
-                                                                -> if { pendingTypes! -> push(field.fieldType) }
-                                                            fieldIndex! + 1 => fieldIndex!
-                                                        }
-                                                } else { false => shareable! }
-                                        }
-                                    } else {
-                                        pendingType.kind == 2 or pendingType.kind == 3 or pendingType.kind == 4 or pendingType.kind == 6 or pendingType.kind == 8 or pendingType.kind == 12
-                                            -> if {
-                                                pendingTypes! -> push(pendingType.first)
-                                            } else {
-                                                pendingType.kind == 5 or pendingType.kind == 13
-                                                    -> if {
-                                                        pendingTypes! -> push(pendingType.first)
-                                                        pendingTypes! -> push(pendingType.second)
-                                                    } else {
-                                                        pendingType.kind == 7 -> if {
-                                                            pendingType.first >= 0 -> if { pendingTypes! -> push(pendingType.first) }
-                                                            pendingType.second >= 0 -> if { pendingTypes! -> push(pendingType.second) }
-                                                        } else { false => shareable! }
-                                                    }
-                                            }
-                                    }
-                                }
-                            }
-                        }
-                }
-                pendingTypeIndex! + 1 => pendingTypeIndex!
-            }
-        shareable!
+        not (binding.typeOrigin == 1 and (binding.typeSymbol == 15 or binding.typeSymbol == 17 or binding.typeSymbol == 18))
     }
     sameBindingName leftIndex: Int, rightIndex: Int -> Bool {
         typed[leftIndex] => left

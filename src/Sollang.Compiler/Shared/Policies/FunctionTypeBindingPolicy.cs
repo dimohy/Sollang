@@ -20,6 +20,9 @@ internal static class FunctionTypeBindingPolicy
     public static bool ParallelBranchTargetAllowed(bool isAsync, bool hasEffects) =>
         !isAsync && !hasEffects;
 
+    public static bool ParallelBranchSourceAllowed(bool ownsStorage, bool sharedTypeSupported) =>
+        !ownsStorage || sharedTypeSupported;
+
     public static bool BindReturnTypeEagerly(bool hasTemplate, bool intrinsic, bool parallelRole) =>
         !hasTemplate || intrinsic && !parallelRole;
 

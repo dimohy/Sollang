@@ -5774,12 +5774,11 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
     package -> semanticContext.indexFlowSourcesByAst => taskFlowSources
     [Int; ~] => typeIdByAst!
     [Int; ~] => floatingLiteralTypeByAst!
-    [Bool; ~] => taskValueByAst!
+    ir -> typedIr.taskValueAsts(prepared, resolved.types) => taskValueByAst
     0 => astSeed!
     astSeed! < (package.nodes -> len) -> while {
         typeIdByAst! -> push(-1)
         floatingLiteralTypeByAst! -> push(-1)
-        taskValueByAst! -> push(false)
         astSeed! + 1 => astSeed!
     }
     0 => typeIndex!
@@ -5817,14 +5816,6 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                 finalRead.astNode >= 0 and finalRead.astNode < finalReadRange.astCount
                     -> if {
                         finalReadRange.astStart + finalRead.astNode => finalReadGlobal
-                        finalRead -> typedIr.isTaskOwnerValue(ir, prepared)
-                            -> if {
-                                true => taskValueByAst![finalReadGlobal]
-                                prepared -> semanticContext.canonicalCallSourceAst(finalRead.sourceModule, finalRead.astNode) => taskSourceAst
-                                taskSourceAst >= 0 -> if {
-                                    true => taskValueByAst![finalReadRange.astStart + taskSourceAst]
-                                }
-                            }
                         (finalRead.kind == 5 and package.nodes[finalReadGlobal].kind == 15)
                             or (finalRead.kind == 3 and package.nodes[finalReadGlobal].kind == 14)
                             or finalRead.kind == 18 or finalRead.kind == 19 or finalRead.kind == 33 or finalRead.kind == 34
@@ -6323,7 +6314,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     child.kind == 11 -> if { flowChild! => materializeCall! }
                     nextChildByAst![flowChild!] => flowChild!
                 }
-                prepared -> taskFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, taskValueByAst!, taskFlowSources, firstChildByAst!, nextChildByAst!, selected!) => selected!
+                prepared -> taskFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, taskValueByAst, taskFlowSources, firstChildByAst!, nextChildByAst!, selected!) => selected!
                 prepared -> heapFlowContract(resolved, sourceIndex!, astIndex!, flowSource!, typeIdByAst!, sourceAstByExpression, resolvedSymbolByAst!, firstChildByAst!, nextChildByAst!, selected!) => selected!
                 # Raw Arena calls share canonical receiver, argument and symbol
                 # indexes with materialize. Declared functions retain precedence.
@@ -7613,6 +7604,8 @@ heapFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref e
 public struct ParallelBranchDiagnostic {
     public code: Int
     public sourceModule: Int
+    public sourceTypeId: Int
+    public sourceTaskPayload: Bool
     public armAst: Int
     public targetAst: Int
     public targetPathAst: Int
@@ -7623,7 +7616,7 @@ public struct ParallelBranchDiagnostic {
 }
 
 parallelBranchFailure code: Int, source: Int, arm: Int, target: Int, path: Int, mode: Int, required: Int, parameterSource: Int, parameter: Int -> ParallelBranchDiagnostic {
-    ParallelBranchDiagnostic { code: code, sourceModule: source, armAst: arm, targetAst: target, targetPathAst: path, declaredMode: mode, requiredMode: required, parameterSourceModule: parameterSource, parameterSymbol: parameter }
+    ParallelBranchDiagnostic { code: code, sourceModule: source, sourceTypeId: -1, sourceTaskPayload: false, armAst: arm, targetAst: target, targetPathAst: path, declaredMode: mode, requiredMode: required, parameterSourceModule: parameterSource, parameterSymbol: parameter }
 }
 
 parallelReadonlyQuery name: Text -> Bool {
@@ -7663,8 +7656,10 @@ parallelArmMode prepared: ref semanticContext.SemanticSnapshot, sourceModule: In
     0
 }
 
-public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> ParallelBranchDiagnostic {
+public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~] -> ParallelBranchDiagnostic {
     prepared.package -> expressionTypeIds.indexContextualRecords => children
+    prepared.package -> semanticContext.indexExpressionSourceAsts => expressionSources
+    ir -> typedIr.taskValueAsts(prepared, resolved.types) => taskValues
     prepared -> effects.indexDeclaredEffects => declaredEffects
     [Bool; ~] => effectful!
     [Int; ~] => typeByAst!
@@ -7710,6 +7705,7 @@ public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnaps
                 and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, branchAst!))
                 -> if {
                     prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => source
+                    false => sourceChecked!
                     children.firstChild[branchGlobal] => armGlobal!
                     armGlobal! >= 0 -> while {
                         prepared.package.nodes[armGlobal!] => arm
@@ -7726,6 +7722,28 @@ public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnaps
                                 children.nextChild[stageSearch!] => stageSearch!
                             }
                             firstStage! >= 0 -> if {
+                                not sourceChecked! -> if {
+                                    true => sourceChecked!
+                                    expressionSources[firstStage!] => sourceAst
+                                    sourceAst >= 0 -> if {
+                                        typeByAst![range.astStart + sourceAst] => sourceExpressionType
+                                        sourceExpressionType >= 0 -> if {
+                                            resolved.types -> typeIds.materializedReadTypeId(sourceExpressionType) => sourceType
+                                            resolved.types[sourceType] => sourceContract
+                                            sourceContract.kind == 7 and sourceContract.origin == 4 and sourceContract.symbol == 2 => canonicalTask
+                                            taskValues[range.astStart + sourceAst] or canonicalTask => sourceIsTask
+                                            sourceIsTask or (prepared -> semanticContext.typeContainsOwnedStorageWithFields(resolved.types, resolved.fields, sourceType)) => ownsStorage
+                                            not sourceIsTask and (prepared -> semanticContext.typeIsParallelShareable(resolved.types, resolved.fields, sourceType)) => sharedTypeSupported
+                                            branchPolicy.parallelBranchSourceAllowed(ownsStorage, sharedTypeSupported)
+                                                -> unless {
+                                                    parallelBranchFailure(7, range.sourceModule, branchAst!, -1, -1, 0, 0, -1, -1) => failure!
+                                                    sourceType => failure!.sourceTypeId
+                                                    sourceIsTask and not canonicalTask => failure!.sourceTaskPayload
+                                                    failure! -> return
+                                                }
+                                        }
+                                    }
+                                }
                                 armGlobal! - range.astStart => armAst
                                 firstStage! - range.astStart => firstTargetAst
                                 prepared -> parallelArmMode(range.sourceModule, armAst, firstTargetAst) => declaredMode

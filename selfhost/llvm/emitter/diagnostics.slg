@@ -2618,7 +2618,12 @@ emitParallelBranchCapture diagnostic: ownershipCheck.OwnershipDiagnostic, contex
         "parallel branch cannot capture mutable binding '$(name)!'" -> println
     } else {
         "parallel branch cannot capture non-sendable binding '$name' of type " -> print
+        context.ir[diagnostic.expectedModule] => binding
+        (binding -> typedIr.isAsyncTaskValue(context.ir))
+            and not (binding.typeKind == 7 and binding.typeOrigin == 4 and binding.typeSymbol == 2) => taskPayload
+        taskPayload -> if { "Task<" -> print }
         context.ir[diagnostic.expectedModule].typeId -> emitBoxOperandTypeName(context)
+        taskPayload -> if { ">" -> print }
         println()
     }
 }
@@ -9399,6 +9404,16 @@ parallelBranchModeText mode: Int -> Text {
 emitParallelBranchDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
     context.parallelBranchDiagnostic => diagnostic
     context.ranges[diagnostic.sourceModule] => range
+    diagnostic.code == 7 -> if {
+        context.nodes[range.astStart + diagnostic.armAst] => branch
+        context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.armAst, branch.start)
+        "parallel branch cannot share non-sendable input " -> print
+        diagnostic.sourceTaskPayload -> if { "Task<" -> print }
+        diagnostic.sourceTypeId -> emitBoxOperandTypeName(context)
+        diagnostic.sourceTaskPayload -> if { ">" -> print }
+        println()
+        return
+    }
     context.nodes[range.astStart + diagnostic.armAst] => arm
     context.tokens[range.tokenStart + arm.payloadToken] => armToken
     context.sources[diagnostic.sourceModule] -> slice(armToken.span.start, armToken.span.length) => label

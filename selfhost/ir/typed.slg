@@ -571,6 +571,28 @@ public isTaskOwnerValue node: TypedIrNode, ir: ref [TypedIrNode; ~], prepared: r
     node -> isAsyncTaskValue(ir)
 }
 
+# The semantic type projection can name a Task's payload. Preserve the
+# outstanding owner fact separately, using the same rule as await diagnostics.
+public taskValueAsts ir: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [Bool; ~] {
+    [Bool; ~] => values!
+    prepared.package.nodes -> each node { values! -> push(false) }
+    ir -> each node {
+        node.kind >= 2 and node.sourceModule >= 0 and node.sourceModule < (prepared.package.ranges -> len)
+            and node.typeId >= 0 and node.typeId < (types -> len)
+            -> if {
+                prepared.package.ranges[node.sourceModule] => range
+                node.astNode >= 0 and node.astNode < range.astCount
+                    and (node -> isTaskOwnerValue(ir, prepared))
+                    -> if {
+                        true => values![range.astStart + node.astNode]
+                        prepared -> semanticContext.canonicalCallSourceAst(node.sourceModule, node.astNode) => sourceAst
+                        sourceAst >= 0 -> if { true => values![range.astStart + sourceAst] }
+                    }
+            }
+    }
+    values!
+}
+
 public struct CoroutineFrameSlot {
     public functionIr: Int
     public state: Int

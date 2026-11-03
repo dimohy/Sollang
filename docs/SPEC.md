@@ -1289,6 +1289,18 @@ capture environment, compute-group execution, and result-product load for
 entry bodies, ordinary functions, and nested control regions alike. Those
 contexts may not carry independent copies of the compute-group sequence.
 
+Before checking parallel arms, infer the source's complete materialized value
+type. An owned source must be structurally safe to share through the joined
+readonly workers. This check follows nested nominal fields, accepts safe
+collection owners and immutable `SourceText`, and rejects `Arena` owners.
+Reading a readonly `Arena` parameter still produces an `Arena` value contract;
+the readonly parameter does not bypass this source check. Source rejection is
+reported at the branch before arm-mode or target admission diagnostics.
+Outstanding `Task` values are not shareable inputs or captures. A completed
+`await` yields its ordinary payload contract. `Arguments` is a non-owning source
+value and may be read by joined branch workers, but it is not a supported local
+function capture at this boundary.
+
 Resolved readonly scalar queries such as `len` and `capacity` are flow stages
 in their own right. Branch and tap lowering must preserve their source,
 position, result type, and following targets. Parallel target metadata keeps

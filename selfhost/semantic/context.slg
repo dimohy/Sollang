@@ -1112,6 +1112,154 @@ public nominalIsOwnedResource snapshot: SemanticSnapshot, typeId: Int -> Bool {
 # A nominal value moves only when its canonical type owns storage or a unique
 # resource. Expression origin alone cannot distinguish an inline imported
 # struct from one with an owned field.
+# Source and capture checks share one canonical structural classifier. SourceText
+# keeps its declaration identity check before unresolved storage status checks.
+public typeIsSourceText snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+    false => sourceText!
+    typeId >= 0 and typeId < (types -> len)
+        -> if {
+            types[typeId] => candidate
+            candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
+                -> if {
+                    true => sourceText!
+                } else {
+                    candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
+                        -> if {
+                            candidate.module => sourceModule!
+                            candidate.origin == 2 and candidate.module >= 0 and candidate.module < (snapshot.modules -> len)
+                                -> if {
+                                    snapshot.modules[candidate.module].sourceIndex => sourceModule!
+                                }
+                            false => fileNamespace!
+                            0 => moduleIndex!
+                            moduleIndex! < (snapshot.modules -> len) -> while {
+                                snapshot.modules[moduleIndex!] => identity
+                                identity.sourceIndex == sourceModule! -> if {
+                                    identity.pathLength == 8 => sameNamespace!
+                                    "sys.file" => expectedNamespace
+                                    UIntSize(0) => namespaceByte!
+                                    sameNamespace! and namespaceByte! < identity.pathLength
+                                        -> while {
+                                            (snapshot.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!))
+                                                -> if {
+                                                    false => sameNamespace!
+                                                }
+                                            namespaceByte! + 1 => namespaceByte!
+                                        }
+                                    sameNamespace! -> if { true => fileNamespace! }
+                                }
+                                moduleIndex! + 1 => moduleIndex!
+                            }
+                            fileNamespace! and sourceModule! >= 0 and sourceModule! < (snapshot.package.ranges -> len)
+                                -> if {
+                                    snapshot.package.ranges[sourceModule!] => sourceRange
+                                    candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
+                                        -> if {
+                                            snapshot.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
+                                            declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0
+                                                -> if {
+                                                    snapshot.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
+                                                    name.span.length == 10 => sameName!
+                                                    "SourceText" => expectedName
+                                                    UIntSize(0) => nameByte!
+                                                    sameName! and nameByte! < name.span.length -> while {
+                                                        (snapshot.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
+                                                            -> if {
+                                                                false => sameName!
+                                                            }
+                                                        nameByte! + 1 => nameByte!
+                                                    }
+                                                    sameName! -> if { true => sourceText! }
+                                                }
+                                        }
+                                }
+                        }
+                }
+        }
+    sourceText!
+}
+
+public typeIsParallelShareable snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], typeId: Int -> Bool {
+    typeId < 0 or typeId >= (types -> len) -> if { false -> return }
+    [Int; ~] => pendingTypes!
+    [Int; ~] => visitedTypes!
+    true => shareable!
+    pendingTypes! -> push(typeId)
+    0 => pendingTypeIndex!
+    shareable! and pendingTypeIndex! < (pendingTypes! -> len)
+        -> while {
+            pendingTypes![pendingTypeIndex!] => pendingTypeId
+            false => typeVisited!
+            0 => visitedTypeIndex!
+            visitedTypeIndex! < (visitedTypes! -> len) -> while {
+                visitedTypes![visitedTypeIndex!] == pendingTypeId
+                    -> if { true => typeVisited! }
+                visitedTypeIndex! + 1 => visitedTypeIndex!
+            }
+            not typeVisited! -> if {
+                visitedTypes! -> push(pendingTypeId)
+                pendingTypeId < 0 or pendingTypeId >= (types -> len)
+                    -> if {
+                        false => shareable!
+                    } else {
+                        types[pendingTypeId] => pendingType
+                        # SourceText owns its mapping but exposes only an immutable
+                        # view. Structured parallel joins before the owner can be
+                        # moved or destroyed. Identity is verified before generic
+                        # status rejection because an imported SourceText can
+                        # retain unresolved storage status with this safe ABI.
+                        snapshot -> typeIsSourceText(types, pendingTypeId)
+                            -> unless {
+                                pendingType.status != 0 -> if { false => shareable! } else {
+                                    pendingType.kind == 10 -> if {
+                                        fields -> each field {
+                                            field.status == 0 and field.ownerType == pendingTypeId
+                                                -> if { pendingTypes! -> push(field.fieldType) }
+                                        }
+                                    } else { pendingType.kind == 1 -> if {
+                                            pendingType.origin == 1 -> if {
+                                                pendingType.symbol == 15 or pendingType.symbol == 16 or pendingType.symbol == 17 or pendingType.symbol == 18
+                                                    -> if { false => shareable! }
+                                            } else {
+                                                pendingType.origin == 0 or pendingType.origin == 2
+                                                    -> if {
+                                                        0 => fieldIndex!
+                                                        fieldIndex! < (fields -> len)
+                                                            -> while {
+                                                                fields[fieldIndex!] => field
+                                                                field.status == 0 and field.ownerType == pendingTypeId
+                                                                    -> if { pendingTypes! -> push(field.fieldType) }
+                                                                fieldIndex! + 1 => fieldIndex!
+                                                            }
+                                                    } else { false => shareable! }
+                                            }
+                                        } else {
+                                            pendingType.kind == 2 or (pendingType -> typeIds.isDynamicArrayFamily) or pendingType.kind == 4 or pendingType.kind == 6 or pendingType.kind == 8 or pendingType.kind == 12
+                                                -> if {
+                                                    pendingTypes! -> push(pendingType.first)
+                                                } else {
+                                                    pendingType -> typeIds.isDictionaryFamily
+                                                        -> if {
+                                                            pendingTypes! -> push(pendingType.first)
+                                                            pendingType.second >= 0 -> if { pendingTypes! -> push(pendingType.second) }
+                                                        } else {
+                                                            pendingType.kind == 7 and pendingType.origin == 4 and (pendingType.symbol == 0 or pendingType.symbol == 1)
+                                                                -> if {
+                                                                    pendingType.first >= 0 -> if { pendingTypes! -> push(pendingType.first) }
+                                                                    pendingType.second >= 0 -> if { pendingTypes! -> push(pendingType.second) }
+                                                                } else { false => shareable! }
+                                                        }
+                                                }
+                                    } }
+                                }
+                            }
+                    }
+            }
+            pendingTypeIndex! + 1 => pendingTypeIndex!
+        }
+    shareable!
+}
+
 public typeContainsOwnedStorage snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
     snapshot -> typeContainsOwnedStorageWithFields(types, snapshot.semantic.fields, typeId)
 }

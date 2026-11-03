@@ -8331,8 +8331,8 @@ internal sealed partial class SemanticCompiler
             mutableBindings: mutableBindings);
         var sourceOwnsStorage = _types.ContainsOwnedStorage(sourceType);
         if (expression.IsParallel
-            && sourceOwnsStorage
-            && !IsParallelSharedTypeSupported(sourceType))
+            && !FunctionTypeBindingPolicy.ParallelBranchSourceAllowed(
+                sourceOwnsStorage, IsParallelSharedTypeSupported(sourceType)))
         {
             throw Error(
                 expression.Line,

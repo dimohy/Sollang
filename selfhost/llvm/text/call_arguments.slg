@@ -646,6 +646,12 @@ referenceParameterValueIsMaterialized valueIndex: Int, ownerIndex: Int, context:
     materialized!
 }
 writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    # Synthetic callbacks have transported references under their IR SSA ids,
+    # with no caller parameter or projected-field namespace in this function.
+    functionIndex == -1 -> if {
+        "%v$(valueIndex -> valueNameId(state))" -> print
+        return
+    }
     context.ir[functionIndex] => referenceFunction
     context.ir[valueIndex] => referenceValue
     false => wroteParameter!
@@ -677,6 +683,15 @@ writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitt
                         referenceParameterOrdinal -> writeDecimal
                         true => wroteParameter!
                     }
+                }
+        }
+    not wroteParameter! and referenceValue.kind == 13
+        -> if {
+            valueIndex -> canonicalMemberValueTypeId(context, state) => memberType
+            memberType >= 0 and context.types[memberType].kind == 8
+                -> if {
+                    valueIndex -> writeMemberStorageValueName(context, state)
+                    true => wroteParameter!
                 }
         }
     not wroteParameter!

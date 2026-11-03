@@ -1890,10 +1890,20 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
-Parallel branch input-mode and target async/effect admission use
+Parallel branch source ownership/shareability, input-mode, and target async/effect admission use
 `FunctionTypeBindingPolicy`, together with its readonly-query name table.
 Keep source-fact discovery and diagnostic formatting in the typed adapters;
 regenerate the SLG policy through `selfhost-sync` when its C# methods change.
+Use the canonical materialized source type before that decision. Source and
+capture sharing checks use the same semantic type walk and committed fields;
+readonly input syntax does not replace the value's ownership contract.
+When Typed IR projects a Task's payload type, also consume its existing
+Task-owner fact. The shared Task-value index serves await and branch diagnostics;
+the payload type alone must not make an outstanding Task look like a scalar.
+Synthetic callbacks read references already published under their IR value ids;
+they have no ordinary caller parameter or field-address namespace. A stored
+reference field forwards its loaded pointer, while borrowing a value field
+forwards that field's address.
 Dyn trait method compatibility follows this same path: `DynTraitPolicy` owns
 the readonly-self, additional-input and Int-result decision. C# semantics and
 the SLG diagnostic adapter supply those facts; associated-type rejection and
