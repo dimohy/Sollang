@@ -371,6 +371,12 @@ materializeLexicalBindingsReady materializeIndex: Int, ownerIndex: Int, expressi
 }
 
 prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionStart: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] uses Console {
+    functionIndex -> prepareScopedExpressionOrder(functionEnd, expressionStart, -1, context, state)
+}
+
+# Canonical interpolation is evaluated by its consumer inside the enclosing
+# branch/callback. Only regions inside that canonical root constrain this order.
+prepareScopedExpressionOrder functionIndex: Int, functionEnd: Int, expressionStart: Int, canonicalRootAst: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] uses Console {
     # Mutable lexical roots require a function-local name and visibility scan.
     # Cache every binding/read root once because readiness and effect ordering
     # revisit the same nodes many times.
@@ -434,34 +440,46 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
     expressionStart => containmentIndex!
     containmentIndex! < functionEnd -> while {
         context.ir[containmentIndex!] => containmentNode
+        canonicalRootAst >= 0 and state.frozenCanonicalInterpolationRootByIr[containmentIndex!] == canonicalRootAst => canonicalOwned
         containmentNode.parent => containmentAncestor!
         containmentNode.kind == 19 or ifConditionRoots![containmentIndex! - expressionStart] => containmentInsideControl!
         containmentAncestor! >= expressionStart and not containmentInsideControl!
             -> while {
-                context.ir[containmentAncestor!].kind == 19
-                    or context.ir[containmentAncestor!].kind == 20
-                    or context.ir[containmentAncestor!].kind == 33
-                    or ifConditionRoots![containmentAncestor! - expressionStart]
-                    -> if { true => containmentInsideControl! } else { context.ir[containmentAncestor!].parent => containmentAncestor! }
+                canonicalOwned and state.frozenCanonicalInterpolationRootByIr[containmentAncestor!] != canonicalRootAst
+                    -> if { -1 => containmentAncestor! } else {
+                        context.ir[containmentAncestor!].kind == 19
+                            or context.ir[containmentAncestor!].kind == 20
+                            or context.ir[containmentAncestor!].kind == 33
+                            or ifConditionRoots![containmentAncestor! - expressionStart]
+                            -> if { true => containmentInsideControl! } else { context.ir[containmentAncestor!].parent => containmentAncestor! }
+                    }
             }
-        (containmentIndex! -> parallelCallbackOwner(context)) >= 0
-            or (containmentIndex! -> userBlockCallbackOwner(context)) >= 0
+        containmentIndex! -> parallelCallbackOwner(context) => containmentParallelOwner
+        containmentIndex! -> userBlockCallbackOwner(context) => containmentUserBlockOwner
+        (containmentParallelOwner >= 0 and (not canonicalOwned or state.frozenCanonicalInterpolationRootByIr[containmentParallelOwner] == canonicalRootAst))
+            or (containmentUserBlockOwner >= 0 and (not canonicalOwned or state.frozenCanonicalInterpolationRootByIr[containmentUserBlockOwner] == canonicalRootAst))
             -> if { true => containmentInsideControl! }
         false => containmentInsideLogical!
         containmentNode.parent => containmentLogicalAncestor!
         containmentLogicalAncestor! >= expressionStart and not containmentInsideLogical!
             -> while {
                 context.ir[containmentLogicalAncestor!] => containmentLogicalAncestorNode
-                containmentLogicalAncestorNode.kind == 8 and (containmentLogicalAncestorNode.opcode == -24 or containmentLogicalAncestorNode.opcode == -25)
-                    -> if { true => containmentInsideLogical! } else { containmentLogicalAncestorNode.parent => containmentLogicalAncestor! }
+                canonicalOwned and state.frozenCanonicalInterpolationRootByIr[containmentLogicalAncestor!] != canonicalRootAst
+                    -> if { -1 => containmentLogicalAncestor! } else {
+                        containmentLogicalAncestorNode.kind == 8 and (containmentLogicalAncestorNode.opcode == -24 or containmentLogicalAncestorNode.opcode == -25)
+                            -> if { true => containmentInsideLogical! } else { containmentLogicalAncestorNode.parent => containmentLogicalAncestor! }
+                    }
             }
         containmentNode.kind == 17 and containmentNode.operand0 >= expressionStart and containmentNode.operand0 < functionEnd and not containmentInsideControl!
             -> if {
                 context.ir[containmentNode.operand0].parent => containmentBindingAncestor!
                 containmentBindingAncestor! >= expressionStart and not containmentInsideControl!
                     -> while {
-                        context.ir[containmentBindingAncestor!].kind == 19
-                            -> if { true => containmentInsideControl! } else { context.ir[containmentBindingAncestor!].parent => containmentBindingAncestor! }
+                        canonicalOwned and state.frozenCanonicalInterpolationRootByIr[containmentBindingAncestor!] != canonicalRootAst
+                            -> if { -1 => containmentBindingAncestor! } else {
+                                context.ir[containmentBindingAncestor!].kind == 19
+                                    -> if { true => containmentInsideControl! } else { context.ir[containmentBindingAncestor!].parent => containmentBindingAncestor! }
+                            }
                     }
             }
         expressionInsideControlRegion! -> push(containmentInsideControl!)

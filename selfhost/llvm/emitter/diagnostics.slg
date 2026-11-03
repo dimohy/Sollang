@@ -5471,6 +5471,45 @@ emitExpressionSemanticPrefix context: ref emitterContext.EmitContext, diagnostic
 emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
     context -> numericCallLiteralOverridesUnary -> if { return }
     context.expressionOperandDiagnostic => diagnostic
+    diagnostic.code == 80 -> if {
+        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location!
+        context.interpolationRanges -> each range {
+            range.sourceModule == diagnostic.sourceModule
+                -> if {
+                    range.nodeStart => nodeIndex!
+                    nodeIndex! < range.nodeStart + range.nodeCount
+                        -> while {
+                            context.interpolations[nodeIndex!] => fragment
+                            fragment.kind == 17 and fragment.parent < 0
+                                and diagnostic.locationOffset >= fragment.payloadStart
+                                and diagnostic.locationOffset < fragment.payloadStart + fragment.payloadLength
+                                -> if {
+                                    context.interpolations -> semanticDiagnostics.interpolationSourceOffsetLocation(context.sources[diagnostic.sourceModule], nodeIndex!, diagnostic.locationOffset) => location!
+                                }
+                            nodeIndex! + 1 => nodeIndex!
+                        }
+                }
+        }
+        context -> emitExpressionSemanticPrefix(diagnostic, location!)
+        diagnostic.operatorKind == 6 -> if { "Deque " -> print } else { "BinaryHeap " -> print }
+        context.ranges[diagnostic.sourceModule] => range
+        context.nodes[range.astStart + diagnostic.operandAst] => target
+        context.sources[diagnostic.sourceModule] -> slice(target.start, target.length) -> print
+        " does not accept arguments" -> println
+        return
+    }
+    diagnostic.code == 78 or diagnostic.code == 79
+        -> if {
+            context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+            context -> emitExpressionSemanticPrefix(diagnostic, location)
+            diagnostic.operatorKind == 6 -> if { "Deque" -> print } else { "BinaryHeap" -> print }
+            diagnostic.code == 78 -> if {
+                " capacity must currently be a positive Int literal" -> println
+            } else {
+                "<T>(capacity) requires one element type and one Int capacity" -> println
+            }
+            return
+        }
     diagnostic.code == 77 -> if {
         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
         context -> emitExpressionSemanticPrefix(diagnostic, location)

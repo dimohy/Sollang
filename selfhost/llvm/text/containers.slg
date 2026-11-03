@@ -518,22 +518,10 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
         collectionNode.opcode == -238 -> if {
             context.types[collectionNode.typeId].first => dequeElementType
             context.typeSizes[dequeElementType] => dequeElementSize
-            "  %v$(collectionIndex -> valueNameId(state))_below_minimum = icmp ult i64 %v$(collectionIndex -> valueNameId(state))_requested, 4" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_minimum = select i1 %v$(collectionIndex -> valueNameId(state))_below_minimum, i64 4, i64 %v$(collectionIndex -> valueNameId(state))_requested" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_minus_one = sub i64 %v$(collectionIndex -> valueNameId(state))_minimum, 1" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_shift1 = lshr i64 %v$(collectionIndex -> valueNameId(state))_minus_one, 1" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_round1 = or i64 %v$(collectionIndex -> valueNameId(state))_minus_one, %v$(collectionIndex -> valueNameId(state))_shift1" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_shift2 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round1, 2" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_round2 = or i64 %v$(collectionIndex -> valueNameId(state))_round1, %v$(collectionIndex -> valueNameId(state))_shift2" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_shift4 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round2, 4" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_round4 = or i64 %v$(collectionIndex -> valueNameId(state))_round2, %v$(collectionIndex -> valueNameId(state))_shift4" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_shift8 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round4, 8" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_round8 = or i64 %v$(collectionIndex -> valueNameId(state))_round4, %v$(collectionIndex -> valueNameId(state))_shift8" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_shift16 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round8, 16" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_round16 = or i64 %v$(collectionIndex -> valueNameId(state))_round8, %v$(collectionIndex -> valueNameId(state))_shift16" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_shift32 = lshr i64 %v$(collectionIndex -> valueNameId(state))_round16, 32" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_round32 = or i64 %v$(collectionIndex -> valueNameId(state))_round16, %v$(collectionIndex -> valueNameId(state))_shift32" -> println
-            "  %v$(collectionIndex -> valueNameId(state))_capacity = add i64 %v$(collectionIndex -> valueNameId(state))_round32, 1" -> println
+            Arena(0) => capacityNames!
+            "v$(collectionIndex -> valueNameId(state))" -> materialize(capacityNames!) => capacityPrefix
+            capacityPrefix -> emitCollectionPowerOfTwo("%v$(collectionIndex -> valueNameId(state))_requested")
+            "  %v$(collectionIndex -> valueNameId(state))_capacity = add i64 %v$(collectionIndex -> valueNameId(state))_power, 0" -> println
             "  %v$(collectionIndex -> valueNameId(state))_payload_bytes = mul i64 %v$(collectionIndex -> valueNameId(state))_capacity, $dequeElementSize" -> println
             "  %v$(collectionIndex -> valueNameId(state))_bytes = add i64 %v$(collectionIndex -> valueNameId(state))_payload_bytes, 8" -> println
             "  %v$(collectionIndex -> valueNameId(state))_data = call ptr @sollang_alloc(i64 %v$(collectionIndex -> valueNameId(state))_bytes)" -> println
@@ -606,7 +594,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
         0 => countWord!
         countWord! < wordCount -> while {
             "  %v$(callIndex -> valueNameId(state))_word$(countWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
-            countRoot >= 0 -> if { "%v$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+            countRoot >= 0 -> if { "%v$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeLoadedValue(ownerIndex, context, state) }
             ", 0, $(countWord!)" -> println
             countWord! == wordCount - 1 and bitCount % 64 != 0
                 -> if {
@@ -688,7 +676,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
                 0 => containsWord!
                 containsWord! < wordCount -> while {
                     "  %v$(callIndex -> valueNameId(state))_word$(containsWord!) = extractvalue %sollang.bitset.t$(bitSetTypeId!) " -> print
-                    containsRoot >= 0 -> if { "%v$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+                    containsRoot >= 0 -> if { "%v$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeLoadedValue(ownerIndex, context, state) }
                     ", 0, $(containsWord!)" -> println
                     containsWord! + 1 => containsWord!
                 }
@@ -735,16 +723,21 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
         dequeBorrow == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(dequeBorrow)_mut_capacity_addr" -> print }
         ", align 8" -> println
     } else {
-        dequeRoot >= 0 -> if { "  %deque$(callIndex -> valueNameId(state))_source = load %sollang.array.i32, ptr %slot$(dequeRoot -> valueNameId(state)), align 8" -> println }
-        "  %deque$(callIndex -> valueNameId(state))_data = extractvalue %sollang.array.i32 " -> print
-        dequeRoot >= 0 -> if { "%deque$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
-        ", 0" -> println
-        "  %deque$(callIndex -> valueNameId(state))_length = extractvalue %sollang.array.i32 " -> print
-        dequeRoot >= 0 -> if { "%deque$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
-        ", 1" -> println
-        "  %deque$(callIndex -> valueNameId(state))_capacity = extractvalue %sollang.array.i32 " -> print
-        dequeRoot >= 0 -> if { "%deque$(callIndex -> valueNameId(state))_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
-        ", 2" -> println
+        "  %deque$(callIndex -> valueNameId(state))_source = " -> print
+        dequeRoot >= 0 -> if {
+            "load %sollang.array.i32, ptr %slot$(dequeRoot -> valueNameId(state)), align 8" -> println
+        } else {
+            base.typeId != dequeTypeId! -> if {
+                "load %sollang.array.i32, ptr " -> print
+            } else {
+                "freeze %sollang.array.i32 " -> print
+            }
+            call.operand0 -> writeValue(ownerIndex, context, state)
+            base.typeId != dequeTypeId! -> if { ", align 8" -> println } else { "" -> println }
+        }
+        "  %deque$(callIndex -> valueNameId(state))_data = extractvalue %sollang.array.i32 %deque$(callIndex -> valueNameId(state))_source, 0" -> println
+        "  %deque$(callIndex -> valueNameId(state))_length = extractvalue %sollang.array.i32 %deque$(callIndex -> valueNameId(state))_source, 1" -> println
+        "  %deque$(callIndex -> valueNameId(state))_capacity = extractvalue %sollang.array.i32 %deque$(callIndex -> valueNameId(state))_source, 2" -> println
     }
     "  %deque$(callIndex -> valueNameId(state))_head = load i64, ptr %deque$(callIndex -> valueNameId(state))_data, align 8" -> println
 
@@ -1744,8 +1737,8 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
     ", 1" -> println
 }
 
-# Same bit spreading and minimum as the managed reserve capacity helpers.
-emitReservePowerOfTwo prefix: Text, value: Text -> Unit uses Console {
+# Constructor and reserve share the managed power-of-two minimum of one.
+emitCollectionPowerOfTwo prefix: Text, value: Text -> Unit uses Console {
     "  %$(prefix)_positive = icmp ugt i64 $value, 0" -> println
     "  %$(prefix)_at_least_one = select i1 %$(prefix)_positive, i64 $value, i64 1" -> println
     "  %$(prefix)_spread0 = sub i64 %$(prefix)_at_least_one, 1" -> println
@@ -1770,7 +1763,7 @@ emitDequeReserve request: WhileValueRequest, context: ref emitterContext.EmitCon
     call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => borrow
     Arena(0) => names!
     "reserve$(index -> valueNameId(state))_deque" -> materialize(names!) => prefix
-    "$(prefix)_round" -> emitReservePowerOfTwo("%reserve$(index -> valueNameId(state))_requested")
+    "$(prefix)_round" -> emitCollectionPowerOfTwo("%reserve$(index -> valueNameId(state))_requested")
     borrow >= 0 -> if {
         "  %$(prefix)_data = load ptr, ptr " -> print
         borrow == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(borrow)_mut_ptr_addr" -> print }
@@ -1871,7 +1864,7 @@ emitDictionaryReserve request: WhileValueRequest, context: ref emitterContext.Em
     "  %$(prefix)_entries_scaled = mul i64 %reserve$(index -> valueNameId(state))_requested, 8" -> println
     "  %$(prefix)_entries_rounded = add i64 %$(prefix)_entries_scaled, 6" -> println
     "  %$(prefix)_required = udiv i64 %$(prefix)_entries_rounded, 7" -> println
-    "$(prefix)_buckets" -> emitReservePowerOfTwo("%$(prefix)_required")
+    "$(prefix)_buckets" -> emitCollectionPowerOfTwo("%$(prefix)_required")
     "  %$(prefix)_below_minimum = icmp ult i64 %$(prefix)_buckets_power, 16" -> println
     "  %$(prefix)_capacity = select i1 %$(prefix)_below_minimum, i64 16, i64 %$(prefix)_buckets_power" -> println
     "  %$(prefix)_owner = load %sollang.int_dictionary, ptr " -> print

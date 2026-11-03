@@ -780,14 +780,6 @@ callArgumentNeedsSliceProjection argumentIndex: Int, callIndex: Int, ordinal: In
     }
     needsProjection!
 }
-# Reference reads already have a loaded aggregate from emitExpression. The
-# generic value writer preserves their pointer ABI for other consumers.
-writeCallSliceProjectionValue valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
-    (context.ir[valueIndex] -> referenceValueTypeId(context, state)) >= 0
-        -> if { "%v$(valueIndex -> valueNameId(state))" -> print } else {
-            valueIndex -> writeValue(ownerIndex, context, state)
-        }
-}
 
 emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     argumentIndex >= 0
@@ -849,16 +841,16 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
                         "  store " -> print
                         sliceValueTypeId -> writeSemanticTypeId(context, state)
                         " " -> print
-                        sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
+                        sliceValueIndex -> writeLoadedValue(ownerIndex, context, state)
                         ", ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId])" -> println
                         "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
                         "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
                     } else {
                         "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
-                        sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
+                        sliceValueIndex -> writeLoadedValue(ownerIndex, context, state)
                         ", 0" -> println
                         "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
-                        sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
+                        sliceValueIndex -> writeLoadedValue(ownerIndex, context, state)
                         ", 1" -> println
                         "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr " -> print
                         sliceValueIndex -> writeCallSliceDataPointer("%call$(callIndex)_arg$(ordinal)_slice_data", context, state)
@@ -1022,7 +1014,7 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
                                                                 and (argument -> referenceValueTypeId(context, state)) >= 0
                                                                 -> if { true => sliceReferenceArgument! }
                                                             sliceReferenceArgument! -> if {
-                                                                argumentValueIndex -> writeCallSliceProjectionValue(callOwnerIndex, context, state)
+                                                                argumentValueIndex -> writeLoadedValue(callOwnerIndex, context, state)
                                                             } else {
                                                                 primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex -> valueNameId(state))" -> print }
                                                             }

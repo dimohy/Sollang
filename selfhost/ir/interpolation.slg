@@ -185,7 +185,7 @@ identifierPathMember nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToke
     false
 }
 
-public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> PreparedInterpolationProduct {
+lowerPreparedProduct request: move PreparedInterpolationRequest, retainOrdinaryFlows: Bool -> PreparedInterpolationProduct {
     decodedSpanLength source: Text, start: UIntSize, end: UIntSize, decodeEscapes: Bool -> UIntSize {
         UIntSize(0) => length!
         start => byteIndex!
@@ -303,7 +303,10 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                     and candidate.payloadToken >= 0
                                     -> if {
                                         fragmentTokens[candidate.payloadToken] => targetToken
-                                        (fragment -> slice(targetToken.span.start, targetToken.span.length)) == "await"
+                                        # The typed product shares ordinary binding and emission
+                                        # for every flow target, including future intrinsics.
+                                        # Flat IR observers retain their existing projection.
+                                        retainOrdinaryFlows or (fragment -> slice(targetToken.span.start, targetToken.span.length)) == "await"
                                             -> if { true => retainFlowValues! }
                                     }
                                 flowValueAstIndex! + 1 => flowValueAstIndex!
@@ -1567,8 +1570,12 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
     PreparedInterpolationProduct { nodes: wiredNodes!, typeNodes: typeNodes!, typeTokens: typeTokens! }
 }
 
+public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> PreparedInterpolationProduct {
+    request -> lowerPreparedProduct(true)
+}
+
 public lowerPrepared request: move PreparedInterpolationRequest -> [InterpolationNode; ~] {
-    request -> lowerPreparedWithTypes => product
+    request -> lowerPreparedProduct(false) => product
     product.nodes => nodes
     nodes
 }

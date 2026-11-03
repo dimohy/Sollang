@@ -57,7 +57,8 @@ internal static class LlvmAssertions
             return false;
         }
 
-        var llvm = NormalizeHeapAllocationNames(NormalizeLlvmTypeIdentities(File.ReadAllText(llvmPath, Encoding.UTF8)));
+        var llvm = NormalizeCollectionControlNames(NormalizeHeapAllocationNames(
+            NormalizeLlvmTypeIdentities(File.ReadAllText(llvmPath, Encoding.UTF8))));
         foreach (var expected in ReadAssertions(containsPath))
         {
             var normalizedExpected = NormalizeLlvmTypeIdentities(expected);
@@ -143,6 +144,69 @@ internal static class LlvmAssertions
                 names.Add(pointer, name);
             }
             return Regex.Replace(body, @"%v\d+(?![-A-Za-z0-9_.$])",
+                match => names.GetValueOrDefault(match.Value, match.Value));
+        });
+
+    // Give actual collection labels/SSA definitions their common role spelling.
+    // Only rename existing definitions and exact uses, within one function;
+    // never supply an assertion marker from a declaration or a comment alone.
+    static string NormalizeCollectionControlNames(string value) =>
+        Regex.Replace(value, @"(?ms)^define[^\r\n]+\{.*?^\}", static function =>
+        {
+            var body = function.Value;
+            var names = new Dictionary<string, string>(StringComparer.Ordinal);
+            var occupied = Regex.Matches(body, @"%?[-A-Za-z0-9_.$]+")
+                .Select(match => match.Value).ToHashSet(StringComparer.Ordinal);
+            void Rename(string original, string preferred, bool label = false)
+            {
+                var replacement = preferred;
+                for (var suffix = 0; occupied.Contains(replacement)
+                    || (label && occupied.Contains("%" + replacement)); suffix++)
+                    replacement = preferred + "_alias" + suffix;
+                occupied.Add(replacement);
+                if (label) occupied.Add("%" + replacement);
+                names.Add(original, replacement);
+                if (label) names.Add("%" + original, "%" + replacement);
+            }
+            foreach (Match label in Regex.Matches(body,
+                @"(?m)^(?<name>(?<family>heap|deque)(?<id>\d+)_(?<role>up|down|copy)):\r?$"))
+            {
+                var name = label.Groups["name"].Value;
+                if (Regex.Matches(body, @"(?m)^\s*br label %" + Regex.Escape(name) + @"\s*$").Count < 2)
+                    continue;
+                var family = label.Groups["family"].Value;
+                var role = label.Groups["role"].Value;
+                if (family == "heap" && role is "up" or "down")
+                    Rename(name, "heap_" + role + "_loop" + label.Groups["id"].Value, label: true);
+                else if (family == "deque" && role == "copy")
+                    Rename(name, "deque_grow_copy" + label.Groups["id"].Value, label: true);
+            }
+            foreach (Match head in Regex.Matches(body,
+                @"(?m)^\s*(?<name>%deque(?<id>\d+)_next_head) = and i64 %deque\k<id>_(?<step>head_minus_one|head_plus_one), %deque\k<id>_mask\r?$"))
+            {
+                var id = head.Groups["id"].Value;
+                var front = head.Groups["step"].Value == "head_minus_one";
+                var step = front ? "head_minus_one = sub i64 %deque" + id + "_active_head"
+                                 : "head_plus_one = add i64 %deque" + id + "_head";
+                if (!Regex.IsMatch(body, @"(?m)^\s*%deque" + id + "_" + Regex.Escape(step) + @", 1\r?$")
+                    || !Regex.IsMatch(body, @"(?m)^\s*store i64 " + Regex.Escape(head.Groups["name"].Value)
+                        + @", ptr %deque" + id + (front ? "_active_data" : "_data") + @", align 8\r?$"))
+                    continue;
+                Rename(head.Groups["name"].Value, "%deque_" + (front ? "front_head" : "pop_front_head") + id);
+            }
+            if (Regex.IsMatch(body, @"^define internal void @sollang_drop_t\d+\(%sollang\.array\.i32 %value\)")
+                && new[] {
+                    @"%capacity = extractvalue %sollang\.array\.i32 %value, 2",
+                    @"%head = load i64, ptr %data, align 8",
+                    @"%payload = getelementptr i8, ptr %data, i64 8",
+                    @"%mask = sub i64 %capacity, 1",
+                    @"%logical = add i64 %head, %index",
+                    @"%physical = and i64 %logical, %mask",
+                    @"%slot = getelementptr [^\r\n]+, ptr %payload, i64 %physical",
+                    @"call void @sollang_drop_t\d+\([^\r\n]+ %element\)"
+                }.All(pattern => Regex.IsMatch(body, @"(?m)^\s*" + pattern + @"\r?$")))
+                Rename("%capacity", "%drop_deque_capacity");
+            return Regex.Replace(body, @"%?[-A-Za-z0-9_.$]+",
                 match => names.GetValueOrDefault(match.Value, match.Value));
         });
 

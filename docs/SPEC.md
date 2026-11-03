@@ -4213,6 +4213,10 @@ tombstones. `Deque<T>` exposes readonly `front`/`back` and mutable
 `pushFront`, `pushBack`, `popFront`, and `popBack`. It deliberately exposes no
 indexing or ordinary array `take`, because those operations would leak its
 physical ring representation. Empty `front`, `back`, or pop traps before a load.
+A `Deque<T>(N)` constructor requires a positive `Int` literal and rounds its
+capacity to the least power of two greater than or equal to `N`, starting at
+one. Growth preserves logical order and transfers owned elements to the new
+backing storage before releasing the old storage.
 
 [10, 20; ~] => values
 values -> append(30) => values

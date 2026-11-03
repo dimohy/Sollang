@@ -1,0 +1,26 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.semantic.symbols as symbols
+
+main {
+    """
+    main {
+        Deque<Int>(2) => values!
+        values! -> pushBack(7)
+        "value=$(values! -> front)" -> println
+    }
+    """ => source
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    nodes -> symbols.collectPreparedWithTokens(tokens) => table
+    interpolation.PreparedInterpolationRequest {
+        source: source, nodes: nodes, tokens: tokens, symbols: table
+    } -> interpolation.lowerPreparedWithTypes => product
+    (product.nodes -> len) == 1 => single
+    single and product.nodes[0].kind == 17
+        and product.nodes[0].valueAst >= 0
+        and product.nodes[0].valueAst < (product.typeNodes -> len)
+        and product.typeNodes[product.nodes[0].valueAst].kind == 10 => canonical
+    "typed-flow=$canonical" -> println
+}

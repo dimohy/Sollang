@@ -6,7 +6,8 @@ internal static class LlvmAssertionTests
     internal static int Run(string inputPath, string resultPath,
         string name = "51-fixed-array-value-generics")
     {
-        if (name is not ("51-fixed-array-value-generics" or "52-multi-file-modules" or "2546-enum-nested-aggregate-layout"))
+        if (name is not ("51-fixed-array-value-generics" or "52-multi-file-modules" or "2546-enum-nested-aggregate-layout"
+            or "852-binary-heap" or "853-deque-ring" or "855-deque-owned-drop"))
             throw new ArgumentException("Unsupported LLVM assertion fixture.", nameof(name));
         if (File.Exists(resultPath)) throw new IOException("Test result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
@@ -31,7 +32,39 @@ internal static class LlvmAssertionTests
         string ReplaceFirst(string pattern, string replacement) => new Regex(pattern).Replace(original, replacement, 1);
         try
         {
-            if (name == "2546-enum-nested-aggregate-layout")
+            if (name is "852-binary-heap" or "853-deque-ring" or "855-deque-owned-drop")
+            {
+                Verify("valid-native-collection", original, true);
+                if (name == "852-binary-heap")
+                {
+                    Verify("missing-up-definition", Regex.Replace(original, @"(?m)^heap\d+_up:\r?\n", ""), false);
+                    Verify("missing-down-definition", Regex.Replace(original, @"(?m)^heap\d+_down:\r?\n", ""), false);
+                    Verify("missing-up-backedge", Regex.Replace(original,
+                        @"(?m)(^heap\d+_up_swap:\r?\n(?:(?!^heap\d+_up_done:).)*?)^\s*br label %heap\d+_up\r?\n",
+                        "$1", RegexOptions.Singleline), false);
+                    Verify("comment-is-not-a-loop", Regex.Replace(original, @"(?m)^heap\d+_(?:up|down):\r?\n", "; removed label\n"), false);
+                }
+                else if (name == "853-deque-ring")
+                {
+                    Verify("missing-copy-definition", Regex.Replace(original, @"(?m)^deque\d+_copy:\r?\n", ""), false);
+                    Verify("wrong-front-step", Regex.Replace(original,
+                        @"(?m)(%deque\d+_head_minus_one = sub i64 %deque\d+_active_head, )1", "${1}0"), false);
+                    Verify("wrong-pop-front-step", Regex.Replace(original,
+                        @"(?m)(%deque\d+_head_plus_one = add i64 %deque\d+_head, )1", "${1}0"), false);
+                }
+                else
+                {
+                    Verify("wrong-ring-header-offset", original.Replace(
+                        "%payload = getelementptr i8, ptr %data, i64 8", "%payload = getelementptr i8, ptr %data, i64 0", StringComparison.Ordinal), false);
+                    Verify("wrong-ring-mask", original.Replace("%mask = sub i64 %capacity, 1",
+                        "%mask = sub i64 %capacity, 2", StringComparison.Ordinal), false);
+                    Verify("missing-element-drop", Regex.Replace(original,
+                        @"(?m)^\s*call void @sollang_drop_t\d+\([^\r\n]+ %element\)\r?\n", ""), false);
+                    Verify("missing-free", Regex.Replace(original,
+                        @"(?m)^\s*call void @sollang_free\([^\r\n]+\)\r?\n", ""), false);
+                }
+            }
+            else if (name == "2546-enum-nested-aggregate-layout")
             {
                 Verify("valid-managed-layout", original, true);
                 var native = Regex.Replace(original, @"%sollang\.enum\.(\d+)\b", "%sollang.enum.t$1");
