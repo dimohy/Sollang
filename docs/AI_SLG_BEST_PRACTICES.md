@@ -1677,7 +1677,12 @@ events -> each event {
 ```
 
 Do not model an event source as an unbounded ordinary stream or hide a worker
-that outlives its owner. Browser targets require a host event-loop capability
+that outlives its owner. `Source.events` may run inside ordinary functions and
+return its affine producer through the normal function ABI; retain its move
+input and structured cancellation rather than imposing a `main`-only rule.
+Declare `uses Console` on a function that subscribes to the source, matching
+the intrinsic's declared effect requirement.
+Browser targets require a host event-loop capability
 rather than a synchronous native fallback.
 
 ## 16. Use structured async, await, yield, and cancellation
@@ -1914,6 +1919,10 @@ cleanup bodies also come from `NativeRuntimePolicy`. Both platform emitters
 and the SLG environment adapter consume those compiled definitions. Keep
 platform declaration placement in the adapter; never copy helper instructions
 or allocation/error branches into a second runtime template.
+Concurrent stream joins use the same compiled-definition path for platform
+declarations, synchronization helpers, worker bodies and lifecycle cleanup.
+Keep the worker/lifecycle split within the bounded multiline limit and preserve
+cancel, join and destruction order across both compiler consumers.
 Regenerate that region through `selfhost-sync`; do not copy or edit its LLVM
 strings. Region markers and the module namespace must be valid before writing,
 and an authored-output change detected during generation aborts publication.

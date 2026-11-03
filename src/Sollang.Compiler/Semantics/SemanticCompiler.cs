@@ -11556,12 +11556,6 @@ internal sealed partial class SemanticCompiler
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeMouseEvents:
-                        EnsureRuntimeIntrinsicAllowed(
-                            function,
-                            allowReadIntCall,
-                            expression.Line,
-                            expression.Column,
-                            path);
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         ValidateAdditionalFunctionArguments(
                             function,
@@ -13305,7 +13299,6 @@ internal sealed partial class SemanticCompiler
 
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeMouseEvents:
-                EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
                 if (expression.Arguments.Count != 1)
                 {
                     throw Error(
@@ -15344,6 +15337,11 @@ internal sealed partial class SemanticCompiler
 
     private static IEnumerable<string> RequiredEffects(BoundFunction function)
     {
+        if (function.Effects is { Count: > 0 } declaredEffects)
+        {
+            return declaredEffects;
+        }
+
         if (function.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock)
         {
             return function.Effects is { } effects ? effects : Array.Empty<string>();

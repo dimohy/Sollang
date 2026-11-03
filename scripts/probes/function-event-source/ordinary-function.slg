@@ -1,0 +1,23 @@
+import sys.input.mouse as mouse
+import sys.process as process
+
+subscribe plan: move mouse.Source -> EventStream<mouse.Event> {
+    mouse.Source.events(plan)
+}
+
+main {
+    process.arguments() -> len => argumentCount
+    argumentCount > 1_000_000 -> if {
+        2 -> mouse.source(mouse.OverflowPolicy.DropNewest) -> when {
+            Ok(plan) {
+                plan -> subscribe => input
+                input -> each event {
+                    event.x -> println
+                    stop
+                }
+            }
+            Err(error) { error.invalidCapacity -> println }
+        }
+    }
+    "function-event-source:ready" -> println
+}

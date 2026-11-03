@@ -155,11 +155,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         }
         if (UsesConcurrentStreamJoins)
         {
-            functions.AppendLine("declare dllimport void @AcquireSRWLockExclusive(ptr)");
-            functions.AppendLine("declare dllimport void @ReleaseSRWLockExclusive(ptr)");
-            functions.AppendLine("declare dllimport void @InitializeConditionVariable(ptr)");
-            functions.AppendLine("declare dllimport i32 @SleepConditionVariableSRW(ptr, ptr, i32, i32)");
-            functions.AppendLine("declare dllimport void @WakeAllConditionVariable(ptr)");
+            functions.AppendLine(NativeRuntimePolicy.StreamJoinWindowsDeclarations());
         }
         functions.AppendLine("""
             define internal i32 @sollang_windows_utf8_path(ptr %data, i64 %length, ptr %wide, i32 %capacity) #0 {
@@ -198,73 +194,8 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     protected override void EmitConcurrentStreamJoinPlatformPrimitives(StringBuilder functions)
     {
-        functions.AppendLine("""
-            define internal i32 @sollang_windows_stream_join_worker(ptr %argument) #0 {
-            entry:
-              call void @sollang_stream_join_worker_run(ptr %argument)
-              ret i32 0
-            }
-
-            define internal i1 @sollang_stream_join_sync_init(ptr %runtime) #0 {
-            entry:
-              %sync = getelementptr i8, ptr %runtime, i64 112
-              store ptr null, ptr %sync, align 8
-              %condition = getelementptr i8, ptr %runtime, i64 120
-              call void @InitializeConditionVariable(ptr %condition)
-              ret i1 true
-            }
-
-            define internal void @sollang_stream_join_lock(ptr %runtime) #0 {
-            entry:
-              %sync = getelementptr i8, ptr %runtime, i64 112
-              call void @AcquireSRWLockExclusive(ptr %sync)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_unlock(ptr %runtime) #0 {
-            entry:
-              %sync = getelementptr i8, ptr %runtime, i64 112
-              call void @ReleaseSRWLockExclusive(ptr %sync)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_wait(ptr %runtime) #0 {
-            entry:
-              %sync = getelementptr i8, ptr %runtime, i64 112
-              %condition = getelementptr i8, ptr %runtime, i64 120
-              %waited = call i32 @SleepConditionVariableSRW(ptr %condition, ptr %sync, i32 -1, i32 0)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_wake_all(ptr %runtime) #0 {
-            entry:
-              %condition = getelementptr i8, ptr %runtime, i64 120
-              call void @WakeAllConditionVariable(ptr %condition)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_sync_destroy(ptr %runtime) #0 {
-            entry:
-              ret void
-            }
-
-            define internal i1 @sollang_stream_join_thread_start(ptr %thread_slot, ptr %argument) #0 {
-            entry:
-              %thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_stream_join_worker, ptr %argument, i32 0, ptr null)
-              store ptr %thread, ptr %thread_slot, align 8
-              %ok = icmp ne ptr %thread, null
-              ret i1 %ok
-            }
-
-            define internal void @sollang_stream_join_thread_join(ptr %thread_slot) #0 {
-            entry:
-              %thread = load ptr, ptr %thread_slot, align 8
-              %waited = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
-              %closed = call i32 @CloseHandle(ptr %thread)
-              ret void
-            }
-
-            """);
+        functions.AppendLine(NativeRuntimePolicy.StreamJoinWindowsFunctions());
+        functions.AppendLine();
     }
 
     private void EmitProcessCapturePrimitives(StringBuilder functions)

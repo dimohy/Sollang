@@ -3309,9 +3309,13 @@ elements because each update emits the current product again.
 `sys.input.mouse.source(capacity, overflow)` validates the first concrete hot
 input source plan. `capacity` must be in `2..65536`; invalid dynamic values are
 typed `Error` results and invalid literals are rejected during compilation.
-`Source.events: move self -> EventStream<Event>` starts the subscription without
+`Source.events: move self -> EventStream<Event> uses Console` starts the subscription without
 a public wrapper, consumes the plan exactly once, and owns cancellation until
-the stream is dropped. Its ring buffer never grows, and `OverflowPolicy` is one
+the stream is dropped. It is available in ordinary functions as well as `main`,
+through either a flowed receiver or a direct call. Function boundaries preserve
+the same affine producer ABI and target capability checks.
+The caller must declare `Console`, as required by the intrinsic declaration.
+Its ring buffer never grows, and `OverflowPolicy` is one
 of:
 
 - `DropNewest`: retain queued events and discard the incoming event.

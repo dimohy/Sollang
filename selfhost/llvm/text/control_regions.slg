@@ -116,15 +116,6 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
             -> if {
                 "  store i1 false, ptr %stream_scope$(regionNodeIndex -> valueNameId(state))_cancelled, align 1" -> println
             }
-        regionEventKind! == 11 and not regionTerminated!
-            -> if {
-                regionNodeIndex -> streamPipelineOwner(context) => pipeline
-                pipeline < 0 -> if {
-                    "; sollang compiler invariant [STREAM_STOP_SCOPE_MISSING]" -> println
-                    process.exit(1)
-                }
-                "  store i1 true, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
-            }
         # Ordinary enclosing bodies delegate interpolation to its consumer.
         # Once inside that canonical root, its nested regions own their events.
         state.frozenCanonicalInterpolationRootByIr[regionNodeIndex] >= 0
@@ -139,6 +130,15 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
                 }
             0 => regionEventKind!
         }
+        regionEventKind! == 11 and not regionTerminated!
+            -> if {
+                regionNodeIndex -> streamPipelineOwner(context) => pipeline
+                pipeline < 0 -> if {
+                    "; sollang compiler invariant [STREAM_STOP_SCOPE_MISSING]" -> println
+                    process.exit(1)
+                }
+                "  store i1 true, ptr %stream_scope$(pipeline -> valueNameId(state))_cancelled, align 1" -> println
+            }
         regionEventKind! == 1 -> if {
             not regionTerminated! -> if {
                 regionNode.kind == 23 -> if {

@@ -124,10 +124,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         }
         if (UsesConcurrentStreamJoins)
         {
-            functions.AppendLine("declare i32 @pthread_cond_init(ptr, ptr)");
-            functions.AppendLine("declare i32 @pthread_cond_destroy(ptr)");
-            functions.AppendLine("declare i32 @pthread_cond_wait(ptr, ptr)");
-            functions.AppendLine("declare i32 @pthread_cond_broadcast(ptr)");
+            functions.AppendLine(NativeRuntimePolicy.StreamJoinLinuxDeclarations());
         }
         functions.AppendLine("@environ = external global ptr");
     }
@@ -140,90 +137,8 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     protected override void EmitConcurrentStreamJoinPlatformPrimitives(StringBuilder functions)
     {
-        functions.AppendLine("""
-            define internal ptr @sollang_linux_stream_join_worker(ptr %argument) #0 {
-            entry:
-              call void @sollang_stream_join_worker_run(ptr %argument)
-              ret ptr null
-            }
-
-            define internal i1 @sollang_stream_join_sync_init(ptr %runtime) #0 {
-            entry:
-              %mutex = getelementptr i8, ptr %runtime, i64 112
-              %mutex_result = call i32 @pthread_mutex_init(ptr %mutex, ptr null)
-              %mutex_ok = icmp eq i32 %mutex_result, 0
-              br i1 %mutex_ok, label %initialize_condition, label %fail
-
-            initialize_condition:
-              %condition = getelementptr i8, ptr %runtime, i64 152
-              %condition_result = call i32 @pthread_cond_init(ptr %condition, ptr null)
-              %condition_ok = icmp eq i32 %condition_result, 0
-              br i1 %condition_ok, label %ready, label %destroy_mutex
-
-            destroy_mutex:
-              %destroyed = call i32 @pthread_mutex_destroy(ptr %mutex)
-              br label %fail
-
-            ready:
-              ret i1 true
-
-            fail:
-              ret i1 false
-            }
-
-            define internal void @sollang_stream_join_lock(ptr %runtime) #0 {
-            entry:
-              %mutex = getelementptr i8, ptr %runtime, i64 112
-              %locked = call i32 @pthread_mutex_lock(ptr %mutex)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_unlock(ptr %runtime) #0 {
-            entry:
-              %mutex = getelementptr i8, ptr %runtime, i64 112
-              %unlocked = call i32 @pthread_mutex_unlock(ptr %mutex)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_wait(ptr %runtime) #0 {
-            entry:
-              %mutex = getelementptr i8, ptr %runtime, i64 112
-              %condition = getelementptr i8, ptr %runtime, i64 152
-              %waited = call i32 @pthread_cond_wait(ptr %condition, ptr %mutex)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_wake_all(ptr %runtime) #0 {
-            entry:
-              %condition = getelementptr i8, ptr %runtime, i64 152
-              %woken = call i32 @pthread_cond_broadcast(ptr %condition)
-              ret void
-            }
-
-            define internal void @sollang_stream_join_sync_destroy(ptr %runtime) #0 {
-            entry:
-              %condition = getelementptr i8, ptr %runtime, i64 152
-              %condition_destroyed = call i32 @pthread_cond_destroy(ptr %condition)
-              %mutex = getelementptr i8, ptr %runtime, i64 112
-              %mutex_destroyed = call i32 @pthread_mutex_destroy(ptr %mutex)
-              ret void
-            }
-
-            define internal i1 @sollang_stream_join_thread_start(ptr %thread_slot, ptr %argument) #0 {
-            entry:
-              %created = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_stream_join_worker, ptr %argument)
-              %ok = icmp eq i32 %created, 0
-              ret i1 %ok
-            }
-
-            define internal void @sollang_stream_join_thread_join(ptr %thread_slot) #0 {
-            entry:
-              %thread = load i64, ptr %thread_slot, align 8
-              %joined = call i32 @pthread_join(i64 %thread, ptr null)
-              ret void
-            }
-
-            """);
+        functions.AppendLine(NativeRuntimePolicy.StreamJoinLinuxFunctions());
+        functions.AppendLine();
     }
 
     public override void EmitEventPrimitives(StringBuilder functions)

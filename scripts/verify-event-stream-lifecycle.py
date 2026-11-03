@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import re
 
-from completed_artifact_plan import initialize_output
+from completed_artifact_plan import initialize_output, cleanup_output
 from verification_execution import VerificationExecution
 
 
@@ -291,6 +291,8 @@ def main():
     parser.add_argument('--windows-module', type=Path, required=True)
     parser.add_argument('--linux-module', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--reusable-directory', type=Path, action='append',
+                        help='Explicit reusable compiler products for the artifact lifecycle contract.')
     parser.add_argument('--expect', choices=['pass', 'reproduce'], required=True)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
@@ -315,7 +317,7 @@ def main():
                 cases.append((name, mouse_module(module, platform, closed, retirement)))
         for cancel_only in [False, True]:
             cases.append((platform + '-join-' + ('cancel' if cancel_only else 'destroy'), join_module(module, cancel_only)))
-    initialize_output(repo, args.output)
+    initialize_output(repo, args.output, reusable_directories=args.reusable_directory)
     args.output.mkdir(exist_ok=False)
     result = dict(schemaVersion=1, status='running', inputHashes=pins, completed=0, total=len(cases), cases=[], scope=__doc__.strip())
     execution = VerificationExecution(repo, args.output, result, lambda: all(sha(path) == expected for path, expected in pins.items()), sha)
@@ -347,7 +349,8 @@ def main():
         error = ex
         raise
     finally:
-        execution.finalize(error=error)
+        execution.finalize(error=error, cleanup=False)
+    cleanup_output(repo, args.output, reusable_directories=args.reusable_directory)
     print(json.dumps({key: result[key] for key in ['status', 'completed', 'total', 'runtimeContractSatisfied', 'inputsStable', 'processesStopped']}))
 
 
