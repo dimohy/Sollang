@@ -8,7 +8,7 @@ from collections import Counter
 
 from verification_execution import VerificationExecution
 from verification_contract_lease import VerificationContractLease
-from verification_fingerprints import managed_runtime_inputs
+from verification_fingerprints import managed_compilation_inputs, managed_runtime_inputs
 from completed_artifact_plan import initialize_output, cleanup_output
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,7 +188,10 @@ def main():
     harness = ROOT / 'scripts/probes/codegen-identity/CodegenLimits.csproj'
     vectors = ROOT / 'scripts/probes/codegen-type-universe/vectors.json'
     vector_count = len(json.loads(vectors.read_text(encoding='utf-8-sig')))
-    inputs = [Path(__file__), compiler, *managed_runtime_inputs(compiler), harness,
+    compiler_inputs = (managed_compilation_inputs(compiler, ROOT / 'stdlib')
+                       if args.registered_sources or args.emitter or args.verify_source
+                       else managed_runtime_inputs(compiler))
+    inputs = [Path(__file__), compiler, *compiler_inputs, harness,
               harness.with_name('Limits.cs'), vectors, ROOT / 'Directory.Build.props', ROOT / 'global.json']
     if args.builtin_display_controls:
         inputs += [ROOT / 'src/Sollang.Compiler/Semantics/SemanticTypeDisplayNames.cs',
