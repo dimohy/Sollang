@@ -510,11 +510,49 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
         }
 }
 
+# Table identity follows the reachable (dyn trait, concrete type) pair.
+# Keep that decision shared by global definitions and conversion expressions.
+prepareDynTableOwners context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
+    [Int; ~] => conversions!
+    0 => index!
+    index! < (context.ir -> len) -> while {
+        context.ir[index!] => conversion
+        conversion.kind == 9 and conversion.opcode == -224 and conversion.operand0 >= 0
+            and conversion.typeOrigin == 16 and conversion.typeId >= 0
+            and (index! -> irNodeReachable(context, state))
+            -> if { conversions! -> push(index!) }
+        index! + 1 => index!
+    }
+    [Int; ~] => owners!
+    (conversions! -> len) == 0 -> if { owners! -> return }
+    0 => slot!
+    slot! < (context.ir -> len) -> while {
+        owners! -> push(-1)
+        slot! + 1 => slot!
+    }
+    {UInt64: Int; 1~} => firstByPair!
+    conversions! -> each conversionIndex {
+        context.ir[conversionIndex] => conversion
+        context.ir[conversion.operand0] -> effectiveTypeId(context, state) => concreteType
+        concreteType >= 0 -> if {
+            UInt64(conversion.typeId) * 4294967296 + UInt64(concreteType) => pair
+            firstByPair! -> putIfAbsent(pair, conversionIndex) => inserted
+            firstByPair![pair] => owners![conversionIndex]
+        }
+    }
+    owners!
+}
+
 emitDynExpression index: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[index] => expression
     expression.kind != 9 or expression.operand0 < 0
         -> if { return }
     expression.opcode == -224 -> if {
+        state.frozenDynTableOwners[index] => tableOwner
+        tableOwner < 0 -> if {
+            "; sollang internal error: dyn conversion has no canonical table" -> println
+            process.exit(1)
+        }
         context.ir[expression.operand0] => concrete
         concrete -> effectiveTypeId(context, state) => concreteType
         "  %v$(index -> valueNameId(state))_data = call ptr @sollang_alloc(i64 $(context.typeSizes[concreteType]))" -> println
@@ -525,7 +563,7 @@ emitDynExpression index: Int, ownerIndex: Int, context: ref emitterContext.EmitC
         ", ptr %v$(index -> valueNameId(state))_data, align " -> print
         concrete -> storageAlign(context, state) -> writeDecimalLine
         "  %v$(index -> valueNameId(state))_with_data = insertvalue %sollang.dyn poison, ptr %v$(index -> valueNameId(state))_data, 0" -> println
-        "  %v$(index -> valueNameId(state)) = insertvalue %sollang.dyn %v$(index -> valueNameId(state))_with_data, ptr @sollang_dyn_vtable_$(index), 1" -> println
+        "  %v$(index -> valueNameId(state)) = insertvalue %sollang.dyn %v$(index -> valueNameId(state))_with_data, ptr @sollang_dyn_vtable_$(tableOwner), 1" -> println
     }
     expression.opcode == -225 -> if {
         expression -> diagnostics.dynTraitDispatchSlot(context) => slot

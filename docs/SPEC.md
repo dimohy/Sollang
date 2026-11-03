@@ -2237,7 +2237,10 @@ and a vtable pointer. Slot 0 is the erased drop function. Subsequent slots are
 trait methods in declaration order. Conversion allocates storage for the
 concrete value and selects its concrete implementation table; dispatch loads
 the requested slot and calls it indirectly. Scope cleanup calls slot 0 exactly
-once.
+once. Reachable conversions of the same canonical trait and concrete type
+share one implementation table and its wrappers. Different trait or concrete
+type identities retain separate tables; unreachable conversions do not select
+a table.
 
 The implemented dyn-compatible subset requires a trait without associated
 types and synchronous, capture-free methods with readonly `self`, no additional
