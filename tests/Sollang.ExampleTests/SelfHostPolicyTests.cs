@@ -122,7 +122,7 @@ internal static class SelfHostPolicyTests
                 .Invoke(null, null)!;
             Check("rule-enum-and-struct-schema-exported", Enum.GetNames(keyPart).All(name => ruleTypes.Contains(name, StringComparison.Ordinal))
                 && ruleTypes.Contains("public parts: [KeyPart; ~]", StringComparison.Ordinal));
-            var rules = keyPolicies.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
+            var rules = keyPolicies.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
             var emittedRules = rules.Select(Emit).ToArray();
             var exportedRuleNames = Regex.Matches(string.Concat(emittedRules), @"(?m)^public (\w+): -> KeyRule")
                 .Select(match => match.Groups[1].Value).ToArray();
@@ -203,29 +203,36 @@ internal static class SelfHostPolicyTests
 
     private static string WriteRuntimeProbe(Assembly compiler, string root, string directory)
     {
-        string[] names = ["BorrowedTextReturnPolicy", "FunctionTypeBindingPolicy", "TypeNamePolicy",
-            "CodegenCachePolicy", "CodegenCacheKeyPolicy", "NativeRuntimePolicy"];
         var source = new System.Text.StringBuilder();
         var expected = new System.Text.StringBuilder();
         var dependencies = new List<string>();
-        var types = names.Select(name => compiler.GetType("Sollang.Compiler.Shared." + name, true)!).ToArray();
+        var types = compiler.GetTypes().Where(type => type.GetCustomAttributesData().Any(attribute =>
+                attribute.AttributeType.FullName == "Sollang.Compiler.Shared.SelfHostPolicyAttribute"))
+            .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+        var names = types.Select(type => type.Name).ToArray();
+        var typeNamePolicy = compiler.GetType("Sollang.Compiler.Shared.TypeNamePolicy", true)!;
+        string Alias(int index) => types[index] == typeNamePolicy ? "typeNames" : "policy" + index;
         for (var index = 0; index < types.Length; index++)
         {
             var attribute = types[index].GetCustomAttributesData().Single(item =>
                 item.AttributeType.FullName == "Sollang.Compiler.Shared.SelfHostPolicyAttribute");
             source.Append("import ").Append(attribute.ConstructorArguments[0].Value)
-                .Append(" as policy").Append(index).Append('\n');
+                .Append(" as ").Append(Alias(index)).Append('\n');
             dependencies.Add(Path.Combine(root, (string)attribute.ConstructorArguments[1].Value!));
         }
         dependencies.Add(Path.Combine(root, "selfhost/semantic/type_name_policy.slg"));
         source.Append("\nmain {\n");
         for (var index = 0; index < types.Length; index++)
         {
-            foreach (var method in types[index].GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)
+            var multilineText = types[index].GetCustomAttributesData()
+                .Where(attribute => attribute.AttributeType.FullName == "Sollang.Compiler.Shared.SelfHostPolicyAttribute")
+                .SelectMany(attribute => attribute.NamedArguments)
+                .Any(argument => argument.MemberName == "MultilineText" && argument.TypedValue.Value is true);
+            foreach (var method in types[index].GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly)
                 .OrderBy(method => method.Name, StringComparer.Ordinal))
             {
                 var parameters = method.GetParameters();
-                var call = "policy" + index + "." + char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
+                var call = Alias(index) + "." + char.ToLowerInvariant(method.Name[0]) + method.Name[1..];
                 if (method.ReturnType.FullName == "Sollang.Compiler.Shared.CodegenKeyRule" && parameters.Length == 0)
                 {
                     var rule = method.Invoke(null, null)!;
@@ -233,12 +240,12 @@ internal static class SelfHostPolicyTests
                     var parts = ((System.Collections.IEnumerable)method.ReturnType.GetProperty("Parts")!.GetValue(rule)!)
                         .Cast<object>().Select(part => Convert.ToInt32(part, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
                     var label = names[index] + "." + method.Name;
-                    var binding = "rule" + method.Name;
+                    var binding = "rule" + index + method.Name;
                     // Read both the declaration order and its exported partIndex at runtime.
                     source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(call)
                         .Append("() => ").Append(binding).Append('\n')
                         .Append("    ").Append(binding).Append(".domain -> println\n    (").Append(binding).Append(".parts -> len) -> println\n")
-                        .Append("    ").Append(binding).Append(".parts -> each part { policy").Append(index).Append(".partIndex(part) -> println }\n");
+                        .Append("    ").Append(binding).Append(".parts -> each part { ").Append(Alias(index)).Append(".partIndex(part) -> println }\n");
                     expected.Append(label).Append('\n').Append(domain).Append('\n').Append(parts.Length).Append('\n');
                     foreach (var part in parts) expected.Append(part).Append('\n');
                     continue;
@@ -262,7 +269,9 @@ internal static class SelfHostPolicyTests
                     var text = value switch
                     {
                         bool boolean => boolean ? "true" : "false",
-                        string literal => literal,
+                        string literal => multilineText
+                            ? literal.Replace("\r\n", "\n", StringComparison.Ordinal)
+                            : literal,
                         ulong number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
                         _ => throw new InvalidDataException("Unsupported runtime policy result: " + method.Name)
                     };
@@ -280,7 +289,7 @@ internal static class SelfHostPolicyTests
         var parserPredicate = compiler.GetTypes()
             .Select(type => type.GetMethod("IsBuiltinTypeName", BindingFlags.NonPublic | BindingFlags.Static))
             .Single(method => method is not null)!;
-        var builtinNames = ((string)types[2].GetMethod("BuiltinNames")!.Invoke(null, null)!).Split('|');
+        var builtinNames = ((string)typeNamePolicy.GetMethod("BuiltinNames")!.Invoke(null, null)!).Split('|');
         var spellings = builtinNames.Concat(builtinNames.Select(name => name + "Extra"))
             .Concat(builtinNames.Select(name => name.ToLowerInvariant()))
             .Concat(["", "Range", "module.Int", " Self", "Self "])
@@ -289,15 +298,15 @@ internal static class SelfHostPolicyTests
         {
             var accepted = (bool)parserPredicate.Invoke(null, [spelling])!;
             var label = "Parser.IsBuiltinTypeName:" + spelling;
-            source.Append("    \"").Append(label).Append("\" -> println\n    policy2.isBuiltin(\"")
+            source.Append("    \"").Append(label).Append("\" -> println\n    typeNames.isBuiltin(\"")
                 .Append(spelling).Append("\") -> println\n");
             expected.Append(label).Append('\n').Append(accepted ? "true" : "false").Append('\n');
         }
         var boxPredicate = compiler.GetType("Sollang.Compiler.Semantics.SemanticTypeRegistrationNames", true)!
             .GetMethod("BoxName", BindingFlags.Public | BindingFlags.Static)!;
-        var primitiveBoxes = ((string)types[2].GetMethod("PrimitiveBoxNames")!.Invoke(null, null)!).Split('|');
+        var primitiveBoxes = ((string)typeNamePolicy.GetMethod("PrimitiveBoxNames")!.Invoke(null, null)!).Split('|');
         var declarations = new[] { "BoxExcludedStructNames", "BoxExcludedNominalNames" }
-            .SelectMany(name => ((string)types[2].GetMethod(name)!.Invoke(null, null)!).Split('|'))
+            .SelectMany(name => ((string)typeNamePolicy.GetMethod(name)!.Invoke(null, null)!).Split('|'))
             .Concat(["Local", "", "sys.file.FileExtra", "SYS.FILE.FILE"]);
         foreach (var declaration in declarations)
         foreach (var name in new[] { "Int", "Local" })
@@ -311,9 +320,46 @@ internal static class SelfHostPolicyTests
             var accepted = (bool)boxPredicate.Invoke(null, [name, structure, enumeration, declaration])!;
             var flags = (structure ? "true" : "false") + ", " + (enumeration ? "true" : "false");
             var label = "SemanticTypeRegistrationNames.BoxName:" + name + ":" + flags + ":" + declaration;
-            source.Append("    \"").Append(label).Append("\" -> println\n    policy2.boxName(\"")
+            source.Append("    \"").Append(label).Append("\" -> println\n    typeNames.boxName(\"")
                 .Append(name).Append("\", ").Append(flags).Append(", \"").Append(declaration).Append("\") -> println\n");
             expected.Append(label).Append('\n').Append(accepted ? "true" : "false").Append('\n');
+        }
+        var typeId = compiler.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+        var display = compiler.GetType("Sollang.Compiler.Semantics.SemanticTypeDisplayNames", true)!
+            .GetMethod("Builtin", BindingFlags.Public | BindingFlags.Static)!;
+        foreach (var value in Enum.GetValues(typeId))
+        {
+            var name = value.ToString()!;
+            AppendValue("SemanticTypeDisplayNames.Builtin:" + name,
+                "typeNames.builtinDisplayName(\"" + name + "\")", (string)display.Invoke(null, [value])!);
+        }
+        var range = compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+            .GetMethod("Range", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)!;
+        AppendValue("BuiltinTypeDefinitions.Range.Name", "typeNames.rangeStructName()",
+            (string)range.GetType().GetProperty("Name")!.GetValue(range)!);
+        var rangeFields = ((System.Collections.IEnumerable)range.GetType().GetProperty("Fields")!.GetValue(range)!)
+            .Cast<object>().ToArray();
+        foreach (var field in rangeFields)
+        {
+            var ordinal = (int)field.GetType().GetProperty("Index")!.GetValue(field)!;
+            var name = (string)field.GetType().GetProperty("Name")!.GetValue(field)!;
+            var type = field.GetType().GetProperty("Type")!.GetValue(field)!.ToString()!;
+            AppendValue("BuiltinTypeDefinitions.Range.FieldName:" + ordinal,
+                "typeNames.rangeFieldName(" + ordinal + ")", name);
+            AppendValue("BuiltinTypeDefinitions.Range.FieldType:" + ordinal,
+                "typeNames.rangeFieldType(" + ordinal + ")", type);
+            AppendValue("BuiltinTypeDefinitions.Range.FieldOrdinal:" + name,
+                "typeNames.rangeFieldOrdinal(\"" + name + "\")", ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        AppendValue("BuiltinTypeDefinitions.Range.End", "typeNames.rangeFieldName(" + rangeFields.Length + ")", "");
+        foreach (var missing in new[] { "", "missing", "Start", "end" })
+            AppendValue("BuiltinTypeDefinitions.Range.Missing:" + missing,
+                "typeNames.rangeFieldOrdinal(\"" + missing + "\")", "-1");
+        void AppendValue(string label, string call, string value)
+        {
+            source.Append("    \"").Append(label).Append("\" -> println\n    ")
+                .Append(call).Append(" -> println\n");
+            expected.Append(label).Append('\n').Append(value).Append('\n');
         }
         source.Append("}\n");
         var sourcePath = Path.Combine(directory, "runtime-policy-probe.slg");
@@ -322,6 +368,7 @@ internal static class SelfHostPolicyTests
         File.WriteAllText(contractPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
+            policyModules = names,
             scope = "Generated policies against compiled CSharp method results; exhaustive boolean inputs, UInt64 boundary products and every declared cache-key rule",
             cases = new[] { new { id = "shared-policy-runtime", source = sourcePath,
                 additionalSources = dependencies, exit = 0, stderr = "", stdout = expected.ToString().TrimEnd('\r', '\n') } }
