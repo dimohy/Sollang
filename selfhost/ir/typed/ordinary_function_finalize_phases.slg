@@ -26,6 +26,12 @@ import sys.file as file
 
 bindTapStageInput callIndex: Int, inputIndex: Int, nodes: mut [TypedIrNode; ~] -> Unit {
     nodes[callIndex] => call!
+    call!.kind == 9 -> if {
+        call!.operand0 => call!.operand1
+        inputIndex => call!.operand0
+        call! => nodes[callIndex]
+        return
+    }
     nodes[inputIndex] => input!
     call!.operand0 => input!.nextOperand
     inputIndex => call!.operand0
@@ -298,7 +304,7 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                     expressionIrStart => tapStageSearch!
                     tapStageSearch! < expressionIrEnd -> while {
                         nodes[tapStageSearch!] => tapStageCandidate
-                        tapStageCandidate.parent == tapIrIndex! and (tapStageCandidate.kind == 6 or (tapStageCandidate.kind == 9 and (tapStageCandidate.opcode == -227 or tapStageCandidate.opcode == -228)))
+                        tapStageCandidate.parent == tapIrIndex! and (tapStageCandidate -> isJunctionStage)
                             -> if {
                                 prepared.package.nodes[sourceRange.astStart + tapStageCandidate.astNode].start => tapStageStart
                                 previousTapStage! < 0 or tapStageStart > previousTapStageStart!
@@ -389,6 +395,7 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                         UIntSize(0) => previousBranchStageStart!
                         -1 => firstBranchStage!
                         -1 => finalBranchStage!
+                        branchSource! => branchStageInput!
                         true => findingBranchStage!
                         findingBranchStage! -> while {
                             false => findingBranchStage!
@@ -397,7 +404,7 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                             expressionIrStart => branchStageSearch!
                             branchStageSearch! < expressionIrEnd -> while {
                                 nodes[branchStageSearch!] => branchStageCandidate
-                                branchStageCandidate.parent == nextBranchArm! and branchStageCandidate.kind == 6
+                                branchStageCandidate.parent == nextBranchArm! and (branchStageCandidate -> isJunctionStage)
                                     -> if {
                                         prepared.package.nodes[sourceRange.astStart + branchStageCandidate.astNode].start => branchStageStart
                                         previousBranchStage! < 0 or branchStageStart > previousBranchStageStart!
@@ -412,6 +419,9 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                                 branchStageSearch! + 1 => branchStageSearch!
                             }
                             nextBranchStage! >= 0 -> if {
+                                nodes[nextBranchStage!].kind == 9 and branchStageInput! >= 0
+                                    -> if { nextBranchStage! -> bindTapStageInput(branchStageInput!, nodes) }
+                                nextBranchStage! => branchStageInput!
                                 firstBranchStage! < 0 -> if { nextBranchStage! => firstBranchStage! }
                                 nextBranchStage! => finalBranchStage!
                                 nextBranchStage! => previousBranchStage!

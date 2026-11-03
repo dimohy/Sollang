@@ -1583,6 +1583,12 @@ values -> tap audit => kept
 The new binding `kept` owns the preserved value and its cleanup. Use that name
 after the binding; the former owner name has been consumed.
 
+Readonly collection queries can also form branch stages, for example
+`count: ref -> len -> double`. Each following target receives the preceding
+stage's result. The same rule applies in an ordinary function, a control
+region, and a `parallel branch`; keep queries in the flow instead of adding
+wrapper functions solely to make them branch targets.
+
 ### Request overlap explicitly
 
 Use `parallel branch` only when the work is independent enough to overlap:
@@ -1884,6 +1890,10 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
+Parallel branch input-mode and target async/effect admission use
+`FunctionTypeBindingPolicy`, together with its readonly-query name table.
+Keep source-fact discovery and diagnostic formatting in the typed adapters;
+regenerate the SLG policy through `selfhost-sync` when its C# methods change.
 Dyn trait method compatibility follows this same path: `DynTraitPolicy` owns
 the readonly-self, additional-input and Int-result decision. C# semantics and
 the SLG diagnostic adapter supply those facts; associated-type rejection and

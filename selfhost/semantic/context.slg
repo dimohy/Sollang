@@ -249,10 +249,16 @@ public indexBindingValueAsts package: ref analysis.PackageAnalysis -> [Int; ~] {
 public indexExpressionSourceAsts package: ref analysis.PackageAnalysis -> [Int; ~] {
     [Int; ~] => sources!
     package.nodes -> each node { sources! -> push(-1) }
+    [Int; ~] => unusedChildIndex
+    0 => sourceModule!
     package.ranges -> each range {
         0 => localAst!
         localAst! < range.astCount -> while {
             package.nodes[range.astStart + localAst!] => child
+            child.kind == 77 -> if {
+                package -> junctionTargetInputAst(sourceModule!, localAst!, unusedChildIndex, unusedChildIndex, false) => input
+                input >= 0 -> if { input - range.astStart => sources![range.astStart + localAst!] }
+            }
             child.parent >= 0 and child.parent < range.astCount
                 -> if {
                     range.astStart + child.parent => parentGlobal
@@ -268,6 +274,7 @@ public indexExpressionSourceAsts package: ref analysis.PackageAnalysis -> [Int; 
                 }
             localAst! + 1 => localAst!
         }
+        sourceModule! + 1 => sourceModule!
     }
     sources!
 }

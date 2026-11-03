@@ -1676,7 +1676,11 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                 branchMissingItemSearch! + 1 => branchMissingItemSearch!
                             }
                     }
-                    (branchNode.kind == 73 or branchNode.kind == 74 or branchNode.kind == 78) and (expressionIndexByAst[branchRange.astStart + branchAstIndex!] < 0 or branchPartitionItemMissing!)
+                    # A target can acquire its canonical result type after the
+                    # first product was interned. Revisit branch dependencies;
+                    # the existing interner preserves old product identities.
+                    branchNode.kind == 73 or branchNode.kind == 74
+                        or (branchNode.kind == 78 and (expressionIndexByAst[branchRange.astStart + branchAstIndex!] < 0 or branchPartitionItemMissing!))
                         -> if {
                             [Int; ~] => branchFieldTypes!
                             [Int; ~] => branchFieldLabels!
@@ -2872,6 +2876,11 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                     pathAstIndex! < pathRange.astCount -> while {
                         pathRange.astStart + pathAstIndex! => pathGlobalAst
                         prepared.package.nodes[pathGlobalAst] => pathNode
+                        pathNode.kind == 77 and pathSourceAstByAst[pathGlobalAst] >= 0
+                            -> if {
+                                pathRange.astStart + pathSourceAstByAst[pathGlobalAst] => inputGlobal
+                                expressionIndexByAst[inputGlobal] => pathBaseExpression![pathGlobalAst]
+                            }
                         pathBaseExpression![pathGlobalAst] >= 0 -> if {
                             expressions[pathBaseExpression![pathGlobalAst]] => baseExpression
                             # `len` is representation-sensitive at the semantic
@@ -2880,9 +2889,10 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                             # SourceText, Arguments, and mapped bytes expose UIntSize.
                             # Resolve that distinction in the canonical recursive arena
                             # so it cannot be overwritten by the conservative seed.
-                            pathNode.kind == 10 and not (prepared -> semanticContext.hasDeclaredCallTarget(pathGlobalAst))
+                            (pathNode.kind == 10 or pathNode.kind == 77) and not (prepared -> semanticContext.hasDeclaredCallTarget(pathGlobalAst))
                                 -> if {
                                     false => canonicalLengthFlow!
+                                    false => canonicalCapacityFlow!
                                     false => canonicalBitSetCountFlow!
                                     false => canonicalBitSetContainsFlow!
                                     false => canonicalBitSetSetFlow!
@@ -2901,6 +2911,12 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                             length: canonicalLengthName.span.length
                                             expected: "len"
                                         } -> textMatches -> if { true => canonicalLengthFlow! }
+                                        TextMatchRequest {
+                                            source: pathSource
+                                            start: canonicalLengthName.span.start
+                                            length: canonicalLengthName.span.length
+                                            expected: "capacity"
+                                        } -> textMatches -> if { true => canonicalCapacityFlow! }
                                         TextMatchRequest {
                                             source: pathSource
                                             start: canonicalLengthName.span.start
@@ -2950,7 +2966,7 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                         TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "remove" } -> textMatches
                                             -> if { true => canonicalSetBoolFlow! }
                                     }
-                                    canonicalLengthFlow! or canonicalBitSetCountFlow! or canonicalBitSetContainsFlow! or canonicalBitSetSetFlow! or canonicalBitSetClearFlow! or canonicalDequePushFlow! or canonicalDequeReadFlow! or canonicalCollectionPushFlow! or canonicalHeapReadFlow! or canonicalSetBoolFlow!
+                                    canonicalLengthFlow! or canonicalCapacityFlow! or canonicalBitSetCountFlow! or canonicalBitSetContainsFlow! or canonicalBitSetSetFlow! or canonicalBitSetClearFlow! or canonicalDequePushFlow! or canonicalDequeReadFlow! or canonicalCollectionPushFlow! or canonicalHeapReadFlow! or canonicalSetBoolFlow!
                                         -> if {
                                             baseExpression.typeId => canonicalLengthBaseTypeId!
                                             types[canonicalLengthBaseTypeId!].kind == 8 and types[canonicalLengthBaseTypeId!].first >= 0
@@ -2959,6 +2975,14 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                 }
                                             types[canonicalLengthBaseTypeId!] => canonicalLengthBaseType
                                             -1 => canonicalCollectionFlowType!
+                                            canonicalCapacityFlow! -> if {
+                                                canonicalLengthBaseType.kind == 3 or canonicalLengthBaseType.kind == 5 or canonicalLengthBaseType.kind == 13
+                                                    or (canonicalLengthBaseType.kind == 7 and canonicalLengthBaseType.origin == 4 and canonicalLengthBaseType.symbol >= 5 and canonicalLengthBaseType.symbol <= 7)
+                                                    -> if { 2 => canonicalCollectionFlowType! }
+                                                canonicalLengthBaseType.kind == 1 and canonicalLengthBaseType.origin == 1
+                                                    and canonicalLengthBaseType.symbol == ("Arena" -> typeIds.builtinSymbolByName)
+                                                    -> if { 13 => canonicalCollectionFlowType! }
+                                            }
                                             # A completed push consumes its argument and returns Unit.
                                             # Keep that result separate from the array receiver and
                                             # argument so branch inference cannot retain an earlier value.

@@ -8,6 +8,7 @@ import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.effects as effects
+import sollang.compiler.semantic.function_type_binding_policy as branchPolicy
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.block_value_contract_policy as blockValueContract
 import sollang.compiler.semantic.context as semanticContext
@@ -7605,4 +7606,207 @@ heapFlowContract prepared: ref semanticContext.SemanticSnapshot, resolved: ref e
     } => diagnostic
     prepared.package -> expressionDiagnosticPrecedes(resolved.fields, diagnostic, previous)
         -> if { diagnostic } else { previous }
+}
+
+# Parallel branch admission uses the same compiled policy as the managed
+# compiler. Facts and source coordinates stay in this semantic adapter.
+public struct ParallelBranchDiagnostic {
+    public code: Int
+    public sourceModule: Int
+    public armAst: Int
+    public targetAst: Int
+    public targetPathAst: Int
+    public declaredMode: Int
+    public requiredMode: Int
+    public parameterSourceModule: Int
+    public parameterSymbol: Int
+}
+
+parallelBranchFailure code: Int, source: Int, arm: Int, target: Int, path: Int, mode: Int, required: Int, parameterSource: Int, parameter: Int -> ParallelBranchDiagnostic {
+    ParallelBranchDiagnostic { code: code, sourceModule: source, armAst: arm, targetAst: target, targetPathAst: path, declaredMode: mode, requiredMode: required, parameterSourceModule: parameterSource, parameterSymbol: parameter }
+}
+
+parallelReadonlyQuery name: Text -> Bool {
+    branchPolicy.parallelReadonlyQueryNames() => names
+    UIntSize(0) => start!
+    UIntSize(0) => cursor!
+    cursor! <= (names -> len) -> while {
+        cursor! == (names -> len) or (names -> byte(cursor!)) == '|'
+            -> if {
+                cursor! - start! == (name -> len) and (names -> slice(start!, cursor! - start!)) == name
+                    -> if { true -> return }
+                cursor! + 1 => start!
+            }
+        cursor! + 1 => cursor!
+    }
+    false
+}
+
+# Mode values are adapter-local: 0 default, 1 ref, 2 mut, 3 move. The policy
+# consumes named Boolean facts, never these representation numbers.
+parallelArmMode prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, armAst: Int, firstTargetAst: Int -> Int {
+    prepared.package.ranges[sourceModule] => range
+    prepared.package.nodes[range.astStart + armAst] => arm
+    prepared.package.nodes[range.astStart + firstTargetAst] => target
+    prepared.package.sources[sourceModule] -> slice(UIntSize(0), prepared.package.sources[sourceModule] -> len) => source
+    arm.firstToken + 1 => tokenIndex!
+    tokenIndex! < arm.firstToken + arm.tokenCount
+        -> while {
+            prepared.package.tokens[range.tokenStart + tokenIndex!] => token
+            token.span.start >= target.start -> if { break }
+            source -> slice(token.span.start, token.span.length) => name
+            name == "ref" -> if { 1 -> return }
+            name == "mut" -> if { 2 -> return }
+            name == "move" -> if { 3 -> return }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    0
+}
+
+public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> ParallelBranchDiagnostic {
+    prepared.package -> expressionTypeIds.indexContextualRecords => children
+    prepared -> effects.indexDeclaredEffects => declaredEffects
+    [Bool; ~] => effectful!
+    [Int; ~] => typeByAst!
+    [Int; ~] => firstArgument!
+    prepared.package.nodes -> each node {
+        effectful! -> push(false)
+        typeByAst! -> push(-1)
+        firstArgument! -> push(-1)
+    }
+    0 => effectIndex!
+    prepared.package.nodes -> each node {
+        declaredEffects.masks[effectIndex!] > 0 -> if { true => effectful![effectIndex!] }
+        node.kind == 52 and declaredEffects.owners[effectIndex!] >= 0
+            -> if { true => effectful![declaredEffects.owners[effectIndex!]] }
+        effectIndex! + 1 => effectIndex!
+    }
+    resolved.expressions -> each value {
+        value.status == 0 and value.typeId >= 0 -> if {
+            prepared.package.ranges[value.sourceModule] => range
+            value.typeId => typeByAst![range.astStart + value.astNode]
+        }
+    }
+    [Int; ~] => nextArgument!
+    0 => argumentIndex!
+    resolved.callArguments -> each argument {
+        nextArgument! -> push(-1)
+        argument.sourceModule >= 0 and argument.sourceModule < (prepared.package.ranges -> len) and argument.callAst >= 0
+            -> if {
+                prepared.package.ranges[argument.sourceModule] => range
+                argument.callAst < range.astCount -> if {
+                    range.astStart + argument.callAst => callGlobal
+                    firstArgument![callGlobal] => nextArgument![argumentIndex!]
+                    argumentIndex! => firstArgument![callGlobal]
+                }
+            }
+        argumentIndex! + 1 => argumentIndex!
+    }
+    prepared.package.ranges -> each range {
+        0 => branchAst!
+        branchAst! < range.astCount -> while {
+            range.astStart + branchAst! => branchGlobal
+            prepared.package.nodes[branchGlobal].kind == 74
+                and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, branchAst!))
+                -> if {
+                    prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => source
+                    children.firstChild[branchGlobal] => armGlobal!
+                    armGlobal! >= 0 -> while {
+                        prepared.package.nodes[armGlobal!] => arm
+                        arm.kind == 75 -> if {
+                            -1 => firstStage!
+                            -1 => lastStage!
+                            children.firstChild[armGlobal!] => stageSearch!
+                            stageSearch! >= 0 -> while {
+                                prepared.package.nodes[stageSearch!].kind == 77
+                                    -> if {
+                                        firstStage! < 0 -> if { stageSearch! => firstStage! }
+                                        stageSearch! => lastStage!
+                                    }
+                                children.nextChild[stageSearch!] => stageSearch!
+                            }
+                            firstStage! >= 0 -> if {
+                                armGlobal! - range.astStart => armAst
+                                firstStage! - range.astStart => firstTargetAst
+                                prepared -> parallelArmMode(range.sourceModule, armAst, firstTargetAst) => declaredMode
+                                declaredMode => mode!
+                                prepared.directFlowTargetPathByAst[firstStage!] => firstPath
+                                prepared.callIndexByAst[firstStage!] => firstCallIndex
+                                firstCallIndex >= 0 -> if {
+                                    prepared.calls[firstCallIndex] => firstCall
+                                    firstCall.status == 0 and firstCall.targetSourceModule >= 0 and firstCall.functionSymbol >= 0
+                                        -> if {
+                                            prepared.package.ranges[firstCall.targetSourceModule] => targetRange
+                                            prepared.package.symbols[targetRange.symbolStart + firstCall.functionSymbol] => function
+                                            function.flags % 2 == 1 -> if { 3 } else { function.flags / 2 % 2 == 1 -> if { 2 } else { 1 } } => requiredMode
+                                            declaredMode != 0 and declaredMode != requiredMode
+                                                -> if { parallelBranchFailure(1, range.sourceModule, armAst, firstTargetAst, firstPath, declaredMode, requiredMode, -1, -1) -> return }
+                                            requiredMode => mode!
+                                        }
+                                }
+                                not (branchPolicy.parallelBranchInputAllowed(mode! == 3, mode! == 2))
+                                    -> if { parallelBranchFailure(2, range.sourceModule, armAst, firstTargetAst, firstPath, mode!, 0, -1, -1) -> return }
+                                typeByAst![lastStage!] => resultType
+                                resultType >= 0 and resolved.types[resultType].kind == 1 and resolved.types[resultType].origin == 1 and resolved.types[resultType].symbol == 0
+                                    -> if { parallelBranchFailure(6, range.sourceModule, armAst, firstTargetAst, firstPath, mode!, 0, -1, -1) -> return }
+                                firstStage! => stage!
+                                stage! >= 0 -> while {
+                                    prepared.package.nodes[stage!].kind == 77 -> if {
+                                        stage! - range.astStart => targetAst
+                                        prepared.directFlowTargetPathByAst[stage!] => pathAst
+                                        prepared.callIndexByAst[stage!] => callIndex
+                                        false => callable!
+                                        callIndex >= 0 -> if {
+                                            prepared.calls[callIndex] => call
+                                            call.status == 0 and call.targetSourceModule >= 0 and call.functionSymbol >= 0
+                                                -> if {
+                                                    true => callable!
+                                                    prepared.package.ranges[call.targetSourceModule] => targetRange
+                                                    prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
+                                                    false => hasEffects!
+                                                    function.astNode >= 0 -> if { effectful![targetRange.astStart + function.astNode] => hasEffects! }
+                                                    not (branchPolicy.parallelBranchTargetAllowed(function.flags / 8 % 2 == 1, hasEffects!))
+                                                        -> if { parallelBranchFailure(3, range.sourceModule, armAst, targetAst, pathAst, mode!, 0, -1, -1) -> return }
+                                                    -1 => unsafeArgument!
+                                                    2147483647 => unsafeOrdinal!
+                                                    firstArgument![stage!] => argument!
+                                                    argument! >= 0 -> while {
+                                                        resolved.callArguments[argument!] => value
+                                                        value.status == 0 and value.parameterOrdinal > 0 and value.parameterOrdinal < unsafeOrdinal!
+                                                            and value.targetSourceModule >= 0 and value.parameterSymbol >= 0
+                                                            -> if {
+                                                                prepared.package.ranges[value.targetSourceModule] => parameterRange
+                                                                prepared.package.symbols[parameterRange.symbolStart + value.parameterSymbol] => parameter
+                                                                not (branchPolicy.parallelBranchInputAllowed(parameter.flags % 2 == 1, parameter.flags / 2 % 2 == 1))
+                                                                    -> if {
+                                                                        argument! => unsafeArgument!
+                                                                        value.parameterOrdinal => unsafeOrdinal!
+                                                                    }
+                                                            }
+                                                        nextArgument![argument!] => argument!
+                                                    }
+                                                    unsafeArgument! >= 0 -> if {
+                                                        resolved.callArguments[unsafeArgument!] => value
+                                                        parallelBranchFailure(4, range.sourceModule, armAst, targetAst, pathAst, mode!, 0, value.targetSourceModule, value.parameterSymbol) -> return
+                                                    }
+                                                }
+                                        }
+                                        not callable! and pathAst >= 0 and typeByAst![stage!] >= 0
+                                            -> if {
+                                                prepared.package.nodes[range.astStart + pathAst] => targetPath
+                                                source -> slice(targetPath.start, targetPath.length) -> parallelReadonlyQuery
+                                                    -> unless { parallelBranchFailure(5, range.sourceModule, armAst, targetAst, pathAst, mode!, 0, -1, -1) -> return }
+                                            }
+                                    }
+                                    children.nextChild[stage!] => stage!
+                                }
+                            }
+                        }
+                        children.nextChild[armGlobal!] => armGlobal!
+                    }
+                }
+            branchAst! + 1 => branchAst!
+        }
+    }
+    parallelBranchFailure(0, -1, -1, -1, -1, 0, 0, -1, -1)
 }

@@ -12,6 +12,14 @@ internal static class FunctionTypeBindingPolicy
     public static string ParallelRoleNames() =>
         "sys.runtime.parallel|sys.runtime.tryParallel";
 
+    public static string ParallelReadonlyQueryNames() => "len|capacity|count|used";
+
+    public static bool ParallelBranchInputAllowed(bool moves, bool mutableBorrow) =>
+        !moves && !mutableBorrow;
+
+    public static bool ParallelBranchTargetAllowed(bool isAsync, bool hasEffects) =>
+        !isAsync && !hasEffects;
+
     public static bool BindReturnTypeEagerly(bool hasTemplate, bool intrinsic, bool parallelRole) =>
         !hasTemplate || intrinsic && !parallelRole;
 

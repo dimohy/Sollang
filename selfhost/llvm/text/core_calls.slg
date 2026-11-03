@@ -1849,6 +1849,31 @@ parallelBranchSourceUsesPointer source: typedIr.TypedIrNode, context: ref emitte
     (source -> referenceValueTypeId(context, state)) >= 0 or (source -> captureUsesBorrowAbi(context, state))
 }
 
+# Callback transport adapts values to the ordinary intrinsic emitters; it
+# must not maintain a second implementation of collection query semantics.
+emitParallelBranchQuery stageIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[stageIndex] => stage
+    stage.opcode == -201 -> if {
+        stageIndex -> emitLengthIntrinsic(-1, context, state)
+    } else {
+        stage.opcode == -236 -> if {
+            stageIndex -> emitCapacityIntrinsic(-1, context, state)
+        } else {
+            stage.opcode == -244 -> if {
+                stageIndex -> emitBitSetIntrinsic(-1, context, state)
+            } else {
+                (stage.opcode -> typedIr.rawArenaOperation) == 2
+                    -> if {
+                        stageIndex -> emitRawArenaIntrinsic(-1, context, state)
+                    } else {
+                        "; sollang compiler error S019: resolved parallel query has no intrinsic emitter" -> println
+                        process.exit(1)
+                    }
+            }
+        }
+    }
+}
+
 writeParallelBranchSourceType source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     source -> parallelBranchSourceUsesPointer(context, state)
         -> if { "ptr" -> print } else {
@@ -4042,7 +4067,7 @@ emitLengthValue callIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
         boundedReceiverTypeId >= 0 and context.types[boundedReceiverTypeId].kind == 8
             -> if { true => boundedReadonlyReference! }
         boundedMutableParameterOrdinal < 0 and not boundedReadonlyReference!
-            -> if { call.operand0 -> mutableStorageRoot(context, state) => boundedMutableRoot! }
+            -> if { call.operand0 -> queryMutableStorageRoot(ownerIndex, context, state) => boundedMutableRoot! }
         boundedMutableParameterOrdinal >= 0 or boundedMutableRoot! >= 0 or boundedReadonlyReference!
             -> if {
                 "  %v$(callIndex -> valueNameId(state))_length_source = load " -> print
@@ -4112,11 +4137,11 @@ emitLengthValue callIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
             -1 => mutableRoot!
             not readonlyReference! and (base -> isDictionaryType)
                 -> if {
-                    call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+                    call.operand0 -> queryMutableStorageRoot(ownerIndex, context, state) => mutableRoot!
                 }
             not readonlyReference! and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 7 and context.types[valueTypeId!].origin == 4 and (context.types[valueTypeId!].symbol == 6 or context.types[valueTypeId!].symbol == 7)
                 -> if {
-                    call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+                    call.operand0 -> queryMutableStorageRoot(ownerIndex, context, state) => mutableRoot!
                 }
             mutableRoot! >= 0 -> if {
                 "  %v$(callIndex -> valueNameId(state))_length_source = load " -> print
@@ -4227,7 +4252,7 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
             }
         -1 => mutableRoot!
         not readonlyReference! -> if {
-            call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+            call.operand0 -> queryMutableStorageRoot(ownerIndex, context, state) => mutableRoot!
         }
         mutableRoot! >= 0 -> if {
             "  %v$(callIndex -> valueNameId(state))_capacity_source = load " -> print

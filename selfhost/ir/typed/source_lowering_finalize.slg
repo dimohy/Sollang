@@ -309,7 +309,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                     entryExpressionStart => entryTapStageSearch!
                     entryTapStageSearch! < entryExpressionEnd -> while {
                         nodes[entryTapStageSearch!] => entryTapStageCandidate
-                        entryTapStageCandidate.parent == entryTapIr! and (entryTapStageCandidate.kind == 6 or (entryTapStageCandidate.kind == 9 and (entryTapStageCandidate.opcode == -227 or entryTapStageCandidate.opcode == -228)))
+                        entryTapStageCandidate.parent == entryTapIr! and (entryTapStageCandidate -> isJunctionStage)
                             -> if {
                                 prepared.package.nodes[sourceRange.astStart + entryTapStageCandidate.astNode].start => entryTapStageStart
                                 previousEntryTapStage! < 0 or entryTapStageStart > previousEntryTapStageStart!
@@ -401,6 +401,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                         UIntSize(0) => entryPreviousBranchStageStart!
                         -1 => entryFirstBranchStage!
                         -1 => entryFinalBranchStage!
+                        entryBranchSource! => entryBranchStageInput!
                         true => entryFindingBranchStage!
                         entryFindingBranchStage! -> while {
                             false => entryFindingBranchStage!
@@ -410,7 +411,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                             entryBranchStageSearch! < entryExpressionEnd
                                 -> while {
                                     nodes[entryBranchStageSearch!] => entryBranchStageCandidate
-                                    entryBranchStageCandidate.parent == entryNextBranchArm! and entryBranchStageCandidate.kind == 6
+                                    entryBranchStageCandidate.parent == entryNextBranchArm! and (entryBranchStageCandidate -> isJunctionStage)
                                         -> if {
                                             prepared.package.nodes[sourceRange.astStart + entryBranchStageCandidate.astNode].start => entryBranchStageStart
                                             entryPreviousBranchStage! < 0 or entryBranchStageStart > entryPreviousBranchStageStart!
@@ -425,6 +426,9 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                                     entryBranchStageSearch! + 1 => entryBranchStageSearch!
                                 }
                             entryNextBranchStage! >= 0 -> if {
+                                nodes[entryNextBranchStage!].kind == 9 and entryBranchStageInput! >= 0
+                                    -> if { entryNextBranchStage! -> bindTapStageInput(entryBranchStageInput!, nodes) }
+                                entryNextBranchStage! => entryBranchStageInput!
                                 entryFirstBranchStage! < 0 -> if { entryNextBranchStage! => entryFirstBranchStage! }
                                 entryNextBranchStage! => entryFinalBranchStage!
                                 entryNextBranchStage! => entryPreviousBranchStage!

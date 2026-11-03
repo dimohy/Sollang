@@ -111,12 +111,12 @@ internal sealed partial class LlvmEmitter
                 for (var targetIndex = 0; targetIndex < arm.Targets.Count; targetIndex++)
                 {
                     var target = arm.Targets[targetIndex];
-                    var function = bound.ArmTargets[armIndex][targetIndex];
-                    var parameters = function.AdditionalParameters ?? [];
+                    var function = bound.ArmTargets[armIndex][targetIndex].Function;
+                    var parameters = function?.AdditionalParameters ?? [];
                     if (parameters.Count != target.Arguments.Count)
                     {
                         throw new SollangException(
-                            $"parallel branch target '{function.Name}' argument metadata is inconsistent");
+                            $"parallel branch target '{string.Join('.', target.Path)}' argument metadata is inconsistent");
                     }
                     var rewrittenArguments = new Expression[target.Arguments.Count];
                     for (var argumentIndex = 0; argumentIndex < target.Arguments.Count; argumentIndex++)
@@ -185,7 +185,8 @@ internal sealed partial class LlvmEmitter
                 []));
             _currentFunction = null;
             var callbackFunctions = new Dictionary<string, BoundFunction>(_program.Functions, StringComparer.Ordinal);
-            foreach (var target in info.Branch.ArmTargets.SelectMany(static targets => targets))
+            foreach (var target in info.Branch.ArmTargets.SelectMany(static targets => targets)
+                .Select(static target => target.Function).OfType<BoundFunction>())
             {
                 foreach (var (name, function) in FunctionScope(target))
                 {

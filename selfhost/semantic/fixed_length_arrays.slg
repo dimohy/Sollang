@@ -236,16 +236,21 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
         localAst! < range.astCount -> while {
             range.astStart + localAst! => globalAst
             prepared.package.nodes[globalAst] => node
-            node.kind == 10 and not (prepared -> semanticContext.hasDeclaredCallTarget(globalAst))
+            (node.kind == 10 or node.kind == 77) and not (prepared -> semanticContext.hasDeclaredCallTarget(globalAst))
                 -> if {
                     prepared -> pushedGrowableOwner(resolved, range.sourceModule, localAst!, flowSources, firstChild!, nextChild!, symbolByAst!, typeByAst!) => pushedOwner
                     pushedOwner >= 0 -> if {
                         candidates![pushedOwner] -> withGrowableRequirement => candidates![pushedOwner]
                     }
-                    firstChild![globalAst] => receiver
-                    receiver >= 0 and symbolByAst![receiver] >= 0
+                    firstChild![globalAst] => receiver!
+                    node.kind == 77 -> if {
+                        -1 => receiver!
+                        sourceByAst[globalAst] >= 0
+                            -> if { range.astStart + sourceByAst[globalAst] => receiver! }
+                    }
+                    receiver! >= 0 and symbolByAst![receiver!] >= 0
                         -> if {
-                            symbolByAst![receiver] => owner
+                            symbolByAst![receiver!] => owner
                             candidates![owner].length >= 0 -> if {
                                 false => nested!
                                 node.parent => ancestor!
@@ -255,7 +260,8 @@ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref exp
                                         -> if { true => nested! }
                                     parent.parent => ancestor!
                                 }
-                                nextChild![receiver] => target!
+                                nextChild![receiver!] => target!
+                                node.kind == 77 -> if { firstChild![globalAst] => target! }
                                 target! >= 0 -> while {
                                     prepared.package.nodes[target!] => targetNode
                                     targetNode.kind == 16 -> if {

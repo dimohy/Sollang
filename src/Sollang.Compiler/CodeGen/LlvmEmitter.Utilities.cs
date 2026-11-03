@@ -115,6 +115,11 @@ internal sealed partial class LlvmEmitter
             ? local
             : throw new SollangException($"unknown runtime binding '{name}' while emitting '{_currentFunction?.Name ?? "main"}'");
 
+        if (_readonlyCaptureBorrowPointers.TryGetValue(name, out var capturePointer))
+        {
+            var referenceType = _program.Types.GetOrAddReference(value.Type);
+            return LoadReference(new RuntimeReference(referenceType, value.Type, capturePointer));
+        }
         if (_mutableStructSlots.TryGetValue(name, out var pointer))
         {
             var loaded = NextTemp("mutable_struct");

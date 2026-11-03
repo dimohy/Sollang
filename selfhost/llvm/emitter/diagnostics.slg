@@ -8552,6 +8552,7 @@ public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int us
         -> if { 1 -> return }
     context -> globalFunctionAliasAdmissionDiagnostics(false) => aliasFailures
     aliasFailures > 0 -> if { aliasFailures -> return }
+    context.parallelBranchDiagnostic.code > 0 -> if { 1 -> return }
     context.firstDeclarationRootDiagnostic > 0
         -> if { 1 -> return }
     (context -> firstBorrowedTextReturnDiagnostic) >= 0
@@ -8803,6 +8804,10 @@ public emitBlockingDiagnostics context: ref emitterContext.EmitContext -> Unit u
         }
     context -> globalFunctionAliasAdmissionDiagnostics(true) => aliasFailures
     aliasFailures > 0 -> if { return }
+    context.parallelBranchDiagnostic.code > 0 -> if {
+        context -> emitParallelBranchDiagnostic
+        return
+    }
     context -> emitBorrowedTextReturnDiagnostic -> if { return }
     context.firstDeclarationRootDiagnostic == 2 -> if {
         context -> mouseCapacityOverridesNumericLiteral => mouseCall
@@ -9327,3 +9332,54 @@ public dynTraitMethodCompatible readonlySelf: Bool, additionalInputs: Bool, intR
     decision! % 2 == 1
 }
 # END generated DynTraitCompatibility
+
+parallelBranchModeText mode: Int -> Text {
+    mode == 1 -> if { "ref" -> return }
+    mode == 2 -> if { "mut" -> return }
+    mode == 3 -> if { "move" -> return }
+    "default flow"
+}
+
+emitParallelBranchDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.parallelBranchDiagnostic => diagnostic
+    context.ranges[diagnostic.sourceModule] => range
+    context.nodes[range.astStart + diagnostic.armAst] => arm
+    context.tokens[range.tokenStart + arm.payloadToken] => armToken
+    context.sources[diagnostic.sourceModule] -> slice(armToken.span.start, armToken.span.length) => label
+    diagnostic.armAst => locationAst!
+    diagnostic.code == 3 or diagnostic.code == 4 -> if { diagnostic.targetAst => locationAst! }
+    context.nodes[range.astStart + locationAst!] => locationNode
+    context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(locationNode.start) => location
+    context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
+    "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
+    moduleName -> emitCanonicalDiagnosticModuleName
+    "'] parallel branch arm '$label' " -> print
+    diagnostic.code == 1 -> if {
+        "declares " -> print
+        diagnostic.declaredMode -> parallelBranchModeText -> print
+        " but target '" -> print
+    }
+    diagnostic.code == 2 -> if {
+        "must use a Copy input or readonly ref; " -> print
+        diagnostic.declaredMode -> parallelBranchModeText -> print
+        " cannot overlap" -> println
+        return
+    }
+    diagnostic.code == 3 -> if { "cannot call effectful or async target '" -> print }
+    diagnostic.code == 4 -> if {
+        context.ranges[diagnostic.parameterSourceModule] => parameterRange
+        context.symbols[parameterRange.symbolStart + diagnostic.parameterSymbol] => parameter
+        context.tokens[parameterRange.tokenStart + parameter.nameToken] => parameterToken
+        context.sources[diagnostic.parameterSourceModule] -> slice(parameterToken.span.start, parameterToken.span.length) => parameterName
+        "argument '$parameterName' must be Copy or readonly ref" -> println
+        return
+    }
+    diagnostic.code == 5 -> if { "contains an unresolved flow target" -> println -> return }
+    diagnostic.code == 6 -> if { "must produce a value" -> println -> return }
+    context.nodes[range.astStart + diagnostic.targetPathAst] => targetPath
+    context.sources[diagnostic.sourceModule] -> slice(targetPath.start, targetPath.length) -> print
+    diagnostic.code == 1 -> if {
+        "' requires " -> print
+        diagnostic.requiredMode -> parallelBranchModeText -> println
+    } else { "'" -> println }
+}

@@ -1289,6 +1289,14 @@ capture environment, compute-group execution, and result-product load for
 entry bodies, ordinary functions, and nested control regions alike. Those
 contexts may not carry independent copies of the compute-group sequence.
 
+Resolved readonly scalar queries such as `len` and `capacity` are flow stages
+in their own right. Branch and tap lowering must preserve their source,
+position, result type, and following targets. Parallel target metadata keeps
+these stages without inventing callable function symbols; only callable stages
+contribute function captures and additional parameter contracts. A readonly
+captured owner is read through its actual borrowed storage, including when a
+query inspects its header directly.
+
 Range values use the same kind-31 materializer in entry bodies, ordinary
 functions, and nested control regions. The shared operation owns inclusive and
 exclusive-end normalization and the two-field product construction; an
@@ -4070,6 +4078,9 @@ The same receiver contract applies inside interpolation, including readonly
 owners and projected fields. Fixed arrays, slices, and `Text` have no capacity
 operation and are rejected before LLVM emission. Interpolated calls preserve
 source order and evaluate each expression once.
+Collection `len` returns `Int` for arrays, slices, dictionaries, and `BitSet`.
+`Text`, `SourceText`, `Arguments`, and mapped-byte `len` return `UIntSize`.
+These result types are preserved through flow targets and branch fields.
 `len` and `capacity` take no arguments. Their argument-count diagnostic is
 reported at the flow target before receiver eligibility or user-method lookup,
 including when the receiver does not support the intrinsic. With no arguments,

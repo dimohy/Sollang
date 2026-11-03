@@ -45,8 +45,10 @@ internal sealed record BoundAsyncSuspensionLocation(
 internal sealed record BoundParallelBranch(
     TypeId SourceType,
     TypeId ResultType,
-    IReadOnlyList<IReadOnlyList<BoundFunction>> ArmTargets,
+    IReadOnlyList<IReadOnlyList<BoundParallelBranchTarget>> ArmTargets,
     IReadOnlyDictionary<string, TypeId> Captures);
+
+internal sealed record BoundParallelBranchTarget(BoundFunction? Function);
 
 internal sealed record BoundStreamJoinPipeline(
     StreamJoinExpression Expression,

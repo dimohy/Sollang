@@ -150,6 +150,13 @@ mutableStorageRoot bindingIndex: Int, context: ref emitterContext.EmitContext, s
     }
     storageRoot!
 }
+# A callback has transported values but no caller-local slot namespace.
+# Query emitters may inspect a mutable slot only when an owner is being emitted.
+queryMutableStorageRoot bindingIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    ownerIndex < 0 -> if { -1 -> return }
+    bindingIndex -> mutableStorageRoot(context, state)
+}
+
 mutableBorrowParameterOrdinal bindingIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => ordinal!
     bindingIndex >= 0 and ownerIndex >= 0 and context.ir[ownerIndex].kind == 0
@@ -376,7 +383,7 @@ emitRawArenaIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
             process.exit(1)
         }
     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => borrowOrdinal
-    call.operand0 -> mutableStorageRoot(context, state) => storageRoot
+    call.operand0 -> queryMutableStorageRoot(ownerIndex, context, state) => storageRoot
     signature.mutates and borrowOrdinal < 0 and storageRoot < 0
         -> if {
             "; sollang internal error: raw Arena mutation has no mutable storage" -> println
@@ -592,7 +599,7 @@ emitBitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
     }
 
     call.opcode == -244 -> if {
-        call.operand0 -> mutableStorageRoot(context, state) => countRoot
+        call.operand0 -> queryMutableStorageRoot(ownerIndex, context, state) => countRoot
         countRoot >= 0 -> if {
             "  %v$(callIndex -> valueNameId(state))_source = load %sollang.bitset.t$(bitSetTypeId!), ptr %slot$(countRoot -> valueNameId(state)), align 8" -> println
         }

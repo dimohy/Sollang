@@ -10,6 +10,8 @@ internal sealed partial class SemanticCompiler
 {
     private static readonly HashSet<string> ParallelRoleFunctionNames =
         FunctionTypeBindingPolicy.ParallelRoleNames().Split('|').ToHashSet(StringComparer.Ordinal);
+    private static readonly HashSet<string> ParallelReadonlyQueryNames =
+        FunctionTypeBindingPolicy.ParallelReadonlyQueryNames().Split('|').ToHashSet(StringComparer.Ordinal);
     private SollangProgram _program;
     private readonly Dictionary<(string Trait, TypeId Type), BoundTraitImplementation> _traitImplementations = [];
     private readonly TypeDefinitionTable _types;
@@ -8340,7 +8342,7 @@ internal sealed partial class SemanticCompiler
         var consumingArm = -1;
         var mutableArm = -1;
         var fields = new List<(string? Label, BoundType Type)>(expression.Arms.Count);
-        var parallelArmTargets = new List<IReadOnlyList<BoundFunction>>(expression.Arms.Count);
+        var parallelArmTargets = new List<IReadOnlyList<BoundParallelBranchTarget>>(expression.Arms.Count);
         for (var index = 0; index < expression.Arms.Count; index++)
         {
             var arm = expression.Arms[index];
@@ -8351,7 +8353,8 @@ internal sealed partial class SemanticCompiler
 
             var mode = ResolveBranchArmMode(arm, sourceType, functions);
             if (expression.IsParallel
-                && mode is BranchInputMode.Move or BranchInputMode.MutableBorrow)
+                && !FunctionTypeBindingPolicy.ParallelBranchInputAllowed(
+                    mode == BranchInputMode.Move, mode == BranchInputMode.MutableBorrow))
             {
                 throw Error(
                     arm.Line,
@@ -8402,17 +8405,27 @@ internal sealed partial class SemanticCompiler
             }
             if (expression.IsParallel)
             {
-                var resolvedTargets = new List<BoundFunction>(arm.Targets.Count);
+                var resolvedTargets = new List<BoundParallelBranchTarget>(arm.Targets.Count);
                 foreach (var target in arm.Targets)
                 {
+                    // These resolved container queries have no arguments or effects.
+                    // Preserve their stage position without inventing a callable symbol.
+                    if (_resolvedContainerFlowTargets.Contains(target)
+                        && target.Arguments.Count == 0
+                        && ParallelReadonlyQueryNames.Contains(string.Join('.', target.Path)))
+                    {
+                        resolvedTargets.Add(new BoundParallelBranchTarget(Function: null));
+                        continue;
+                    }
                     if (!(_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
                             || TryGetFunction(string.Join('.', target.Path), functions, out targetFunction)
                             || TryResolveInstanceMethod(sourceType, string.Join('.', target.Path), functions, out targetFunction)))
                     {
                         continue;
                     }
-                    resolvedTargets.Add(targetFunction);
-                    if (targetFunction.IsAsync || (targetFunction.Effects?.Count ?? 0) != 0)
+                    resolvedTargets.Add(new BoundParallelBranchTarget(targetFunction));
+                    if (!FunctionTypeBindingPolicy.ParallelBranchTargetAllowed(
+                        targetFunction.IsAsync, (targetFunction.Effects?.Count ?? 0) != 0))
                     {
                         throw Error(
                             target.Line,
@@ -8420,8 +8433,9 @@ internal sealed partial class SemanticCompiler
                             $"parallel branch arm '{arm.Label}' cannot call effectful or async target '{string.Join('.', target.Path)}'");
                     }
                     var unsafeParameter = (targetFunction.AdditionalParameters ?? [])
-                        .FirstOrDefault(parameter => parameter.Ownership is
-                            BoundFunctionInputOwnership.Move or BoundFunctionInputOwnership.MutableBorrow);
+                        .FirstOrDefault(parameter => !FunctionTypeBindingPolicy.ParallelBranchInputAllowed(
+                            parameter.Ownership == BoundFunctionInputOwnership.Move,
+                            parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow));
                     if (unsafeParameter is not null)
                     {
                         throw Error(
@@ -8448,7 +8462,8 @@ internal sealed partial class SemanticCompiler
         if (expression.IsParallel)
         {
             var captures = SelectParallelBranchCapturedBindings(
-                parallelArmTargets.SelectMany(static targets => targets),
+                parallelArmTargets.SelectMany(static targets => targets)
+                    .Select(static target => target.Function).OfType<BoundFunction>(),
                 functions,
                 bindings);
             foreach (var (name, type) in captures)
