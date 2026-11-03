@@ -126,6 +126,8 @@ public emptyRegisteredTypeSeeds: -> RegisteredTypeSeeds {
 # source declarations to builtin runtime representations. Keep their original
 # declaration identities separately; cache metadata still describes the source.
 public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, declaredTypes: ref [typeIds.SemanticType; ~], types: mut [typeIds.SemanticType; ~] -> Result<RegisteredTypeSeeds, TypeRegistryError> {
+    package -> modules.identitiesAnalyzed => identities
+    package -> typeIds.intrinsicSourceTextDeclaration(identities) => sourceText
     [Int; ~] => declarationBySymbol!
     package.symbols -> each _ { declarationBySymbol! -> push(-1) }
     0 => index!
@@ -152,7 +154,15 @@ public registerCompilationTypeSeeds package: ref analysis.PackageAnalysis, decla
                     -> if {
                         declarationBySymbol![range.symbolStart + symbol!] => identity
                         identity < 0 -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.DeclarationIdentity) -> return }
-                        declarations! -> push(RegisteredDeclaration { typeId: identity, identity: declaredTypes[identity] })
+                        identity => runtime!
+                        sourceText.matchCount == 1 and source! == sourceText.targetModule and symbol! == sourceText.targetSymbol
+                            -> if {
+                                types -> typeIds.builtinTypeId(typeIds.builtinSymbolByName("SourceText")) => runtime!
+                                runtime! < 0 or runtime! >= (types -> len) or types[runtime!].kind != declaredTypes[identity].kind
+                                    or types[runtime!].status != 0 or types[runtime!].containsParameter
+                                    -> if { Result<RegisteredTypeSeeds, TypeRegistryError>.Err(TypeRegistryError.DeclarationIdentity) -> return }
+                            }
+                        declarations! -> push(RegisteredDeclaration { typeId: runtime!, identity: declaredTypes[identity] })
                     }
                 symbol! + 1 => symbol!
             }

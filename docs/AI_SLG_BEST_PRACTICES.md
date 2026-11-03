@@ -1893,6 +1893,11 @@ Resolve names through the shared builtin/intrinsic catalogs, preserve alias
 order and distinguish a dynamic semantic length from its compatibility key.
 Malformed rows fail before registry mutation. Include generated runtime probes
 in the existing format preflight before compiling them.
+When a source declaration canonicalizes to a runtime builtin, register its
+metadata on that canonical type identity while retaining the original source
+descriptor. Declaration headers, field owners and references must share that
+identity. Reuse the exact intrinsic declaration resolver; neither a name-only
+fallback nor a second copied field schema preserves this boundary.
 Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate

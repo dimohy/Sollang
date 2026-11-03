@@ -1166,6 +1166,13 @@ without copying member names, element types or lengths into a second table.
 Empty or truncated rows, a trailing separator, invalid length digits and length
 overflow fail before semantic registry mutation. Preserve dynamic semantic
 length `-1` separately from compatibility shape length `0`.
+Canonical runtime representations retain their source declaration metadata.
+In particular, `sys.file.SourceText` uses its existing canonical runtime type
+identity for declaration seeds, fields and references; its original declaration
+descriptor still supplies the nominal name and source field metadata. Do not
+publish a second empty nominal definition or replace declared field information
+with a copied runtime schema. Canonicalization requires the unique exact
+intrinsic declaration identity, preserving ordinary same-named declarations.
 Identity enum projections require nonnegative `Int32` members without flags
 semantics; aliases retain their input values and use the compiled enum's
 canonical name on output. Unknown values retain numeric identity diagnostics,
