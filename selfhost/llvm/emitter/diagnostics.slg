@@ -9403,6 +9403,10 @@ parallelBranchModeText mode: Int -> Text {
 
 emitParallelBranchDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
     context.parallelBranchDiagnostic => diagnostic
+    diagnostic.code == 8 -> if {
+        context -> emitCallArityDiagnostic
+        return
+    }
     context.ranges[diagnostic.sourceModule] => range
     diagnostic.code == 7 -> if {
         context.nodes[range.astStart + diagnostic.armAst] => branch
@@ -9424,7 +9428,10 @@ emitParallelBranchDiagnostic context: ref emitterContext.EmitContext -> Unit use
     context -> semanticDiagnosticModuleText(diagnostic.sourceModule) => moduleName
     "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
     moduleName -> emitCanonicalDiagnosticModuleName
-    "'] parallel branch arm '$label' " -> print
+    "'] " -> print
+    diagnostic.code != 1 and diagnostic.code != 6
+        -> if { "parallel " -> print }
+    "branch arm '$label' " -> print
     diagnostic.code == 1 -> if {
         "declares " -> print
         diagnostic.declaredMode -> parallelBranchModeText -> print

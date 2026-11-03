@@ -1899,6 +1899,10 @@ capture sharing checks use the same semantic type walk, committed fields, and
 canonical enum payload dependencies from the finalized type/reference facts.
 Enum payload dependencies are separate from struct layout fields;
 readonly input syntax does not replace the value's ownership contract.
+Validate junction argument counts through the ordinary canonical call-argument
+collector. Preserve source and input-mode admission first, then complete the
+arm's flow inference before its result and target-effect checks. An arity
+failure in a later arm must not suppress an earlier arm's target failure.
 When Typed IR projects a Task's payload type, also consume its existing
 Task-owner fact. The shared Task-value index serves await and branch diagnostics;
 the payload type alone must not make an outstanding Task look like a scalar.

@@ -432,6 +432,7 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, 
                 prepared -> directCallExpectedArguments(call) => directExpected
                 call.callAst >= 0 and call.callAst < range.astCount
                     and (prepared.package.nodes[range.astStart + call.callAst].kind == 10
+                    or prepared.package.nodes[range.astStart + call.callAst].kind == 77
                     or directExpected >= 0)
                     and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.callAst))
                     -> if {
@@ -444,7 +445,8 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, 
                         (arguments -> len) == 0
                             and (prepared.package -> calls.displayFunctionSymbol(prepared.modules, call.targetSourceModule, call.functionSymbol, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount)) == -102
                             -> if { 0 => expectedTotal! }
-                        ((prepared.package.nodes[range.astStart + call.callAst].kind == 10 and expectedTotal! > 0)
+                        (((prepared.package.nodes[range.astStart + call.callAst].kind == 10
+                            or prepared.package.nodes[range.astStart + call.callAst].kind == 77) and expectedTotal! > 0)
                             or prepared.package.nodes[range.astStart + call.callAst].kind == 11 or nativePathStyle)
                             and (arguments -> len) != expectedTotal!
                             and (prepared.package -> diagnosticOriginBefore(call.sourceModule, call.callAst, selected!.sourceModule, selected!.callAst))
@@ -7656,7 +7658,7 @@ parallelArmMode prepared: ref semanticContext.SemanticSnapshot, sourceModule: In
     0
 }
 
-public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], payloadEdges: ref [typeIds.PayloadEdge; ~] -> ParallelBranchDiagnostic {
+public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], arity: ref CallArityDiagnostic -> ParallelBranchDiagnostic {
     prepared.package -> expressionTypeIds.indexContextualRecords => children
     prepared.package -> semanticContext.indexExpressionSourceAsts => expressionSources
     ir -> typedIr.taskValueAsts(prepared, resolved.types) => taskValues
@@ -7764,6 +7766,11 @@ public firstParallelBranchDiagnostic prepared: ref semanticContext.SemanticSnaps
                                 }
                                 not (branchPolicy.parallelBranchInputAllowed(mode! == 3, mode! == 2))
                                     -> if { parallelBranchFailure(2, range.sourceModule, armAst, firstTargetAst, firstPath, mode!, 0, -1, -1) -> return }
+                                # C# infers the complete arm flow before checking
+                                # its result or any target's parallel effects.
+                                arity.sourceModule == range.sourceModule
+                                    and (prepared.package -> declarationAncestor(range.sourceModule, armAst, arity.callAst))
+                                    -> if { parallelBranchFailure(8, range.sourceModule, armAst, arity.callAst, arity.targetPathAst, mode!, 0, -1, -1) -> return }
                                 typeByAst![lastStage!] => resultType
                                 resultType >= 0 and resolved.types[resultType].kind == 1 and resolved.types[resultType].origin == 1 and resolved.types[resultType].symbol == 0
                                     -> if { parallelBranchFailure(6, range.sourceModule, armAst, firstTargetAst, firstPath, mode!, 0, -1, -1) -> return }

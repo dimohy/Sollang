@@ -1296,6 +1296,11 @@ collection owners and immutable `SourceText`, and rejects `Arena` owners.
 Reading a readonly `Arena` parameter still produces an `Arena` value contract;
 the readonly parameter does not bypass this source check. Source rejection is
 reported at the branch before arm-mode or target admission diagnostics.
+Within each arm, input-mode admission precedes inference of the complete arm
+flow. Validate every stage's arguments before checking that the arm produces a
+value and before admitting its targets' parallel effects. Report an earlier
+arm's failure before a later arm's failure. Junction stages use the same
+canonical input and explicit-argument list as ordinary calls.
 Outstanding `Task` values are not shareable inputs or captures. A completed
 `await` yields its ordinary payload contract. `Arguments` is a non-owning source
 value and may be read by joined branch workers, but it is not a supported local
