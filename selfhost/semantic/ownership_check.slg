@@ -3816,7 +3816,8 @@ analyzeResolvedLoweredContextWithBindingFacts prepared: ref semanticContext.Sema
     genericFunctionsByCall -> each selected { concreteFunctions! -> push(selected) }
     functionTargets -> each selected { concreteFunctions! -> push(selected) }
     prepared -> bodyDiagnosticActivity(typed, types, bindingFacts.activeDeclarationBodyByAst, concreteFunctions!) => activeBodies
-    prepared -> analyzeResolvedLoweredContextWithInterpolationFactsAndPaths(typed, types, bindingFacts.fields, genericFunctionsByCall, resultTypes, functionTargets, activeBodies) -> ownershipDiagnosticsWithoutPaths
+    typeIds.enumPayloadEdges(types, bindingFacts.references, prepared.package.ranges, prepared.package.symbols, bindingFacts.referenceIndexByTypeAst) => payloadEdges
+    prepared -> analyzeResolvedLoweredContextWithInterpolationFactsAndPaths(typed, types, bindingFacts.fields, payloadEdges, genericFunctionsByCall, resultTypes, functionTargets, activeBodies) -> ownershipDiagnosticsWithoutPaths
 }
 
 public analyzeResolvedLoweredContextWithInterpolationFacts prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], genericFunctionsByCall: ref [Int; ~], interpolationResultTypes: ref [Int; ~], interpolationFunctionTargets: ref [Int; ~] -> [OwnershipDiagnostic; ~] {
@@ -3825,7 +3826,8 @@ public analyzeResolvedLoweredContextWithInterpolationFacts prepared: ref semanti
     genericFunctionsByCall -> each selected { concreteFunctions! -> push(selected) }
     interpolationFunctionTargets -> each selected { concreteFunctions! -> push(selected) }
     prepared -> bodyDiagnosticActivity(typed, types, referenceFacts.activeDeclarationBodyByAst, concreteFunctions!) => activeBodies
-    prepared -> analyzeResolvedLoweredContextWithInterpolationFactsAndPaths(typed, types, referenceFacts.fields, genericFunctionsByCall, interpolationResultTypes, interpolationFunctionTargets, activeBodies) -> ownershipDiagnosticsWithoutPaths
+    typeIds.enumPayloadEdges(types, referenceFacts.references, prepared.package.ranges, prepared.package.symbols, referenceFacts.referenceIndexByTypeAst) => payloadEdges
+    prepared -> analyzeResolvedLoweredContextWithInterpolationFactsAndPaths(typed, types, referenceFacts.fields, payloadEdges, genericFunctionsByCall, interpolationResultTypes, interpolationFunctionTargets, activeBodies) -> ownershipDiagnosticsWithoutPaths
 }
 
 ownershipDiagnosticsWithoutPaths result: move OwnershipAnalysis -> [OwnershipDiagnostic; ~] {
@@ -3842,7 +3844,7 @@ ownershipDiagnosticsWithoutPaths result: move OwnershipAnalysis -> [OwnershipDia
     diagnostics!
 }
 
-public analyzeResolvedLoweredContextWithInterpolationFactsAndPaths prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], genericFunctionsByCall: ref [Int; ~], interpolationResultTypes: ref [Int; ~], interpolationFunctionTargets: ref [Int; ~], activeBodies: ref [Bool; ~] -> OwnershipAnalysis {
+public analyzeResolvedLoweredContextWithInterpolationFactsAndPaths prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], genericFunctionsByCall: ref [Int; ~], interpolationResultTypes: ref [Int; ~], interpolationFunctionTargets: ref [Int; ~], activeBodies: ref [Bool; ~] -> OwnershipAnalysis {
     # Keep original IR order and every explicit/implicit return candidate.
     # Repeated origin inference does not need to revisit unrelated IR nodes.
     [Int; ~] => genericSelectionByCall!
@@ -3907,10 +3909,10 @@ public analyzeResolvedLoweredContextWithInterpolationFactsAndPaths prepared: ref
         scalarVersionNext: scalarVersionNext!
         irIndex: irIndex
     } => callFunctionIndex
-    prepared -> analyzeResolvedLoweredContextWithReturnSites(typed, types, fields, callFunctionIndex, borrowedReturnSites!, activeBodies)
+    prepared -> analyzeResolvedLoweredContextWithReturnSites(typed, types, fields, payloadEdges, callFunctionIndex, borrowedReturnSites!, activeBodies)
 }
 
-analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], callFunctionIndex: ref BorrowedTextCallFunctionIndex, borrowedReturnSites: ref [Int; ~], activeBodies: ref [Bool; ~] -> OwnershipAnalysis {
+analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], callFunctionIndex: ref BorrowedTextCallFunctionIndex, borrowedReturnSites: ref [Int; ~], activeBodies: ref [Bool; ~] -> OwnershipAnalysis {
     appendBodyDiagnostic output: mut [OwnershipDiagnostic; ~], siteIr: Int, diagnostic: OwnershipDiagnostic -> Unit {
         siteIr < 0 or siteIr >= (activeBodies -> len)
             -> if {
@@ -4555,7 +4557,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
         binding -> typedIr.isTaskOwnerValue(typed, prepared)
             -> if { false -> return }
         binding.typeId >= 0 -> if {
-            prepared -> semanticContext.typeIsParallelShareable(types, fields, binding.typeId) -> return
+            prepared -> semanticContext.typeIsParallelShareable(types, fields, payloadEdges, binding.typeId) -> return
         }
         not (binding.typeOrigin == 1 and (binding.typeSymbol == 15 or binding.typeSymbol == 17 or binding.typeSymbol == 18))
     }

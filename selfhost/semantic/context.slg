@@ -1179,7 +1179,7 @@ public typeIsSourceText snapshot: ref SemanticSnapshot, types: ref [typeIds.Sema
     sourceText!
 }
 
-public typeIsParallelShareable snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], typeId: Int -> Bool {
+public typeIsParallelShareable snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], typeId: Int -> Bool {
     typeId < 0 or typeId >= (types -> len) -> if { false -> return }
     [Int; ~] => pendingTypes!
     [Int; ~] => visitedTypes!
@@ -1223,6 +1223,10 @@ public typeIsParallelShareable snapshot: ref SemanticSnapshot, types: ref [typeI
                                             } else {
                                                 pendingType.origin == 0 or pendingType.origin == 2
                                                     -> if {
+                                                        payloadEdges -> each edge {
+                                                            edge.ownerType == pendingTypeId
+                                                                -> if { pendingTypes! -> push(edge.payloadType) }
+                                                        }
                                                         0 => fieldIndex!
                                                         fieldIndex! < (fields -> len)
                                                             -> while {

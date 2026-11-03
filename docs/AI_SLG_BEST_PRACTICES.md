@@ -1895,7 +1895,9 @@ Parallel branch source ownership/shareability, input-mode, and target async/effe
 Keep source-fact discovery and diagnostic formatting in the typed adapters;
 regenerate the SLG policy through `selfhost-sync` when its C# methods change.
 Use the canonical materialized source type before that decision. Source and
-capture sharing checks use the same semantic type walk and committed fields;
+capture sharing checks use the same semantic type walk, committed fields, and
+canonical enum payload dependencies from the finalized type/reference facts.
+Enum payload dependencies are separate from struct layout fields;
 readonly input syntax does not replace the value's ownership contract.
 When Typed IR projects a Task's payload type, also consume its existing
 Task-owner fact. The shared Task-value index serves await and branch diagnostics;
