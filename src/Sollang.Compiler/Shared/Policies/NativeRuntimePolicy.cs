@@ -615,6 +615,10 @@ internal static class NativeRuntimePolicy
 
     // Bounded concurrent joins share the same platform and lifecycle instructions.
 
+    // Both backends select worker-backed joins from the same compiled decision.
+    public static bool StreamJoinUsesWorkers(bool merge, bool latest, bool hasEvent) =>
+        (merge || latest) && hasEvent;
+
     public static string StreamJoinWorkerFunctions() =>
         """
         define internal void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %event) #0 {

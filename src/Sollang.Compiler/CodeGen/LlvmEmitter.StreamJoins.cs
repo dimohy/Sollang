@@ -80,8 +80,10 @@ internal sealed partial class LlvmEmitter
     }
 
     private static bool RequiresConcurrentJoinRuntime(BoundStreamJoin join) =>
-        join.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest
-        && join.Inputs.Any(static input => input.IsEvent);
+        Shared.NativeRuntimePolicy.StreamJoinUsesWorkers(
+            join.Policy == StreamJoinPolicy.Merge,
+            join.Policy == StreamJoinPolicy.Latest,
+            join.Inputs.Any(static input => input.IsEvent));
 
     private string InputStreamLlvmType(BoundStreamJoinInput input) =>
         input.IsEvent ? "%sollang.event_stream" : "%sollang.stream";

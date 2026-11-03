@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.stream_join_runtime as streamJoinRuntime
 
 emitPlannedJunctionValue expressionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -385,23 +386,22 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
 
 junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.streamPlan.junctions[junctionIndex] => junction
-    false => concurrent!
-    junction.kind == 2 and (junction.policy == 1 or junction.policy == 3)
-        -> if {
-            junction.inputStart => inputIndex!
-            inputIndex! < junction.inputStart + junction.inputCount
-                -> while {
-                    context.streamPlan.junctionInputs[inputIndex!].typeId => inputTypeId
-                    inputTypeId >= 0 and inputTypeId < (context.types -> len)
-                        -> if {
-                            context.types[inputTypeId] => inputType
-                            inputType.kind == 7 and inputType.symbol == 4
-                                -> if { true => concurrent! }
-                        }
-                    inputIndex! + 1 => inputIndex!
-                }
-        }
-    concurrent!
+    false => hasEvent!
+    junction.kind == 2 -> if {
+        junction.inputStart => inputIndex!
+        inputIndex! < junction.inputStart + junction.inputCount
+            -> while {
+                context.streamPlan.junctionInputs[inputIndex!].typeId => inputTypeId
+                inputTypeId >= 0 and inputTypeId < (context.types -> len)
+                    -> if {
+                        context.types[inputTypeId] => inputType
+                        inputType.kind == 7 and inputType.symbol == 4
+                            -> if { true => hasEvent! }
+                    }
+                inputIndex! + 1 => inputIndex!
+            }
+    }
+    junction.kind == 2 and llvmRuntime.streamJoinUsesWorkers(junction.policy == 1, junction.policy == 3, hasEvent!)
 }
 
 emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {

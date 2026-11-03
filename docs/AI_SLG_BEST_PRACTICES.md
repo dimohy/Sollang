@@ -1879,6 +1879,9 @@ ABI block alias; the named-box catalog and nominal identity seeds include the
 same declarations. Do not skip an affine declaration to make cache capture pass.
 Function collision checks and their diagnostics use this same ABI alias owner;
 ordinary functions keep their namespace-qualified identity.
+Stream-join worker selection consumes the compiled NativeRuntimePolicy Boolean
+decision in both backends. Typed adapters provide event-input presence; keep
+callback layouts and lifecycle lowering separate from that policy decision.
 Public library ABI type admission and C names use TypeNamePolicy compiled
 bindings in both backends and interface validators. Preserve declared-name
 rejection separately from bound-type naming, including source alias diagnostics.

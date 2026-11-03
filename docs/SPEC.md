@@ -1171,6 +1171,8 @@ Compiler metadata preserves affine native/COM declarations in nominal and
 named-box identity registration, with the same order and alias-qualified names
 as ordinary C# type-definition registration. Native/COM function declaration
 identity uses its ABI block alias for duplicate checks and error names.
+Both compiler backends select worker-backed stream joins through the same
+compiled policy over merge/latest mode and EventStream input presence.
 Public library scalar ABI admission and names share compiled type bindings;
 source declaration spellings retain their own validation and diagnostic order.
 Checked intrinsic values obey the same source evaluation order as ordinary
