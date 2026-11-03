@@ -4,6 +4,9 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.llvm.codegen_cache_policy as arithmetic
 import sys.file as file
+import sollang.compiler.llvm.scoped_names as functionNames
+import sollang.compiler.syntax.unicode_identifier as functionUnicode
+import sollang.compiler.diagnostics as functionLocations
 
 public struct CodegenFunctionMetadata {
     public functions: CompilationFunctions
@@ -77,4 +80,197 @@ public captureFunctionEmissions context: ref TypeFieldContext, prepared: ref sem
         emissions! -> push(ModuleEmission { identity: names![module] -> copyFunctionField, hash: hash! })
     }
     Result<[ModuleEmission; ~], FunctionEmissionError>.Ok(emissions!)
+}
+
+
+# LLVM function references are separate from declaration/type identity keys.
+public struct FunctionSymbols {
+    public declarations: functionNames.Names
+    public instances: functionNames.Names
+    public status: Int
+}
+
+appendFunctionHex value: UInt8, bytes: mut [UInt8; ~] -> Unit {
+    "0123456789ABCDEF" => digits
+    bytes -> push(digits -> byte(UIntSize(value / 16)))
+    bytes -> push(digits -> byte(UIntSize(value % 16)))
+}
+
+appendFunctionSymbol moduleName: Text, name: Text, local: Bool, line: Int, column: Int, bytes: mut [UInt8; ~] -> Unit {
+    [UInt8; ~] => canonical!
+    false => qualified!
+    (moduleName -> len) > 0 and (name -> len) > (moduleName -> len)
+        -> if { (name -> slice(0, moduleName -> len)) == moduleName and (name -> byte(moduleName -> len)) == '.' => qualified! }
+    (moduleName -> len) > 0 and not qualified! -> if {
+        moduleName -> appendTypeText(canonical!)
+        canonical! -> push('.')
+    }
+    name -> appendTypeText(canonical!)
+    true => simple!
+    canonical! -> each byte {
+        not ((byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or (byte >= 48 and byte <= 57) or byte == '.')
+            -> if { false => simple! }
+    }
+    [UInt8; ~] => raw!
+    "sollang_fn_" -> appendTypeText(raw!)
+    simple! -> if {
+        canonical! -> each byte { byte == '.' -> if { raw! -> push('_') } else { raw! -> push(byte) } }
+    } else {
+        raw! -> push('$')
+        canonical! -> each byte { byte -> appendFunctionHex(raw!) }
+    }
+    local -> if {
+        "_local_m" -> appendTypeText(raw!)
+        UIntSize(0) => cursor!
+        cursor! < (moduleName -> len) -> while {
+            moduleName -> functionUnicode.continueWidth(cursor!) => width
+            width > 0 -> if {
+                UIntSize(0) => index!
+                index! < width -> while {
+                    raw! -> push(moduleName -> byte(cursor! + index!))
+                    index! + 1 => index!
+                }
+                cursor! + width => cursor!
+            } else {
+                moduleName -> functionUnicode.scalarWidth(cursor!) => scalarWidth
+                raw! -> push('_')
+                scalarWidth == 4 -> if { raw! -> push('_') }
+                cursor! + scalarWidth => cursor!
+            }
+        }
+        "_$(line)_$(column)" -> appendTypeText(raw!)
+    }
+    false => quoted!
+    raw! -> each byte { byte > 127 -> if { true => quoted! } }
+    bytes -> push('@')
+    quoted! -> if { bytes -> push(34) }
+    raw! -> each byte {
+        quoted! and (byte > 127 or byte == 34 or byte == 92)
+            -> if { bytes -> push(92)
+                byte -> appendFunctionHex(bytes) } else { bytes -> push(byte) }
+    }
+    quoted! -> if { bytes -> push(34) }
+}
+
+# COM wrappers use callable kind36 and the managed parser's operation names.
+comFunctionSymbolField context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot -> Field {
+    prepared.package.ranges[context.sourceModule] => range
+    prepared.package.symbols[range.symbolStart + context.ownerSymbol] => declaration
+    prepared.package.symbols[range.symbolStart + declaration.parent] => ownerInterface
+    prepared.package.nodes[range.astStart + ownerInterface.astNode] => interfaceAst
+    prepared.package.nodes[range.astStart + interfaceAst.parent] => comBlock
+    [UInt8; ~] => bytes!
+    context -> typeTokenText(prepared.package, context.sourceModule, comBlock.payloadToken) -> appendTypeText(bytes!)
+    bytes! -> push('.')
+    declaration.flags / 131072 % 2 == 1 -> if {
+        "query" -> appendTypeText(bytes!)
+        prepared.package.symbols[range.symbolStart + declaration.secondaryTypeNode] => target
+        context -> typeTokenText(prepared.package, context.sourceModule, target.nameToken) -> appendTypeText(bytes!)
+        "From" -> appendTypeText(bytes!)
+        context -> typeTokenText(prepared.package, context.sourceModule, ownerInterface.nameToken) -> appendTypeText(bytes!)
+    } else {
+        declaration.flags / 4096 % 2 == 1 or declaration.flags / 8192 % 2 == 1
+            -> if {
+                declaration.flags / 4096 % 2 == 1 -> if { "create" } else { "clone" } -> appendTypeText(bytes!)
+                true => firstInterface!
+                0..<declaration.parent -> each index {
+                    prepared.package.symbols[range.symbolStart + index] => prior
+                    prior.kind == 3 and prior.flags / 512 % 2 == 1
+                        and prepared.package.nodes[range.astStart + prior.astNode].parent == interfaceAst.parent
+                        -> if { false => firstInterface! }
+                }
+                not firstInterface! -> if {
+                    context -> typeTokenText(prepared.package, context.sourceModule, ownerInterface.nameToken) -> appendTypeText(bytes!)
+                }
+            } else {
+                context -> typeTokenText(prepared.package, context.sourceModule, declaration.nameToken) -> appendTypeText(bytes!)
+            }
+    }
+    Field { bytes: bytes! }
+}
+
+functionSymbolField context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot -> Result<Field, DeclarationFieldError> {
+    prepared.package.ranges[context.sourceModule] => range
+    prepared.package.symbols[range.symbolStart + context.ownerSymbol].flags / 512 % 2 == 1
+        -> if {
+            Result<Field, DeclarationFieldError>.Ok(context -> comFunctionSymbolField(prepared)) -> return
+        }
+    context -> functionContextFields(prepared.package) -> when {
+        Err(error) { Result<Field, DeclarationFieldError>.Err(error) }
+        Ok(fields) { Result<Field, DeclarationFieldError>.Ok(fields.name) }
+    }
+}
+
+# Names are prepared once; source/symbol/IR ordinals are only table coordinates.
+public prepareFunctionSymbols context: mut TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, metadata: ref Result<CodegenFunctionMetadata, FunctionEmissionError>, irCount: Int -> FunctionSymbols {
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt8; ~] => bytes!
+    0 => status!
+    0..<(prepared.package.ranges -> len) -> each sourceModule {
+        sourceModule => context.sourceModule
+        prepared.package.ranges[sourceModule] => range
+        prepared.package.sources[sourceModule] -> slice(0, prepared.package.sources[sourceModule] -> len) => source
+        source -> logicalIdentityField(context.identities[sourceModule], range, prepared.package.tokens) => module
+        module.bytes -> file.borrowBytes => moduleSource
+        moduleSource -> slice(0, moduleSource -> len) => moduleName
+        0..<range.symbolCount -> each symbol {
+            prepared.package.symbols[range.symbolStart + symbol] => declaration
+            -1 => start!
+            0 => length!
+            declaration.kind == 7 or declaration.kind == 31 or declaration.kind == 36
+                -> if {
+                    symbol => context.ownerSymbol
+                    context -> functionSymbolField(prepared) -> when {
+                        Err(_) { 1 => status! }
+                        Ok(field) {
+                            field.bytes -> file.borrowBytes => nameSource
+                            nameSource -> slice(0, nameSource -> len) => name
+                            source -> functionLocations.sourceLocation(prepared.package.nodes[range.astStart + declaration.astNode].start) => location
+                            bytes! -> len => start!
+                            moduleName -> appendFunctionSymbol(name, (context -> functionParentSymbol(prepared.package)) >= 0, location.line, location.column, bytes!)
+                            (bytes! -> len) - start! => length!
+                        }
+                    }
+                }
+            starts! -> push(start!)
+            lengths! -> push(length!)
+        }
+    }
+    [Int; ~] => instanceStarts!
+    [Int; ~] => instanceLengths!
+    [UInt8; ~] => instanceBytes!
+    0..<irCount -> each { instanceStarts! -> push(-1)
+        instanceLengths! -> push(0) }
+    metadata -> when {
+        Err(_) { 2 => status! }
+        Ok(captured) {
+            captured.functions.functions -> each function {
+                function.functionNode >= 0 and function.functionNode < irCount
+                    -> if {
+                        function.sourceModule => context.sourceModule
+                        function.ownerSymbol => context.ownerSymbol
+                        prepared.package.ranges[function.sourceModule] => range
+                        prepared.package.sources[function.sourceModule] -> slice(0, prepared.package.sources[function.sourceModule] -> len) => source
+                        source -> logicalIdentityField(context.identities[function.sourceModule], range, prepared.package.tokens) => module
+                        module.bytes -> file.borrowBytes => moduleSource
+                        moduleSource -> slice(0, moduleSource -> len) => moduleName
+                        function.name.bytes -> file.borrowBytes => nameSource
+                        nameSource -> slice(0, nameSource -> len) => name
+                        prepared.package.symbols[range.symbolStart + function.ownerSymbol] => declaration
+                        source -> functionLocations.sourceLocation(prepared.package.nodes[range.astStart + declaration.astNode].start) => location
+                        instanceBytes! -> len => start
+                        instanceStarts![function.functionNode] >= 0 -> if { 3 => status! }
+                        start => instanceStarts![function.functionNode]
+                        moduleName -> appendFunctionSymbol(name, (context -> functionParentSymbol(prepared.package)) >= 0, location.line, location.column, instanceBytes!)
+                        (instanceBytes! -> len) - start => instanceLengths![function.functionNode]
+                    }
+            }
+        }
+    }
+    FunctionSymbols {
+        declarations: functionNames.Names { starts: starts!, lengths: lengths!, bytes: bytes!, status: status! }
+        instances: functionNames.Names { starts: instanceStarts!, lengths: instanceLengths!, bytes: instanceBytes!, status: status! }
+        status: status!
+    }
 }

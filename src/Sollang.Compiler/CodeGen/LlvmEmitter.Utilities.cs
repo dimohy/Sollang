@@ -1893,29 +1893,15 @@ internal sealed partial class LlvmEmitter
 
     private static string SymbolForFunction(BoundFunction function)
     {
-        var canonicalName = CanonicalFunctionName(function);
-        // Keep existing simple qualified symbols, but encode the complete name
-        // when replacing punctuation would erase identifier boundaries. The $
-        // prefix cannot occur in the legacy alphabet; UTF-8 hex is injective.
-        var encodedName = canonicalName.All(static c => char.IsAsciiLetterOrDigit(c) || c == '.')
-            ? canonicalName.Replace('.', '_')
-            : "$" + Convert.ToHexString(Encoding.UTF8.GetBytes(canonicalName));
-        var baseSymbol = "sollang_fn_" + encodedName;
-        var module = string.Concat(function.ModuleName.Select(
-            static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
-        var symbol = function.IsLocal
-            ? $"{baseSymbol}_local_m{module}_{function.Line.ToString(CultureInfo.InvariantCulture)}_{function.Column.ToString(CultureInfo.InvariantCulture)}"
-            : baseSymbol;
+        var symbol = Shared.FunctionSymbolIdentity.Create(
+            function.ModuleName, function.Name, function.IsLocal, function.Line, function.Column).Symbol;
         return symbol.Any(static c => c > 0x7F)
             ? $"@\"{EscapeLlvmBytes(Encoding.UTF8.GetBytes(symbol))}\""
             : "@" + symbol;
     }
 
     private static string CanonicalFunctionName(BoundFunction function) =>
-        function.ModuleName.Length == 0
-        || function.Name.StartsWith(function.ModuleName + ".", StringComparison.Ordinal)
-            ? function.Name
-            : function.ModuleName + "." + function.Name;
+        Shared.FunctionSymbolIdentity.CanonicalName(function.ModuleName, function.Name);
 
     private string NextTemp(string prefix)
     {
