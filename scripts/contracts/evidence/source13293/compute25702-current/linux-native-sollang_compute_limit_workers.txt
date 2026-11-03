@@ -1,0 +1,21 @@
+define internal i32 @sollang_compute_limit_workers(i32 %requested) {
+entry:
+%existing = load i32, ptr @sollang_compute_worker_count, align 4
+%already_started = icmp sgt i32 %existing, 0
+br i1 %already_started, label %started, label %configure
+configure:
+%positive = icmp sgt i32 %requested, 0
+%at_least_one = select i1 %positive, i32 %requested, i32 1
+%too_many = icmp sgt i32 %at_least_one, 64
+%bounded = select i1 %too_many, i32 64, i32 %at_least_one
+store i32 %bounded, ptr @sollang_compute_worker_limit, align 4
+%started_ok = call i1 @sollang_compute_start()
+br i1 %started_ok, label %read, label %failed
+started:
+ret i32 %existing
+read:
+%workers = load i32, ptr @sollang_compute_worker_count, align 4
+ret i32 %workers
+failed:
+ret i32 0
+}

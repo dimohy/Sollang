@@ -1929,6 +1929,9 @@ cleanup bodies also come from `NativeRuntimePolicy`. Both platform emitters
 and the SLG environment adapter consume those compiled definitions. Keep
 platform declaration placement in the adapter; never copy helper instructions
 or allocation/error branches into a second runtime template.
+Compute pool workers, scheduling, worker queries and memory output sinks consume
+compiled definition groups too. Keep direct tagged-stdout and thread-local
+output ABI adapters explicit at initialization, callback entry/exit and disposal.
 Concurrent stream joins use the same compiled-definition path for platform
 declarations, synchronization helpers, worker bodies and lifecycle cleanup.
 Keep the worker/lifecycle split within the bounded multiline limit and preserve

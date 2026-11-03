@@ -1,0 +1,35 @@
+define internal void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+entry:
+%data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
+%length_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 1
+%capacity_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 2
+%length = load i64, ptr %length_slot, align 8
+%capacity = load i64, ptr %capacity_slot, align 8
+%required = add i64 %length, %len
+%fits = icmp ule i64 %required, %capacity
+br i1 %fits, label %append, label %grow
+grow:
+%doubled = shl i64 %capacity, 1
+%minimum = icmp ult i64 %doubled, 256
+%base_capacity = select i1 %minimum, i64 256, i64 %doubled
+%enough = icmp uge i64 %base_capacity, %required
+%new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+%new_data = call ptr @sollang_alloc(i64 %new_capacity)
+%old_data = load ptr, ptr %data_slot, align 8
+%has_old = icmp ne ptr %old_data, null
+br i1 %has_old, label %copy_old, label %publish
+copy_old:
+call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+call void @sollang_free(ptr %old_data)
+br label %publish
+publish:
+store ptr %new_data, ptr %data_slot, align 8
+store i64 %new_capacity, ptr %capacity_slot, align 8
+br label %append
+append:
+%current_data = load ptr, ptr %data_slot, align 8
+%destination = getelementptr i8, ptr %current_data, i64 %length
+call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+store i64 %required, ptr %length_slot, align 8
+ret void
+}

@@ -1,0 +1,57 @@
+define internal i32 @sollang_windows_compute_worker(ptr %unused) {
+entry:
+br label %wait
+wait:
+%semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
+%waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
+%stopping_value = load atomic i32, ptr @sollang_compute_stopping acquire, align 4
+%stopping = icmp ne i32 %stopping_value, 0
+br i1 %stopping, label %stopped, label %take
+take:
+%group = load atomic ptr, ptr @sollang_compute_group_current acquire, align 8
+%count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
+%count = load i64, ptr %count_slot, align 8
+br label %claim
+claim:
+%index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
+%failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
+%failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
+%within_count = icmp ult i64 %index, %count
+%before_failure = icmp ult i64 %index, %failure_limit
+%has_work = and i1 %within_count, %before_failure
+br i1 %has_work, label %work, label %complete
+work:
+%callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
+%callback = load ptr, ptr %callback_slot, align 8
+%running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
+%running_now = add i32 %running_before, 1
+%peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
+%gate_pair = cmpxchg ptr @sollang_compute_parent_gate, i32 0, i32 1 acq_rel acquire
+%gate_owner = extractvalue { i32, i1 } %gate_pair, 1
+br i1 %gate_owner, label %wait_parent, label %worker_callback
+wait_parent:
+%parent_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+%parent_ready = icmp eq i32 %parent_gate, 2
+br i1 %parent_ready, label %worker_callback, label %wait_parent
+worker_callback:
+call void @sollang_compute_output_enter(ptr %group, i64 %index)
+call void %callback(ptr %group, i64 %index)
+call void @sollang_compute_output_leave()
+%running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
+br label %claim
+complete:
+%previous = atomicrmw sub ptr @sollang_compute_active, i32 1 acq_rel
+%last = icmp eq i32 %previous, 1
+br i1 %last, label %signal, label %barrier
+barrier:
+%barrier_event = load ptr, ptr @sollang_compute_completion_event, align 8
+%barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+%departed_before = atomicrmw add ptr @sollang_compute_barrier_departed, i32 1 acq_rel
+br label %wait
+signal:
+%event = load ptr, ptr @sollang_compute_completion_event, align 8
+%signalled = call i32 @SetEvent(ptr %event)
+br label %wait
+stopped:
+ret i32 0
+}

@@ -1,0 +1,38 @@
+define internal void @sollang_compute_shutdown() {
+entry:
+%workers = load i32, ptr @sollang_compute_worker_count, align 4
+%started = icmp sgt i32 %workers, 0
+br i1 %started, label %stop, label %done
+stop:
+store atomic i32 1, ptr @sollang_compute_stopping release, align 4
+%workers64 = zext i32 %workers to i64
+%event_value = alloca i64, align 8
+store i64 %workers64, ptr %event_value, align 8
+%work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
+%released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
+br label %join
+join:
+%index = phi i32 [ 0, %stop ], [ %next, %joined ]
+%all_joined = icmp eq i32 %index, %workers
+br i1 %all_joined, label %cleanup, label %join_one
+join_one:
+%slot = getelementptr [64 x i64], ptr @sollang_compute_worker_threads, i32 0, i32 %index
+%worker = load i64, ptr %slot, align 8
+%joined_status = call i32 @pthread_join(i64 %worker, ptr null)
+store i64 0, ptr %slot, align 8
+br label %joined
+joined:
+%next = add i32 %index, 1
+br label %join
+cleanup:
+call void @sollang_compute_output_dispose()
+%completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
+%closed_completion = call i32 @close(i32 %completion_fd)
+%closed_work = call i32 @close(i32 %work_fd)
+store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
+store i32 -1, ptr @sollang_compute_work_event_fd, align 4
+store i32 0, ptr @sollang_compute_worker_count, align 4
+br label %done
+done:
+ret void
+}

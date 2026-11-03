@@ -1,0 +1,52 @@
+define internal i1 @sollang_compute_start() {
+entry:
+%existing = load i32, ptr @sollang_compute_worker_count, align 4
+%already = icmp sgt i32 %existing, 0
+br i1 %already, label %ready, label %create_sync
+create_sync:
+%output_ready = call i1 @sollang_compute_output_initialize()
+br i1 %output_ready, label %create_platform_sync, label %fail
+create_platform_sync:
+%semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
+%semaphore_ok = icmp ne ptr %semaphore, null
+br i1 %semaphore_ok, label %create_event, label %fail
+create_event:
+store ptr %semaphore, ptr @sollang_compute_semaphore, align 8
+%event = call ptr @CreateEventA(ptr null, i32 1, i32 0, ptr null)
+%event_ok = icmp ne ptr %event, null
+br i1 %event_ok, label %count, label %fail
+count:
+store ptr %event, ptr @sollang_compute_completion_event, align 8
+%reported = call i32 @GetActiveProcessorCount(i16 -1)
+%positive = icmp sgt i32 %reported, 0
+%at_least_one = select i1 %positive, i32 %reported, i32 1
+%configured = load i32, ptr @sollang_compute_worker_limit, align 4
+%has_configured = icmp sgt i32 %configured, 0
+%selected = select i1 %has_configured, i32 %configured, i32 %at_least_one
+%too_many = icmp sgt i32 %selected, 64
+%bounded = select i1 %too_many, i32 64, i32 %selected
+br label %create_workers
+create_workers:
+%index = phi i32 [ 0, %count ], [ %next, %created ]
+%done = icmp eq i32 %index, %bounded
+br i1 %done, label %publish, label %create_one
+create_one:
+%worker = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_compute_worker, ptr null, i32 0, ptr null)
+%worker_ok = icmp ne ptr %worker, null
+br i1 %worker_ok, label %created, label %publish
+created:
+%slot = getelementptr [64 x ptr], ptr @sollang_compute_worker_handles, i32 0, i32 %index
+store ptr %worker, ptr %slot, align 8
+%next = add i32 %index, 1
+br label %create_workers
+publish:
+%created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+store i32 %created_count, ptr @sollang_compute_worker_count, align 4
+%has_workers = icmp sgt i32 %created_count, 0
+br i1 %has_workers, label %ready, label %fail
+ready:
+ret i1 true
+fail:
+call void @sollang_compute_output_dispose()
+ret i1 false
+}

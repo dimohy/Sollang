@@ -1,0 +1,18 @@
+define internal void @sollang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) {
+entry:
+br label %dispose_loop
+dispose_loop:
+%index = phi i64 [ 0, %entry ], [ %next, %dispose_one ]
+%done = icmp eq i64 %index, %count
+br i1 %done, label %finish, label %dispose_one
+dispose_one:
+%sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
+%data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
+%data = load ptr, ptr %data_slot, align 8
+call void @sollang_free(ptr %data)
+%next = add i64 %index, 1
+br label %dispose_loop
+finish:
+call void @sollang_free(ptr %sinks)
+ret void
+}

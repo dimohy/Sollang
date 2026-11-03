@@ -1,0 +1,63 @@
+define internal i1 @sollang_compute_start() {
+entry:
+%existing = load i32, ptr @sollang_compute_worker_count, align 4
+%already = icmp sgt i32 %existing, 0
+br i1 %already, label %ready, label %create_work_event
+create_work_event:
+%output_ready = call i1 @sollang_compute_output_initialize()
+br i1 %output_ready, label %create_platform_sync, label %fail
+create_platform_sync:
+%work_fd = call i32 @eventfd(i32 0, i32 1)
+%work_ok = icmp sge i32 %work_fd, 0
+br i1 %work_ok, label %create_completion_event, label %fail
+create_completion_event:
+store i32 %work_fd, ptr @sollang_compute_work_event_fd, align 4
+%completion_fd = call i32 @eventfd(i32 0, i32 0)
+%completion_ok = icmp sge i32 %completion_fd, 0
+br i1 %completion_ok, label %count, label %close_work
+count:
+store i32 %completion_fd, ptr @sollang_compute_completion_event_fd, align 4
+%reported = call i64 @sysconf(i32 84)
+%positive = icmp sgt i64 %reported, 0
+%at_least_one = select i1 %positive, i64 %reported, i64 1
+%configured32 = load i32, ptr @sollang_compute_worker_limit, align 4
+%configured = sext i32 %configured32 to i64
+%has_configured = icmp sgt i64 %configured, 0
+%selected = select i1 %has_configured, i64 %configured, i64 %at_least_one
+%too_many = icmp sgt i64 %selected, 64
+%bounded64 = select i1 %too_many, i64 64, i64 %selected
+%bounded = trunc i64 %bounded64 to i32
+br label %create_workers
+create_workers:
+%index = phi i32 [ 0, %count ], [ %next, %created ]
+%done = icmp eq i32 %index, %bounded
+br i1 %done, label %publish, label %create_one
+create_one:
+%slot = getelementptr [64 x i64], ptr @sollang_compute_worker_threads, i32 0, i32 %index
+%create = call i32 @pthread_create(ptr %slot, ptr null, ptr @sollang_linux_compute_worker, ptr null)
+%worker_ok = icmp eq i32 %create, 0
+br i1 %worker_ok, label %created, label %publish
+created:
+%next = add i32 %index, 1
+br label %create_workers
+publish:
+%created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+store i32 %created_count, ptr @sollang_compute_worker_count, align 4
+%has_workers = icmp sgt i32 %created_count, 0
+br i1 %has_workers, label %ready, label %close_both
+close_work:
+%closed_work_only = call i32 @close(i32 %work_fd)
+store i32 -1, ptr @sollang_compute_work_event_fd, align 4
+br label %fail
+close_both:
+%closed_completion = call i32 @close(i32 %completion_fd)
+%closed_work = call i32 @close(i32 %work_fd)
+store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
+store i32 -1, ptr @sollang_compute_work_event_fd, align 4
+br label %fail
+ready:
+ret i1 true
+fail:
+call void @sollang_compute_output_dispose()
+ret i1 false
+}

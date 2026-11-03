@@ -1,0 +1,30 @@
+define internal void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %prefix, ptr %context, ptr %writer) {
+entry:
+br label %flush_loop
+flush_loop:
+%index = phi i64 [ 0, %entry ], [ %next, %flush_one_done ]
+%done = icmp eq i64 %index, %count
+br i1 %done, label %finish, label %flush_one
+flush_one:
+%sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
+%data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
+%length_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 1
+%data = load ptr, ptr %data_slot, align 8
+%length = load i64, ptr %length_slot, align 8
+%has_data = icmp ne ptr %data, null
+%in_prefix = icmp ult i64 %index, %prefix
+%should_write = and i1 %has_data, %in_prefix
+br i1 %should_write, label %write, label %dispose_one
+write:
+call void %writer(ptr %context, ptr %data, i64 %length)
+br label %dispose_one
+dispose_one:
+call void @sollang_free(ptr %data)
+br label %flush_one_done
+flush_one_done:
+%next = add i64 %index, 1
+br label %flush_loop
+finish:
+call void @sollang_free(ptr %sinks)
+ret void
+}
