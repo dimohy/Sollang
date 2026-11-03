@@ -71,7 +71,7 @@ internal sealed partial class LlvmEmitter
         EmitLoad(method, "ptr", slot, _platform.PointerBitWidth / 8);
         var returnType = dispatch.Method.ReturnType
             ?? throw new SollangException("dyn trait dispatch requires a concrete return type");
-        const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
+        var runtimeContext = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters();
         var arguments = runtimeContext + $", ptr {value.DataPointerName}";
         if (returnType == BoundType.Unit)
         {
@@ -114,13 +114,13 @@ internal sealed partial class LlvmEmitter
         var llvmReturnType = returnType == BoundType.Unit ? "void" : LlvmType(returnType);
         var wrapper = DynMethodWrapperSymbol(conversion, methodIndex);
         EmitFunctionLine($"define internal {llvmReturnType} @{wrapper}("
-            + "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %data) #0 {");
+            + FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters() + ", ptr %data) #0 {");
         EmitFunctionLine("entry:");
         _currentBlockLabel = "entry";
         var receiver = NextTemp("dyn_receiver");
         EmitLoad(receiver, LlvmType(conversion.ConcreteType), "%data",
             RuntimeAlignment(conversion.ConcreteType));
-        var arguments = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, "
+        var arguments = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters() + ", "
             + $"{LlvmType(conversion.ConcreteType)} {receiver}";
         if (returnType == BoundType.Unit)
         {

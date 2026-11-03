@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -665,7 +666,7 @@ internal sealed partial class LlvmEmitter
 
     private string ParameterListForFunction(BoundFunction function)
     {
-        const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
+        var runtimeContext = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters();
         var parameters = new[]
             {
                 _usesAsyncDiagnostics && function.IsAsync ? "ptr %diagnostic_context" : string.Empty,

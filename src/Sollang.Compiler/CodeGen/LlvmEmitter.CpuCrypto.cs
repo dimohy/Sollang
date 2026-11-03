@@ -1,4 +1,5 @@
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 
 namespace Sollang.Compiler.CodeGen;
 
@@ -53,7 +54,7 @@ internal sealed partial class LlvmEmitter
         var receiverLlvmType = LlvmType(receiverType);
         var inputLlvmType = LlvmType(inputType);
         var parameters = ParameterListForFunction(function);
-        var arguments = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, "
+        var arguments = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters() + ", "
             + $"{receiverLlvmType} %it, {inputLlvmType} %arg_0";
 
         EmitStructFunction(function, portableSymbol);

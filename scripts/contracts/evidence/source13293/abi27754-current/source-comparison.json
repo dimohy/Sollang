@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "status": "csharp-first-verified-native-source-inspected-consumers-pending",
+  "csharpFirst": [
+    "original-runtime.json",
+    "focused-runtime.json",
+    "controls-runtime.json",
+    "original-llvm.json"
+  ],
+  "sourceHashes": {
+    "src/Sollang.Compiler/Shared/Policies/FunctionRuntimeContextPolicy.cs": "21688D6325455C74925F3A135FCE89CB163F9363DE53A7CFD99F58944D6950A5",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs": "BC327961D26678FE413EAE2AC1C486629C13009BFD2010EB2B4332229B438021",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs": "B25336C2C61921FF26856CEE178CB40AE186E227242D80EE3F62E66ED9B1D751",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.DynTraits.cs": "11E6081D02FBA362054BC773F6A08055E90949F317F24F14773B62CAFC561D9E",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.CpuCrypto.cs": "38A1E924A37F669DC29243DE016C8D34FEF171D42E3F2C87E2DABD7111029BD3",
+    "selfhost/llvm/text/functions.slg": "D96ECC077EF8793A1EF7D02E90B7C430D983ACAD992CB3E61309C956B1C48D8B",
+    "selfhost/llvm/text/core_calls.slg": "20AE24A17F484DD82AA32D827490FED1CDEE2E1CEF0A304F260031DC0E295C9A",
+    "selfhost/llvm/text/value_names.slg": "CC3A4B8F877F61E22BA31585527989BD4DF84582525A893C8F742788AE50FED2",
+    "selfhost/llvm/text.slg": "625848786AB263133038845FE1038F711977A1D36219C4078401AA35245089E5",
+    "selfhost/llvm/emitter/text_output_runtime.slg": "C637C39589E67D8D5722FC5B3549522DD0843AC2FBBCB9702212340ABF787073",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs": "3DFC960BD6C18E2127B379D8C109BF7ADCB231D25386992755586DEF10B782FF"
+  },
+  "decisions": [
+    {
+      "topic": "runtime parameter list",
+      "csharp": "Six declaration/call/dyn/CPU consumers now use FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters. Order and LLVM output unchanged.",
+      "slg": "functions.slg receives the same literal via existing selfhost-sync Region generation. Ordinary function header around line1293 and call environment around core_calls.slg3638 still omit the runtime prefix. Generated definition is not yet consumed."
+    },
+    {
+      "topic": "root and actual IO transport",
+      "csharp": "Runtime handles and state are propagated as hidden function inputs.",
+      "slg": "text.slg entry setup does not establish those five function inputs; text_output_runtime.slg obtains the Windows stdout handle directly and uses runtime globals for its buffer. Adding unused/null parameters would not align the transport decision."
+    },
+    {
+      "topic": "async transport",
+      "csharp": "Async.cs explicitly loads/stores five runtime fields and uses a fixed input/frame layout. This layout is not centralized by the present parameter-list refactor.",
+      "slg": "functions.slg async factory around1090 takes diagnostic parent and explicit inputs; worker/control ABI needs a coordinated frame and call decision before adopting runtime-context parameters."
+    },
+    {
+      "topic": "names and linkage",
+      "csharp": "Canonical function symbol names and internal linkage remain unchanged.",
+      "slg": "value_names.slg functionSymbolName delegates to declarationName; ordinary definitions remain global. Original48 common LLVM failure is still required work."
+    }
+  ],
+  "nextAction": "Integrate real context transport, name/linkage and their function-value/dyn/async/library consumers after complete source decisions; then build the checked SLG emitter and native CLI with existing prerequisites. Do not weaken original48 assertions.",
+  "claimsWholeSourcePhaseComplete": false
+}

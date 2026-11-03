@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -1936,7 +1937,7 @@ internal sealed partial class LlvmEmitter
 
     private string FunctionCallArgumentList(BoundFunction function, RuntimeValue? argument, IReadOnlyList<RuntimeValue>? additionalArguments = null)
     {
-        const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
+        var runtimeContext = FunctionRuntimeContextPolicy.FunctionRuntimeContextParameters();
         var explicitArguments = string.Join(", ", new[]
             {
                 _usesAsyncDiagnostics && function.IsAsync
