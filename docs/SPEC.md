@@ -3731,12 +3731,18 @@ paths is a branch ownership error. The diagnostic names the affected field and
 its binding; this join error takes precedence over a later overlapping-field
 read derived from the same move site. All moved fields from one binding at the
 same join are reported once, with duplicate names removed and names in ordinal
-lexical order. If a field is moved twice inside one branch, the second move is
+lexical order. Fields moved identically on every incoming path are excluded
+from those affected names. If a field is moved twice inside one branch, the second move is
 rejected as an overlapping field access before the branch-state comparison.
 
 Result constructors
 consume named owned payloads and transfer their single drop obligation into the
 new enum value.
+When a returned match consumes an outer owner on one arm, cleanup on the other
+arm uses that arm's complete moved-field state and drops only live fields.
+A canonical function return may select the match directly beneath its syntax
+flow wrapper; ownership checks follow that selected value through result edges.
+An earlier match followed by another owner use still joins its ownership state.
 
 ## Containers
 

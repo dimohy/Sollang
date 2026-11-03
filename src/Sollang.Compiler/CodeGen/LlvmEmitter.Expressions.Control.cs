@@ -1082,9 +1082,10 @@ internal sealed partial class LlvmEmitter
                     ? masks.Any(mask => !entryMask.SetEquals(mask))
                     : masks.Skip(1).Any(mask => !mergedMask.SetEquals(mask)))
             {
-                var changedFields = masks
-                    .SelectMany(static mask => mask)
-                    .Concat(requireEntryMask ? entryMask : EmptyMovedFieldMask)
+                var comparisonMask = requireEntryMask ? entryMask : mergedMask;
+                var changedFields = masks.SelectMany(mask =>
+                    mask.Except(comparisonMask, StringComparer.Ordinal)
+                        .Concat(comparisonMask.Except(mask, StringComparer.Ordinal)))
                     .Distinct(StringComparer.Ordinal)
                     .Order(StringComparer.Ordinal);
                 throw new SollangException(

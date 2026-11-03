@@ -1,0 +1,22 @@
+struct Task { child: box Int, program: box Int, output: box Int, error: box Int }
+struct Outcome { program: box Int, output: box Int, error: box Int, code: Int }
+
+wait child: move box Int -> Result<Int, Text> => Result<Int, Text>.Ok(7)
+
+finish task: move Task -> Result<Outcome, Text> {
+    task.child -> wait -> when {
+        Ok(status) { Result<Outcome, Text>.Ok(Outcome {
+            program: task.program, output: task.output, error: task.error, code: status
+        }) }
+        Err(error) { Result<Outcome, Text>.Err(error) }
+    } => prior
+    task.program => stolen
+    Result<Outcome, Text>.Err("later")
+}
+
+main {
+    Task { child: box 1, program: box 2, output: box 3, error: box 4 } -> finish -> when {
+        Ok(outcome) { outcome.code -> println }
+        Err(error) { error -> println }
+    }
+}

@@ -422,6 +422,7 @@ internal sealed partial class LlvmEmitter
         var previousFunctions = _activeFunctions;
         var previousLabel = _currentBlockLabel;
         var previousTerminated = _currentBlockTerminated;
+        var previousLocals = CaptureLocals();
         try
         {
             foreach (var (name, _) in outerOwnedLocals)
@@ -441,10 +442,11 @@ internal sealed partial class LlvmEmitter
                 normalizedNames.Add(name);
                 foreach (var path in presentPaths)
                 {
+                    RestoreLocals(path.Scope);
                     _activeFunctions = path.Cleanup;
                     _currentBlockLabel = path.Label;
                     _currentBlockTerminated = false;
-                    DropOwnedRuntimeValue(path.Scope.Locals[name]);
+                    DropOwnedLocal(name, path.Scope.Locals[name]);
                     path.Label = _currentBlockLabel;
                 }
             }
@@ -454,6 +456,7 @@ internal sealed partial class LlvmEmitter
             _activeFunctions = previousFunctions;
             _currentBlockLabel = previousLabel;
             _currentBlockTerminated = previousTerminated;
+            RestoreLocals(previousLocals);
         }
 
         if (normalizedNames.Count == 0)
