@@ -1873,6 +1873,11 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
+Dyn trait method compatibility follows this same path: `DynTraitPolicy` owns
+the readonly-self, additional-input and Int-result decision. C# semantics and
+the SLG diagnostic adapter supply those facts; associated-type rejection and
+diagnostic ordering remain in their typed adapters. Regenerate the policy
+region in `selfhost/llvm/emitter/diagnostics.slg` through the C# build.
 Reference metadata registers ordinary and affine native/COM nominal declarations
 in the same struct-before-enum order as C#. Affine names come from their owning
 ABI block alias; the named-box catalog and nominal identity seeds include the

@@ -11920,9 +11920,10 @@ internal sealed partial class SemanticCompiler
                 $"trait '{CanonicalTraitName(trait)}' is not dyn-compatible because it declares associated types");
         }
         var incompatible = trait.Methods.FirstOrDefault(method =>
-            method.SelfOwnership != BoundFunctionInputOwnership.Default
-            || method.ReturnType != BoundType.Int
-            || method.AdditionalParameters.Count != 0);
+            !DynTraitPolicy.DynTraitMethodCompatible(
+                method.SelfOwnership == BoundFunctionInputOwnership.Default,
+                method.AdditionalParameters.Count != 0,
+                method.ReturnType == BoundType.Int));
         if (incompatible is not null)
         {
             throw Error(line, column,
