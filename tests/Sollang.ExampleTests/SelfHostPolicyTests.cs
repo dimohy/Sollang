@@ -8,7 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
-        const int expectedTestCount = 65;
+        const int expectedTestCount = 68;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -66,6 +66,26 @@ internal static class SelfHostPolicyTests
             Check("enum-negative-identity-rejected", EnumRejected(typeof(NegativeIdentity)));
             Check("enum-flags-rejected", EnumRejected(typeof(FlagIdentity)));
             Check("enum-empty-rejected", EnumRejected(typeof(EmptyIdentity)));
+            var intrinsicFactory = compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+                .GetMethod("IntrinsicNominal", BindingFlags.Public | BindingFlags.Static)!;
+            var namePolicy = compiler.GetType("Sollang.Compiler.Shared.TypeNamePolicy", true)!;
+            var intrinsicRows = new[] { (Enumeration: false, Method: "IntrinsicStructDefinitions"),
+                (Enumeration: true, Method: "IntrinsicEnumDefinitions") }.SelectMany(item =>
+                    ((string)namePolicy.GetMethod(item.Method)!.Invoke(null, null)!).Split('|')
+                        .Select(row => row.Split(':', 2)).Select(parts =>
+                            (item.Enumeration, Member: parts[0], Name: parts[1]))).ToArray();
+            Check("intrinsic-catalog-defined-and-unique", intrinsicRows.Length > 0
+                && intrinsicRows.Select(row => row.Name).Distinct(StringComparer.Ordinal).Count() == intrinsicRows.Length
+                && intrinsicRows.All(row => Enum.IsDefined(typeId, row.Member)));
+            Check("intrinsic-factory-consumes-compiled-catalog", intrinsicRows.All(row =>
+                intrinsicFactory.Invoke(null, [row.Name, row.Enumeration]) is { } value
+                && Convert.ToInt32(value) == Convert.ToInt32(Enum.Parse(typeId, row.Member))));
+            Check("intrinsic-kind-and-near-miss-rejection", intrinsicRows.All(row =>
+                intrinsicFactory.Invoke(null, [row.Name, !row.Enumeration]) is null
+                && new[] { row.Name + "Extra", row.Name.ToLowerInvariant(), row.Name.Split('.').Last() }
+                    .All(name => intrinsicFactory.Invoke(null, [name, row.Enumeration]) is null))
+                && intrinsicFactory.Invoke(null, ["", false]) is null
+                && intrinsicFactory.Invoke(null, ["missing", true]) is null);
             var actual = compiler.GetType("Sollang.Compiler.Shared.BorrowedTextReturnPolicy", true)!
                 .GetMethod("RequiresOriginCheck", BindingFlags.Public | BindingFlags.Static)!;
             var original = Emit(actual);
@@ -245,7 +265,8 @@ internal static class SelfHostPolicyTests
             .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
         var names = types.Select(type => type.Name).ToArray();
         var typeNamePolicy = compiler.GetType("Sollang.Compiler.Shared.TypeNamePolicy", true)!;
-        string Alias(int index) => types[index] == typeNamePolicy ? "typeNames" : "policy" + index;
+        string Alias(int index) => types[index] == typeNamePolicy ? "typeNames"
+            : names[index] == "TypeId" ? "referenceIds" : "policy" + index;
         for (var index = 0; index < types.Length; index++)
         {
             var attribute = types[index].GetCustomAttributesData().Single(item =>
@@ -271,11 +292,14 @@ internal static class SelfHostPolicyTests
                     source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(Alias(index))
                         .Append(".enumName(").Append(literal).Append(") -> println\n");
                     expected.Append(label).Append('\n').Append(name ?? "").Append('\n');
-                    label = names[index] + ".TypeName." + literal;
-                    source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(Alias(index))
-                        .Append(".nameOf(").Append(literal).Append(") -> when {\n")
-                        .Append("        Named(name) { name -> println }\n        Numeric(number) { number -> println }\n    }\n");
-                    expected.Append(label).Append('\n').Append(name ?? literal).Append('\n');
+                    if (enumType.FullName == "Sollang.Compiler.Semantics.TypeId")
+                    {
+                        label = names[index] + ".TypeName." + literal;
+                        source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(Alias(index))
+                            .Append(".nameOf(").Append(literal).Append(") -> when {\n")
+                            .Append("        Named(name) { name -> println }\n        Numeric(number) { number -> println }\n    }\n");
+                        expected.Append(label).Append('\n').Append(name ?? literal).Append('\n');
+                    }
                 }
                 foreach (var name in Enum.GetNames(enumType).Concat(["", "__unknown_type_id__", "unit"]))
                 {
@@ -418,6 +442,22 @@ internal static class SelfHostPolicyTests
         foreach (var missing in new[] { "", "missing", "Start", "end" })
             AppendValue("BuiltinTypeDefinitions.Range.Missing:" + missing,
                 "typeNames.rangeFieldOrdinal(\"" + missing + "\")", "-1");
+        var intrinsicFactory = compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+            .GetMethod("IntrinsicNominal", BindingFlags.Public | BindingFlags.Static)!;
+        var intrinsicNames = new[] { "IntrinsicStructDefinitions", "IntrinsicEnumDefinitions" }
+            .SelectMany(method => ((string)typeNamePolicy.GetMethod(method)!.Invoke(null, null)!).Split('|'))
+            .Select(row => row.Split(':', 2)[1])
+            .SelectMany(name => new[] { name, name + "Extra", name.ToLowerInvariant(), name.Split('.').Last() })
+            .Concat(["", "missing"]).Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var enumeration in new[] { false, true })
+        foreach (var name in intrinsicNames)
+        {
+            var value = intrinsicFactory.Invoke(null, [name, enumeration]);
+            var flag = enumeration ? "true" : "false";
+            AppendValue("BuiltinTypeDefinitions.IntrinsicNominal:" + flag + ":" + name,
+                "referenceIds.enumValue(typeNames.intrinsicEnumName(\"" + name + "\", " + flag + "))",
+                (value is null ? -1 : Convert.ToInt32(value)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
         void AppendValue(string label, string call, string value)
         {
             source.Append("    \"").Append(label).Append("\" -> println\n    ")
@@ -431,7 +471,8 @@ internal static class SelfHostPolicyTests
         File.WriteAllText(contractPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
-            formatCheckSources = new[] { Path.Combine(root, "selfhost/semantic/reference_type_ids.slg") },
+            formatCheckSources = new[] { Path.Combine(root, "selfhost/semantic/reference_type_ids.slg"),
+                Path.Combine(root, "selfhost/semantic/type_name_policy.slg") },
             policyModules = names,
             scope = "Generated policies against compiled CSharp method results; exhaustive boolean inputs, UInt64 boundary products and every declared cache-key rule",
             cases = new[] { new { id = "shared-policy-runtime", source = sourcePath,

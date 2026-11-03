@@ -1136,7 +1136,12 @@ to create a value or independently maintain AST-to-Typed-IR kind tables.
 S080 is a blocking compiler-integrity diagnostic when a standard-library
 compilation cannot prepare its required type-registration seeds. The same
 compiled definitions supply the managed and self-hosted compilers' predefined
-storage shapes and named box eligibility. The C# `TypeId` declaration also
+storage shapes and named box eligibility. Intrinsic struct and enum declaration
+names share compiled catalogs mapping exact qualified names to `TypeId` member
+names. Registration selects the catalog by declaration kind, retains ordinal
+case-sensitive matching, and reuses an intrinsic identity without advancing
+the ordinary type allocation counter. Unmatched declarations retain their
+normal allocation order. The C# `TypeId` declaration also
 supplies reference identity names and values to the self-host compiler through
 the compiled-policy exporter.
 Identity enum projections require nonnegative `Int32` members without flags

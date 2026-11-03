@@ -1867,6 +1867,13 @@ missing names return `-1`. Numeric selection uses integer `when`; text lookup
 uses text equality and early returns. Keep `TypeId` authoritative in C# and
 regenerate its region in `semantic/reference_type_ids.slg`, preserving authored
 registration code and existing source manifests.
+Intrinsic struct and enum declaration spellings use the two compiled
+`TypeNamePolicy` catalogs in `EnumMember:QualifiedName` rows. C# registration
+and the SLG lookup adapter consume the same catalogs; retain exact case and
+declaration kind. An intrinsic reuses its declared enum identity without
+advancing the ordinary allocation counter. Keep struct-before-enum traversal
+and ordinary unmatched-name allocation unchanged; do not add compiler-specific
+intrinsic spelling lists.
 Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate

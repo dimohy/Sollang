@@ -15551,30 +15551,8 @@ internal sealed partial class SemanticCompiler
                 throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
             }
 
-            var id = string.Equals(
-                declaration.Name,
-                "std.time.Duration",
-                StringComparison.Ordinal)
-                ? TypeId.Duration
-                : string.Equals(declaration.Name, "sys.file.File", StringComparison.Ordinal)
-                    ? TypeId.File
-                    : string.Equals(declaration.Name, "sys.file.FileWriter", StringComparison.Ordinal)
-                        ? TypeId.FileWriter
-                        : string.Equals(declaration.Name, "sys.file.SourceText", StringComparison.Ordinal)
-                            ? TypeId.SourceText
-            : string.Equals(declaration.Name, "sys.process.Command", StringComparison.Ordinal)
-                                ? TypeId.ProcessCommand
-                            : string.Equals(declaration.Name, "sys.file.AtomicReplaceRequest", StringComparison.Ordinal)
-                                ? TypeId.AtomicReplaceRequest
-                                : string.Equals(declaration.Name, "sys.path.Path", StringComparison.Ordinal)
-                                    ? TypeId.Path
-                                    : string.Equals(declaration.Name, "sys.directory.Raw", StringComparison.Ordinal)
-                                        ? TypeId.DirectoryRaw
-                                        : string.Equals(declaration.Name, "sys.directory.Entry", StringComparison.Ordinal)
-                                            ? TypeId.DirectoryEntry
-                                            : string.Equals(declaration.Name, "sys.input.mouse.Event", StringComparison.Ordinal)
-                                                ? TypeId.MouseEvent
-                                            : (TypeId)nextTypeId++;
+            var id = BuiltinTypeDefinitions.IntrinsicNominal(declaration.Name, enumeration: false)
+                ?? (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
                 throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
@@ -15591,19 +15569,8 @@ internal sealed partial class SemanticCompiler
                 throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
             }
 
-            var id = string.Equals(declaration.Name, "sys.path.Style", StringComparison.Ordinal)
-                ? TypeId.PathStyle
-                : string.Equals(declaration.Name, "sys.directory.kind.Kind", StringComparison.Ordinal)
-                    ? TypeId.DirectoryEntryKind
-                    : string.Equals(declaration.Name, "sys.directory.RawResult", StringComparison.Ordinal)
-                        ? TypeId.DirectoryRawResult
-                        : string.Equals(declaration.Name, "sys.directory.ReadResult", StringComparison.Ordinal)
-                            ? TypeId.DirectoryReadResult
-                        : string.Equals(declaration.Name, "sys.input.mouse.Kind", StringComparison.Ordinal)
-                            ? TypeId.MouseEventKind
-                        : string.Equals(declaration.Name, "sys.input.mouse.OverflowPolicy", StringComparison.Ordinal)
-                            ? TypeId.EventOverflowPolicy
-                    : (TypeId)nextTypeId++;
+            var id = BuiltinTypeDefinitions.IntrinsicNominal(declaration.Name, enumeration: true)
+                ?? (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
                 throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");

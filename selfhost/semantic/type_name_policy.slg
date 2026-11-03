@@ -24,6 +24,28 @@ public builtinDisplayName enumName: Text -> Text {
     enumName
 }
 
+public intrinsicEnumName name: Text, enumeration: Bool -> Text {
+    enumeration -> if {
+        intrinsicEnumDefinitions() -> intrinsicSchemaMember(name)
+    } else { intrinsicStructDefinitions() -> intrinsicSchemaMember(name) }
+}
+
+intrinsicSchemaMember schema: Text, name: Text -> Text {
+    UIntSize(0) => start!
+    start! < (schema -> len) -> while {
+        start! => end!
+        end! < (schema -> len) and (schema -> byte(end!)) != '|'
+            -> while { end! + 1 => end! }
+        start! => colon!
+        colon! < end! and (schema -> byte(colon!)) != ':'
+            -> while { colon! + 1 => colon! }
+        colon! < end! and (schema -> slice(colon! + 1, end! - colon! - 1)) == name
+            -> if { schema -> slice(start!, colon! - start!) -> return }
+        end! + 1 => start!
+    }
+    ""
+}
+
 public boxName name: Text, structure: Bool, enumeration: Bool, declarationName: Text -> Bool {
     primitiveBoxNames() -> containsName(name) => primitive
     boxExcludedStructNames() -> containsName(declarationName) => excludedStructure

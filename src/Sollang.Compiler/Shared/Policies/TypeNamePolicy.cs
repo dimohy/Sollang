@@ -23,6 +23,11 @@ internal static class TypeNamePolicy
     public static string ResultVariantNames() => "Ok|Err";
     public static string RuntimeResultAliasNames() => "sys.directory.RawResult|sys.directory.ReadResult";
 
+    public static string IntrinsicStructDefinitions() =>
+        "Duration:std.time.Duration|File:sys.file.File|FileWriter:sys.file.FileWriter|SourceText:sys.file.SourceText|ProcessCommand:sys.process.Command|AtomicReplaceRequest:sys.file.AtomicReplaceRequest|Path:sys.path.Path|DirectoryRaw:sys.directory.Raw|DirectoryEntry:sys.directory.Entry|MouseEvent:sys.input.mouse.Event";
+    public static string IntrinsicEnumDefinitions() =>
+        "PathStyle:sys.path.Style|DirectoryEntryKind:sys.directory.kind.Kind|DirectoryRawResult:sys.directory.RawResult|DirectoryReadResult:sys.directory.ReadResult|MouseEventKind:sys.input.mouse.Kind|EventOverflowPolicy:sys.input.mouse.OverflowPolicy";
+
     public static string PredeclaredFixedArrays() =>
         "FixedUInt8Array12:UInt8:12|FixedUInt8Array16:UInt8:16|FixedUInt8Array32:UInt8:32";
     public static string PredeclaredDynamicArrays() =>
