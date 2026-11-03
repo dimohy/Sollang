@@ -1942,6 +1942,9 @@ functions follow that same compiled-definition path. Preserve the optional
 file-worker boundary for socket-only IO. Keep the compatibility reader's
 platform ABI adapter separate from its shared worker and use the canonical
 completion-drain declaration in every caller.
+Windows and Linux IO signals and file-worker lifecycle functions use compiled
+definition groups too. Keep socket-only IO independent of file-worker storage;
+both shutdown routes delegate to the same shared IO teardown body.
 Async file open and owned-buffer calls also share the compiled Task-start
 definitions, intrinsic names and operation values used by C#. Keep typed
 context layout in one adapter shared by setup, completion and cancellation.

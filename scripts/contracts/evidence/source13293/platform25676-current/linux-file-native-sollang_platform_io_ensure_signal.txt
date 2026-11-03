@@ -1,0 +1,18 @@
+define internal i1 @sollang_platform_io_ensure_signal() {
+entry:
+%existing = load i32, ptr @sollang_io_completion_event_fd, align 4
+%ready = icmp sge i32 %existing, 0
+br i1 %ready, label %success, label %create
+create:
+; EFD_NONBLOCK keeps a raced signal clear from blocking the completion drain.
+%completion_fd = call i32 @eventfd(i32 0, i32 2048)
+%created = icmp sge i32 %completion_fd, 0
+br i1 %created, label %publish, label %fail
+publish:
+store i32 %completion_fd, ptr @sollang_io_completion_event_fd, align 4
+br label %success
+success:
+ret i1 true
+fail:
+ret i1 false
+}

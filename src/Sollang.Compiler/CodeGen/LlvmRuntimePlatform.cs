@@ -428,6 +428,8 @@ internal abstract class LlvmRuntimePlatform
             functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.IoWaitIdleFunction());
             functions.AppendLine();
+            functions.AppendLine(NativeRuntimePolicy.IoShutdownFunction());
+            functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileShutdownFunction());
             functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileTaskWorkerFunction());

@@ -1165,6 +1165,8 @@ Async IO queues, file worker operations, cancellation-safe completion publicatio
 completion draining and task cleanup also share compiled runtime definitions.
 The compatibility reader retains its platform storage behind the same read ABI;
 socket-only IO does not acquire a file worker merely to share completion logic.
+Platform IO signals and file-worker lifecycle bodies use compiled definition
+groups; file and socket-only shutdown share the IO teardown implementation.
 Async open and owned-buffer Task creation consume the same compiled runtime
 definitions and operation values in both compilers. Their typed context adapters
 retain the file and buffer owners until completion transfers them into either

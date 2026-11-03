@@ -1,0 +1,21 @@
+define internal i1 @sollang_platform_file_worker_start() {
+entry:
+%request_fd = call i32 @eventfd(i32 0, i32 0)
+%request_ok = icmp sge i32 %request_fd, 0
+br i1 %request_ok, label %ensure_completion, label %fail
+ensure_completion:
+store i32 %request_fd, ptr @sollang_file_request_event_fd, align 4
+%completion_ok = call i1 @sollang_platform_io_ensure_signal()
+br i1 %completion_ok, label %thread, label %fail
+thread:
+%thread_slot = alloca i64, align 8
+%create = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_file_worker, ptr null)
+%thread_ok = icmp eq i32 %create, 0
+br i1 %thread_ok, label %ready, label %fail
+ready:
+%worker_thread = load i64, ptr %thread_slot, align 8
+store i64 %worker_thread, ptr @sollang_file_worker_thread, align 8
+ret i1 true
+fail:
+ret i1 false
+}

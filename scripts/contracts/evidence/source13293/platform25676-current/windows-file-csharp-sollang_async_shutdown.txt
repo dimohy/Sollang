@@ -1,0 +1,15 @@
+define internal void @sollang_async_shutdown() {
+entry:
+%started = load i1, ptr @sollang_file_worker_started, align 1
+br i1 %started, label %stop, label %done
+stop:
+call void @sollang_file_wait_idle()
+store atomic i32 1, ptr @sollang_file_worker_stopping release, align 4
+call void @sollang_platform_file_worker_signal_request()
+call void @sollang_platform_file_worker_join()
+store i1 false, ptr @sollang_file_worker_started, align 1
+br label %done
+done:
+call void @sollang_io_shutdown()
+ret void
+}

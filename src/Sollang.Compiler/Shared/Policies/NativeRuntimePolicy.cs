@@ -2473,6 +2473,265 @@ internal static class NativeRuntimePolicy
         }
         """;
 
+    public static string AsyncWindowsIoFunctions() =>
+        """
+        define internal i1 @sollang_platform_io_ensure_signal() #0 {
+        entry:
+          %existing = load ptr, ptr @sollang_io_completion_event, align 8
+          %ready = icmp ne ptr %existing, null
+          br i1 %ready, label %success, label %create
+        create:
+          %event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+          %created = icmp ne ptr %event, null
+          br i1 %created, label %publish, label %fail
+        publish:
+          store ptr %event, ptr @sollang_io_completion_event, align 8
+          br label %success
+        success:
+          ret i1 true
+        fail:
+          ret i1 false
+        }
+
+        define internal void @sollang_platform_io_signal_completion() #0 {
+        entry:
+          %event = load ptr, ptr @sollang_io_completion_event, align 8
+          %ignored = call i32 @SetEvent(ptr %event)
+          ret void
+        }
+
+        define internal void @sollang_platform_io_clear_completion() #0 {
+        entry:
+          ret void
+        }
+
+        define internal void @sollang_platform_io_wait_completion(i64 %requested) #0 {
+        entry:
+          %infinite = icmp slt i64 %requested, 0
+          %too_large = icmp ugt i64 %requested, 4294967294
+          %bounded = select i1 %too_large, i64 4294967294, i64 %requested
+          %finite = trunc i64 %bounded to i32
+          %timeout = select i1 %infinite, i32 -1, i32 %finite
+          %event = load ptr, ptr @sollang_io_completion_event, align 8
+          %ignored = call i32 @WaitForSingleObject(ptr %event, i32 %timeout)
+          ret void
+        }
+
+        define internal void @sollang_platform_io_shutdown() #0 {
+        entry:
+          %event = load ptr, ptr @sollang_io_completion_event, align 8
+          %present = icmp ne ptr %event, null
+          br i1 %present, label %close, label %done
+        close:
+          %closed = call i32 @CloseHandle(ptr %event)
+          store ptr null, ptr @sollang_io_completion_event, align 8
+          br label %done
+        done:
+          ret void
+        }
+        """;
+
+    public static string AsyncWindowsFileWorkerFunctions() =>
+        """
+        define internal i32 @sollang_windows_file_worker(ptr %unused) #0 {
+        entry:
+          call void @sollang_file_worker_run()
+          ret i32 0
+        }
+
+        define internal i1 @sollang_platform_file_worker_start() #0 {
+        entry:
+          %request_event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+          %request_ok = icmp ne ptr %request_event, null
+          br i1 %request_ok, label %ensure_completion, label %fail
+
+        ensure_completion:
+          store ptr %request_event, ptr @sollang_file_request_event, align 8
+          %completion_ok = call i1 @sollang_platform_io_ensure_signal()
+          br i1 %completion_ok, label %thread, label %fail
+
+        thread:
+          %worker = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_file_worker, ptr null, i32 0, ptr null)
+          %worker_ok = icmp ne ptr %worker, null
+          br i1 %worker_ok, label %ready, label %fail
+
+        ready:
+          store ptr %worker, ptr @sollang_file_worker_handle, align 8
+          ret i1 true
+
+        fail:
+          ret i1 false
+        }
+
+        define internal void @sollang_platform_file_worker_signal_request() #0 {
+        entry:
+          %event = load ptr, ptr @sollang_file_request_event, align 8
+          %ignored = call i32 @SetEvent(ptr %event)
+          ret void
+        }
+
+        define internal void @sollang_platform_file_worker_wait_request() #0 {
+        entry:
+          %event = load ptr, ptr @sollang_file_request_event, align 8
+          %ignored = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+          ret void
+        }
+
+        define internal void @sollang_platform_file_worker_join() #0 {
+        entry:
+          %worker = load ptr, ptr @sollang_file_worker_handle, align 8
+          %waited = call i32 @WaitForSingleObject(ptr %worker, i32 -1)
+          %closed_worker = call i32 @CloseHandle(ptr %worker)
+          %request_event = load ptr, ptr @sollang_file_request_event, align 8
+          %closed_request = call i32 @CloseHandle(ptr %request_event)
+          store ptr null, ptr @sollang_file_worker_handle, align 8
+          store ptr null, ptr @sollang_file_request_event, align 8
+          ret void
+        }
+        """;
+
+    public static string AsyncLinuxIoFunctions() =>
+        """
+        define internal i1 @sollang_platform_io_ensure_signal() #0 {
+        entry:
+          %existing = load i32, ptr @sollang_io_completion_event_fd, align 4
+          %ready = icmp sge i32 %existing, 0
+          br i1 %ready, label %success, label %create
+        create:
+          ; EFD_NONBLOCK keeps a raced signal clear from blocking the completion drain.
+          %completion_fd = call i32 @eventfd(i32 0, i32 2048)
+          %created = icmp sge i32 %completion_fd, 0
+          br i1 %created, label %publish, label %fail
+        publish:
+          store i32 %completion_fd, ptr @sollang_io_completion_event_fd, align 4
+          br label %success
+        success:
+          ret i1 true
+        fail:
+          ret i1 false
+        }
+
+        define internal void @sollang_platform_io_signal_completion() #0 {
+        entry:
+          %value = alloca i64, align 8
+          store i64 1, ptr %value, align 8
+          %fd = load i32, ptr @sollang_io_completion_event_fd, align 4
+          %ignored = call i64 @write(i32 %fd, ptr %value, i64 8)
+          ret void
+        }
+
+        define internal void @sollang_platform_io_clear_completion() #0 {
+        entry:
+          %value = alloca i64, align 8
+          %fd = load i32, ptr @sollang_io_completion_event_fd, align 4
+          %ignored = call i64 @read(i32 %fd, ptr %value, i64 8)
+          ret void
+        }
+
+        define internal void @sollang_platform_io_wait_completion(i64 %requested) #0 {
+        entry:
+          %pollfd = alloca [8 x i8], align 4
+          %fd = load i32, ptr @sollang_io_completion_event_fd, align 4
+          store i32 %fd, ptr %pollfd, align 4
+          %events_slot = getelementptr i8, ptr %pollfd, i64 4
+          store i16 1, ptr %events_slot, align 2
+          %revents_slot = getelementptr i8, ptr %pollfd, i64 6
+          store i16 0, ptr %revents_slot, align 2
+          %infinite = icmp slt i64 %requested, 0
+          %too_large = icmp sgt i64 %requested, 2147483647
+          %bounded = select i1 %too_large, i64 2147483647, i64 %requested
+          %finite = trunc i64 %bounded to i32
+          %timeout = select i1 %infinite, i32 -1, i32 %finite
+          %ignored = call i32 @poll(ptr %pollfd, i64 1, i32 %timeout)
+          ret void
+        }
+
+        define internal void @sollang_platform_io_shutdown() #0 {
+        entry:
+          %completion_fd = load i32, ptr @sollang_io_completion_event_fd, align 4
+          %present = icmp sge i32 %completion_fd, 0
+          br i1 %present, label %close_completion, label %done
+        close_completion:
+          %closed = call i32 @close(i32 %completion_fd)
+          store i32 -1, ptr @sollang_io_completion_event_fd, align 4
+          br label %done
+        done:
+          ret void
+        }
+        """;
+
+    public static string AsyncLinuxFileWorkerFunctions() =>
+        """
+        define internal ptr @sollang_linux_file_worker(ptr %unused) #0 {
+        entry:
+          call void @sollang_file_worker_run()
+          ret ptr null
+        }
+
+        define internal i1 @sollang_platform_file_worker_start() #0 {
+        entry:
+          %request_fd = call i32 @eventfd(i32 0, i32 0)
+          %request_ok = icmp sge i32 %request_fd, 0
+          br i1 %request_ok, label %ensure_completion, label %fail
+
+        ensure_completion:
+          store i32 %request_fd, ptr @sollang_file_request_event_fd, align 4
+          %completion_ok = call i1 @sollang_platform_io_ensure_signal()
+          br i1 %completion_ok, label %thread, label %fail
+
+        thread:
+          %thread_slot = alloca i64, align 8
+          %create = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_file_worker, ptr null)
+          %thread_ok = icmp eq i32 %create, 0
+          br i1 %thread_ok, label %ready, label %fail
+
+        ready:
+          %worker_thread = load i64, ptr %thread_slot, align 8
+          store i64 %worker_thread, ptr @sollang_file_worker_thread, align 8
+          ret i1 true
+
+        fail:
+          ret i1 false
+        }
+
+        define internal void @sollang_platform_file_worker_signal_request() #0 {
+        entry:
+          %value = alloca i64, align 8
+          store i64 1, ptr %value, align 8
+          %fd = load i32, ptr @sollang_file_request_event_fd, align 4
+          %ignored = call i64 @write(i32 %fd, ptr %value, i64 8)
+          ret void
+        }
+
+        define internal void @sollang_platform_file_worker_wait_request() #0 {
+        entry:
+          %value = alloca i64, align 8
+          %fd = load i32, ptr @sollang_file_request_event_fd, align 4
+          %ignored = call i64 @read(i32 %fd, ptr %value, i64 8)
+          ret void
+        }
+
+        define internal void @sollang_platform_file_worker_join() #0 {
+        entry:
+          %thread = load i64, ptr @sollang_file_worker_thread, align 8
+          %joined = call i32 @pthread_join(i64 %thread, ptr null)
+          %request_fd = load i32, ptr @sollang_file_request_event_fd, align 4
+          %closed_request = call i32 @close(i32 %request_fd)
+          store i64 0, ptr @sollang_file_worker_thread, align 8
+          store i32 -1, ptr @sollang_file_request_event_fd, align 4
+          ret void
+        }
+        """;
+
+    public static string IoShutdownFunction() =>
+        """
+        define internal void @sollang_io_shutdown() #0 {
+        entry:
+          call void @sollang_platform_io_shutdown()
+          ret void
+        }
+        """;
+
     public static string AsyncFileShutdownFunction() =>
         """
         define internal void @sollang_async_shutdown() #0 {
@@ -2489,7 +2748,7 @@ internal static class NativeRuntimePolicy
           br label %done
 
         done:
-          call void @sollang_platform_io_shutdown()
+          call void @sollang_io_shutdown()
           ret void
         }
         """;

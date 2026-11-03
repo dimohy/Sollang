@@ -1,0 +1,17 @@
+define internal void @sollang_platform_io_wait_completion(i64 %requested) {
+entry:
+%pollfd = alloca [8 x i8], align 4
+%fd = load i32, ptr @sollang_io_completion_event_fd, align 4
+store i32 %fd, ptr %pollfd, align 4
+%events_slot = getelementptr i8, ptr %pollfd, i64 4
+store i16 1, ptr %events_slot, align 2
+%revents_slot = getelementptr i8, ptr %pollfd, i64 6
+store i16 0, ptr %revents_slot, align 2
+%infinite = icmp slt i64 %requested, 0
+%too_large = icmp sgt i64 %requested, 2147483647
+%bounded = select i1 %too_large, i64 2147483647, i64 %requested
+%finite = trunc i64 %bounded to i32
+%timeout = select i1 %infinite, i32 -1, i32 %finite
+%ignored = call i32 @poll(ptr %pollfd, i64 1, i32 %timeout)
+ret void
+}

@@ -1,0 +1,19 @@
+define internal i1 @sollang_platform_file_worker_start() {
+entry:
+%request_event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+%request_ok = icmp ne ptr %request_event, null
+br i1 %request_ok, label %ensure_completion, label %fail
+ensure_completion:
+store ptr %request_event, ptr @sollang_file_request_event, align 8
+%completion_ok = call i1 @sollang_platform_io_ensure_signal()
+br i1 %completion_ok, label %thread, label %fail
+thread:
+%worker = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_file_worker, ptr null, i32 0, ptr null)
+%worker_ok = icmp ne ptr %worker, null
+br i1 %worker_ok, label %ready, label %fail
+ready:
+store ptr %worker, ptr @sollang_file_worker_handle, align 8
+ret i1 true
+fail:
+ret i1 false
+}
