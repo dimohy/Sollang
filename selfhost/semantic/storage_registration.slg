@@ -46,42 +46,15 @@ registerStorageShape types: mut [typeIds.SemanticType; ~], kind: Int, element: I
 }
 
 collectStorageDefinitions package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], types: ref [typeIds.SemanticType; ~], schema: Text, kind: Int, definitions: mut [StorageDefinition; ~] -> Result<Unit, StorageRegistrationError> {
-    (schema -> len) == 0 -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
-    (schema -> byte((schema -> len) - 1)) == '|' -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
-    UIntSize(0) => start!
-    start! < (schema -> len) -> while {
-        start! => end!
-        end! < (schema -> len) and (schema -> byte(end!)) != '|'
-            -> while { end! + 1 => end! }
-        start! => colon!
-        colon! < end! and (schema -> byte(colon!)) != ':'
-            -> while { colon! + 1 => colon! }
-        colon! == start! or colon! + 1 >= end!
-            -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
-        colon! + 1 => elementStart
-        end! => elementEnd!
-        -1 => length!
-        kind == 4 -> if {
-            elementStart => elementEnd!
-            elementEnd! < end! and (schema -> byte(elementEnd!)) != ':'
-                -> while { elementEnd! + 1 => elementEnd! }
-            elementEnd! == elementStart or elementEnd! + 1 >= end!
-                -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
-            0 => length!
-            elementEnd! + 1 => digitIndex!
-            digitIndex! < end! -> while {
-                Int(schema -> byte(digitIndex!)) - 48 => digit
-                digit < 0 or digit > 9 or length! > (2147483647 - digit) / 10
-                    -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
-                length! * 10 + digit => length!
-                digitIndex! + 1 => digitIndex!
-            }
-        }
-        schema -> slice(elementStart, elementEnd! - elementStart) => name
+    schema -> policy.storageBindings(kind == 4) -> when {
+        Err(_) { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.InvalidDefinition) -> return }
+        Ok(value) { value }
+    } => bindings
+    bindings -> each binding {
+        schema -> slice(binding.elementStart, binding.elementLength) => name
         package -> storageElement(identities, types, name) => element
         element < 0 -> if { Result<Unit, StorageRegistrationError>.Err(StorageRegistrationError.MissingElement) -> return }
-        definitions -> push(StorageDefinition { kind: kind, element: element, length: length! })
-        end! + 1 => start!
+        definitions -> push(StorageDefinition { kind: kind, element: element, length: binding.length })
     }
     Result<Unit, StorageRegistrationError>.Ok
 }

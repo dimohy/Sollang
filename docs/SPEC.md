@@ -1157,6 +1157,15 @@ managed type-table constructor and self-host prepared registration. The initial
 without advancing the synthetic allocation counter. Unreserved payload types
 and distinct stream kinds retain ordinary ordered interning. The catalog names
 enum members rather than copying their numeric identities.
+Predeclared fixed and dynamic arrays likewise use the compiled storage catalogs
+for both semantic registration and compatibility identities. A shared bounded
+decoder returns source spans for the identity and element names and the fixed
+length; the two consumers retain their own identity spaces. Compatibility
+aliases resolve those names through the generated enum and shared name catalogs
+without copying member names, element types or lengths into a second table.
+Empty or truncated rows, a trailing separator, invalid length digits and length
+overflow fail before semantic registry mutation. Preserve dynamic semantic
+length `-1` separately from compatibility shape length `0`.
 Identity enum projections require nonnegative `Int32` members without flags
 semantics; aliases retain their input values and use the compiled enum's
 canonical name on output. Unknown values retain numeric identity diagnostics,

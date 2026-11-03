@@ -34,6 +34,56 @@ public builtinEnumName name: Text -> Text { predefinedTypeBindings() -> typeBind
 
 public taskEnumName valueEnumName: Text -> Text { predeclaredTaskBindings() -> typeBindingMember(valueEnumName) }
 
+public enum StorageBindingError { InvalidDefinition }
+public struct StorageBinding {
+    public identityStart: UIntSize
+    public identityLength: UIntSize
+    public elementStart: UIntSize
+    public elementLength: UIntSize
+    public length: Int
+}
+
+# Catalog views carry source coordinates; callers retain the compiled schema.
+# Decode every row before either consumer mutates its type registry.
+public storageBindings schema: Text, fixedLength: Bool -> Result<[StorageBinding; ~], StorageBindingError> {
+    (schema -> len) == 0 -> if { Result<[StorageBinding; ~], StorageBindingError>.Err(StorageBindingError.InvalidDefinition) -> return }
+    (schema -> byte((schema -> len) - 1)) == '|' -> if { Result<[StorageBinding; ~], StorageBindingError>.Err(StorageBindingError.InvalidDefinition) -> return }
+    [StorageBinding; ~] => bindings!
+    UIntSize(0) => start!
+    start! < (schema -> len) -> while {
+        start! => end!
+        end! < (schema -> len) and (schema -> byte(end!)) != '|'
+            -> while { end! + 1 => end! }
+        start! => colon!
+        colon! < end! and (schema -> byte(colon!)) != ':'
+            -> while { colon! + 1 => colon! }
+        colon! == start! or colon! + 1 >= end!
+            -> if { Result<[StorageBinding; ~], StorageBindingError>.Err(StorageBindingError.InvalidDefinition) -> return }
+        colon! + 1 => elementStart
+        end! => elementEnd!
+        -1 => length!
+        fixedLength -> if {
+            elementStart => elementEnd!
+            elementEnd! < end! and (schema -> byte(elementEnd!)) != ':'
+                -> while { elementEnd! + 1 => elementEnd! }
+            elementEnd! == elementStart or elementEnd! + 1 >= end!
+                -> if { Result<[StorageBinding; ~], StorageBindingError>.Err(StorageBindingError.InvalidDefinition) -> return }
+            0 => length!
+            elementEnd! + 1 => digitIndex!
+            digitIndex! < end! -> while {
+                Int(schema -> byte(digitIndex!)) - 48 => digit
+                digit < 0 or digit > 9 or length! > (2147483647 - digit) / 10
+                    -> if { Result<[StorageBinding; ~], StorageBindingError>.Err(StorageBindingError.InvalidDefinition) -> return }
+                length! * 10 + digit => length!
+                digitIndex! + 1 => digitIndex!
+            }
+        }
+        bindings! -> push(StorageBinding { identityStart: start!, identityLength: colon! - start!, elementStart: elementStart, elementLength: elementEnd! - elementStart, length: length! })
+        end! + 1 => start!
+    }
+    Result<[StorageBinding; ~], StorageBindingError>.Ok(bindings!)
+}
+
 typeBindingMember schema: Text, name: Text -> Text {
     UIntSize(0) => start!
     start! < (schema -> len) -> while {

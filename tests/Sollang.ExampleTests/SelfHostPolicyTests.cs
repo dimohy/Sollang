@@ -8,7 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
-        const int expectedTestCount = 74;
+        const int expectedTestCount = 78;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -116,6 +116,38 @@ internal static class SelfHostPolicyTests
             var inverse = new object?[] { taskType, null };
             Check("task-predeclared-inverse", (bool)tableType.GetMethod("TryGetTaskValue")!.Invoke(table, inverse)!
                 && intType.Equals(inverse[1]));
+            var storageNames = (System.Collections.IDictionary)CreateBuiltinNames(compiler);
+            var storageFactory = compiler.GetType("Sollang.Compiler.Semantics.StorageTypeDefinitions", true)!;
+            var fixedFactory = storageFactory.GetMethod("FixedArrays")!;
+            var dynamicFactory = storageFactory.GetMethod("DynamicArrays")!;
+            var fixedShapes = (System.Collections.IDictionary)fixedFactory.Invoke(null, [storageNames])!;
+            var dynamicShapes = (System.Collections.IDictionary)dynamicFactory.Invoke(null, [storageNames])!;
+            var fixedRows = ((string)namePolicy.GetMethod("PredeclaredFixedArrays")!.Invoke(null, null)!)
+                .Split('|').Select(row => row.Split(':')).ToArray();
+            var dynamicRows = ((string)namePolicy.GetMethod("PredeclaredDynamicArrays")!.Invoke(null, null)!)
+                .Split('|').Select(row => row.Split(':', 2)).ToArray();
+            Check("storage-fixed-compiled-shapes-and-order", fixedShapes.Count == fixedRows.Length
+                && fixedShapes.Keys.Cast<object>().SequenceEqual(fixedRows.Select(row => Enum.Parse(typeId, row[0])))
+                && fixedRows.All(row => {
+                    var shape = fixedShapes[Enum.Parse(typeId, row[0])]!;
+                    return storageNames[row[1]]!.Equals(shape.GetType().GetField("Item1")!.GetValue(shape))
+                        && int.Parse(row[2], System.Globalization.CultureInfo.InvariantCulture)
+                            == (int)shape.GetType().GetField("Item2")!.GetValue(shape)!;
+                }));
+            Check("storage-dynamic-compiled-shapes-and-order", dynamicShapes.Count == dynamicRows.Length
+                && dynamicShapes.Keys.Cast<object>().SequenceEqual(dynamicRows.Select(row => Enum.Parse(typeId, row[0])))
+                && dynamicRows.All(row => storageNames[row[1]]!.Equals(dynamicShapes[Enum.Parse(typeId, row[0])])));
+            fixedShapes.Clear();
+            dynamicShapes.Clear();
+            Check("storage-factory-copies-isolated",
+                ((System.Collections.IDictionary)fixedFactory.Invoke(null, [storageNames])!).Count == fixedRows.Length
+                && ((System.Collections.IDictionary)dynamicFactory.Invoke(null, [storageNames])!).Count == dynamicRows.Length);
+            storageNames.Remove(dynamicRows[^1][1]);
+            var missingStorageRejected = false;
+            try { dynamicFactory.Invoke(null, [storageNames]); }
+            catch (TargetInvocationException error) when (error.InnerException is KeyNotFoundException)
+            { missingStorageRejected = true; }
+            Check("storage-missing-element-rejected", missingStorageRejected);
             var actual = compiler.GetType("Sollang.Compiler.Shared.BorrowedTextReturnPolicy", true)!
                 .GetMethod("RequiresOriginCheck", BindingFlags.Public | BindingFlags.Static)!;
             var original = Emit(actual);
@@ -285,6 +317,18 @@ internal static class SelfHostPolicyTests
         return failure is null ? 0 : 1;
     }
 
+    private static object CreateBuiltinNames(Assembly compiler)
+    {
+        var names = (System.Collections.IDictionary)compiler.GetType("Sollang.Compiler.Semantics.BuiltinTypeDefinitions", true)!
+            .GetMethod("PredefinedTypeNames")!.Invoke(null, null)!;
+        var policy = compiler.GetType("Sollang.Compiler.Shared.TypeNamePolicy", true)!;
+        var typeId = compiler.GetType("Sollang.Compiler.Semantics.TypeId", true)!;
+        foreach (var method in new[] { "IntrinsicStructDefinitions", "IntrinsicEnumDefinitions" })
+            foreach (var row in ((string)policy.GetMethod(method)!.Invoke(null, null)!).Split('|').Select(row => row.Split(':', 2)))
+                if (!names.Contains(row[1])) names.Add(row[1], Enum.Parse(typeId, row[0]));
+        return names;
+    }
+
     private static object CreateTypeTable(Assembly compiler)
     {
         var constructor = compiler.GetType("Sollang.Compiler.Semantics.TypeDefinitionTable", true)!.GetConstructors().Single();
@@ -342,6 +386,55 @@ taskRegistrationValue index: Int -> Int {
         Err(_) { -1 }
         Ok(registered) {
             index < 7 -> if { registered.ids[index + 2] } else { registered.nextTypeId }
+        }
+    }
+}
+
+""");
+        source.Append("""
+
+arrayAliasValue index: Int, part: Int -> Int {
+    synthetic.predeclaredArrays() -> when {
+        Err(_) { -2 }
+        Ok(shapes) {
+            index < 0 or index >= (shapes -> len) -> if { -1 -> return }
+            shapes[index] => shape
+            part -> when {
+                == 0 => shape.identity
+                == 1 => shape.first
+                == 2 => shape.length
+                == 3 => shape.kind -> when {
+                    Dynamic => 0
+                    Fixed => 1
+                    else => -1
+                }
+                else => -1
+            }
+        }
+    }
+}
+
+storageBindingCount schema: Text, fixedLength: Bool -> Int {
+    schema -> typeNames.storageBindings(fixedLength) -> when {
+        Err(_) { -1 }
+        Ok(bindings) { Int(bindings -> len) }
+    }
+}
+
+storageBindingSpan schema: Text, fixedLength: Bool, index: Int, part: Int -> Int {
+    schema -> typeNames.storageBindings(fixedLength) -> when {
+        Err(_) { -2 }
+        Ok(bindings) {
+            index < 0 or index >= (bindings -> len) -> if { -1 -> return }
+            bindings[index] => binding
+            part -> when {
+                == 0 => Int(binding.identityStart)
+                == 1 => Int(binding.identityLength)
+                == 2 => Int(binding.elementStart)
+                == 3 => Int(binding.elementLength)
+                == 4 => binding.length
+                else => -1
+            }
         }
     }
 }
@@ -567,6 +660,56 @@ taskRegistrationValue index: Int -> Int {
                 (value is not null && taskBindings.Contains(value) ? Convert.ToInt32(taskBindings[value]) : -1)
                     .ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
+        var storageNames = CreateBuiltinNames(compiler);
+        var storageFactory = compiler.GetType("Sollang.Compiler.Semantics.StorageTypeDefinitions", true)!;
+        var arrayIndex = 0;
+        foreach (var fixedLength in new[] { false, true })
+        {
+            var shapes = (System.Collections.IDictionary)storageFactory.GetMethod(fixedLength ? "FixedArrays" : "DynamicArrays")!
+                .Invoke(null, [storageNames])!;
+            foreach (System.Collections.DictionaryEntry entry in shapes)
+            {
+                var element = fixedLength ? entry.Value!.GetType().GetField("Item1")!.GetValue(entry.Value)! : entry.Value!;
+                var length = fixedLength ? (int)entry.Value!.GetType().GetField("Item2")!.GetValue(entry.Value)! : 0;
+                var values = new[] { Convert.ToInt32(entry.Key), Convert.ToInt32(element), length, fixedLength ? 1 : 0 };
+                for (var part = 0; part < values.Length; part++)
+                    AppendValue("StorageTypeDefinitions.Alias:" + arrayIndex + ":" + part,
+                        "arrayAliasValue(" + arrayIndex + ", " + part + ")",
+                        values[part].ToString(System.Globalization.CultureInfo.InvariantCulture));
+                arrayIndex++;
+            }
+            var schema = (string)typeNamePolicy.GetMethod(fixedLength ? "PredeclaredFixedArrays" : "PredeclaredDynamicArrays")!
+                .Invoke(null, null)!;
+            var start = 0;
+            var ordinal = 0;
+            foreach (var row in schema.Split('|'))
+            {
+                var fields = row.Split(':');
+                var values = new[] { start, fields[0].Length, start + fields[0].Length + 1, fields[1].Length,
+                    fixedLength ? int.Parse(fields[2], System.Globalization.CultureInfo.InvariantCulture) : -1 };
+                for (var part = 0; part < values.Length; part++)
+                    AppendValue("StorageTypeDefinitions.Span:" + fixedLength + ":" + ordinal + ":" + part,
+                        "storageBindingSpan(\"" + schema + "\", " + fixedLength.ToString().ToLowerInvariant() + ", " + ordinal + ", " + part + ")",
+                        values[part].ToString(System.Globalization.CultureInfo.InvariantCulture));
+                start += row.Length + 1;
+                ordinal++;
+            }
+        }
+        foreach (var index in new[] { -1, arrayIndex })
+            AppendValue("StorageTypeDefinitions.AliasMissing:" + index, "arrayAliasValue(" + index + ", 0)", "-1");
+        AppendValue("StorageTypeDefinitions.AliasPartMissing", "arrayAliasValue(0, 4)", "-1");
+        foreach (var row in new (string Schema, bool Fixed, int Count)[] {
+            ("A:B:0", true, 1), ("A:B:2147483647", true, 1),
+            ("A:B:2147483648", true, -1), ("A:B:-1", true, -1), ("A:B:+1", true, -1),
+            ("A:B:1x", true, -1), ("", true, -1), (":B:1", true, -1), ("A::1", true, -1),
+            ("A:B:", true, -1), ("A:B", true, -1), ("A:B:1|", true, -1),
+            ("A:B:1||C:D:2", true, -1), ("A:B:1|C:D:2", true, 2),
+            ("A:B", false, 1), ("A:B|C:D", false, 2), ("", false, -1),
+            ("A:B|", false, -1), (":B", false, -1), ("A:", false, -1), ("A", false, -1)
+        })
+            AppendValue("StorageTypeDefinitions.Parse:" + row.Fixed + ":" + row.Schema,
+                "storageBindingCount(\"" + row.Schema + "\", " + row.Fixed.ToString().ToLowerInvariant() + ")",
+                row.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
         void AppendValue(string label, string call, string value)
         {
             source.Append("    \"").Append(label).Append("\" -> println\n    ")
@@ -580,7 +723,7 @@ taskRegistrationValue index: Int -> Int {
         File.WriteAllText(contractPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
-            formatCheckSources = new[] { Path.Combine(root, "selfhost/semantic/reference_type_ids.slg"),
+            formatCheckSources = new[] { sourcePath, Path.Combine(root, "selfhost/semantic/reference_type_ids.slg"),
                 Path.Combine(root, "selfhost/semantic/type_name_policy.slg") },
             policyModules = names,
             scope = "Generated policies against compiled CSharp method results; exhaustive boolean inputs, UInt64 boundary products and every declared cache-key rule",

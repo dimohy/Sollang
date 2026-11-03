@@ -43,6 +43,41 @@ public predeclaredTasks values: ref [Int; ~] -> [Shape; ~] {
     shapes!
 }
 
+storageElementIdentity name: Text -> Int {
+    name -> typeNames.builtinEnumName -> nominal.enumValue => builtin
+    builtin >= 0 -> if { builtin -> return }
+    name -> typeNames.intrinsicEnumName(false) -> nominal.enumValue => structure
+    structure >= 0 -> if { structure -> return }
+    name -> typeNames.intrinsicEnumName(true) -> nominal.enumValue
+}
+
+collectArrayAliases schema: Text, fixedLength: Bool, shapes: mut [Shape; ~] -> Result<Unit, Error> {
+    schema -> typeNames.storageBindings(fixedLength) -> when {
+        Err(_) { Result<Unit, Error>.Err(Error.InvalidShape) -> return }
+        Ok(value) { value }
+    } => bindings
+    bindings -> each binding {
+        schema -> slice(binding.identityStart, binding.identityLength) -> nominal.enumValue => identity
+        schema -> slice(binding.elementStart, binding.elementLength) -> storageElementIdentity => element
+        identity < 0 or element < 0 -> if { Result<Unit, Error>.Err(Error.InvalidShape) -> return }
+        shapes -> push(Shape {
+            kind: fixedLength -> if { Kind.Fixed } else { Kind.Dynamic }
+            first: element
+            second: -1
+            length: fixedLength -> if { binding.length } else { 0 }
+            identity: identity
+        })
+    }
+    Result<Unit, Error>.Ok
+}
+
+public predeclaredArrays: -> Result<[Shape; ~], Error> {
+    [Shape; ~] => shapes!
+    typeNames.predeclaredDynamicArrays() -> collectArrayAliases(false, shapes!)?
+    typeNames.predeclaredFixedArrays() -> collectArrayAliases(true, shapes!)?
+    Result<[Shape; ~], Error>.Ok(shapes!)
+}
+
 kindKey kind: Kind -> Int => kind -> when {
     Named => 0
     Slice => 1

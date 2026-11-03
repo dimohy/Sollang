@@ -1886,6 +1886,13 @@ catalog. Both the C# type-table constructor and SLG prepared registration
 reserve those shapes before allocating task roots. Repeated and nested tasks
 reuse their canonical value identities; an unreserved payload retains normal
 allocation order. Do not copy a task ID or omit its reservation in SLG.
+Fixed and dynamic array reservations reuse their compiled storage catalogs.
+One bounded schema decoder supplies identity and element source spans plus
+the fixed length to both semantic registration and compatibility aliases.
+Resolve names through the shared builtin/intrinsic catalogs, preserve alias
+order and distinguish a dynamic semantic length from its compatibility key.
+Malformed rows fail before registry mutation. Include generated runtime probes
+in the existing format preflight before compiling them.
 Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate
