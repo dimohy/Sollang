@@ -3569,51 +3569,29 @@ repairDirectFlowCallBindings results: mut [TypedIrNode; ~] -> Unit {
 
 # A direct async call can itself be the source of a following `await` flow.
 # Match its source child and the contextual await target in the canonical AST.
-directAwaitCallSource call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+directAwaitCallSourceAst call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
+        -> if { -1 -> return }
+    prepared.package.ranges[call.sourceModule] => range
+    call.astNode < 0 or call.astNode >= range.astCount
+        -> if { -1 -> return }
     call.kind == 13 and call.typeKind == 7 and call.typeOrigin == 4 and call.typeSymbol == 2
-        and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
         -> if {
-            prepared.package.ranges[call.sourceModule] => projectedAwaitRange
-            call.astNode >= 0 and call.astNode < projectedAwaitRange.astCount
-                -> if { prepared.awaitSourceByAst[projectedAwaitRange.astStart + call.astNode] -> return }
+            prepared.awaitSourceByAst[range.astStart + call.astNode]
+                -> if { call.astNode -> return }
+            -1 -> return
         }
-    (call.kind != 6 and call.kind != 9)
-        or (call.flags / 8) % 2 != 1
-        or call.sourceModule < 0
-        or call.sourceModule >= (prepared.package.ranges -> len)
-        -> if { false -> return }
-    prepared.package.ranges[call.sourceModule] => sourceRange
-    call.astNode < 0 or call.astNode >= sourceRange.astCount
-        -> if { false -> return }
-    prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
-    (callAst.kind != 10 and callAst.kind != 11)
-        or callAst.parent < 0 or callAst.parent >= sourceRange.astCount
-        -> if { false -> return }
-    prepared.package.nodes[sourceRange.astStart + callAst.parent] => awaitFlowAst
-    awaitFlowAst.kind != 10
-        or callAst.firstToken != awaitFlowAst.firstToken
-        or callAst.start != awaitFlowAst.start
-        -> if { false -> return }
-    0 => awaitTargetSearch!
-    awaitTargetSearch! < sourceRange.astCount -> while {
-        prepared.package.nodes[sourceRange.astStart + awaitTargetSearch!] => awaitTarget
-        awaitTarget.kind == 16
-            and awaitTarget.parent == callAst.parent
-            and awaitTarget.payloadToken >= 0
-            and awaitTarget.payloadToken < sourceRange.tokenCount
-            -> if {
-                prepared.package.tokens[sourceRange.tokenStart + awaitTarget.payloadToken] => awaitToken
-                prepared.package.sources[call.sourceModule] -> len => awaitSourceLength
-                prepared.package.sources[call.sourceModule] -> slice(UIntSize(0), awaitSourceLength) => awaitSourceText
-                awaitSourceText -> sourceMatches(awaitToken.span.start, awaitToken.span.length, "await")
-                    -> if { true -> return }
-            }
-        awaitTargetSearch! + 1 => awaitTargetSearch!
-    }
-    false
+    (call.kind != 6 and call.kind != 9) or (call.flags / 8) % 2 != 1
+        -> if { -1 -> return }
+    prepared.package.nodes[range.astStart + call.astNode] => callAst
+    callAst.kind != 10 and callAst.kind != 11 -> if { -1 -> return }
+    prepared -> semanticContext.canonicalCallSourceAst(call.sourceModule, call.astNode) => sourceAst
+    sourceAst >= 0 and prepared.awaitSourceByAst[range.astStart + sourceAst]
+        -> if { sourceAst -> return }
+    -1
 }
 
-ensureDirectAwaitValue results: mut [TypedIrNode; ~], callIndex: Int, parentIndex: Int -> Int {
+ensureDirectAwaitValue results: mut [TypedIrNode; ~], callIndex: Int, parentIndex: Int, awaitSourceAst: Int -> Int {
     results[callIndex] => call
     0 => awaitSearch!
     awaitSearch! < (results -> len) -> while {
@@ -3621,7 +3599,7 @@ ensureDirectAwaitValue results: mut [TypedIrNode; ~], callIndex: Int, parentInde
         existingAwait.kind == 5
             and existingAwait.operand0 == callIndex
             and existingAwait.sourceModule == call.sourceModule
-            and existingAwait.astNode == call.astNode
+            and existingAwait.astNode == awaitSourceAst
             -> if { awaitSearch! -> return }
         awaitSearch! + 1 => awaitSearch!
     }
@@ -3630,7 +3608,7 @@ ensureDirectAwaitValue results: mut [TypedIrNode; ~], callIndex: Int, parentInde
         kind: 5
         parent: parentIndex
         sourceModule: call.sourceModule
-        astNode: call.astNode
+        astNode: awaitSourceAst
         symbol: -1
         targetModule: -1
         typeOrigin: call.typeOrigin
@@ -3656,7 +3634,8 @@ public repairDiscardedDirectAsyncAwaits results: mut [TypedIrNode; ~], prepared:
     0 => callIndex!
     callIndex! < originalNodeCount -> while {
         results[callIndex!] => call
-        call -> directAwaitCallSource(prepared) -> if {
+        call -> directAwaitCallSourceAst(prepared) => awaitSourceAst
+        awaitSourceAst >= 0 -> if {
             false => consumed!
             0 => consumerIndex!
             consumerIndex! < originalNodeCount and not consumed!
@@ -3668,7 +3647,7 @@ public repairDiscardedDirectAsyncAwaits results: mut [TypedIrNode; ~], prepared:
                     consumerIndex! + 1 => consumerIndex!
                 }
             not consumed! -> if {
-                results -> ensureDirectAwaitValue(callIndex!, call.parent) => discardedAwait
+                results -> ensureDirectAwaitValue(callIndex!, call.parent, awaitSourceAst) => discardedAwait
             }
         }
         callIndex! + 1 => callIndex!
@@ -3689,8 +3668,9 @@ public repairDirectAsyncAwaitConsumers results: mut [TypedIrNode; ~], prepared: 
             -> if {
                 consumer!.operand0 => callIndex
                 results[callIndex] => call
-                call -> directAwaitCallSource(prepared) -> if {
-                    results -> ensureDirectAwaitValue(callIndex, consumerIndex!) => consumer!.operand0
+                call -> directAwaitCallSourceAst(prepared) => awaitSourceAst
+                awaitSourceAst >= 0 -> if {
+                    results -> ensureDirectAwaitValue(callIndex, consumerIndex!, awaitSourceAst) => consumer!.operand0
                     consumer! => results[consumerIndex!]
                 }
             }

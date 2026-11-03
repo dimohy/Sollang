@@ -1161,6 +1161,10 @@ literals. Runtime mouse workers, terminal parsing, bounded queue operations,
 context allocation and lifecycle cleanup consume the same compiled definitions
 on Windows and Linux. Platform adapters retain declaration ownership, including
 the Linux `write` declaration when text output has not already declared it.
+Async IO queues, file worker operations, cancellation-safe completion publication,
+completion draining and task cleanup also share compiled runtime definitions.
+The compatibility reader retains its platform storage behind the same read ABI;
+socket-only IO does not acquire a file worker merely to share completion logic.
 Predeclared task identities come from a compiled binding catalog shared by the
 managed type-table constructor and self-host prepared registration. The initial
 `Task<Int>` shape reuses `TaskInt`, including repeated and nested task roots,

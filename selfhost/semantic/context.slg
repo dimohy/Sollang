@@ -312,6 +312,28 @@ public indexFlowSourcesByAst package: ref analysis.PackageAnalysis -> [Int; ~] {
     flowSource!
 }
 
+# A qualified call may have a member envelope with exactly the call's span.
+# Share its value identity without treating a real field projection as a call.
+public canonicalCallSourceAst prepared: ref SemanticSnapshot, sourceModule: Int, callAst: Int -> Int {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { -1 -> return }
+    prepared.package.ranges[sourceModule] => range
+    callAst < 0 or callAst >= range.astCount -> if { -1 -> return }
+    prepared.package.nodes[range.astStart + callAst] => call
+    call.kind != 10 and call.kind != 11 -> if { callAst -> return }
+    callAst => sourceAst!
+    true -> while {
+        prepared.package.nodes[range.astStart + sourceAst!].parent => parentAst
+        parentAst < 0 or parentAst >= range.astCount -> if { sourceAst! -> return }
+        prepared.package.nodes[range.astStart + parentAst] => parent
+        parent.kind != 36 or parent.firstToken != call.firstToken
+            or parent.start != call.start or parent.length != call.length
+            -> if { sourceAst! -> return }
+        parentAst => sourceAst!
+    }
+    sourceAst!
+}
+
 # Flow targets belong to source syntax. Publish the exact source expression of
 # each await before Typed IR lowering so ownership and LLVM share one decision.
 public indexAwaitSourcesByAst package: ref analysis.PackageAnalysis -> [Bool; ~] {

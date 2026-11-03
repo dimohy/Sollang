@@ -1,0 +1,24 @@
+define internal void @sollang_file_submit(ptr %control, i32 %size) {
+entry:
+%started = load i1, ptr @sollang_file_worker_started, align 1
+br i1 %started, label %initialize, label %start
+start:
+%start_ok = call i1 @sollang_platform_file_worker_start()
+br i1 %start_ok, label %mark_started, label %failed
+mark_started:
+store i1 true, ptr @sollang_file_worker_started, align 1
+br label %initialize
+initialize:
+%size_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 11
+store i32 %size, ptr %size_slot, align 4
+%phase_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 12
+store atomic i32 1, ptr %phase_slot release, align 4
+%status_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 4
+store i32 6, ptr %status_slot, align 4
+%old_count = atomicrmw add ptr @sollang_io_outstanding, i64 1 acq_rel
+call void @sollang_file_push_request(ptr %control)
+ret void
+failed:
+call void @llvm.trap()
+unreachable
+}

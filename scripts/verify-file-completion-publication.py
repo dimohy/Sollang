@@ -14,7 +14,7 @@ from pathlib import Path
 
 from verification_execution import VerificationExecution
 from verification_contract_lease import VerificationContractLease
-from completed_artifact_plan import initialize_output
+from completed_artifact_plan import initialize_output, cleanup_output
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -149,6 +149,8 @@ def main():
     parser.add_argument('--producer-proof', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--expect-boundary-exit', type=int, choices=[0, 17], default=0)
+    parser.add_argument('--reusable-directory', type=Path, action='append',
+                        help='Explicit reusable compiler products for the artifact lifecycle contract.')
     args = parser.parse_args()
     source, proof, output = (p.resolve() for p in (args.llvm_input, args.producer_proof, args.output))
     parent = json.loads(proof.read_text(encoding='utf-8-sig'))
@@ -160,7 +162,7 @@ def main():
     inputs = [source, proof, Path(__file__).resolve(), llvm/'clang.exe']
     if output.exists():
         raise ValueError('FILE_COMPLETION_OUTPUT_NOT_FRESH')
-    initialize_output(ROOT, output)
+    initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir()
     with VerificationContractLease(inputs):
         pins = {str(p): sha(p) for p in inputs}
@@ -194,12 +196,14 @@ def main():
         except BaseException as caught:
             error = caught
         finally:
-            execution.finalize(error, cleanup=error is None and args.expect_boundary_exit == 0)
+            execution.finalize(error, cleanup=False)
         print(json.dumps({k: record[k] for k in ['status', 'completed', 'total', 'publicationContractSatisfied']}))
         if error:
             raise error
         if record['status'] not in ('passed', 'reproduced'):
             raise SystemExit(1)
+        if record['status'] == 'passed':
+            cleanup_output(ROOT, output, reusable_directories=args.reusable_directory)
 
 
 if __name__ == '__main__':

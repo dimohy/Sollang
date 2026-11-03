@@ -1,0 +1,14 @@
+define internal void @sollang_file_push_request(ptr %control) {
+entry:
+%next_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 16
+br label %push
+push:
+%head = load atomic ptr, ptr @sollang_file_request_head acquire, align 8
+store ptr %head, ptr %next_slot, align 8
+%exchange = cmpxchg ptr @sollang_file_request_head, ptr %head, ptr %control release monotonic
+%pushed = extractvalue { ptr, i1 } %exchange, 1
+br i1 %pushed, label %signal, label %push
+signal:
+call void @sollang_platform_file_worker_signal_request()
+ret void
+}

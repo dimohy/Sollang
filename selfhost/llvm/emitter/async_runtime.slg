@@ -5,7 +5,7 @@ import sollang.compiler.llvm.emitter.async_file_runtime as asyncFileRuntime
 
 emitNoFileRuntime: -> Unit uses Console {
     """
-    define internal i1 @sollang_file_drain_completions() {
+    define internal i1 @sollang_io_drain_completions() {
     entry:
       ret i1 false
     }
@@ -175,7 +175,7 @@ emitCommonRuntime diagnosticsEnabled: Bool -> Unit uses Console {
 
     define internal i1 @sollang_timer_wait_next() {
     entry:
-      %file_progress = call i1 @sollang_file_drain_completions()
+      %file_progress = call i1 @sollang_io_drain_completions()
       call void @sollang_timer_wake_due()
       %ready = load ptr, ptr @sollang_task_ready_head, align 8
       %has_ready = icmp ne ptr %ready, null
@@ -202,13 +202,13 @@ emitCommonRuntime diagnosticsEnabled: Bool -> Unit uses Console {
 
     wait_file_or_timer:
       call void @sollang_platform_io_wait_completion(i64 %remaining)
-      %file_timer_progress = call i1 @sollang_file_drain_completions()
+      %file_timer_progress = call i1 @sollang_io_drain_completions()
       call void @sollang_timer_wake_due()
       br label %progress
 
     wait_file_only:
       call void @sollang_platform_io_wait_completion(i64 -1)
-      %file_only_progress = call i1 @sollang_file_drain_completions()
+      %file_only_progress = call i1 @sollang_io_drain_completions()
       br label %progress
 
     wait_timer_only:

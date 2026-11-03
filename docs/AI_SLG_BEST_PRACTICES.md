@@ -1711,6 +1711,14 @@ Use direct await when no sibling task can overlap:
 6 -> squareAsync -> await => squared
 ```
 
+Direct calls and qualified calls use the same prepared await-source identity.
+Preserve an exact same-span member wrapper when it owns that source, and attach
+the shared synthesized await value to that canonical AST so scheduling,
+ownership and result emission all observe one join.
+Publish the producer's Task ownership at both the call and its canonical
+same-span source. The joined payload remains a separate value; it must not
+erase the Task fact used to admit an immediate await or cancel consumer.
+
 Suspension is structured: live values move into the coroutine frame, owned
 results transfer exactly once, and leaving scope joins or cleans up outstanding
 children. Keep restored frame reads after their await or yield boundary, even
@@ -1927,6 +1935,14 @@ Mouse input workers and lifecycle bodies also use compiled definitions. Keep
 platform declarations in the adapter, including Linux's conditional `write`
 declaration; do not copy context sizes, terminal parsing, overflow or cancellation
 branches into a separate SLG body.
+Async IO completion publication, file workers, draining and task lifecycle
+functions follow that same compiled-definition path. Preserve the optional
+file-worker boundary for socket-only IO. Keep the compatibility reader's
+platform ABI adapter separate from its shared worker and use the canonical
+completion-drain declaration in every caller.
+File-path literals use the frozen string-global name selected by the existing
+name table. Keep that identity for both pointer and length operands; an IR
+index is not an emitted global name.
 Export constants containing quotes or interpolation markers as raw literals,
 with a delimiter wider than any contained quote run. Verify the parsed value
 against the compiled constant; escaped source spelling alone is insufficient.

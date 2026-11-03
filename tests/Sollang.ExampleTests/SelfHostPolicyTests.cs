@@ -210,15 +210,26 @@ internal static class SelfHostPolicyTests
                 }
                 return actual == expected && (raw || !expected.Contains('"') && !expected.Contains('$'));
             }
-            bool ExactTextLiteral(MethodInfo method) => ExactTextSource(Emit(method), (string)method.Invoke(null, null)!);
-            bool ExactMultilineText(string value) => ExactTextSource(RenderTextValue(compiler, "Value", value), value);
+            bool ExactTextLiteral(MethodInfo method)
+            {
+                var expected = (string)method.Invoke(null, null)!;
+                var multiline = method.DeclaringType!.GetCustomAttributesData()
+                    .Any(attribute => attribute.AttributeType.FullName == "Sollang.Compiler.Shared.SelfHostPolicyAttribute"
+                        && attribute.NamedArguments.Any(argument => argument.MemberName == "MultilineText"
+                            && argument.TypedValue.Value is true));
+                if (multiline) expected = expected.Replace("\r\n", "\n", StringComparison.Ordinal);
+                return ExactTextSource(Emit(method), expected);
+            }
+            bool ExactMultilineText(string value) => ExactTextSource(RenderTextValue(compiler, "Value", value),
+                value.Replace("\r\n", "\n", StringComparison.Ordinal));
             MethodInfo TextMethod(string name) => typeof(SelfHostPolicyTests)
                 .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!;
             Check("text-quoted-literal-parses-exactly", ExactTextLiteral(TextMethod(nameof(EscapedText))));
             Check("text-interpolation-markers-stay-literal", ExactTextLiteral(TextMethod(nameof(InterpolationText))));
             Check("text-boundary-quotes-stay-literal", ExactTextLiteral(TextMethod(nameof(BoundaryQuoteText))));
             Check("text-repeated-quotes-stay-literal", ExactTextLiteral(TextMethod(nameof(RepeatedQuoteText))));
-            Check("text-leading-newline-whitespace-preserved", ExactMultilineText("\n  \n$"));
+            Check("text-leading-newline-whitespace-preserved", ExactMultilineText("\n  \n$")
+                && ExactMultilineText("\r\n  \r\n$"));
             Check("text-multiline-quote-runs-preserved", ExactMultilineText("first\n  left\"\"\"right\n  tail"));
             Check("text-call-rejected", Rejected(nameof(CallText), "SELFHOST_POLICY_TEXT_CONSTANT_REQUIRED"));
             Check("text-input-rejected", Rejected(nameof(InputText), "SELFHOST_POLICY_TEXT_SIGNATURE_REQUIRED"));
@@ -754,7 +765,7 @@ storageBindingSpan schema: Text, fixedLength: Bool, index: Int, part: Int -> Int
         var sourcePath = Path.Combine(directory, "runtime-policy-probe.slg");
         File.WriteAllText(sourcePath, source.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
         var literalValues = new[] { "a\"b\\c", "$name $(value) \\n", "\"quoted\"", "left\"\"\"right",
-            "\n  \n$", "first  \n  left\"\"\"right\n  tail" };
+            "\n  \n$", "first  \n  left\"\"\"right\n  tail", "\r\n  \r\n$" };
         var literalSource = new System.Text.StringBuilder();
         for (var index = 0; index < literalValues.Length; index++)
             literalSource.Append(RenderTextValue(compiler, "Value" + index, literalValues[index])).Append('\n');
@@ -764,7 +775,8 @@ storageBindingSpan schema: Text, fixedLength: Bool, index: Int, part: Int -> Int
         {
             literalSource.Append("    \"case:").Append(index).Append("\" -> println\n    value")
                 .Append(index).Append("() -> println\n");
-            literalExpected.Append("case:").Append(index).Append('\n').Append(literalValues[index]).Append('\n');
+            literalExpected.Append("case:").Append(index).Append('\n')
+                .Append(literalValues[index].Replace("\r\n", "\n", StringComparison.Ordinal)).Append('\n');
         }
         literalSource.Append("    \"end\" -> println\n}\n");
         literalExpected.Append("end");
