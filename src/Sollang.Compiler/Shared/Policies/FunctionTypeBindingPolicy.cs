@@ -30,4 +30,10 @@ internal static class FunctionTypeBindingPolicy
         hasTemplate && !valueGeneric && explicitOwnership;
 
     public static bool BindCallbackResultEagerly(bool hasCallbackInput) => hasCallbackInput;
+
+    public static bool MoveInputReturnCoverageInvalid(bool hasRetainedPath, bool hasTransferredPath) =>
+        hasRetainedPath && hasTransferredPath;
+
+    public static bool OwnershipAlternativesTransfer(bool leftTransfers, bool rightTransfers) =>
+        leftTransfers && rightTransfers;
 }

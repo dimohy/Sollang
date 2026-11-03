@@ -1693,13 +1693,15 @@ internal sealed partial class LlvmEmitter
 
         if (expression is IfExpression conditional && conditional.Else is not null)
         {
-            return TransfersOwnerName(conditional.Then, ownerName, ownerType)
-                && TransfersOwnerName(conditional.Else, ownerName, ownerType);
+            return Shared.FunctionTypeBindingPolicy.OwnershipAlternativesTransfer(
+                TransfersOwnerName(conditional.Then, ownerName, ownerType),
+                TransfersOwnerName(conditional.Else, ownerName, ownerType));
         }
 
         return expression is WhenExpression whenExpression
-            && TransfersOwnerName(whenExpression.Else, ownerName, ownerType)
-            && whenExpression.Arms.All(arm => TransfersOwnerName(arm.Body, ownerName, ownerType));
+            && Shared.FunctionTypeBindingPolicy.OwnershipAlternativesTransfer(
+                TransfersOwnerName(whenExpression.Else, ownerName, ownerType),
+                whenExpression.Arms.All(arm => TransfersOwnerName(arm.Body, ownerName, ownerType)));
     }
 
     private bool FlowTransfersOwnerName(

@@ -6,7 +6,7 @@ internal static class LlvmAssertionTests
     internal static int Run(string inputPath, string resultPath,
         string name = "51-fixed-array-value-generics")
     {
-        if (name is not ("51-fixed-array-value-generics" or "52-multi-file-modules"))
+        if (name is not ("51-fixed-array-value-generics" or "52-multi-file-modules" or "2546-enum-nested-aggregate-layout"))
             throw new ArgumentException("Unsupported LLVM assertion fixture.", nameof(name));
         if (File.Exists(resultPath)) throw new IOException("Test result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
@@ -31,6 +31,21 @@ internal static class LlvmAssertionTests
         string ReplaceFirst(string pattern, string replacement) => new Regex(pattern).Replace(original, replacement, 1);
         try
         {
+            if (name == "2546-enum-nested-aggregate-layout")
+            {
+                Verify("valid-managed-layout", original, true);
+                var native = Regex.Replace(original, @"%sollang\.enum\.(\d+)\b", "%sollang.enum.t$1");
+                native = Regex.Replace(native, @"%heap(\d+)(?![-A-Za-z0-9_.$])", "%v$1");
+                Verify("valid-native-identities", native, true);
+                Verify("wrong-allocation-size", native.Replace("@sollang_alloc(i64 16)", "@sollang_alloc(i64 8)", StringComparison.Ordinal), false);
+                Verify("wrong-store-alignment", Regex.Replace(native, @"(store %sollang\.enum\.t\d+ [^\n]+), align 8", "$1, align 4"), false);
+                Verify("wrong-store-pointer", Regex.Replace(native, @"(store %sollang\.enum\.t\d+ [^\n]+, ptr )%v\d+", "${1}%v999999"), false);
+                Verify("missing-allocation", Regex.Replace(native, @"(?m)^\s*%v\d+ = call ptr @sollang_alloc\(i64 16\)\r?\n", ""), false);
+                Verify("missing-enum-store", Regex.Replace(native, @"(?m)^\s*store %sollang\.enum\.t\d+ [^\n]+\r?\n", ""), false);
+                Verify("duplicate-allocation-and-store", native + native, false);
+            }
+            else
+            {
             Check("slg-selector", paths.RegexCounts.EndsWith(".slg.llvm.regex-counts.txt", StringComparison.Ordinal));
             var managed = LlvmAssertions.SelectPaths(expectedDirectory, name, "windows-x64", true);
             Check("csharp-original-selector", managed.Contains == Path.Combine(expectedDirectory, name + ".llvm.contains.txt"));
@@ -65,12 +80,13 @@ internal static class LlvmAssertionTests
                 Verify("wrong-length-binding", ReplaceFirst(@"(= insertvalue %sollang\.int_slice %v\d+_0, i64 )3(, 1)", "${1}4${2}"), false);
                 Verify("wrong-fixed-length-result", ReplaceFirst(@"(?s)(define i32 @sollang_m144_s5_g\d+\(%sollang\.int_slice %arg\) \{.*?ret i32 )%v\d+", "${1}999"), false);
             }
+            }
         }
         catch (Exception error) { failure = error.ToString(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new
         {
             status = failure is null ? "passed" : "failed", completed = cases.Count,
-            total = name == "52-multi-file-modules" ? 9 : 12,
+            total = name == "2546-enum-nested-aggregate-layout" ? 8 : name == "52-multi-file-modules" ? 9 : 12,
             cases, failure
         }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;

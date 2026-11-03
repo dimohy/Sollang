@@ -8,11 +8,221 @@ import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.resolve as resolution
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.function_type_binding_policy as bindingPolicy
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
 struct SourceTypedIr {
     nodes: [TypedIrNode; ~]
+}
+
+public enum MoveInputReturnDisposition {
+    Retained
+    Transferred
+    NoContinuation
+    Mixed
+}
+
+public moveInputReturnIsRetained disposition: MoveInputReturnDisposition -> Bool {
+    disposition -> when {
+        Retained { true }
+        Transferred { false }
+        NoContinuation { false }
+        Mixed { false }
+    }
+}
+
+public moveInputReturnIsTransferred disposition: MoveInputReturnDisposition -> Bool {
+    disposition -> when {
+        Retained { false }
+        Transferred { true }
+        NoContinuation { false }
+        Mixed { false }
+    }
+}
+
+public moveInputReturnIsNoContinuation disposition: MoveInputReturnDisposition -> Bool {
+    disposition -> when {
+        Retained { false }
+        Transferred { false }
+        NoContinuation { true }
+        Mixed { false }
+    }
+}
+
+public moveInputReturnIsMixed disposition: MoveInputReturnDisposition -> Bool {
+    disposition -> when {
+        Retained { false }
+        Transferred { false }
+        NoContinuation { false }
+        Mixed { true }
+    }
+}
+
+public struct MoveInputReturnFact {
+    public functionIr: Int
+    public parameterIr: Int
+    public resultIr: Int
+    public disposition: MoveInputReturnDisposition
+}
+
+struct MoveInputReturnIndex {
+    firstChild: [Int; ~]
+    nextChild: [Int; ~]
+    firstMove: [Int; ~]
+    nextMove: [Int; ~]
+}
+
+combineMoveInputReturns left: MoveInputReturnDisposition, right: MoveInputReturnDisposition -> MoveInputReturnDisposition {
+    left -> moveInputReturnIsNoContinuation
+        -> if { right -> return }
+    right -> moveInputReturnIsNoContinuation
+        -> if { left -> return }
+    (left -> moveInputReturnIsRetained) or (left -> moveInputReturnIsMixed)
+        or (right -> moveInputReturnIsRetained) or (right -> moveInputReturnIsMixed) => retained
+    (left -> moveInputReturnIsTransferred) or (left -> moveInputReturnIsMixed)
+        or (right -> moveInputReturnIsTransferred) or (right -> moveInputReturnIsMixed) => transferred
+    retained -> bindingPolicy.moveInputReturnCoverageInvalid(transferred)
+        -> if { MoveInputReturnDisposition.Mixed -> return }
+    ((left -> moveInputReturnIsTransferred))
+        -> bindingPolicy.ownershipAlternativesTransfer((right -> moveInputReturnIsTransferred))
+        -> if { MoveInputReturnDisposition.Transferred -> return }
+    left
+}
+
+# These are return-coverage facts, not chronological moves. In particular a
+# conditional result must not consume its input before an await in that arm.
+moveInputReturnDisposition valueIr: Int, parameterIr: Int, nodes: ref [TypedIrNode; ~], moves: ref [MoveEvent; ~], index: ref MoveInputReturnIndex, prepared: ref semanticContext.SemanticSnapshot, isResult: Bool -> MoveInputReturnDisposition {
+    valueIr < 0 or valueIr >= (nodes -> len) -> if { MoveInputReturnDisposition.Retained -> return }
+    nodes[valueIr] => value
+    nodes[parameterIr] => parameter
+    index.firstMove[valueIr] => moveIndex!
+    moveIndex! >= 0 -> while {
+        moves[moveIndex!] => moved
+        moved.sourceModule == parameter.sourceModule and moved.symbol == parameter.symbol and moved.memberIr < 0
+            -> if { MoveInputReturnDisposition.Transferred -> return }
+        index.nextMove[moveIndex!] => moveIndex!
+    }
+    value.kind == 5 and isResult and value.sourceModule == parameter.sourceModule and value.symbol == parameter.symbol
+        -> if { MoveInputReturnDisposition.Transferred -> return }
+    value.kind == 1 or value.kind == 19 -> if {
+        value.operand0 => resultIr!
+        value.kind == 19 -> if { value.operand1 => resultIr! }
+        MoveInputReturnDisposition.Retained => statements!
+        UIntSize(0) => firstStatementStart!
+        index.firstChild[valueIr] => child!
+        child! >= 0 -> while {
+            nodes[child!] => statement
+            child! != resultIr! and statement.kind != 0 and statement.kind != 10
+                -> if {
+                    child! -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, false) => disposition
+                    not (disposition -> moveInputReturnIsRetained) and statement.astNode >= 0 and statement.sourceModule >= 0
+                        -> if {
+                            prepared.package.ranges[statement.sourceModule] => range
+                            prepared.package.nodes[range.astStart + statement.astNode].start => start
+                            (statements! -> moveInputReturnIsRetained) or start < firstStatementStart!
+                                -> if {
+                                    disposition => statements!
+                                    start => firstStatementStart!
+                                }
+                        }
+                }
+            index.nextChild[child!] => child!
+        }
+        not (statements! -> moveInputReturnIsRetained)
+            -> if { statements! -> return }
+        resultIr! -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, true) -> return
+    }
+    value.kind == 18 -> if {
+        value.operand1 -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, true) => left
+        value.nextOperand -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, true) => right
+        left -> combineMoveInputReturns(right) -> return
+    }
+    value.kind == 27 or value.kind == 33 or value.kind == 34
+        -> if {
+            value.operand1 => armIr!
+            value.kind == 33 -> if { value.operand0 => armIr! }
+            MoveInputReturnDisposition.NoContinuation => disposition!
+            armIr! >= 0 and armIr! < (nodes -> len) -> while {
+                nodes[armIr!] => arm
+                arm.parent != valueIr -> if { break }
+                arm.operand1 => bodyIr!
+                bodyIr! < 0 -> if { arm.operand0 => bodyIr! }
+                bodyIr! -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, true) => next
+                disposition! -> combineMoveInputReturns(next) => disposition!
+                arm.nextOperand => armIr!
+            }
+            disposition! -> return
+        }
+    value.kind == 9 and value.opcode == -1 -> if {
+        value.operand0 => completed!
+        value.operand1 >= 0 -> if { value.operand1 => completed! }
+        completed! -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, isResult) -> return
+    }
+    value.kind == 17 or value.kind == 23 -> if {
+        value.operand0 -> moveInputReturnDisposition(parameterIr, nodes, moves, index, prepared, false) -> return
+    }
+    MoveInputReturnDisposition.Retained
+}
+
+public moveInputReturnFacts nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], moves: ref [MoveEvent; ~] -> [MoveInputReturnFact; ~] {
+    [Int; ~] => firstChild!
+    [Int; ~] => nextChild!
+    [Int; ~] => firstMove!
+    [Int; ~] => nextMove!
+    nodes -> each node {
+        firstChild! -> push(-1)
+        nextChild! -> push(-1)
+        firstMove! -> push(-1)
+    }
+    moves -> each moved { nextMove! -> push(-1) }
+    (nodes -> len) - 1 => nodeIr!
+    nodeIr! >= 0 -> while {
+        nodes[nodeIr!].parent => parent
+        parent >= 0 and parent < (nodes -> len) -> if {
+            firstChild![parent] => nextChild![nodeIr!]
+            nodeIr! => firstChild![parent]
+        }
+        nodeIr! - 1 => nodeIr!
+    }
+    (moves -> len) - 1 => moveIndex!
+    moveIndex! >= 0 -> while {
+        moves[moveIndex!].siteIr => site
+        site >= 0 and site < (nodes -> len) -> if {
+            firstMove![site] => nextMove![moveIndex!]
+            moveIndex! => firstMove![site]
+        }
+        moveIndex! - 1 => moveIndex!
+    }
+    MoveInputReturnIndex { firstChild: firstChild!, nextChild: nextChild!, firstMove: firstMove!, nextMove: nextMove! } => index
+    [MoveInputReturnFact; ~] => facts!
+    nodes -> functionDeclarationIrs -> each functionIr {
+        nodes[functionIr] => function
+        function.operand0 >= 0 and function.typeId >= 0 and function.typeId < (types -> len)
+            and types[function.typeId].kind != 8
+            and (prepared -> semanticContext.typeContainsOwnedStorage(types, function.typeId))
+            -> if {
+                function.operand1 => parameterIr!
+                0 => ordinal!
+                -1 => returnedParameter!
+                parameterIr! >= 0 and parameterIr! < (nodes -> len) and returnedParameter! < 0
+                    -> while {
+                        nodes[parameterIr!] => parameter
+                        parameter.flags % 2 == 1
+                            and (types -> calls.typedMethodOwnerMatches(parameter.typeId, function.typeId, false))
+                            -> if { parameterIr! => returnedParameter! }
+                        ordinal! == 0 -> if { function.nextOperand => parameterIr! } else { parameter.nextOperand => parameterIr! }
+                        ordinal! + 1 => ordinal!
+                    }
+                returnedParameter! >= 0 -> if {
+                    function.operand0 -> moveInputReturnDisposition(returnedParameter!, nodes, moves, index, prepared, true) => disposition
+                    function.operand0 => resultIr!
+                    nodes[resultIr!].kind == 1 -> if { nodes[resultIr!].operand0 => resultIr! }
+                    facts! -> push(MoveInputReturnFact { functionIr: functionIr, parameterIr: returnedParameter!, resultIr: resultIr!, disposition: disposition })
+                }
+            }
+    }
+    facts!
 }
 
 struct FunctionLowerRequest {

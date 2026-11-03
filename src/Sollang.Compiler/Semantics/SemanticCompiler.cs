@@ -18814,7 +18814,13 @@ internal sealed partial class SemanticCompiler
     {
         if (left == MoveInputDisposition.NoContinuation) return right;
         if (right == MoveInputDisposition.NoContinuation) return left;
-        return left == right ? left : MoveInputDisposition.Mixed;
+        var hasRetainedPath = left is MoveInputDisposition.Retained or MoveInputDisposition.Mixed
+            || right is MoveInputDisposition.Retained or MoveInputDisposition.Mixed;
+        var hasTransferredPath = left is MoveInputDisposition.Transferred or MoveInputDisposition.Mixed
+            || right is MoveInputDisposition.Transferred or MoveInputDisposition.Mixed;
+        return FunctionTypeBindingPolicy.MoveInputReturnCoverageInvalid(hasRetainedPath, hasTransferredPath)
+            ? MoveInputDisposition.Mixed
+            : left;
     }
 
     private void ValidateOwnedParameterConsumptionExpression(

@@ -178,6 +178,7 @@ public aggregateTransferOverlapCode: -> Int { 47 }
 public diagnosticTrackTaskArgumentCode: -> Int { 48 }
 public taskOperationContractCode: -> Int { 51 }
 public parallelSourceTextResultCode: -> Int { 52 }
+public moveInputReturnCoverageCode: -> Int { 53 }
 public borrowedTextBlockEscapeCode: -> Int { 50 }
 
 public struct ReadonlyReferencePathStep {
@@ -210,6 +211,7 @@ public struct OwnershipAnalysis {
     public diagnostics: [OwnershipDiagnostic; ~]
     public referencePaths: [ReadonlyReferenceLoan; ~]
     public consumedInterpolationBindingByNode: [Bool; ~]
+    public inputReturns: [typedIr.MoveInputReturnFact; ~]
 }
 
 public struct EnumPayloadStoragePlace {
@@ -468,6 +470,7 @@ public isBlockingDiagnostic diagnosticIndex: Int, diagnostics: ref [OwnershipDia
                     or diagnostic.code == deferredFunctionReturnCode()
                     or diagnostic.code == localArraySliceReturnCode()
                     or diagnostic.code == borrowedTextBlockEscapeCode()
+                    or diagnostic.code == moveInputReturnCoverageCode()
             }
         }
 }
@@ -5774,6 +5777,30 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     }
     [OwnershipDiagnostic; ~] => diagnostics!
     [ReadonlyReferenceLoan; ~] => diagnosticReferencePaths!
+    typed -> typedIr.moveInputReturnFacts(prepared, types, moves!) => inputReturns
+    inputReturns -> each fact {
+        (fact.disposition -> typedIr.moveInputReturnIsMixed) and fact.resultIr >= 0
+            and activeBodies[fact.functionIr] -> if {
+                typed[fact.resultIr] => result
+                typed[fact.parameterIr] => parameter
+                prepared.package.ranges[result.sourceModule] => range
+                prepared.package.nodes[range.astStart + result.astNode] => resultAst
+                diagnostics! -> push(OwnershipDiagnostic {
+                    code: moveInputReturnCoverageCode()
+                    sourceModule: result.sourceModule
+                    functionSymbol: typed[fact.functionIr].symbol
+                    expectedOrigin: -1
+                    expectedModule: parameter.sourceModule
+                    expectedSymbol: parameter.symbol
+                    actualOrigin: result.astNode
+                    actualModule: -1
+                    actualSymbol: -1
+                    actualBuiltin: -1
+                    readonlyReferencePath: -1
+                    span: syntax.SourceSpan { fileId: result.sourceModule, start: resultAst.start, length: resultAst.length }
+                })
+            }
+    }
     typed -> typedIr.terminatingControlFlags => terminatingControls
     # Resolved call operands are the actual producers. The shared classifier
     # distinguishes borrowed names from unnamed places before code generation.
@@ -9467,5 +9494,5 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             }
         literalIndex! + 1 => literalIndex!
     }
-    OwnershipAnalysis { diagnostics: classifiedDiagnostics!, referencePaths: diagnosticReferencePaths!, consumedInterpolationBindingByNode: consumedInterpolationBindingByNode! }
+    OwnershipAnalysis { diagnostics: classifiedDiagnostics!, referencePaths: diagnosticReferencePaths!, consumedInterpolationBindingByNode: consumedInterpolationBindingByNode!, inputReturns: inputReturns }
 }

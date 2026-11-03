@@ -57,7 +57,7 @@ internal static class LlvmAssertions
             return false;
         }
 
-        var llvm = NormalizeLlvmTypeIdentities(File.ReadAllText(llvmPath, Encoding.UTF8));
+        var llvm = NormalizeHeapAllocationNames(NormalizeLlvmTypeIdentities(File.ReadAllText(llvmPath, Encoding.UTF8)));
         foreach (var expected in ReadAssertions(containsPath))
         {
             var normalizedExpected = NormalizeLlvmTypeIdentities(expected);
@@ -122,12 +122,36 @@ internal static class LlvmAssertions
         return shared == name ? null : Path.Combine(Path.GetDirectoryName(regexCountsPath)!, shared);
     }
 
+    // Local SSA spelling is producer-specific. Rename only actual allocation
+    // definitions and their exact uses, separately in each function. The size,
+    // stored type, pointer relationship, alignment and count remain assertions.
+    static string NormalizeHeapAllocationNames(string value) =>
+        Regex.Replace(value, @"(?ms)^define[^\r\n]+\{.*?^\}", static function =>
+        {
+            var body = function.Value;
+            var occupied = Regex.Matches(body, @"%heap\d+(?![-A-Za-z0-9_.$])")
+                .Select(match => match.Value).ToHashSet(StringComparer.Ordinal);
+            var names = new Dictionary<string, string>(StringComparer.Ordinal);
+            var ordinal = 0;
+            foreach (Match allocation in Regex.Matches(body,
+                @"(?m)^\s*(%v\d+) = call ptr @sollang_alloc\("))
+            {
+                var pointer = allocation.Groups[1].Value;
+                if (names.ContainsKey(pointer)) continue;
+                string name;
+                do { name = "%heap" + ordinal++; } while (!occupied.Add(name));
+                names.Add(pointer, name);
+            }
+            return Regex.Replace(body, @"%v\d+(?![-A-Za-z0-9_.$])",
+                match => names.GetValueOrDefault(match.Value, match.Value));
+        });
+
     static string NormalizeLlvmTypeIdentities(string value) =>
         Regex.Replace(
             Regex.Replace(
                 Regex.Replace(
                     value,
-                    @"%sollang\.(struct|enum)\.\d+",
+                    @"%sollang\.(struct|enum)\.(?:t)?\d+\b",
                     "%sollang.$1.#"),
                 @"@sollang_drop_\d+",
                 "@sollang_drop_#"),

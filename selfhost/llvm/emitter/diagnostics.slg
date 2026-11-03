@@ -2638,6 +2638,15 @@ public emitOwnershipDiagnostics context: ref emitterContext.EmitContext -> Unit 
     diagnosticIndex! < (context.ownershipDiagnostics -> len)
         -> while {
             context.ownershipDiagnostics[diagnosticIndex!] => diagnostic
+            diagnostic.code == ownershipCheck.moveInputReturnCoverageCode()
+                -> if {
+                    context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.actualOrigin, diagnostic.span.start)
+                    context.ranges[diagnostic.expectedModule] => parameterRange
+                    context.symbols[parameterRange.symbolStart + diagnostic.expectedSymbol] => parameter
+                    context.tokens[parameterRange.tokenStart + parameter.nameToken] => parameterName
+                    context.sources[diagnostic.expectedModule] -> slice(parameterName.span.start, parameterName.span.length) => name
+                    "move input '$name' must be transferred on every return branch or on none of them" -> println
+                }
             diagnostic.code == ownershipCheck.borrowedTextBlockEscapeCode()
                 -> if { context -> emitBorrowedTextReturnEscape(diagnostic) }
             diagnostic.code == ownershipCheck.aggregateTransferOverlapCode()

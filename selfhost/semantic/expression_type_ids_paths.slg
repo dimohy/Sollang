@@ -845,6 +845,18 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
     prepared.package -> indexResolvedNameReferences => nameReferences
     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+    # A call operand can become typed during this fixed point. Its enclosing
+    # box/collection must then publish its own type before binding propagation.
+    [Int; ~] => deferredCompositeAsts!
+    0 => compositeAst!
+    compositeAst! < (prepared.package.nodes -> len)
+        -> while {
+            prepared.package.nodes[compositeAst!] => node
+            (node.kind == 23 or node.kind == 37 or node.kind == 38)
+                and expressionIndexByAst[compositeAst!] < 0
+                -> if { deferredCompositeAsts! -> push(compositeAst!) }
+            compositeAst! + 1 => compositeAst!
+        }
     # An omitted input is constrained by its committed primary argument AST,
     # never by an already-typed expression nested inside that argument.
     [Int; ~] => primaryArgumentByCall!
@@ -2804,6 +2816,15 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                 streamRoleCallIndex! + 1 => streamRoleCallIndex!
             }
 
+        false => compositePending!
+        deferredCompositeAsts! -> each globalAst {
+            expressionIndexByAst[globalAst] < 0 -> if { true => compositePending! }
+        }
+        compositePending! -> if {
+            expressions -> len => beforeCompositeCount
+            resolveCompositeLiteralTypes(prepared, types, expressions, expressionIndexByAst)
+            (expressions -> len) != beforeCompositeCount -> if { true => pathChanged! }
+        }
         # Product dependencies become canonical after binding propagation.
         # Revisit indexed candidates and append only newly interned field links.
         resolveStructuralProductTypes(prepared, types, fields, expressions, expressionIndexByAst, productSources, productAsts) => productTypesChanged
