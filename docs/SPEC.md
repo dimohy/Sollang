@@ -1136,8 +1136,16 @@ to create a value or independently maintain AST-to-Typed-IR kind tables.
 S080 is a blocking compiler-integrity diagnostic when a standard-library
 compilation cannot prepare its required type-registration seeds. The same
 compiled definitions supply the managed and self-hosted compilers' predefined
-storage shapes and named box eligibility. Preparation preserves committed
-identities, retains the complete registration result in the emitter context,
+storage shapes and named box eligibility. The C# `TypeId` declaration also
+supplies reference identity names and values to the self-host compiler through
+the compiled-policy exporter.
+Identity enum projections require nonnegative `Int32` members without flags
+semantics; aliases retain their input values and use the compiled enum's
+canonical name on output. Unknown values retain numeric identity diagnostics,
+and unknown names return the explicit missing identity `-1`. Generation checks
+the compiled source and preserves authored code outside its generated region.
+Preparation preserves committed identities, retains the complete registration
+result in the emitter context,
 and rejects a failed result before target headers or LLVM output. Unrelated
 scratch boxes are not named registration seeds. Standalone prepared APIs with
 no standard-library source range have no complete-registry or cache-universe

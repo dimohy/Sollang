@@ -1,6 +1,6 @@
 namespace Sollang.Compiler.Shared;
 
-[AttributeUsage(AttributeTargets.Class)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Enum)]
 internal sealed class SelfHostPolicyAttribute(string module, string output, string source) : Attribute
 {
     public string Module { get; } = module;

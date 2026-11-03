@@ -8,6 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
+        const int expectedTestCount = 65;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -34,6 +35,37 @@ internal static class SelfHostPolicyTests
         }
         try
         {
+            var enumRender = exporter.GetMethod("RenderEnumModel", BindingFlags.NonPublic | BindingFlags.Static)!;
+            string EnumModel(Type type) => (string)enumRender.Invoke(null, [type])!;
+            bool EnumRejected(Type type)
+            {
+                try { EnumModel(type); }
+                catch (TargetInvocationException error)
+                { return error.InnerException!.Message == "SELFHOST_POLICY_ENUM_IDENTITY_REQUIRED"; }
+                return false;
+            }
+            var typeId = compiler.GetType("Sollang.Compiler.Semantics.TypeId", throwOnError: true)!;
+            var enumModel = EnumModel(typeId);
+            Check("enum-actual-type-id-model", Enum.GetNames(typeId).All(name =>
+                enumModel.Contains("name == \"" + name + "\" -> if { " + Convert.ToInt32(Enum.Parse(typeId, name)) + " -> return }", StringComparison.Ordinal))
+                && Enum.GetValues(typeId).Cast<object>().All(value =>
+                    enumModel.Contains("== " + Convert.ToInt32(value) + " => \"" + Enum.GetName(typeId, value) + "\"", StringComparison.Ordinal))
+                && enumModel.Contains("else => \"\"", StringComparison.Ordinal)
+                && enumModel.Contains("    -1\n}", StringComparison.Ordinal));
+            Check("enum-changed-declarations-projected", EnumModel(typeof(OriginalIdentity)) != EnumModel(typeof(ChangedIdentity))
+                && EnumModel(typeof(ChangedIdentity)).Contains("name == \"Changed\" -> if { 9 -> return }", StringComparison.Ordinal)
+                && EnumModel(typeof(ChangedIdentity)).Contains("name == \"Added\" -> if { 12 -> return }", StringComparison.Ordinal));
+            var aliasModel = EnumModel(typeof(AliasedIdentity));
+            Check("enum-aliases-preserve-compiled-canonical-name", aliasModel.Contains("== 1 => \""
+                + Enum.GetName(typeof(AliasedIdentity), 1) + "\"", StringComparison.Ordinal)
+                && aliasModel.Contains("name == \"One\" -> if { 1 -> return }", StringComparison.Ordinal)
+                && aliasModel.Contains("name == \"Alias\" -> if { 1 -> return }", StringComparison.Ordinal)
+                && Regex.Matches(aliasModel, "== 1 =>").Count == 1);
+            Check("enum-non-enum-rejected", EnumRejected(typeof(string)));
+            Check("enum-non-int32-rejected", EnumRejected(typeof(ByteIdentity)));
+            Check("enum-negative-identity-rejected", EnumRejected(typeof(NegativeIdentity)));
+            Check("enum-flags-rejected", EnumRejected(typeof(FlagIdentity)));
+            Check("enum-empty-rejected", EnumRejected(typeof(EmptyIdentity)));
             var actual = compiler.GetType("Sollang.Compiler.Shared.BorrowedTextReturnPolicy", true)!
                 .GetMethod("RequiresOriginCheck", BindingFlags.Public | BindingFlags.Static)!;
             var original = Emit(actual);
@@ -196,8 +228,10 @@ internal static class SelfHostPolicyTests
         }
         catch (Exception error) { failure = error.ToString(); }
         finally { context.Unload(); }
+        if (failure is null && cases.Count != expectedTestCount)
+            failure = $"Policy test count differs: {cases.Count}/{expectedTestCount}.";
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new { status = failure is null ? "passed" : "failed",
-            completed = cases.Count, total = 57, cases, failure, runtimeProbeContract }, new JsonSerializerOptions { WriteIndented = true }));
+            completed = cases.Count, total = expectedTestCount, cases, failure, runtimeProbeContract }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;
     }
 
@@ -224,6 +258,35 @@ internal static class SelfHostPolicyTests
         source.Append("\nmain {\n");
         for (var index = 0; index < types.Length; index++)
         {
+            if (types[index].IsEnum)
+            {
+                var enumType = types[index];
+                var values = Enum.GetValues(enumType).Cast<object>().Select(value => Convert.ToInt32(value))
+                    .Concat([-1, 50, 511, 515, 1023, 1025, int.MaxValue]).Distinct().ToArray();
+                foreach (var value in values)
+                {
+                    var literal = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    var name = Enum.GetName(enumType, value);
+                    var label = names[index] + ".EnumName." + literal;
+                    source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(Alias(index))
+                        .Append(".enumName(").Append(literal).Append(") -> println\n");
+                    expected.Append(label).Append('\n').Append(name ?? "").Append('\n');
+                    label = names[index] + ".TypeName." + literal;
+                    source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(Alias(index))
+                        .Append(".nameOf(").Append(literal).Append(") -> when {\n")
+                        .Append("        Named(name) { name -> println }\n        Numeric(number) { number -> println }\n    }\n");
+                    expected.Append(label).Append('\n').Append(name ?? literal).Append('\n');
+                }
+                foreach (var name in Enum.GetNames(enumType).Concat(["", "__unknown_type_id__", "unit"]))
+                {
+                    var label = names[index] + ".EnumValue." + name;
+                    source.Append("    \"").Append(label).Append("\" -> println\n    ").Append(Alias(index))
+                        .Append(".enumValue(\"").Append(name).Append("\") -> println\n");
+                    var value = Enum.IsDefined(enumType, name) ? Convert.ToInt32(Enum.Parse(enumType, name)) : -1;
+                    expected.Append(label).Append('\n').Append(value).Append('\n');
+                }
+                continue;
+            }
             var multilineText = types[index].GetCustomAttributesData()
                 .Where(attribute => attribute.AttributeType.FullName == "Sollang.Compiler.Shared.SelfHostPolicyAttribute")
                 .SelectMany(attribute => attribute.NamedArguments)
@@ -368,6 +431,7 @@ internal static class SelfHostPolicyTests
         File.WriteAllText(contractPath, JsonSerializer.Serialize(new
         {
             schemaVersion = 1,
+            formatCheckSources = new[] { Path.Combine(root, "selfhost/semantic/reference_type_ids.slg") },
             policyModules = names,
             scope = "Generated policies against compiled CSharp method results; exhaustive boolean inputs, UInt64 boundary products and every declared cache-key rule",
             cases = new[] { new { id = "shared-policy-runtime", source = sourcePath,
@@ -382,6 +446,14 @@ internal static class SelfHostPolicyTests
             if (File.Exists(Path.Combine(directory.FullName, "src", "Sollang.Compiler", "Sollang.Compiler.csproj"))) return directory.FullName;
         throw new DirectoryNotFoundException("Sollang repository");
     }
+
+    private enum OriginalIdentity { Zero, Changed = 7 }
+    private enum ChangedIdentity { Zero, Changed = 9, Added = 12 }
+    private enum AliasedIdentity { Zero, One, Alias = One }
+    private enum ByteIdentity : byte { Zero }
+    private enum NegativeIdentity { Negative = -1 }
+    [Flags] private enum FlagIdentity { Zero, One }
+    private enum EmptyIdentity { }
 
     private static string EscapedText() => "a\"b\\c";
     private static string CallText() => string.Concat(Environment.NewLine, "x");

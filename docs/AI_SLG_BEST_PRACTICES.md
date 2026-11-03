@@ -1858,6 +1858,15 @@ bits. Calls, branches, locals, exception regions, checked arithmetic and
 unsupported signatures fail instead of retaining an old rule. This arithmetic
 path shares cache checksums and key fingerprints without a second handwritten
 equation. Do not edit generated SLG.
+Identity enums use the same attribute and generated-region mechanism. The
+exporter reads the compiled enum fields rather than a copied name/number table.
+This representation requires nonnegative `Int32` values, at least one member,
+and no flags semantics. All aliases resolve on input; output uses the compiled
+enum's canonical name. Missing numeric identities return an empty name and
+missing names return `-1`. Numeric selection uses integer `when`; text lookup
+uses text equality and early returns. Keep `TypeId` authoritative in C# and
+regenerate its region in `semantic/reference_type_ids.slg`, preserving authored
+registration code and existing source manifests.
 Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate

@@ -331,6 +331,9 @@ internal enum BoundFunctionKind
     RuntimePathAbsolute
 }
 
+[Shared.SelfHostPolicy("sollang.compiler.semantic.reference_type_ids",
+    "selfhost/semantic/reference_type_ids.slg",
+    "src/Sollang.Compiler/Semantics/BoundProgram.cs", Region = "TypeId")]
 internal enum TypeId
 {
     Unit,

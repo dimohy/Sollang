@@ -66,10 +66,14 @@ internal static class SelfHostPolicyCompiler
                 .Append(sourceHash).Append("\nnamespace ").Append(policy.Module).Append('\n');
             var methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly)
                 .OrderBy(method => method.Name, StringComparer.Ordinal).ToArray();
-            if (methods.Length == 0) throw new SollangException("SELFHOST_POLICY_EMPTY");
-            if (methods.Any(method => method.ReturnType == typeof(CodegenKeyRule)))
-                text.Append(RenderKeyRuleTypes());
-            foreach (var method in methods) text.Append('\n').Append(RenderDecision(method));
+            if (type.IsEnum) text.Append('\n').Append(RenderEnumModel(type));
+            else
+            {
+                if (methods.Length == 0) throw new SollangException("SELFHOST_POLICY_EMPTY");
+                if (methods.Any(method => method.ReturnType == typeof(CodegenKeyRule)))
+                    text.Append(RenderKeyRuleTypes());
+                foreach (var method in methods) text.Append('\n').Append(RenderDecision(method));
+            }
             var content = SourceFormatter.Format(text.ToString()).ReplaceLineEndings("\n");
             string? outputHash = null;
             if (policy.Region is { } region)
@@ -115,6 +119,30 @@ internal static class SelfHostPolicyCompiler
         }
         if (verbose) Console.WriteLine($"[selfhost policies] {(check ? "checked" : "synchronized")} {policies.Length} module(s)");
         return 0;
+    }
+
+    internal static string RenderEnumModel(Type type)
+    {
+        // Identity enums have a signed Int32 representation, nonnegative IDs
+        // and an unambiguous missing-value sentinel. Aliases keep all input
+        // names; their output name follows the actual compiled enum metadata.
+        if (!type.IsEnum || Enum.GetUnderlyingType(type) != typeof(int)
+            || type.IsDefined(typeof(FlagsAttribute), inherit: false))
+            throw new SollangException("SELFHOST_POLICY_ENUM_IDENTITY_REQUIRED");
+        var fields = type.GetFields(BindingFlags.Public | BindingFlags.Static)
+            .OrderBy(field => field.MetadataToken).ToArray();
+        if (fields.Length == 0 || fields.Any(field => !Identifier(field.Name)
+                || (int)field.GetRawConstantValue()! < 0))
+            throw new SollangException("SELFHOST_POLICY_ENUM_IDENTITY_REQUIRED");
+        var text = new StringBuilder("public enumName identity: Int -> Text => identity -> when {\n");
+        foreach (var value in fields.Select(field => (int)field.GetRawConstantValue()!).Distinct().Order())
+            text.Append("    == ").Append(value.ToString(CultureInfo.InvariantCulture))
+                .Append(" => \"").Append(Enum.GetName(type, value)).Append("\"\n");
+        text.Append("    else => \"\"\n}\n\npublic enumValue name: Text -> Int {\n");
+        foreach (var field in fields)
+            text.Append("    name == \"").Append(field.Name).Append("\" -> if { ")
+                .Append(((int)field.GetRawConstantValue()!).ToString(CultureInfo.InvariantCulture)).Append(" -> return }\n");
+        return text.Append("    -1\n}\n").ToString();
     }
 
     internal static string RenderDecision(MethodInfo method)
