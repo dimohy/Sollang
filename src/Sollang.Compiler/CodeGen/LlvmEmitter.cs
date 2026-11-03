@@ -830,7 +830,7 @@ internal sealed partial class LlvmEmitter
             %sollang.file_handle_result = type { i64, i32 }
             %sollang.socket_result = type { i64, i32, i32 }
             %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
-            %sollang.environment_result = type { ptr, i64, i1, i1 }
+            {{NativeRuntimePolicy.EnvironmentResultType()}}
             %sollang.process_result = type { i32, i32 }
             %sollang.process_poll_result = type { i32, i32 }
             %sollang.process_spawn_result = type { i64, i64, i32 }

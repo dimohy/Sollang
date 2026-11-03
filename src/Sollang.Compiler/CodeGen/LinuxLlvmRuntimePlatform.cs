@@ -1,4 +1,5 @@
 using System.Text;
+using Sollang.Compiler.Shared;
 
 namespace Sollang.Compiler.CodeGen;
 
@@ -2495,70 +2496,8 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
                 }
                 """);
         }
-        functions.AppendLine("""
-            define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) #0 {
-            entry:
-              %bytes = add i64 %name_len, 1
-              %key = call ptr @sollang_alloc(i64 %bytes)
-              %allocated = icmp ne ptr %key, null
-              br i1 %allocated, label %copy, label %error
-
-            copy:
-              %i = phi i64 [ 0, %entry ], [ %next, %store_byte ]
-              %done = icmp eq i64 %i, %name_len
-              br i1 %done, label %terminate, label %copy_byte
-
-            copy_byte:
-              %source = getelementptr i8, ptr %name, i64 %i
-              %byte = load i8, ptr %source, align 1
-              %valid = icmp ne i8 %byte, 0
-              br i1 %valid, label %store_byte, label %invalid_key
-
-            store_byte:
-              %destination = getelementptr i8, ptr %key, i64 %i
-              store i8 %byte, ptr %destination, align 1
-              %next = add i64 %i, 1
-              br label %copy
-
-            terminate:
-              %end = getelementptr i8, ptr %key, i64 %name_len
-              store i8 0, ptr %end, align 1
-              %value = call ptr @getenv(ptr %key)
-              call void @sollang_free(ptr %key)
-              %found = icmp ne ptr %value, null
-              br i1 %found, label %length, label %missing
-
-            length:
-              %j = phi i64 [ 0, %terminate ], [ %j_next, %length_more ]
-              %value_byte_ptr = getelementptr i8, ptr %value, i64 %j
-              %value_byte = load i8, ptr %value_byte_ptr, align 1
-              %length_done = icmp eq i8 %value_byte, 0
-              br i1 %length_done, label %present, label %length_more
-
-            length_more:
-              %j_next = add i64 %j, 1
-              br label %length
-
-            present:
-              %p0 = insertvalue %sollang.environment_result poison, ptr %value, 0
-              %p1 = insertvalue %sollang.environment_result %p0, i64 %j, 1
-              %p2 = insertvalue %sollang.environment_result %p1, i1 true, 2
-              %p3 = insertvalue %sollang.environment_result %p2, i1 true, 3
-              ret %sollang.environment_result %p3
-
-            missing:
-              %m0 = insertvalue %sollang.environment_result zeroinitializer, i1 true, 3
-              ret %sollang.environment_result %m0
-
-            invalid_key:
-              call void @sollang_free(ptr %key)
-              br label %error
-
-            error:
-              ret %sollang.environment_result zeroinitializer
-            }
-
-            """);
+        functions.AppendLine(NativeRuntimePolicy.EnvironmentLinuxFunctions());
+        functions.AppendLine();
     }
 
     public override void EmitIoPrimitives(StringBuilder functions)

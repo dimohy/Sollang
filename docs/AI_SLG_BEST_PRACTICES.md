@@ -1909,6 +1909,11 @@ Runtime LLVM templates opt into bounded multiline constants explicitly. Keep
 the Windows entry constant in `WindowsLinkPolicy` and the shared legacy integer
 reader in `NativeRuntimePolicy`. Its generated region in `llvm/runtime.slg`
 preserves the surrounding authored module and its existing source manifests.
+Environment result layout, Windows globals, and Windows/Linux lookup and
+cleanup bodies also come from `NativeRuntimePolicy`. Both platform emitters
+and the SLG environment adapter consume those compiled definitions. Keep
+platform declaration placement in the adapter; never copy helper instructions
+or allocation/error branches into a second runtime template.
 Regenerate that region through `selfhost-sync`; do not copy or edit its LLVM
 strings. Region markers and the module namespace must be valid before writing,
 and an authored-output change detected during generation aborts publication.
