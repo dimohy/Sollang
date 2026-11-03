@@ -873,6 +873,9 @@ Notes:
   replace source, interface, type, diagnostic, or cache validation.
   `run` requires the current native host target before build work begins;
   cross-target build support does not imply cross-target process execution.
+  Windows import-library exports are shared by the C# and self-host linkers.
+  The kernel32 definition includes `TlsAlloc`, `TlsSetValue`, `TlsGetValue`
+  and `TlsFree` for the compute runtime's per-thread output sink.
 - `--jobs <n>` accepts a positive `Int` decimal value and bounds compiler
   workers. Zero, signs, non-digits, missing values, and values above
   `2147483647` are rejected before generation. The C# Windows linker bounds
@@ -4043,6 +4046,11 @@ uses the ordinary checked `capacity` conversion and traps.
 `BitSet<N>` is a nominal fixed inline owner. Set storage contains no dummy
 value, deque indexing uses a power-of-two ring, heap mutation preserves the
 heap invariant, and bit-set words use fixed-width `UInt64` storage.
+For an admitted positive Int32 bit count `N`, the word count is
+`(Int64(N) + 63) / 64` and the inline byte size is eight times that count.
+Type layout, emitted storage types and ordinary or interpolated intrinsics
+use the same word count. In particular, `BitSet<2147483647>` has 33554432
+words and a 268435456-byte inline layout; rounding must not wrap in Int32.
 `BitSet<N> -> count` accepts no arguments and returns `Int` by counting set
 bits across every inline word. Unused bits in the final word do not contribute
 to the count. It has the same result and diagnostic behavior
@@ -6392,6 +6400,15 @@ Current backend:
   element or entry layout facts. Prepared type identities reuse equal storage
   shapes including capacity. A new bounded dictionary first interns its heap
   dictionary layout, preserving the C# type allocation order.
+  The current shared type-universe plan has no standalone `BitSet<N>` layout
+  record. A registered BitSet retains its bit count in its resolved type name
+  and module/function identity. Its positive bit count, known inline size and
+  eight-byte alignment must be valid before applying the plan's category selection.
+  Ordered synthetic type registration still interns each concrete BitSet by its
+  positive bit count. BitSet recipes have no element dependency; repeated counts
+  reuse the same identity, and a readonly reference registers its BitSet target
+  before the reference identity. Declaration and resolved-use registration must
+  preserve these identities independently of the type-universe category plan.
   `Set<T>`, `Deque<T>` and `BinaryHeap<T>` retain distinct factory identities
   when ordered synthetic types are registered. Set cache records use dictionary
   storage with a `Unit` value, zero value size and alignment one. Deque and heap

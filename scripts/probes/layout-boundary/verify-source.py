@@ -32,7 +32,9 @@ def main():
     parser.add_argument("--provider-contract", type=Path)
     parser.add_argument("--arithmetic-only", action="store_true",
                         help="Test the independent production arithmetic module; no full layoutsFor API claim")
-    parser.add_argument("--dictionary", action="store_true")
+    kind = parser.add_mutually_exclusive_group()
+    kind.add_argument("--dictionary", action="store_true")
+    kind.add_argument("--bitset", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append", required=True)
     args = parser.parse_args()
@@ -40,12 +42,12 @@ def main():
     sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
     managed = json.loads(args.managed_proof.read_text(encoding="utf-8-sig"))
     assert args.arithmetic_only or (args.semantic_proof and args.provider_contract), "LAYOUT_FULL_API_PROOFS_REQUIRED"
-    assert not args.dictionary or args.arithmetic_only, "DICTIONARY_LAYOUT_ARITHMETIC_SCOPE_REQUIRED"
-    assert managed["completed"] == managed["total"] == (18 if args.dictionary else 9)
+    assert not (args.dictionary or args.bitset) or args.arithmetic_only, "LAYOUT_ARITHMETIC_SCOPE_REQUIRED"
+    assert managed["completed"] == managed["total"] == (18 if args.dictionary or args.bitset else 9)
     api_cases = [case for case in managed["cases"] if "capacity" in case and not case.get("restored", False)]
     # Historical records used the domain status as the case completion status.
     api_cases = [{**case, "status": case["layoutStatus"]} if "layoutStatus" in case else case for case in api_cases]
-    assert len(api_cases) == (8 if args.dictionary else 7) and all(case["passed"] for case in api_cases)
+    assert len(api_cases) == (8 if args.dictionary or args.bitset else 7) and all(case["passed"] for case in api_cases)
     pins = {}
     references = [(args.managed_proof, managed)]
     if args.semantic_proof:
@@ -58,7 +60,7 @@ def main():
         pins[str(path.resolve())] = sha(path)
     if args.arithmetic_only:
         providers = [ROOT / "selfhost/llvm/emitter/layout_arithmetic.slg"]
-        source = Path(__file__).with_name("dictionary-arithmetic.slg" if args.dictionary else "arithmetic.slg")
+        source = Path(__file__).with_name("dictionary-arithmetic.slg" if args.dictionary else "bitset-arithmetic.slg" if args.bitset else "arithmetic.slg")
     else:
         contract = json.loads(args.provider_contract.read_text(encoding="utf-8-sig"))
         providers = [ROOT / name for name in contract["reusableCheckedProducer"]["additionalSources"]]

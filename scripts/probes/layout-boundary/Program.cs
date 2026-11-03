@@ -9,6 +9,36 @@ var inputs = parameters.Select(parameter => parameter.HasDefaultValue ? paramete
     : parameter.ParameterType == typeof(int) ? 8
     : Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(parameter.ParameterType.GetGenericArguments()))).ToArray();
 var table = constructor.Invoke(inputs);
+if (args.Length > 1 && args[1] == "bitset")
+{
+    var bitSetAdd = tableType.GetMethod("GetOrAddBitSet")!;
+    var bitSetGet = tableType.GetMethod("GetBitSet")!;
+    var register = tableType.GetMethod("RegisterBitSets")!;
+    var bitSetTypeId = bitSetGet.GetParameters()[0].ParameterType;
+    var definitionMapType = typeof(Dictionary<,>).MakeGenericType(bitSetTypeId, typeof(int));
+    foreach (var restored in new[] { false, true })
+    foreach (var capacity in new[] { 1, 63, 64, 65, 2147483584, 2147483585, 2147483646, int.MaxValue })
+    {
+        var currentTable = constructor.Invoke(inputs);
+        object id;
+        if (restored)
+        {
+            id = Enum.ToObject(bitSetTypeId, 1000000);
+            var definitions = (System.Collections.IDictionary)Activator.CreateInstance(definitionMapType)!;
+            definitions.Add(id, capacity);
+            register.Invoke(currentTable, [definitions]);
+        }
+        else
+        {
+            id = bitSetAdd.Invoke(currentTable, [capacity])!;
+        }
+        var definition = bitSetGet.Invoke(currentTable, [id])!;
+        var size = (int)definition.GetType().GetProperty("Size")!.GetValue(definition)!;
+        var words = (int)definition.GetType().GetProperty("WordCount")!.GetValue(definition)!;
+        Console.WriteLine(JsonSerializer.Serialize(new { restored, capacity, status = "known", size, words }));
+    }
+    return;
+}
 if (args.Length > 1 && args[1] == "dictionary")
 {
     var dictionaryAdd = tableType.GetMethod("GetOrAddBoundedDictionary")!;

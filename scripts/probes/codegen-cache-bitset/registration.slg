@@ -1,0 +1,50 @@
+import sollang.compiler.semantic.reference_synthetic_type_ids as ids
+
+reportRegistration label: Text, result: move Result<ids.Identities, ids.Error> -> Unit uses Console {
+    result -> when {
+        Err(error) {
+            error -> when {
+                InvalidType { "invalid-type" }
+                InvalidShape { "invalid-shape" }
+                Cycle { "cycle" }
+                TypeIdOverflow { "overflow" }
+            } => reason
+            "$label:error:$reason" -> println
+        }
+        Ok(registered) {
+            "$label:ok:$(registered.nextTypeId)" -> print
+            registered.ids -> each identity { ":$identity" -> print }
+            "" -> println
+        }
+    }
+}
+
+main {
+    [
+    ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 130 },
+    ids.Recipe { kind: ids.Kind.Reference, first: 0, second: -1, length: 0 },
+    ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 130 },
+    ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 2147483647 },
+    ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 2147483647 },
+    ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 64 }; ~] => recipes
+    [-1, -1, -1, -1, -1, -1; ~] => seeds
+    [ids.Shape; ~] => noAliases
+    [1, 2, 3, 4, 5; ~] => roots
+    "shape" -> reportRegistration(recipes -> ids.register(seeds, noAliases, roots, 100))
+    [ids.Shape { kind: ids.Kind.BitSet, first: -1, second: -1, length: 130, identity: 90 }; ~] => aliases
+    [-1,; ~] => oneSeed
+    [0,; ~] => oneRoot
+    [ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 130 }; ~] => one
+    "alias" -> reportRegistration(one -> ids.register(oneSeed, aliases, oneRoot, 100))
+    [ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: 0 }; ~] => zero
+    "zero" -> reportRegistration(zero -> ids.register(oneSeed, noAliases, oneRoot, 100))
+    [ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: -1, length: -1 }; ~] => negative
+    "negative" -> reportRegistration(negative -> ids.register(oneSeed, noAliases, oneRoot, 100))
+    [ids.Recipe { kind: ids.Kind.BitSet, first: 0, second: -1, length: 130 }; ~] => element
+    "element" -> reportRegistration(element -> ids.register(oneSeed, noAliases, oneRoot, 100))
+    [ids.Recipe { kind: ids.Kind.BitSet, first: -1, second: 0, length: 130 }; ~] => second
+    "second" -> reportRegistration(second -> ids.register(oneSeed, noAliases, oneRoot, 100))
+    [ids.Shape { kind: ids.Kind.BitSet, first: 0, second: -1, length: 130, identity: 90 }; ~] => badAlias
+    "bad-alias" -> reportRegistration(one -> ids.register(oneSeed, badAlias, oneRoot, 100))
+    "overflow" -> reportRegistration(one -> ids.register(oneSeed, noAliases, oneRoot, 2147483647))
+}

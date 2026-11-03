@@ -1,0 +1,71 @@
+import sollang.compiler.llvm.codegen_cache_keys as keys
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sys.process as process
+
+expectBitSetCaptureRejected context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref llvm.TypeLayouts, selected: ref [Int; ~] -> Unit uses Process {
+    context -> llvm.captureRegisteredTypeUniverse(package, semantic, layouts, selected) -> when {
+        Ok(_) { process.exit(71) }
+        Err(error) {
+            error -> when {
+                InvalidType {}
+                InvalidPart { process.exit(72) }
+                Record(_) { process.exit(73) }
+            }
+        }
+    }
+}
+
+verifyBitSetCapture context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: mut typeIds.SemanticTypeSet, layouts: mut llvm.TypeLayouts -> Unit uses Console, Process {
+    semantic.types -> len => bitSet
+    semantic.types -> push(typeIds.SemanticType {
+        kind: 14, origin: 0, module: -1, symbol: -1,
+        first: -1, second: -1, length: 130, lengthHash: 0,
+        containsParameter: false, status: 0
+    })
+    layouts.sizes -> push(24)
+    layouts.aligns -> push(8)
+    layouts.statuses -> push(0)
+    [Int; ~] => empty
+    context -> llvm.captureRegisteredTypeUniverse(package, semantic, layouts, empty) -> when {
+        Err(_) { process.exit(74) -> return }
+        Ok(records) {
+            records -> keys.typeUniverseHash -> when {
+                Err(_) { process.exit(75) -> return }
+                Ok(hash) { hash }
+            }
+        }
+    } => baseline
+    [bitSet,; ~] => selected
+    context -> llvm.captureRegisteredTypeUniverse(package, semantic, layouts, selected) -> when {
+        Err(_) { process.exit(76) }
+        Ok(records) {
+            records -> keys.typeUniverseHash -> when {
+                Err(_) { process.exit(77) }
+                Ok(hash) { hash != baseline -> if { process.exit(78) } }
+            }
+        }
+    }
+    [bitSet, bitSet; ~] => duplicate
+    context -> expectBitSetCaptureRejected(package, semantic, layouts, duplicate)
+    0..<6 -> each scenario {
+        semantic.types -> len => invalid
+        scenario == 5 -> if { 15 } else { 14 } => kind
+        scenario == 4 -> if { 0 } else { 130 } => length
+        scenario == 0 -> if { -1 } else { scenario == 1 -> if { 16 } else { 24 } } => size
+        scenario == 2 -> if { 4 } else { 8 } => alignment
+        scenario == 3 -> if { 4 } else { 0 } => status
+        semantic.types -> push(typeIds.SemanticType {
+            kind: kind, origin: 0, module: -1, symbol: -1,
+            first: -1, second: -1, length: length, lengthHash: 0,
+            containsParameter: false, status: 0
+        })
+        layouts.sizes -> push(size)
+        layouts.aligns -> push(alignment)
+        layouts.statuses -> push(status)
+        [invalid,; ~] => invalidSelection
+        context -> expectBitSetCaptureRejected(package, semantic, layouts, invalidSelection)
+    }
+    "bitset-capture:8" -> println
+}

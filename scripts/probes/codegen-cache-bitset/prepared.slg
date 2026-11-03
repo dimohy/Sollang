@@ -1,0 +1,44 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.reference_prepared_type_ids as preparedIds
+import sollang.compiler.semantic.reference_synthetic_type_ids as syntheticIds
+import sollang.compiler.semantic.type_ids as typeIds
+import sys.process as process
+
+reportPhase label: Text, result: move Result<syntheticIds.Identities, preparedIds.Error> -> Unit uses Console {
+    result -> when {
+        Err(error) {
+            error -> when {
+                Nominal(_) { "nominal" }
+                Synthetic(reason) {
+                    reason -> when {
+                        InvalidType { "invalid-type" }
+                        InvalidShape { "invalid-shape" }
+                        Cycle { "cycle" }
+                        TypeIdOverflow { "overflow" }
+                    }
+                }
+                InvalidSource { "invalid-source" }
+            } => reason
+            "$label:error:$reason" -> println
+        }
+        Ok(registered) {
+            "$label:ok:$(registered.nextTypeId)" -> println
+        }
+    }
+}
+
+main {
+    process.arguments() => arguments
+    [arguments[1],; ~] -> semanticContext.prepareFiles => prepared
+    "metadata" -> reportPhase(prepared -> preparedIds.registerMetadataSignatures)
+    "declarations" -> reportPhase(prepared -> preparedIds.registerDeclarations)
+    [Int; ~] => uses!
+    0 => index!
+    prepared.semantic.types -> each type {
+        type.kind == 14 -> if { uses! -> push(index!)
+            "bitset:$(type.length)" -> println }
+        index! + 1 => index!
+    }
+    "bitset-uses:$(uses! -> len)" -> println
+    "resolved-uses" -> reportPhase(prepared -> preparedIds.registerResolvedTypeUses(prepared.semantic, uses!))
+}

@@ -5,8 +5,18 @@ import sollang.compiler.llvm.codegen_cache_key_policy as plans
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_registration as registration
+import sollang.compiler.llvm.emitter.layout_arithmetic as layoutArithmetic
 
 captureRegisteredTypeRecord records: mut keys.TypeUniverseRecords, context: mut keys.TypeFieldContext, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, layouts: ref TypeLayouts, typeId: Int, type: typeIds.SemanticType -> Result<Unit, keys.TypeUniverseCaptureError> {
+    # The shared plan and CSharp BuildTypeUniverseHash have no standalone
+    # BitSet record. Its resolved type name still carries the bit count.
+    # Validate the committed inline geometry before applying that selection.
+    type.kind == 14 -> if {
+        type.length <= 0 or layouts.statuses[typeId] != 0 or layouts.aligns[typeId] != 8
+            or layouts.sizes[typeId] != (type.length -> layoutArithmetic.bitSetWordCount) * 8
+            -> if { Result<Unit, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
+        Result<Unit, keys.TypeUniverseCaptureError>.Ok -> return
+    }
     type.kind == 1 and type.origin == 1 -> if {
         records -> keys.appendBuiltinTypeUniverseRecord(semantic.types, typeId) -> return
     }
