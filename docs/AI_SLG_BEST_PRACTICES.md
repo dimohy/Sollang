@@ -106,6 +106,10 @@ Boolean-condition and subject-style `when` share the same all-arms-return
 termination rule. A nested selection that returns on every path produces no
 continuing value; enclosing control emission must preserve that termination
 rather than storing a result or creating a merge edge.
+For a conditional inside interpolation, retain each emitted arm's actual
+termination state before writing its result, cleanup, or merge branch. Resolve
+the condition through the common value writer; an IR index alone is not the
+LLVM name of a parameter or mutable local read.
 Read a readonly integer subject through its canonical value type in both
 relational and range arms, preserving its width, signedness, and reference ABI.
 Keep distinct AST grammar identities disjoint. Registered expression kinds and

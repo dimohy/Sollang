@@ -107,6 +107,11 @@ Independent effectful calls and control regions retain source order even when
 their value dependencies would otherwise allow topological reordering.
 Nested value conditionals compose by using the innermost result-producing merge
 block as the predecessor of an enclosing `phi` input.
+Only arms whose emitted control flow continues contribute a join value or a
+branch to that join. A returning arm emits no later result store, branch-local
+cleanup, or merge branch. These rules also apply to conditionals inside
+interpolation. Conditions read their canonical Bool value, including primary
+and additional parameters and mutable local reads.
 
 Self-hosted mutable scalar loops use an explicit memory form before LLVM
 optimization: one non-escaping entry-block `alloca` represents each mutable

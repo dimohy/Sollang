@@ -1746,6 +1746,8 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
 }
 
 # Shared conditional value emission for direct bodies and retained interpolation.
+# A terminating arm owns its cleanup and return. Only actual continuing edges
+# may store a result, release branch locals, and branch to a merge.
 emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[controlIndex] => control
     control.operand0 -> aggregateValueIndex(context, state) => conditionalConditionIndex
@@ -1760,39 +1762,42 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
         control -> writeIfShortCircuitExitTarget(controlIndex, state)
     } else {
         "  br i1 " -> print
-        conditionalCondition.kind == 4 -> if {
-            conditionalCondition -> sourceToken(context, state) => conditionalConditionToken
-            (context.sources[conditionalCondition.sourceModule] -> byte(conditionalConditionToken.span.start)) == 116
-                -> if { "1" -> print } else { "0" -> print }
-        } else { "%v$(conditionalConditionIndex -> valueNameId(state))" -> print }
+        conditionalConditionIndex -> writeValue(ownerIndex, context, state)
         control -> writeIfDirectBranchTargets(controlIndex, state)
     }
     "if$(controlIndex -> valueNameId(state))_then:" -> println
-    control.operand1 -> emitRegion(emissionOrder, context, state)
-    conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
-        -> if {
-            control.operand1 -> regionResultValueIndex(context, state) => entryThenStoreIndex
-            control -> emitIfResultStore(entryThenStoreIndex, ownerIndex, controlIndex, 0, context, state)
-        }
-    OwnedDropRequest { regionIndex: control.operand1, beforeAst: -1, edgeIndex: controlIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-    "  br label %if$(controlIndex -> valueNameId(state))_merge" -> println
-    control.nextOperand >= 0 -> if {
-        "if$(controlIndex -> valueNameId(state))_else:" -> println
-        control.nextOperand -> emitRegion(emissionOrder, context, state)
-        conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0)
+    control.operand1 -> emitRegionState(emissionOrder, context, state) => thenTerminated
+    not thenTerminated -> if {
+        conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
             -> if {
-                control.nextOperand -> regionResultValueIndex(context, state) => entryElseStoreIndex
-                control -> emitIfResultStore(entryElseStoreIndex, ownerIndex, controlIndex, 1, context, state)
+                control.operand1 -> regionResultValueIndex(context, state) => entryThenStoreIndex
+                control -> emitIfResultStore(entryThenStoreIndex, ownerIndex, controlIndex, 0, context, state)
             }
-        OwnedDropRequest { regionIndex: control.nextOperand, beforeAst: -1, edgeIndex: controlIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+        OwnedDropRequest { regionIndex: control.operand1, beforeAst: -1, edgeIndex: controlIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
         "  br label %if$(controlIndex -> valueNameId(state))_merge" -> println
     }
-    "if$(controlIndex -> valueNameId(state))_merge:" -> println
-    conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
-        -> if {
-            "  %v$(controlIndex -> valueNameId(state)) = load " -> print
-            control -> writeIrType(context, state)
-            ", ptr %if$(controlIndex -> valueNameId(state))_result, align " -> print
-            control -> storageAlign(context, state) -> writeDecimalLine
+    false => elseTerminated!
+    control.nextOperand >= 0 -> if {
+        "if$(controlIndex -> valueNameId(state))_else:" -> println
+        control.nextOperand -> emitRegionState(emissionOrder, context, state) => elseTerminated!
+        not elseTerminated! -> if {
+            conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0)
+                -> if {
+                    control.nextOperand -> regionResultValueIndex(context, state) => entryElseStoreIndex
+                    control -> emitIfResultStore(entryElseStoreIndex, ownerIndex, controlIndex, 1, context, state)
+                }
+            OwnedDropRequest { regionIndex: control.nextOperand, beforeAst: -1, edgeIndex: controlIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+            "  br label %if$(controlIndex -> valueNameId(state))_merge" -> println
         }
+    }
+    not thenTerminated or not elseTerminated! -> if {
+        "if$(controlIndex -> valueNameId(state))_merge:" -> println
+        conditionalValueUsed and not (control.typeOrigin == 1 and control.typeSymbol == 0) and control.nextOperand >= 0
+            -> if {
+                "  %v$(controlIndex -> valueNameId(state)) = load " -> print
+                control -> writeIrType(context, state)
+                ", ptr %if$(controlIndex -> valueNameId(state))_result, align " -> print
+                control -> storageAlign(context, state) -> writeDecimalLine
+            }
+    }
 }
