@@ -45,9 +45,8 @@ internal sealed partial class LlvmEmitter
     {
         EnsureRuntimeType(value, conversion.ConcreteType, "dyn conversion");
         var materialized = MaterializeAggregateValue(value);
-        var data = NextTemp("dyn_data");
-        EmitCall(data, "ptr", "sollang_alloc",
-            $"i64 {_program.Types.InlineSizeOf(conversion.ConcreteType).ToString(CultureInfo.InvariantCulture)}");
+        var data = EmitHeapAllocate(
+            _program.Types.InlineSizeOf(conversion.ConcreteType).ToString(CultureInfo.InvariantCulture));
         EmitStore(materialized.TypeName, materialized.ValueName, data,
             RuntimeAlignment(conversion.ConcreteType));
         return new RuntimeDynTrait(

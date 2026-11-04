@@ -2291,6 +2291,11 @@ share one implementation table and its wrappers. Different trait or concrete
 type identities retain separate tables; unreachable conversions do not select
 a table.
 
+Conversion checks the nullable payload allocation before storing the concrete
+value or publishing the two-pointer object. Failure reports the enclosing
+source function identity followed by `allocation_failed` and traps, using the
+same checked-allocation decision in entry and ordinary function bodies.
+
 Table keys and emitted table symbols derive from the committed dyn trait and
 concrete type identities. Distinct qualified trait names remain distinct even
 when replacing namespace separators with underscores would give the same text.
