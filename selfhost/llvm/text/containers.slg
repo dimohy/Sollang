@@ -637,7 +637,7 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
             "  %v$(collectionIndex -> valueNameId(state))_round32 = or i64 %v$(collectionIndex -> valueNameId(state))_round16, %v$(collectionIndex -> valueNameId(state))_shift32" -> println
             "  %v$(collectionIndex -> valueNameId(state))_capacity = add i64 %v$(collectionIndex -> valueNameId(state))_round32, 1" -> println
             setElementSize -> dictionaryEntryLayout(context.typeAligns[setElementType], 0, 1) => setEntryLayout
-            "v$(collectionIndex -> valueNameId(state))" -> emitGrowableDictionaryAllocation("%v$(collectionIndex -> valueNameId(state))_capacity", setEntryLayout)
+            "v$(collectionIndex -> valueNameId(state))" -> emitGrowableDictionaryAllocation("%v$(collectionIndex -> valueNameId(state))_capacity", setEntryLayout, request.ownerIndex, context, state)
             "v$(collectionIndex -> valueNameId(state))" -> emitGrowableDictionaryOwner("%v$(collectionIndex -> valueNameId(state))_storage", "0", "%v$(collectionIndex -> valueNameId(state))_capacity")
         }
     }
@@ -1268,9 +1268,9 @@ emitSetEquality prefix: Text, storedName: Text, queryName: Text, keyTypeId: Int,
 # the controls pointer, includes 16 mirrored-control bytes, and owns the keys
 # immediately after that prefix. Scalar probing here is hash-indexed and keeps
 # the same 7-bit H2 contract as the SIMD native emitter.
-emitSetRehash prefix: Text, oldKeysName: Text, oldControlsName: Text, oldCapacityName: Text, newCapacityName: Text, lengthName: Text, keyTypeId: Int, keySize: Int, keyAlign: Int, hashMethod: Int, keyIsText: Bool, keyIsNominal: Bool, hashWidth: Int, hashSigned: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitSetRehash prefix: Text, oldKeysName: Text, oldControlsName: Text, oldCapacityName: Text, newCapacityName: Text, lengthName: Text, keyTypeId: Int, keySize: Int, keyAlign: Int, hashMethod: Int, keyIsText: Bool, keyIsNominal: Bool, hashWidth: Int, hashSigned: Bool, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     keySize -> dictionaryEntryLayout(keyAlign, 0, 1) => setEntryLayout
-    prefix -> emitGrowableDictionaryAllocation(newCapacityName, setEntryLayout)
+    prefix -> emitGrowableDictionaryAllocation(newCapacityName, setEntryLayout, ownerIndex, context, state)
     "  br label %$(prefix)_loop" -> println
     "$(prefix)_loop:" -> println
     "  %$(prefix)_index = phi i64 [ 0, %$(prefix)_allocation_ready ], [ %$(prefix)_next_index, %$(prefix)_advance ]" -> println
@@ -1457,7 +1457,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
         "  %set$(callIndex -> valueNameId(state))_grown_capacity = mul i64 %set$(callIndex -> valueNameId(state))_capacity, 2" -> println
         "  br label %set$(callIndex -> valueNameId(state))_grow_rehash_entry" -> println
         "set$(callIndex -> valueNameId(state))_grow_rehash_entry:" -> println
-        "set$(callIndex -> valueNameId(state))_grow_rehash" -> emitSetRehash("%set$(callIndex -> valueNameId(state))_keys", "%set$(callIndex -> valueNameId(state))_controls", "%set$(callIndex -> valueNameId(state))_capacity", "%set$(callIndex -> valueNameId(state))_grown_capacity", "%set$(callIndex -> valueNameId(state))_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
+        "set$(callIndex -> valueNameId(state))_grow_rehash" -> emitSetRehash("%set$(callIndex -> valueNameId(state))_keys", "%set$(callIndex -> valueNameId(state))_controls", "%set$(callIndex -> valueNameId(state))_capacity", "%set$(callIndex -> valueNameId(state))_grown_capacity", "%set$(callIndex -> valueNameId(state))_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, ownerIndex, context, state)
         Arena(0) => grownProbePrefixStorage!
         "set$(callIndex -> valueNameId(state))_grown_probe" -> materialize(grownProbePrefixStorage!) => grownProbePrefix
         Arena(0) => grownProbeControlsStorage!
@@ -1547,7 +1547,7 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
             "set$(callIndex -> valueNameId(state))_compact:" -> println
             "  br label %set$(callIndex -> valueNameId(state))_compact_rehash_entry" -> println
             "set$(callIndex -> valueNameId(state))_compact_rehash_entry:" -> println
-            "set$(callIndex -> valueNameId(state))_compact_rehash" -> emitSetRehash("%set$(callIndex -> valueNameId(state))_keys", "%set$(callIndex -> valueNameId(state))_controls", "%set$(callIndex -> valueNameId(state))_capacity", "%set$(callIndex -> valueNameId(state))_capacity", "%set$(callIndex -> valueNameId(state))_next_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
+            "set$(callIndex -> valueNameId(state))_compact_rehash" -> emitSetRehash("%set$(callIndex -> valueNameId(state))_keys", "%set$(callIndex -> valueNameId(state))_controls", "%set$(callIndex -> valueNameId(state))_capacity", "%set$(callIndex -> valueNameId(state))_capacity", "%set$(callIndex -> valueNameId(state))_next_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, ownerIndex, context, state)
             "  store %sollang.int_dictionary %set$(callIndex -> valueNameId(state))_compact_rehash_result, ptr " -> print
             setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
             ", align 8" -> println
@@ -1971,10 +1971,10 @@ emitDictionaryReserve request: WhileValueRequest, context: ref emitterContext.Em
     "  br i1 %$(prefix)_grow, label %$(prefix)_allocate, label %$(prefix)_keep" -> println
     "$(prefix)_allocate:" -> println
     isSet -> if {
-        "$(prefix)_set" -> emitSetRehash("%$(prefix)_old_keys", "%$(prefix)_old_controls", "%$(prefix)_old_capacity", "%$(prefix)_capacity", "%$(prefix)_old_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, context, state)
+        "$(prefix)_set" -> emitSetRehash("%$(prefix)_old_keys", "%$(prefix)_old_controls", "%$(prefix)_old_capacity", "%$(prefix)_capacity", "%$(prefix)_old_length", keyTypeId, keySize, keyAlign, hashMethod, keyIsText, keyIsNominal, hashWidth, hashSigned, request.ownerIndex, context, state)
         "  %$(prefix)_new_storage = extractvalue %sollang.int_dictionary %$(prefix)_set_result, 0" -> println
     } else {
-        prefix -> emitGrowableDictionaryAllocation("%$(prefix)_capacity", layout)
+        prefix -> emitGrowableDictionaryAllocation("%$(prefix)_capacity", layout, request.ownerIndex, context, state)
         prefix -> emitDictionaryRehashEntries(layout, keyTypeId, collectionType.second, keyType.symbol, context.types[collectionType.second].symbol, keyIsText, keyIsNominal, hashMethod, hashWidth, hashSigned, "", context, state)
         "  call void @sollang_free(ptr %$(prefix)_old_storage)" -> println
         "  %$(prefix)_new_storage = getelementptr i8, ptr %$(prefix)_storage, i64 0" -> println
@@ -2732,7 +2732,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                 "  %put$(putIndex -> valueNameId(state))_capacity_double = mul i64 %put$(putIndex -> valueNameId(state))_old_capacity, 2" -> println
                 "  %put$(putIndex -> valueNameId(state))_capacity_small = icmp ult i64 %put$(putIndex -> valueNameId(state))_old_capacity, 4" -> println
                 "  %put$(putIndex -> valueNameId(state))_capacity = select i1 %put$(putIndex -> valueNameId(state))_capacity_small, i64 4, i64 %put$(putIndex -> valueNameId(state))_capacity_double" -> println
-                "put$(putIndex -> valueNameId(state))" -> emitGrowableDictionaryAllocation("%put$(putIndex -> valueNameId(state))_capacity", putEntryLayout)
+                "put$(putIndex -> valueNameId(state))" -> emitGrowableDictionaryAllocation("%put$(putIndex -> valueNameId(state))_capacity", putEntryLayout, request.ownerIndex, context, state)
                 "put$(putIndex -> valueNameId(state))" -> emitDictionaryRehashEntries(putEntryLayout, putKeyTypeId!, putValueTypeId!, putSource.typeModule, putSource.typeSymbol, putKeyIsText!, putKeyIsNominal, putHashMethod!, putHashWidth, putHashSigned!, "", context, state)
                 "  call void @sollang_free(ptr %put$(putIndex -> valueNameId(state))_old_storage)" -> println
                 Arena(0) => grownProbePrefixStorage!
@@ -3286,7 +3286,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex -> valueNameId(state))_rebuild_old_controls = getelementptr i8, ptr %take$(takeIndex -> valueNameId(state))_controls, i64 0" -> println
         "  %take$(takeIndex -> valueNameId(state))_rebuild_old_keys = getelementptr i8, ptr %take$(takeIndex -> valueNameId(state))_keys, i64 0" -> println
         "  %take$(takeIndex -> valueNameId(state))_rebuild_old_values = getelementptr i8, ptr %take$(takeIndex -> valueNameId(state))_values, i64 0" -> println
-        "take$(takeIndex -> valueNameId(state))_rebuild" -> emitGrowableDictionaryAllocation("%take$(takeIndex -> valueNameId(state))_rebuild_capacity", takeEntryLayout)
+        "take$(takeIndex -> valueNameId(state))_rebuild" -> emitGrowableDictionaryAllocation("%take$(takeIndex -> valueNameId(state))_rebuild_capacity", takeEntryLayout, request.ownerIndex, context, state)
         "take$(takeIndex -> valueNameId(state))_rebuild" -> emitDictionaryRehashEntries(takeEntryLayout, takeKeyTypeId!, takeValueTypeId!, takeSource.typeModule, takeSource.typeSymbol, takeKeyIsText!, takeKeyIsNominal, takeHashMethod!, takeHashWidth, takeHashSigned!, "%take$(takeIndex -> valueNameId(state))_find_index", context, state)
         "  call void @sollang_free(ptr %take$(takeIndex -> valueNameId(state))_storage)" -> println
         "take$(takeIndex -> valueNameId(state))_result" -> emitGrowableDictionaryOwner("%take$(takeIndex -> valueNameId(state))_rebuild_storage", "%take$(takeIndex -> valueNameId(state))_new_length", "%take$(takeIndex -> valueNameId(state))_capacity")

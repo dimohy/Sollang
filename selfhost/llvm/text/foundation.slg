@@ -523,18 +523,13 @@ emitGrowableDictionaryPointers prefix: Text, storagePointer: Text, capacity: Tex
     "  %$(prefix)_values = getelementptr i8, ptr %$(prefix)_keys, i64 $(layout.valueOffset)" -> println
 }
 
-emitGrowableDictionaryAllocation prefix: Text, capacity: Text, layout: DictionaryEntryLayout -> Unit uses Console {
+emitGrowableDictionaryAllocation prefix: Text, capacity: Text, layout: DictionaryEntryLayout, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     "  %$(prefix)_allocation_mirror = add i64 $(capacity), 23" -> println
     "  %$(prefix)_allocation_offset = and i64 %$(prefix)_allocation_mirror, -8" -> println
     "  %$(prefix)_entry_bytes = mul i64 $(capacity), $(layout.stride)" -> println
     "  %$(prefix)_allocation_bytes = add i64 %$(prefix)_allocation_offset, %$(prefix)_entry_bytes" -> println
     "  %$(prefix)_storage = call ptr @sollang_alloc(i64 %$(prefix)_allocation_bytes)" -> println
-    "  %$(prefix)_allocated = icmp ne ptr %$(prefix)_storage, null" -> println
-    "  br i1 %$(prefix)_allocated, label %$(prefix)_allocation_ready, label %$(prefix)_allocation_failed" -> println
-    "$(prefix)_allocation_failed:" -> println
-    "  call void @llvm.trap()" -> println
-    "  unreachable" -> println
-    "$(prefix)_allocation_ready:" -> println
+    prefix -> emitAllocationGuard("_storage", ownerIndex, context, state)
     prefix -> emitGrowableDictionaryPointers("%$(prefix)_storage", capacity, layout)
     "  %$(prefix)_control_bytes = add i64 $(capacity), 16" -> println
     "  call void @llvm.memset.p0.i64(ptr %$(prefix)_controls, i8 0, i64 %$(prefix)_control_bytes, i1 false)" -> println
