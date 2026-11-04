@@ -1001,7 +1001,7 @@ internal sealed partial class LlvmEmitter
         {
             EmitMain();
         }
-        EmitFunctionLine("attributes #0 = { nounwind }");
+        EmitFunctionLine(NativeRuntimePolicy.RuntimeFunctionAttributes());
         if (_usesAes128CpuSpecialization)
         {
             EmitFunctionLine("attributes #1 = { nounwind \"target-features\"=\"+aes,+sse2\" }");

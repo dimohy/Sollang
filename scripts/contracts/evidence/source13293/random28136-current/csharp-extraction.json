@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "status": "csharp-extracted-native-authored-adapters-pending",
+  "observedAtUtc": "2026-11-04T10:47:20.484333+00:00",
+  "originalPlatformDefinitions": {
+    "Windows": "declare dllimport i32 @BCryptGenRandom(ptr, ptr, i32, i32)\ndefine internal i1 @sollang_secure_random_fill(ptr %buffer, i64 %length) #0 {\nentry:\n  %empty = icmp eq i64 %length, 0\n  br i1 %empty, label %success, label %fill\n\nfill:\n  %offset = phi i64 [ 0, %entry ], [ %next_offset, %continue ]\n  %remaining = sub i64 %length, %offset\n  %large = icmp ugt i64 %remaining, 4294967295\n  %chunk64 = select i1 %large, i64 4294967295, i64 %remaining\n  %chunk = trunc i64 %chunk64 to i32\n  %target = getelementptr i8, ptr %buffer, i64 %offset\n  %status = call i32 @BCryptGenRandom(ptr null, ptr %target, i32 %chunk, i32 2)\n  %ok = icmp eq i32 %status, 0\n  br i1 %ok, label %continue, label %failure\n\ncontinue:\n  %next_offset = add i64 %offset, %chunk64\n  %done = icmp eq i64 %next_offset, %length\n  br i1 %done, label %success, label %fill\n\nsuccess:\n  ret i1 true\n\nfailure:\n  ret i1 false\n}\n",
+    "Linux": "declare i64 @getrandom(ptr, i64, i32)\ndefine internal i1 @sollang_secure_random_fill(ptr %buffer, i64 %length) #0 {\nentry:\n  %empty = icmp eq i64 %length, 0\n  br i1 %empty, label %success, label %fill\n\nfill:\n  %offset = phi i64 [ 0, %entry ], [ %next_offset, %continue ]\n  %remaining = sub i64 %length, %offset\n  %target = getelementptr i8, ptr %buffer, i64 %offset\n  %read = call i64 @getrandom(ptr %target, i64 %remaining, i32 0)\n  %progress = icmp sgt i64 %read, 0\n  br i1 %progress, label %continue, label %failure\n\ncontinue:\n  %next_offset = add i64 %offset, %read\n  %done = icmp eq i64 %next_offset, %length\n  br i1 %done, label %success, label %fill\n\nsuccess:\n  ret i1 true\n\nfailure:\n  ret i1 false\n}\n"
+  },
+  "attributeDefinition": "attributes #0 = { nounwind }",
+  "beforeSourceHashes": {
+    "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.Random.cs": "83841C0DD54758ED869C9CF9E1A35B9CC99A161C10EC700BDD3B0B88226EB82B",
+    "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.Random.cs": "C45D7954781C35D884420187B54720AEBD08D2734BCADB3B596012F988E91611",
+    "src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs": "C47E5C5772DA3D7670165AAAE05E0E91F178CD735B48FAFE39A50B8A3554AEB5",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.cs": "22303095D1B321302CB90C0B504FA67106E0D722A97595A27D31794193A7292F",
+    "selfhost/llvm/runtime.slg": "01781867DF1323950627D1ED2F0C91F042BFDE2D7D3E72CFCFC0518FA3163BFC",
+    "selfhost/llvm/text.slg": "1BF64D901F7FCCFC0635E56784EEB0F99B24573C20BD679074966BCF8BEF5567"
+  },
+  "scope": "Exact CSharp platform definition and attribute constant extraction into existing compiled policy; CSharp focused verification required before authored SLG adapter changes.",
+  "claimsGoalComplete": false
+}

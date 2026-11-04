@@ -110,6 +110,9 @@ For a conditional inside interpolation, retain each emitted arm's actual
 termination state before writing its result, cleanup, or merge branch. Resolve
 the condition through the common value writer; an IR index alone is not the
 LLVM name of a parameter or mutable local read.
+Emit a selected interpolation value through the common value writer in every
+control region. Do not reconstruct an SSA name from its interpolation container
+when canonical Typed IR emitted the actual value under another identity.
 Share condition and target dispatch across ordinary functions, nested regions,
 and retained interpolation. Each surrounding schedule still owns its arm bodies,
 lifetimes, and joins; preserve loop-header value regeneration at the iteration
@@ -2343,6 +2346,10 @@ through its recorded cancellation-request path rather than a raw process kill;
 accept cancellation only when the structured result reports `cancelled`, a
 non-zero exit code, the exact `CANCELLATION_REQUESTED` identifier, and zero
 orphan processes.
+
+Runtime LLVM templates and their referenced attribute groups share one compiled
+C# policy. Publish the authoritative groups at module completion; an intrinsic
+must not supply the meaning of a shared numeric group by accident.
 
 Windows Stage2/Stage3 self-compilation uses the canonical compiler manifest
 with `windows-stdlib` and the repository's full standard-library root. Resolve
