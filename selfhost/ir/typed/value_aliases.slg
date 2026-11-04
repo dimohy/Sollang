@@ -5,6 +5,19 @@ import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.type_ids as typeIds
 import syntax.generated.slg as grammar
 
+# Transfer a canonical value type as one identity, matching C# BoundType.
+# The caller owns admission and topology; operands, owners and symbols stay put.
+withValueType node: TypedIrNode, peer: TypedIrNode -> TypedIrNode {
+    node => value!
+    peer.typeId => value!.typeId
+    peer.typeKind => value!.typeKind
+    peer.typeOrigin => value!.typeOrigin
+    peer.typeModule => value!.typeModule
+    peer.typeSymbol => value!.typeSymbol
+    peer.typeFlags => value!.typeFlags
+    value!
+}
+
 hasCanonicalValueType node: ref TypedIrNode -> Bool {
     node.typeId >= 0 and not (node.typeOrigin == 1 and node.typeSymbol == 0)
 }
@@ -78,12 +91,7 @@ sealReturnedSubjectWhenTypes nodes: mut [TypedIrNode; ~] -> Unit {
                         # Unit result still has to satisfy return compatibility.
                         result!.kind == 34 and result!.typeId < 0
                             -> if {
-                                function.typeId => result!.typeId
-                                function.typeKind => result!.typeKind
-                                function.typeOrigin => result!.typeOrigin
-                                function.typeModule => result!.typeModule
-                                function.typeSymbol => result!.typeSymbol
-                                function.typeFlags => result!.typeFlags
+                                result! -> withValueType(function) => result!
                                 result! => nodes[returnNode.operand0]
                             }
                     }
@@ -364,12 +372,7 @@ sealLateResultPropagations nodes: mut [TypedIrNode; ~], types: ref [typeIds.Sema
                         -> if {
                             nodes[propagation!.parent] => propagationBinding!
                             resultPropagationIndex! => propagationBinding!.operand0
-                            propagation!.typeId => propagationBinding!.typeId
-                            propagation!.typeKind => propagationBinding!.typeKind
-                            propagation!.typeOrigin => propagationBinding!.typeOrigin
-                            propagation!.typeModule => propagationBinding!.typeModule
-                            propagation!.typeSymbol => propagationBinding!.typeSymbol
-                            propagation!.typeFlags => propagationBinding!.typeFlags
+                            propagationBinding! -> withValueType(propagation!) => propagationBinding!
                             propagationBinding! => nodes[propagation!.parent]
                         }
                 }
@@ -416,12 +419,7 @@ sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
             and binding!.typeId != nodes[binding!.operand0].typeId))
             -> if {
                 nodes[binding!.operand0] => value
-                value.typeId => binding!.typeId
-                value.typeKind => binding!.typeKind
-                value.typeOrigin => binding!.typeOrigin
-                value.typeModule => binding!.typeModule
-                value.typeSymbol => binding!.typeSymbol
-                value.typeFlags => binding!.typeFlags
+                binding! -> withValueType(value) => binding!
                 binding! => nodes[bindingIndex!]
             }
         binding!.kind == 17
@@ -445,12 +443,7 @@ sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                     -> if {
                         nodes[canonicalMutableBindingBySymbol![canonicalMutableGlobalSymbol]]
                             => canonicalMutableBinding
-                        canonicalMutableBinding.typeId => binding!.typeId
-                        canonicalMutableBinding.typeKind => binding!.typeKind
-                        canonicalMutableBinding.typeOrigin => binding!.typeOrigin
-                        canonicalMutableBinding.typeModule => binding!.typeModule
-                        canonicalMutableBinding.typeSymbol => binding!.typeSymbol
-                        canonicalMutableBinding.typeFlags => binding!.typeFlags
+                        binding! -> withValueType(canonicalMutableBinding) => binding!
                         binding! => nodes[bindingIndex!]
                     }
                 binding! -> hasCanonicalValueType -> if {
@@ -469,12 +462,7 @@ sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
             and nodes[read!.operand0].typeId >= 0
             -> if {
                 nodes[read!.operand0] => binding
-                binding.typeId => read!.typeId
-                binding.typeKind => read!.typeKind
-                binding.typeOrigin => read!.typeOrigin
-                binding.typeModule => read!.typeModule
-                binding.typeSymbol => read!.typeSymbol
-                binding.typeFlags => read!.typeFlags
+                read! -> withValueType(binding) => read!
                 read! => nodes[readIndex!]
             }
         readIndex! + 1 => readIndex!
@@ -516,12 +504,7 @@ sealPostArithmeticSlotTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticC
                             and (nodes[arithmeticBinding!.operand0] -> hasCanonicalValueType)
                             -> if {
                                 nodes[arithmeticBinding!.operand0] => arithmeticRootValue
-                                arithmeticRootValue.typeId => arithmeticBinding!.typeId
-                                arithmeticRootValue.typeKind => arithmeticBinding!.typeKind
-                                arithmeticRootValue.typeOrigin => arithmeticBinding!.typeOrigin
-                                arithmeticRootValue.typeModule => arithmeticBinding!.typeModule
-                                arithmeticRootValue.typeSymbol => arithmeticBinding!.typeSymbol
-                                arithmeticRootValue.typeFlags => arithmeticBinding!.typeFlags
+                                arithmeticBinding! -> withValueType(arithmeticRootValue) => arithmeticBinding!
                                 arithmeticBinding! => nodes[arithmeticBindingIndex!]
                                 arithmeticBindingIndex! => arithmeticRootBySymbol![arithmeticGlobalSymbol]
                             }
@@ -538,20 +521,10 @@ sealPostArithmeticSlotTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticC
                                         nodes[arithmeticBinding!.operand0] => arithmeticRebindValue!
                                         nodes -> sealIntegerLiteralPeerContext(arithmeticRebindValue!.operand0, arithmeticRoot)
                                         nodes -> sealIntegerLiteralPeerContext(arithmeticRebindValue!.operand1, arithmeticRoot)
-                                        arithmeticRoot.typeId => arithmeticRebindValue!.typeId
-                                        arithmeticRoot.typeKind => arithmeticRebindValue!.typeKind
-                                        arithmeticRoot.typeOrigin => arithmeticRebindValue!.typeOrigin
-                                        arithmeticRoot.typeModule => arithmeticRebindValue!.typeModule
-                                        arithmeticRoot.typeSymbol => arithmeticRebindValue!.typeSymbol
-                                        arithmeticRoot.typeFlags => arithmeticRebindValue!.typeFlags
+                                        arithmeticRebindValue! -> withValueType(arithmeticRoot) => arithmeticRebindValue!
                                         arithmeticRebindValue! => nodes[arithmeticBinding!.operand0]
                                     }
-                                arithmeticRoot.typeId => arithmeticBinding!.typeId
-                                arithmeticRoot.typeKind => arithmeticBinding!.typeKind
-                                arithmeticRoot.typeOrigin => arithmeticBinding!.typeOrigin
-                                arithmeticRoot.typeModule => arithmeticBinding!.typeModule
-                                arithmeticRoot.typeSymbol => arithmeticBinding!.typeSymbol
-                                arithmeticRoot.typeFlags => arithmeticBinding!.typeFlags
+                                arithmeticBinding! -> withValueType(arithmeticRoot) => arithmeticBinding!
                                 arithmeticBinding! => nodes[arithmeticBindingIndex!]
                             }
                     }
@@ -576,12 +549,7 @@ sealPostArithmeticSlotTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticC
                         arithmeticReadRange.symbolStart + arithmeticReadBinding.symbol => arithmeticReadGlobalSymbol
                         arithmeticRootBySymbol![arithmeticReadGlobalSymbol] >= 0
                             -> if {
-                                arithmeticReadBinding.typeId => arithmeticRead!.typeId
-                                arithmeticReadBinding.typeKind => arithmeticRead!.typeKind
-                                arithmeticReadBinding.typeOrigin => arithmeticRead!.typeOrigin
-                                arithmeticReadBinding.typeModule => arithmeticRead!.typeModule
-                                arithmeticReadBinding.typeSymbol => arithmeticRead!.typeSymbol
-                                arithmeticReadBinding.typeFlags => arithmeticRead!.typeFlags
+                                arithmeticRead! -> withValueType(arithmeticReadBinding) => arithmeticRead!
                                 arithmeticRead! => nodes[arithmeticReadIndex!]
                             }
                     }
