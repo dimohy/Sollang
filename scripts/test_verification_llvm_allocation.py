@@ -1,6 +1,49 @@
 """Entry adapter controls for actual CSharp and Native allocation fault probes."""
 import unittest
-from verification_llvm_allocation import allocation_failure_entrypoint, allocation_failure_case_call, allocation_failure_call_binding
+from verification_llvm_allocation import (allocation_failure_entrypoint, allocation_failure_case_call,
+    allocation_failure_call_binding, instrument_owned_allocation_audit, task_start_failure_trace)
+
+
+class TaskStartFailureAuditTests(unittest.TestCase):
+    source = ('define internal ptr @sollang_task_start(ptr %w, ptr %d, ptr %c, ptr %x) #0 {\n'
+              '  ret ptr null\n}\n'
+              'define i32 @sollang_start() {\n'
+              '  %p = call ptr @sollang_alloc(i64 72)\n'
+              '  %h = call ptr @sollang_task_start(ptr null, ptr @sollang_free, ptr null, ptr %p)\n'
+              '  call void @sollang_free(ptr %p)\n  ret i32 0\n}\n')
+
+    def test_normal_audit_keeps_real_task_start_and_tracks_callback_frees(self):
+        result = instrument_owned_allocation_audit(self.source)
+        self.assertIn('call ptr @sollang_task_start(', result)
+        self.assertNotIn('audit_task_start_fail', result)
+        self.assertIn('ptr @audit_free,', result)
+        self.assertIn('call void @audit_free(ptr %p)', result)
+
+    def test_failure_mode_replaces_call_without_erasing_cleanup(self):
+        result = instrument_owned_allocation_audit(self.source, task_start_failure=True)
+        self.assertIn('define internal ptr @sollang_task_start(', result)
+        self.assertIn('call ptr @audit_task_start_fail(', result)
+        self.assertIn('call void @audit_free(ptr %p)', result)
+        self.assertEqual(result.count('define i32 @slg_program_main()'), 1)
+
+    def test_changed_signature_and_missing_call_fail_before_link(self):
+        for text, error in [(self.source.replace(', ptr %x)', ')'), 'SIGNATURE_CHANGED'),
+                            (self.source.replace('call ptr @sollang_task_start', 'call ptr @other'), 'CALL_MISSING')]:
+            with self.subTest(error=error):
+                with self.assertRaisesRegex(ValueError, error):
+                    instrument_owned_allocation_audit(text, task_start_failure=True)
+
+    def test_exact_release_trace_and_invalid_expected_counts(self):
+        self.assertEqual(task_start_failure_trace(2), 'task-start-failure:live=2\n'
+                         'task-start-release:released=1,live=1\n'
+                         'task-start-release:released=2,live=0\n')
+        for count in [0, -1, True, '2']:
+            with self.assertRaisesRegex(ValueError, 'LIVE_COUNT_INVALID'):
+                task_start_failure_trace(count)
+
+    def test_ambiguous_entry_cannot_be_silently_selected(self):
+        with self.assertRaisesRegex(ValueError, 'ENTRY_SHAPE'):
+            instrument_owned_allocation_audit(self.source + 'define i32 @main() {\n}\n')
 
 
 class AllocationFailureEntrypointTests(unittest.TestCase):

@@ -15,6 +15,7 @@ from completed_artifact_plan import initialize_output, cleanup_output, assert_ou
 from verification_execution import VerificationExecution
 from verification_json_records import write_json_atomic
 from verification_step_diagnostics import SlowStepDiagnostics
+from verification_llvm_allocation import instrument_owned_allocation_audit
 
 
 from verification_async_workers import (validate_worker_contract, validate_workers,
@@ -345,24 +346,7 @@ def audit_llvm_program(llvm, folder, expected_allocations, expected_stdout, run)
     if not llvm.is_file():
         raise ValueError("EMISSION_AUDIT_LLVM_MISSING")
     row = {}
-    audit_text = read(llvm)
-    for source, target in (
-            ("call ptr @malloc(", "call ptr @audit_malloc("),
-            ("call ptr @sollang_alloc(", "call ptr @audit_malloc("),
-            ("call ptr @realloc(", "call ptr @audit_realloc("),
-            ("call void @free(", "call void @audit_free("),
-            ("call void @sollang_free(", "call void @audit_free("),
-            ("ptr @free,", "ptr @audit_free,"),
-            ("ptr @free)", "ptr @audit_free)"),
-            ("ptr @sollang_free,", "ptr @audit_free,"),
-            ("ptr @sollang_free)", "ptr @audit_free)"),
-            ("@sollang_start()", "@slg_program_main()"),
-            ("define i32 @main()", "define i32 @slg_program_main()"),
-            ("define dso_local i32 @main()", "define dso_local i32 @slg_program_main()")):
-        audit_text = audit_text.replace(source, target)
-    if len(re.findall(r"^define (?:dso_local )?i32 @slg_program_main\(\)", audit_text, re.M)) != 1:
-        raise ValueError("EMISSION_AUDIT_ENTRY_SHAPE")
-    audit_text += "\ndeclare ptr @audit_malloc(i64)\ndeclare ptr @audit_realloc(ptr,i64)\ndeclare void @audit_free(ptr)\n"
+    audit_text = instrument_owned_allocation_audit(read(llvm))
     audit_llvm = folder / "audit.ll"
     audit_llvm.write_text(audit_text, encoding="utf-8")
     row["auditLlvmSha256"] = sha(audit_llvm)
@@ -512,6 +496,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
              ROOT / 'scripts/verification_observed_sources.py', *observed, *runtime_inputs,
              ROOT / "scripts/verification_contract_lease.py",
              ROOT / "scripts/verification_async_workers.py",
+             ROOT / "scripts/verification_llvm_allocation.py",
              ROOT / "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
              *[path for case in cases for path in case_sources(case)], *sorted((ROOT / "stdlib").rglob("*.slg"))]
     if format_paths:

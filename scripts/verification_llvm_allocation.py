@@ -144,6 +144,47 @@ def allocation_failure_case_call(case, text=None):
     return call
 
 
+def task_start_failure_trace(live):
+    if type(live) is not int or live <= 0:
+        raise ValueError('TASK_START_FAILURE_LIVE_COUNT_INVALID')
+    return f'task-start-failure:live={live}\n' + ''.join(
+        f'task-start-release:released={released},live={live-released}\n'
+        for released in range(1, live + 1))
+
+
+def instrument_owned_allocation_audit(text, *, task_start_failure=False):
+    """Redirect allocation ownership uniformly; preserve original cleanup CFG."""
+    if task_start_failure:
+        signature = (r'^define internal ptr @sollang_task_start\('
+                     r'ptr %[\w.$-]+, ptr %[\w.$-]+, ptr %[\w.$-]+, ptr %[\w.$-]+\)'
+                     r'(?: #[0-9]+)? \{')
+        if len(re.findall(signature, text, re.M)) != 1:
+            raise ValueError('TASK_START_FAILURE_SIGNATURE_CHANGED')
+        if not re.search(r'call ptr @sollang_task_start\(', text):
+            raise ValueError('TASK_START_FAILURE_CALL_MISSING')
+    for source, target in (
+            ('call ptr @malloc(', 'call ptr @audit_malloc('),
+            ('call ptr @sollang_alloc(', 'call ptr @audit_malloc('),
+            ('call ptr @realloc(', 'call ptr @audit_realloc('),
+            ('call void @free(', 'call void @audit_free('),
+            ('call void @sollang_free(', 'call void @audit_free('),
+            ('ptr @free,', 'ptr @audit_free,'),
+            ('ptr @free)', 'ptr @audit_free)'),
+            ('ptr @sollang_free,', 'ptr @audit_free,'),
+            ('ptr @sollang_free)', 'ptr @audit_free)'),
+            ('@sollang_start()', '@slg_program_main()'),
+            ('define i32 @main()', 'define i32 @slg_program_main()'),
+            ('define dso_local i32 @main()', 'define dso_local i32 @slg_program_main()')):
+        text = text.replace(source, target)
+    if len(re.findall(r'^define (?:dso_local )?i32 @slg_program_main\(\)', text, re.M)) != 1:
+        raise ValueError('EMISSION_AUDIT_ENTRY_SHAPE')
+    text += '\ndeclare ptr @audit_malloc(i64)\ndeclare ptr @audit_realloc(ptr,i64)\ndeclare void @audit_free(ptr)\n'
+    if task_start_failure:
+        text = text.replace('call ptr @sollang_task_start(', 'call ptr @audit_task_start_fail(')
+        text += 'declare ptr @audit_task_start_fail(ptr,ptr,ptr,ptr)\n'
+    return text
+
+
 def main():
     """Reuse the guarded-allocation observer for exact shared failure cases."""
     import argparse
@@ -166,6 +207,9 @@ def main():
     root = Path(__file__).resolve().parent.parent
     contract_path = args.contract.resolve(strict=True)
     contract = json.loads(contract_path.read_text(encoding='utf-8-sig'))
+    mode = contract.get('failureMode', 'allocation')
+    if mode not in ('allocation', 'task-start'):
+        raise ValueError('ALLOCATION_FAILURE_MODE_INVALID')
     cases = contract['cases']
     reference_path = args.reference_result.resolve(strict=True)
     reference = json.loads(reference_path.read_text(encoding='utf-8-sig'))
@@ -183,12 +227,18 @@ def main():
         programs[key] = Path(value).resolve(strict=True)
     source_paths = {}
     for case in cases:
-        allocation_failure_case_call(case)
+        if mode == 'allocation':
+            allocation_failure_case_call(case)
+            if (case['diagnosticCode'] != 'allocation_failed'
+                    or case['runStderr'] != case['sourceFunction'] + ':allocation_failed'):
+                raise ValueError('ALLOCATION_FAILURE_CASE_INVALID')
+        elif (any(key in case for key in ('allocationBytes', 'allocationCall', 'allocationSite'))
+              or case['runStderr'] != task_start_failure_trace(case['expectedLiveBeforeStart'])
+              or case['stdout'] != ''):
+            raise ValueError('TASK_START_FAILURE_CASE_INVALID')
         if (re.fullmatch(r'[a-z0-9-]+', case['id']) is None or
                 re.fullmatch(r'[a-z0-9-]+', case['program']) is None or
-                case['diagnosticCode'] != 'allocation_failed' or case['exit'] != 0 or
-                case['expectedRuntimeExit'] != -1073741795 or
-                case['runStderr'] != case['sourceFunction'] + ':allocation_failed'):
+                case['exit'] != 0 or case['expectedRuntimeExit'] != -1073741795):
             raise ValueError('ALLOCATION_FAILURE_CASE_INVALID')
         source = (root / case['source']).resolve(strict=True)
         if not source.is_relative_to(root) or not source.is_file():
@@ -205,6 +255,9 @@ def main():
               root / 'scripts/verification_contract_lease.py',
               root / 'scripts/completed_artifact_plan.py', *source_paths.values(),
               *programs.values()]
+    shim = root / 'tests/native-interop/owned_array_audit.c'
+    if mode == 'task-start':
+        inputs.append(shim)
     sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
     pins = dict(reference['inputHashes'])
     if args.managed_compiler:
@@ -241,32 +294,37 @@ def main():
             for case in cases:
                 started = time.monotonic()
                 text = programs[case['program']].read_text(encoding='utf-8-sig')
-                needle = allocation_failure_case_call(case, text)
-                observe = lambda value: allocation_failure_call_binding(value, needle,
-                    case['sourceFunction'], diagnostic_code=case['diagnosticCode'])
-                binding = observe(text)
-                # Backend label movement must not change the semantic diagnostic.
-                moved = text.replace(binding['failureBlock'], binding['failureBlock'] + '_moved')
-                observe(moved)
-                bad_guard = binding['condition'] + ' = icmp ne ptr ' + binding['testedPointer']
-                mutants = [text.replace(bad_guard, bad_guard.replace('icmp ne', 'icmp eq'), 1),
-                           text.replace('call void @llvm.trap()', ''),
-                           text[:binding['diagnosticStart']] + 'X' + text[binding['diagnosticStart']:]]
-                for mutant in mutants:
-                    try:
-                        observe(mutant)
-                    except ValueError:
-                        continue
-                    raise ValueError('ALLOCATION_FAILURE_MUTATION_ACCEPTED')
-                result['controls'].append(dict(id=case['id'], completed=4, total=4))
-                changed = text.replace(needle, needle.replace('@sollang_alloc', '@sollang_test_fail_alloc'))
-                changed += '\ndefine internal ptr @sollang_test_fail_alloc(i64 %bytes) {\nentry:\n  ret ptr null\n}\n'
-                changed = allocation_failure_entrypoint(changed)
+                if mode == 'task-start':
+                    binding = dict(failureMode=mode, expectedLiveBeforeStart=case['expectedLiveBeforeStart'])
+                    changed = instrument_owned_allocation_audit(text, task_start_failure=True)
+                else:
+                    needle = allocation_failure_case_call(case, text)
+                    observe = lambda value: allocation_failure_call_binding(value, needle,
+                        case['sourceFunction'], diagnostic_code=case['diagnosticCode'])
+                    binding = observe(text)
+                    moved = text.replace(binding['failureBlock'], binding['failureBlock'] + '_moved')
+                    observe(moved)
+                    bad_guard = binding['condition'] + ' = icmp ne ptr ' + binding['testedPointer']
+                    mutants = [text.replace(bad_guard, bad_guard.replace('icmp ne', 'icmp eq'), 1),
+                               text.replace('call void @llvm.trap()', ''),
+                               text[:binding['diagnosticStart']] + 'X' + text[binding['diagnosticStart']:]]
+                    for mutant in mutants:
+                        try:
+                            observe(mutant)
+                        except ValueError:
+                            continue
+                        raise ValueError('ALLOCATION_FAILURE_MUTATION_ACCEPTED')
+                    result['controls'].append(dict(id=case['id'], completed=4, total=4))
+                    changed = text.replace(needle, needle.replace('@sollang_alloc', '@sollang_test_fail_alloc'))
+                    changed += '\ndefine internal ptr @sollang_test_fail_alloc(i64 %bytes) {\nentry:\n  ret ptr null\n}\n'
+                    changed = allocation_failure_entrypoint(changed)
                 folder = output / ('failure-' + case['id'])
                 folder.mkdir()
                 llvm, executable = folder / 'failure.ll', folder / 'failure.exe'
                 llvm.write_bytes(changed.encode('utf-8'))
-                run = execution.run([str(clang), '-Wno-override-module', str(llvm), '-O1',
+                extra = ([str(shim), f'-DEXPECTED_ALLOCATIONS={case["expectedLiveBeforeStart"]}',
+                          '-DAUDIT_TASK_START_FAILURE=1'] if mode == 'task-start' else [])
+                run = execution.run([str(clang), '-Wno-override-module', str(llvm), *extra, '-O1',
                     '-o', str(executable), '-lws2_32', '-lshell32', '-lbcrypt', '-lole32'],
                     folder / 'link', timeout=180)
                 if run.returncode or run.stderr.strip():

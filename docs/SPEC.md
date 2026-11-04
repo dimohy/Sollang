@@ -1853,8 +1853,9 @@ semantic diagnostic and remove diagnostic-only staging files before returning.
 `Bool`, `Text`, dynamic array/dictionary, struct, enum, and `box` results cross
 the task boundary without erasing their type. Owned results transfer to the
 awaiting scope; if a task leaves scope unawaited, cleanup joins it and drops the
-result before freeing the context. If native worker creation fails, a moved input
-is dropped before its context is released. The LLVM emitter calls the common
+result before freeing the context. If task startup fails before taking ownership
+of its context, all moved inputs containing owned storage are dropped in declaration order before the context
+is released and execution traps. The LLVM emitter calls the common
 `sollang_task_start`, `sollang_task_join`, and `sollang_task_release`
 runtime boundary. Both native targets now use one cooperative FIFO ready queue;
 `await` pumps ready work until its affine target completes, and release invokes

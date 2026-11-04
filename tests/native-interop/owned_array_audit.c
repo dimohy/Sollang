@@ -50,7 +50,19 @@ void audit_free(void *value) {
     free(record);
     releases++;
     free(value);
+#ifdef AUDIT_TASK_START_FAILURE
+    fprintf(stderr, "task-start-release:released=%d,live=%d\n", releases, allocations - releases);
+#endif
 }
+
+#ifdef AUDIT_TASK_START_FAILURE
+/* A failed task-control allocation returns before taking context ownership. */
+void *audit_task_start_fail(void *worker, void *destroy, void *cancel, void *context) {
+    (void)worker; (void)destroy; (void)cancel; (void)context;
+    fprintf(stderr, "task-start-failure:live=%d\n", allocations - releases);
+    return NULL;
+}
+#endif
 
 void *audit_realloc(void *value, size_t size) {
     if (value == NULL) return audit_malloc(size);
