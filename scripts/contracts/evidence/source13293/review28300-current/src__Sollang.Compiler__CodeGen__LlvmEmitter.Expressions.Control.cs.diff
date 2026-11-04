@@ -1,0 +1,29 @@
+--- reviewed/src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs
++++ current/src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs
+@@ -1081,11 +1081,12 @@
+             if (requireEntryMask
+                     ? masks.Any(mask => !entryMask.SetEquals(mask))
+                     : masks.Skip(1).Any(mask => !mergedMask.SetEquals(mask)))
+             {
+-                var changedFields = masks
+-                    .SelectMany(static mask => mask)
+-                    .Concat(requireEntryMask ? entryMask : EmptyMovedFieldMask)
++                var comparisonMask = requireEntryMask ? entryMask : mergedMask;
++                var changedFields = masks.SelectMany(mask =>
++                    mask.Except(comparisonMask, StringComparer.Ordinal)
++                        .Concat(comparisonMask.Except(mask, StringComparer.Ordinal)))
+                     .Distinct(StringComparer.Ordinal)
+                     .Order(StringComparer.Ordinal);
+                 throw new SollangException(
+                     $"sollang error[E20]: partial move of owned field(s) "
+@@ -1542,9 +1543,9 @@
+             ContextName = context,
+             DiagnosticHeaderName = first.DiagnosticHeaderName is null
+                 ? null
+                 : AsyncContextField(
+-                    context, first.InputType, first.ResultType, 10, "async_phi_task_diagnostic_header")
++                    context, first.InputType, first.ResultType, AsyncAdditionalParameterStart, "async_phi_task_diagnostic_header")
+         };
+     }
+ 
+     private RuntimeBox EmitBoxPhi(

@@ -1,0 +1,91 @@
+--- reviewed/selfhost/semantic/fixed_length_arrays.slg
++++ current/selfhost/semantic/fixed_length_arrays.slg
+@@ -132,8 +132,26 @@
+         -> if { -1 -> return }
+     symbolByAst[value]
+ }
+ 
++mutableArgumentOwner prepared: ref semanticContext.SemanticSnapshot, argument: expressionTypes.ResolvedCallArgument, sourceByAst: ref [Int; ~], symbolByAst: ref [Int; ~] -> Int {
++    argument.status != 0 or argument.argumentAst < 0 or argument.parameterSymbol < 0 or argument.targetSourceModule < 0
++        -> if { -1 -> return }
++    prepared.package.ranges[argument.targetSourceModule] => targetRange
++    prepared.package.symbols[targetRange.symbolStart + argument.parameterSymbol] => parameter
++    parameter.flags / 2 % 2 == 1 -> unless { -1 -> return }
++    prepared.package.ranges[argument.sourceModule] => range
++    argument.argumentAst => root!
++    root! >= 0 -> while {
++        prepared.package.nodes[range.astStart + root!] => node
++        node.kind == 10 or node.kind == 36 or node.kind == 41
++            -> unless { break }
++        sourceByAst[range.astStart + root!] => root!
++    }
++    root! >= 0 and prepared.package.nodes[range.astStart + root!].kind == 15
++        -> if { symbolByAst[range.astStart + root!] } else { -1 }
++}
++
+ # Commit warnings from the semantic package and its resolved type/name facts.
+ public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypes.ExpressionTypeIdSet, interpolations: ref [interpolation.InterpolationNode; ~], interpolationRanges: ref [interpolation.InterpolationSourceRange; ~] -> [FixedLengthArrayWarning; ~] {
+     [Candidate; ~] => candidates!
+     prepared.package.symbols -> each symbol { candidates! -> push(Candidate { length: -1, unknown: false, requiresGrowable: false }) }
+@@ -159,8 +177,9 @@
+             }
+     }
+     prepared.package -> semanticDiagnostics.nominalFieldExpectedTypeIds(resolved, typeByAst!) => fieldExpectedTypes
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
++    prepared.package -> semanticContext.indexExpressionSourceAsts => sourceByAst
+     prepared.package.ranges -> each range {
+         0 => localAst!
+         localAst! < range.astCount -> while {
+             range.astStart + localAst! => globalAst
+@@ -216,18 +235,23 @@
+         0 => localAst!
+         localAst! < range.astCount -> while {
+             range.astStart + localAst! => globalAst
+             prepared.package.nodes[globalAst] => node
+-            node.kind == 10 and not (prepared -> semanticContext.hasDeclaredCallTarget(globalAst))
++            (node.kind == 10 or node.kind == 77) and not (prepared -> semanticContext.hasDeclaredCallTarget(globalAst))
+                 -> if {
+                     prepared -> pushedGrowableOwner(resolved, range.sourceModule, localAst!, flowSources, firstChild!, nextChild!, symbolByAst!, typeByAst!) => pushedOwner
+                     pushedOwner >= 0 -> if {
+                         candidates![pushedOwner] -> withGrowableRequirement => candidates![pushedOwner]
+                     }
+-                    firstChild![globalAst] => receiver
+-                    receiver >= 0 and symbolByAst![receiver] >= 0
++                    firstChild![globalAst] => receiver!
++                    node.kind == 77 -> if {
++                        -1 => receiver!
++                        sourceByAst[globalAst] >= 0
++                            -> if { range.astStart + sourceByAst[globalAst] => receiver! }
++                    }
++                    receiver! >= 0 and symbolByAst![receiver!] >= 0
+                         -> if {
+-                            symbolByAst![receiver] => owner
++                            symbolByAst![receiver!] => owner
+                             candidates![owner].length >= 0 -> if {
+                                 false => nested!
+                                 node.parent => ancestor!
+                                 ancestor! >= 0 -> while {
+@@ -235,9 +259,10 @@
+                                     parent.kind == 42 or parent.kind == 44 or parent.kind == 48 or parent.kind == 56 or parent.kind == 57
+                                         -> if { true => nested! }
+                                     parent.parent => ancestor!
+                                 }
+-                                nextChild![receiver] => target!
++                                nextChild![receiver!] => target!
++                                node.kind == 77 -> if { firstChild![globalAst] => target! }
+                                 target! >= 0 -> while {
+                                     prepared.package.nodes[target!] => targetNode
+                                     targetNode.kind == 16 -> if {
+                                         prepared.package -> operationCode(range.sourceModule, targetNode.payloadToken) => operation
+@@ -251,8 +276,11 @@
+             localAst! + 1 => localAst!
+         }
+     }
+     resolved.callArguments -> each argument {
++        prepared -> mutableArgumentOwner(argument, sourceByAst, symbolByAst!) => mutableOwner
++        mutableOwner >= 0 and candidates![mutableOwner].length >= 0
++            -> if { candidates![mutableOwner] -> afterOperation(4, false) => candidates![mutableOwner] }
+         false => blockSource!
+         argument.parameterOrdinal == 0 and argument.callAst >= 0
+             -> if {
+                 prepared.package.ranges[argument.sourceModule] => range

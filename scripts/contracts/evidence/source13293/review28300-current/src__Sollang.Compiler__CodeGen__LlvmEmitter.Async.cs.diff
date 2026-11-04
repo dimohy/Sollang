@@ -1,0 +1,465 @@
+--- reviewed/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
++++ current/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
+@@ -1,13 +1,21 @@
+ using System.Globalization;
+ using Sollang.Compiler.Diagnostics;
+ using Sollang.Compiler.Semantics;
++using Sollang.Compiler.Shared;
+ using Sollang.Compiler.Syntax;
+ 
+ namespace Sollang.Compiler.CodeGen;
+ 
+ internal sealed partial class LlvmEmitter
+ {
++    private const int AsyncInputField = FunctionRuntimeContextPolicy.AsyncInputField;
++    private const int AsyncResultField = FunctionRuntimeContextPolicy.AsyncResultField;
++    private const int AsyncChildHandleField = FunctionRuntimeContextPolicy.AsyncChildHandleField;
++    private const int AsyncChildContextField = FunctionRuntimeContextPolicy.AsyncChildContextField;
++    private const int AsyncSpillFrameField = FunctionRuntimeContextPolicy.AsyncSpillFrameField;
++    private const int AsyncAdditionalParameterStart = FunctionRuntimeContextPolicy.AsyncAdditionalParameterStart;
++
+     private void EmitAsyncFunction(BoundFunction function)
+     {
+         if (function.Body is null && function.ReturnType != BoundType.Unit)
+         {
+@@ -38,17 +46,16 @@
+                 _currentAsyncDiagnosticHeader = AsyncFunctionDiagnosticHeader(
+                     "%context", function, "async_diagnostic_header");
+             }
+ 
+-            EmitAsyncContextLoad("%stdin", "%context", function.InputType, function.ReturnType, 0, "ptr", 8);
+-            EmitAsyncContextLoad("%stdout", "%context", function.InputType, function.ReturnType, 1, "ptr", 8);
+-            EmitAsyncContextLoad("%written", "%context", function.InputType, function.ReturnType, 2, "ptr", 8);
+-            EmitAsyncContextLoad("%read", "%context", function.InputType, function.ReturnType, 3, "ptr", 8);
+-            EmitAsyncContextLoad("%ok_state", "%context", function.InputType, function.ReturnType, 4, "ptr", 8);
++            foreach (var slot in FunctionRuntimeContext.Slots)
++            {
++                EmitAsyncContextLoad($"%{slot}", "%context", function.InputType, function.ReturnType, (int)slot, "ptr", 8);
++            }
+             if (function.InputType is { } inputType)
+             {
+                 EmitAsyncContextLoad(
+-                    "%it", "%context", function.InputType, function.ReturnType, 5,
++                    "%it", "%context", function.InputType, function.ReturnType, AsyncInputField,
+                     AsyncStorageLlvmType(inputType), RuntimeAlignment(inputType));
+             }
+             var additionalParameters = function.AdditionalParameters ?? [];
+             for (var parameterIndex = 0; parameterIndex < additionalParameters.Count; parameterIndex++)
+@@ -57,9 +64,9 @@
+                 EmitAsyncFunctionContextLoad(
+                     $"%arg_{parameterIndex}",
+                     "%context",
+                     function,
+-                    10 + parameterIndex,
++                    AsyncAdditionalParameterStart + parameterIndex,
+                     AsyncStorageLlvmType(parameter.Type),
+                     RuntimeAlignment(parameter.Type));
+             }
+             BindFunctionCaptures(function);
+@@ -79,41 +86,40 @@
+             ClearLocalState();
+             EmitAsyncCancelFunction(function, cfgSuspendPlan);
+ 
+             ClearLocalState();
+-            EmitFunctionLine($"define internal %sollang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
++            EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+             EmitLabel("entry");
+             var context = NextTemp("async_context");
+             EmitCall(context, "ptr", "sollang_alloc", $"i64 {AsyncContextSize(function)}");
+-            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 0, "ptr", "%stdin", 8);
+-            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 1, "ptr", "%stdout", 8);
+-            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 2, "ptr", "%written", 8);
+-            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 3, "ptr", "%read", 8);
+-            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 4, "ptr", "%ok_state", 8);
++            foreach (var slot in FunctionRuntimeContext.Slots)
++            {
++                EmitAsyncContextStore(context, function.InputType, function.ReturnType, (int)slot, "ptr", $"%{slot}", 8);
++            }
+             EmitAsyncContextStore(
+-                context, function.InputType, function.ReturnType, 5,
++                context, function.InputType, function.ReturnType, AsyncInputField,
+                 AsyncStorageLlvmType(function.InputType), function.InputType is null ? "0" : "%it",
+                 AsyncStorageAlignment(function.InputType));
+             EmitAsyncContextStore(
+-                context, function.InputType, function.ReturnType, 6,
++                context, function.InputType, function.ReturnType, AsyncResultField,
+                 AsyncStorageLlvmType(function.ReturnType), "zeroinitializer",
+                 RuntimeAlignment(function.ReturnType));
+             EmitAsyncContextStore(
+-                context, function.InputType, function.ReturnType, 7,
++                context, function.InputType, function.ReturnType, AsyncChildHandleField,
+                 "ptr", "null", 8);
+             EmitAsyncContextStore(
+-                context, function.InputType, function.ReturnType, 8,
++                context, function.InputType, function.ReturnType, AsyncChildContextField,
+                 "ptr", "null", 8);
+             EmitAsyncContextStore(
+-                context, function.InputType, function.ReturnType, 9,
++                context, function.InputType, function.ReturnType, AsyncSpillFrameField,
+                 "ptr", "null", 8);
+             for (var parameterIndex = 0; parameterIndex < additionalParameters.Count; parameterIndex++)
+             {
+                 var parameter = additionalParameters[parameterIndex];
+                 EmitAsyncFunctionContextStore(
+                     context,
+                     function,
+-                    10 + parameterIndex,
++                    AsyncAdditionalParameterStart + parameterIndex,
+                     AsyncStorageLlvmType(parameter.Type),
+                     $"%arg_{parameterIndex}",
+                     RuntimeAlignment(parameter.Type));
+             }
+@@ -262,9 +268,9 @@
+             return;
+         }
+ 
+         var inputAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 5, "cancel_input_address");
++            "%context", function.InputType, function.ReturnType, AsyncInputField, "cancel_input_address");
+         var input = NextTemp("cancel_input");
+         EmitLoad(input, AsyncStorageLlvmType(inputType), inputAddress, RuntimeAlignment(inputType));
+         DropOwnedRuntimeValue(DematerializeAggregateValue(inputType, input));
+     }
+@@ -276,9 +282,9 @@
+             return;
+         }
+ 
+         var resultAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 6, "cancel_result_address");
++            "%context", function.InputType, function.ReturnType, AsyncResultField, "cancel_result_address");
+         var result = NextTemp("cancel_result");
+         EmitLoad(
+             result,
+             AsyncStorageLlvmType(function.ReturnType),
+@@ -289,9 +295,9 @@
+ 
+     private void CancelStoredChild(BoundFunction function)
+     {
+         var handleAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 7, "cancel_child_handle_address");
++            "%context", function.InputType, function.ReturnType, AsyncChildHandleField, "cancel_child_handle_address");
+         var handle = NextTemp("cancel_child_handle");
+         EmitLoad(handle, "ptr", handleAddress, 8);
+         EmitCancelTaskHandle(handle);
+     }
+@@ -305,9 +311,9 @@
+             return;
+         }
+ 
+         var frameAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 9, "cancel_spill_frame_address");
++            "%context", function.InputType, function.ReturnType, AsyncSpillFrameField, "cancel_spill_frame_address");
+         var frame = NextTemp("cancel_spill_frame");
+         EmitLoad(frame, "ptr", frameAddress, 8);
+         var layouts = new List<(AsyncSpillPlan Spill, int Offset, int Alignment)>(spills.Count);
+         var offset = 0;
+@@ -916,12 +922,12 @@
+ 
+     private void StoreSuspendedChild(BoundFunction function, RuntimeTask child)
+     {
+         EmitAsyncContextStore(
+-            "%context", function.InputType, function.ReturnType, 7,
++            "%context", function.InputType, function.ReturnType, AsyncChildHandleField,
+             "ptr", child.HandleName, 8);
+         EmitAsyncContextStore(
+-            "%context", function.InputType, function.ReturnType, 8,
++            "%context", function.InputType, function.ReturnType, AsyncChildContextField,
+             "ptr", child.ContextName, 8);
+         EmitCall(
+             target: null,
+             "void",
+@@ -931,13 +937,13 @@
+ 
+     private RuntimeValue EmitStoredChildAwait(BoundFunction function, RuntimeTask child)
+     {
+         var childHandleAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 7, "async_child_handle_address");
++            "%context", function.InputType, function.ReturnType, AsyncChildHandleField, "async_child_handle_address");
+         var childHandle = NextTemp("async_child_handle");
+         EmitLoad(childHandle, "ptr", childHandleAddress, 8);
+         var childContextAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 8, "async_child_context_address");
++            "%context", function.InputType, function.ReturnType, AsyncChildContextField, "async_child_context_address");
+         var childContext = NextTemp("async_child_context");
+         EmitLoad(childContext, "ptr", childContextAddress, 8);
+         var resumedChild = child with
+         {
+@@ -945,9 +951,9 @@
+             ContextName = childContext,
+             DiagnosticHeaderName = child.DiagnosticHeaderName is null
+                 ? null
+                 : AsyncContextField(
+-                    childContext, child.InputType, child.ResultType, 10, "async_child_diagnostic_header")
++                    childContext, child.InputType, child.ResultType, AsyncAdditionalParameterStart, "async_child_diagnostic_header")
+         };
+         return EmitAwaitTask(resumedChild);
+     }
+ 
+@@ -1018,9 +1024,9 @@
+             : checked(spill.Offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1)));
+         var frame = NextTemp("async_spill_frame");
+         EmitCall(frame, "ptr", "sollang_alloc", $"i64 {size}");
+         EmitAsyncContextStore(
+-            "%context", function.InputType, function.ReturnType, 9,
++            "%context", function.InputType, function.ReturnType, AsyncSpillFrameField,
+             "ptr", frame, 8);
+         foreach (var spill in spills)
+         {
+             var address = NextTemp("async_spill_address");
+@@ -1047,9 +1053,9 @@
+             return;
+         }
+ 
+         var frameAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 9, "async_spill_frame_address");
++            "%context", function.InputType, function.ReturnType, AsyncSpillFrameField, "async_spill_frame_address");
+         var frame = NextTemp("async_spill_frame");
+         EmitLoad(frame, "ptr", frameAddress, 8);
+         foreach (var spill in spills)
+         {
+@@ -1136,17 +1142,17 @@
+             ContextName = context,
+             DiagnosticHeaderName = template.DiagnosticHeaderName is null
+                 ? null
+                 : AsyncContextField(
+-                    context, template.InputType, template.ResultType, 10, "async_spill_task_diagnostic_header")
++                    context, template.InputType, template.ResultType, AsyncAdditionalParameterStart, "async_spill_task_diagnostic_header")
+         };
+     }
+ 
+     private void StoreAsyncResult(BoundFunction function, RuntimeValue value)
+     {
+         var result = MaterializeAsyncResult(value);
+         var resultAddress = AsyncContextField(
+-            "%context", function.InputType, function.ReturnType, 6, "async_result_address");
++            "%context", function.InputType, function.ReturnType, AsyncResultField, "async_result_address");
+         EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
+     }
+ 
+     private void EmitPropagatedResultReturn(BoundFunction function, RuntimeValue value)
+@@ -1521,9 +1527,9 @@
+         EmitTrap();
+         EmitLabel(waitedLabel);
+         if (task.RuntimeFunction is null)
+         {
+-            var completionSlot = TaskControlField(task.HandleName, 22, "erased_task_completion_slot");
++            var completionSlot = TaskControlField(task.HandleName, (int)NativeRuntimePolicy.TaskResultCompletionField(), "erased_task_completion_slot");
+             var completion = NextTemp("erased_task_completion");
+             EmitLoad(completion, "ptr", completionSlot, 8);
+             var needsCompletion = NextTemp("erased_task_needs_completion");
+             EmitCompare(needsCompletion, "ne", "ptr", completion, "null");
+@@ -1544,14 +1550,14 @@
+         string resultAddress;
+         if (task.RuntimeFunction is null)
+         {
+             resultAddress = NextTemp("erased_task_result_address");
+-            EmitLoad(resultAddress, "ptr", TaskControlField(task.HandleName, 21, "erased_task_result_slot"), 8);
++            EmitLoad(resultAddress, "ptr", TaskControlField(task.HandleName, (int)NativeRuntimePolicy.TaskResultAddressField(), "erased_task_result_slot"), 8);
+         }
+         else
+         {
+             resultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "task_result_address");
+         }
+         var loaded = NextTemp(discardResult ? "task_discarded_result" : "task_result");
+         EmitLoad(loaded, AsyncStorageLlvmType(task.ResultType), resultAddress, RuntimeAlignment(task.ResultType));
+         var value = DematerializeAsyncResult(task.ResultType, loaded);
+@@ -1586,9 +1592,9 @@
+         EmitInitializeTaskResult(handle, context, inputType, resultType, function);
+         if (_usesAsyncDiagnostics && function is not { Kind: BoundFunctionKind.User, IsAsync: true })
+         {
+             var header = DiagnosticHeaderName
+-                ?? AsyncContextField(context, inputType, resultType, 10, "task_created_diagnostic_header");
++                ?? AsyncContextField(context, inputType, resultType, AsyncAdditionalParameterStart, "task_created_diagnostic_header");
+             if (DiagnosticHeaderName is null)
+             {
+                 EmitInitializeAsyncDiagnosticHeader(header, _currentAsyncDiagnosticHeader);
+                 EmitAttachInheritedDiagnosticRecord(header, handle);
+@@ -1607,14 +1613,14 @@
+ 
+     private void EmitInitializeTaskResult(
+         string handle, string context, BoundType? inputType, BoundType resultType, BoundFunction? function)
+     {
+-        var result = AsyncContextField(context, inputType, resultType, 6, "task_stored_result_address");
+-        EmitStore("ptr", result, TaskControlField(handle, 21, "task_stored_result_slot"), 8);
++        var result = AsyncContextField(context, inputType, resultType, AsyncResultField, "task_stored_result_address");
++        EmitStore("ptr", result, TaskControlField(handle, (int)NativeRuntimePolicy.TaskResultAddressField(), "task_stored_result_slot"), 8);
+         var completion = function is not null && HasDeferredTaskResult(function)
+             ? $"@{TaskResultCompletionSymbol(function)}"
+             : "null";
+-        EmitStore("ptr", completion, TaskControlField(handle, 22, "task_stored_completion_slot"), 8);
++        EmitStore("ptr", completion, TaskControlField(handle, (int)NativeRuntimePolicy.TaskResultCompletionField(), "task_stored_completion_slot"), 8);
+     }
+ 
+     private static bool HasDeferredTaskResult(BoundFunction function) => function.Kind is
+         BoundFunctionKind.RuntimeReadScalarAsync
+@@ -1657,9 +1663,9 @@
+         if (task.RuntimeFunction is { Kind: BoundFunctionKind.RuntimeReadScalarAsync } fileRead)
+         {
+             var fileResult = EmitRuntimeReadScalar(fileRead, task.HandleName);
+             var fileResultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "file_task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "file_task_result_address");
+             EmitStore(
+                 LlvmEnumType(fileResult.Type),
+                 fileResult.ValueName,
+                 fileResultAddress,
+@@ -1668,9 +1674,9 @@
+         else if (task.RuntimeFunction is { Kind: BoundFunctionKind.RuntimeWriteScalarAtAsync } fileWrite)
+         {
+             var fileResult = EmitRuntimeCompletedWriteScalarAt(fileWrite, task.HandleName);
+             var fileResultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "file_write_task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "file_write_task_result_address");
+             EmitStore(
+                 LlvmEnumType(fileResult.Type),
+                 fileResult.ValueName,
+                 fileResultAddress,
+@@ -1679,9 +1685,9 @@
+         else if (task.RuntimeFunction is { Kind: BoundFunctionKind.RuntimeSyncFileAsync } fileSync)
+         {
+             var fileResult = EmitRuntimeCompletedSyncFile(fileSync, task.HandleName);
+             var fileResultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "file_sync_task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "file_sync_task_result_address");
+             EmitStore(
+                 LlvmEnumType(fileResult.Type),
+                 fileResult.ValueName,
+                 fileResultAddress,
+@@ -1697,9 +1703,9 @@
+                 fileBuffer,
+                 task.HandleName,
+                 task.ContextName);
+             var fileResultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "file_buffer_task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "file_buffer_task_result_address");
+             EmitStore(
+                 LlvmEnumType(fileResult.Type),
+                 fileResult.ValueName,
+                 fileResultAddress,
+@@ -1712,9 +1718,9 @@
+                  } fileOpen)
+         {
+             var fileResult = EmitRuntimeCompletedOpenFile(fileOpen, task.HandleName);
+             var fileResultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "file_open_task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "file_open_task_result_address");
+             EmitStore(
+                 LlvmEnumType(fileResult.Type),
+                 fileResult.ValueName,
+                 fileResultAddress,
+@@ -1726,9 +1732,9 @@
+                 socketDequeue,
+                 task.HandleName,
+                 task.ContextName);
+             var socketResultAddress = AsyncContextField(
+-                task.ContextName, task.InputType, task.ResultType, 6, "socket_completion_task_result_address");
++                task.ContextName, task.InputType, task.ResultType, AsyncResultField, "socket_completion_task_result_address");
+             EmitStore(
+                 LlvmEnumType(socketResult.Type),
+                 socketResult.ValueName,
+                 socketResultAddress,
+@@ -1818,9 +1824,9 @@
+         string prefix)
+     {
+         var address = NextTemp(prefix);
+         EmitAssign(address,
+-            $"getelementptr {AsyncFunctionContextType(function)}, ptr {context}, i32 0, i32 {10 + (function.AdditionalParameters?.Count ?? 0)}");
++            $"getelementptr {AsyncFunctionContextType(function)}, ptr {context}, i32 0, i32 {AsyncAdditionalParameterStart + (function.AdditionalParameters?.Count ?? 0)}");
+         return address;
+     }
+ 
+     private void EmitInitializeAsyncFunctionDiagnosticHeader(
+@@ -1880,28 +1886,17 @@
+     }
+ 
+     private string AsyncContextType(BoundType? inputType, BoundType resultType)
+     {
+-        var fields = new List<string>
+-        {
+-            "ptr", "ptr", "ptr", "ptr", "ptr",
+-            AsyncStorageLlvmType(inputType),
+-            AsyncStorageLlvmType(resultType),
+-            "ptr", "ptr", "ptr"
+-        };
++        var fields = AsyncContextFields(inputType, resultType).Select(static field => field.Type).ToList();
+         AppendAsyncDiagnosticHeaderFields(fields);
+         return $"{{ {string.Join(", ", fields)} }}";
+     }
+ 
+     private string AsyncFunctionContextType(BoundFunction function)
+     {
+-        var fields = new List<string>
+-        {
+-            "ptr", "ptr", "ptr", "ptr", "ptr",
+-            AsyncStorageLlvmType(function.InputType),
+-            AsyncStorageLlvmType(function.ReturnType),
+-            "ptr", "ptr", "ptr"
+-        };
++        var fields = AsyncContextFields(function.InputType, function.ReturnType)
++            .Select(static field => field.Type).ToList();
+         fields.AddRange((function.AdditionalParameters ?? [])
+             .Select(parameter => AsyncStorageLlvmType(parameter.Type)));
+         AppendAsyncDiagnosticHeaderFields(fields);
+         return $"{{ {string.Join(", ", fields)} }}";
+@@ -1977,9 +1972,9 @@
+             EmitAsyncFunctionContextLoad(
+                 value,
+                 "%context",
+                 function,
+-                10 + index,
++                AsyncAdditionalParameterStart + index,
+                 AsyncStorageLlvmType(parameter.Type),
+                 RuntimeAlignment(parameter.Type));
+             DropOwnedRuntimeValue(DematerializeAggregateValue(parameter.Type, value));
+         }
+@@ -2012,20 +2007,39 @@
+         }
+         return size;
+     }
+ 
+-    private int AsyncContextSizeCore(BoundType? inputType, BoundType resultType)
+-    {
+-        var inputAlignment = AsyncStorageAlignment(inputType);
+-        var inputOffset = AlignAsyncSize(40, inputAlignment);
++    private (string Type, int Size, int Alignment)[] AsyncContextFields(BoundType? inputType, BoundType resultType)
++    {
++        var fields = new (string Type, int Size, int Alignment)[AsyncAdditionalParameterStart];
++        foreach (var slot in FunctionRuntimeContext.Slots)
++        {
++            fields[(int)slot] = ("ptr", 8, 8);
++        }
+         var inputSize = inputType is null
+             ? 1
+             : Math.Max(_program.Types.InlineSizeOf(inputType.Value), 1);
+-        var resultAlignment = RuntimeAlignment(resultType);
+-        var resultOffset = AlignAsyncSize(inputOffset + inputSize, resultAlignment);
+-        var resultSize = Math.Max(_program.Types.InlineSizeOf(resultType), 1);
+-        var childTaskOffset = AlignAsyncSize(resultOffset + resultSize, 8);
+-        return childTaskOffset + 24;
++        fields[AsyncInputField] = (AsyncStorageLlvmType(inputType), inputSize, AsyncStorageAlignment(inputType));
++        fields[AsyncResultField] = (AsyncStorageLlvmType(resultType),
++            Math.Max(_program.Types.InlineSizeOf(resultType), 1), RuntimeAlignment(resultType));
++        fields[AsyncChildHandleField] = ("ptr", 8, 8);
++        fields[AsyncChildContextField] = ("ptr", 8, 8);
++        fields[AsyncSpillFrameField] = ("ptr", 8, 8);
++        if (fields.Any(static field => field.Type is null))
++        {
++            throw new InvalidOperationException("Async context field positions must cover the complete frame prefix.");
++        }
++        return fields;
++    }
++
++    private int AsyncContextSizeCore(BoundType? inputType, BoundType resultType)
++    {
++        var size = 0;
++        foreach (var field in AsyncContextFields(inputType, resultType))
++        {
++            size = checked(AlignAsyncSize(size, field.Alignment) + field.Size);
++        }
++        return size;
+     }
+ 
+     private static int AlignAsyncSize(int value, int alignment) =>
+         checked((value + alignment - 1) / alignment * alignment);

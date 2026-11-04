@@ -1,0 +1,74 @@
+--- reviewed/selfhost/llvm/text.slg
++++ current/selfhost/llvm/text.slg
+@@ -97,8 +97,16 @@
+     context -> emitCoreWithUnitStream(state, emitEntry, false)
+ }
+ 
+ emitCoreWithUnitStream context: ref emitterContext.EmitContext, state: ref CoreEmitterState, emitEntry: Bool, streamed: Bool -> Unit uses Console, Process {
++    asyncFixedContextLayoutStatus() != 0 -> if {
++        "; sollang compiler invariant: invalid shared async context fields" -> println
++        process.exit(1)
++    }
++    context.functionNames.status != 0 -> if {
++        "; sollang compiler invariant: invalid function symbol names" -> println
++        process.exit(1)
++    }
+     context.symbolNames.status != 0 -> if {
+         "; sollang compiler invariant: invalid declaration symbol names" -> println
+         process.exit(1)
+     }
+@@ -147,8 +155,9 @@
+                             usesArguments and context.expectedPathStyle != 1
+                                 -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
+                     } }
+                     "entry:" -> println
++                    context -> emitEntryRuntimeContext
+                     functionIndex! -> emitHoistedControlAllocas(functionIndex! + 1, entryEnd!, true, false, context, state)
+                     functionIndex! -> emitHoistedReferenceArgumentAllocas(functionIndex! + 1, entryEnd!, context, state)
+                     usesNativeInterop -> if { "  call void @sollang_native_init()" -> println }
+                     usesComInterop -> if { "  call void @sollang_com_init()" -> println }
+@@ -183,30 +192,34 @@
+                     context -> diagnostics.usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
+                     context.pointerBitWidth != 32 and context.expectedPathStyle == 0 and (context -> diagnostics.usesTextRuntime)
+                         -> if {
+                             "  %io_failed = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1" -> println
+-                            "  %exit_code = zext i8 %io_failed to i32" -> println
++                            "  %context_ok = load i1, ptr %ok_state, align 1" -> println
++                            "  %context_failed = xor i1 %context_ok, true" -> println
++                            "  %context_failed8 = zext i1 %context_failed to i8" -> println
++                            "  %combined_failed = or i8 %io_failed, %context_failed8" -> println
++                            "  %exit_code = zext i8 %combined_failed to i32" -> println
+                             "  ret i32 %exit_code" -> println
+                         } else {
+                             usesArguments and context.expectedPathStyle == 1 and context.pointerBitWidth != 32
+                                 -> if {
+-                                    "  %exit_code = select i1 %arguments_valid, i32 0, i32 1" -> println
++                                    "  %context_ok = load i1, ptr %ok_state, align 1" -> println
++                                    "  %exit_ok = and i1 %context_ok, %arguments_valid" -> println
++                                    "  %exit_code = select i1 %exit_ok, i32 0, i32 1" -> println
+                                     "  ret i32 %exit_code" -> println
+                                 } else {
+-                                    "  ret i32 0" -> println
++                                    "  %context_ok = load i1, ptr %ok_state, align 1" -> println
++                                    "  %exit_code = select i1 %context_ok, i32 0, i32 1" -> println
++                                    "  ret i32 %exit_code" -> println
+                                 }
+                         }
+                     "}" -> println
+                     entryEnd! => functionIndex!
+                 } else {
+                     functionIndex! + 1 => functionIndex!
+                 }
+             }
+-            # Keep attribute group zero authoritative. LLVM assigns group zero to
+-            # llvm.trap when this line is absent, which would make every runtime helper
+-            # carrying #0 cold+noreturn and lets O1 miscompile returning platform calls.
+-            context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)
+-                -> if {
+-                    "attributes #0 = { nounwind }" -> println
+-                }
++            # Shared runtime templates reference the same explicit group as C#.
++            # An intrinsic must never supply an accidental meaning for group zero.
++            llvmRuntime.runtimeFunctionAttributes() -> println
+         }
+ }
