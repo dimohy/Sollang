@@ -1561,6 +1561,8 @@ UTF-16 characters rather than UTF-8 bytes.
 N002 is a source-style note for redundant parentheses around an entire
 single- or multi-line `if`, `unless`, or `while` condition. Write
 `ready and active -> if {` rather than `(ready and active) -> if {`.
+When formatting nested conditions, remove each redundant opening and closing
+parenthesis by its source position, independently of pair discovery order.
 Parentheses that group only part of a condition remain significant and are
 not reported. `sollang format` removes only the redundant whole-condition
 pair even when its opening and closing tokens are on different lines.

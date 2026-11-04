@@ -176,16 +176,20 @@ sourceControlParentheses source: file.SourceText -> [SourceControlParentheses; ~
 removeSourceControlParentheses source: file.SourceText -> [UInt8; ~] {
     source -> sourceControlParentheses => pairs
     [UInt8; ~] => normalized!
-    0 => pairIndex!
+    (pairs -> len) == 0 -> if {
+        normalized! -> appendSource(source, 0, source -> len)
+        normalized! -> return
+    }
+    Set<UIntSize>(16) => removed!
+    pairs -> each pair {
+        removed! -> insert(pair.opening) => openingInserted
+        removed! -> insert(pair.closing) => closingInserted
+    }
     UIntSize(0) => index!
     index! < (source -> len) -> while {
-        pairIndex! < (pairs -> len)
-            and (index! == pairs[pairIndex!].opening or index! == pairs[pairIndex!].closing)
-            -> if {
-                index! == pairs[pairIndex!].closing -> if { pairIndex! + 1 => pairIndex! }
-            } else {
-                normalized! -> push(source -> byte(index!))
-            }
+        removed! -> contains(index!) -> unless {
+            normalized! -> push(source -> byte(index!))
+        }
         index! + 1 => index!
     }
     normalized!
