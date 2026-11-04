@@ -591,6 +591,9 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
             "  %v$(collectionIndex -> valueNameId(state))_has_bytes = icmp ugt i64 %v$(collectionIndex -> valueNameId(state))_bytes, 0" -> println
             "  %v$(collectionIndex -> valueNameId(state))_allocation = select i1 %v$(collectionIndex -> valueNameId(state))_has_bytes, i64 %v$(collectionIndex -> valueNameId(state))_bytes, i64 1" -> println
             "  %v$(collectionIndex -> valueNameId(state))_data = call ptr @sollang_alloc(i64 %v$(collectionIndex -> valueNameId(state))_allocation)" -> println
+            Arena(0) => allocationNames!
+            "v$(collectionIndex -> valueNameId(state))" -> materialize(allocationNames!)
+                -> emitAllocationGuard("_data", request.ownerIndex, context, state)
             "  %v$(collectionIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex -> valueNameId(state))_data, 0" -> println
             "  %v$(collectionIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_0, i64 0, 1" -> println
             "  %v$(collectionIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_1, i64 %v$(collectionIndex -> valueNameId(state))_requested, 2" -> println
@@ -605,6 +608,7 @@ emitCollectionConstructor request: WhileValueRequest, context: ref emitterContex
             "  %v$(collectionIndex -> valueNameId(state))_payload_bytes = mul i64 %v$(collectionIndex -> valueNameId(state))_capacity, $dequeElementSize" -> println
             "  %v$(collectionIndex -> valueNameId(state))_bytes = add i64 %v$(collectionIndex -> valueNameId(state))_payload_bytes, 8" -> println
             "  %v$(collectionIndex -> valueNameId(state))_data = call ptr @sollang_alloc(i64 %v$(collectionIndex -> valueNameId(state))_bytes)" -> println
+            capacityPrefix -> emitAllocationGuard("_data", request.ownerIndex, context, state)
             "  store i64 0, ptr %v$(collectionIndex -> valueNameId(state))_data, align 8" -> println
             "  %v$(collectionIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %v$(collectionIndex -> valueNameId(state))_data, 0" -> println
             "  %v$(collectionIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %v$(collectionIndex -> valueNameId(state))_0, i64 0, 1" -> println
@@ -832,13 +836,16 @@ emitDequeIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.
         "  %deque$(callIndex -> valueNameId(state))_grown_payload_bytes = mul i64 %deque$(callIndex -> valueNameId(state))_grown_capacity, $elementSize" -> println
         "  %deque$(callIndex -> valueNameId(state))_grown_bytes = add i64 %deque$(callIndex -> valueNameId(state))_grown_payload_bytes, 8" -> println
         "  %deque$(callIndex -> valueNameId(state))_grown_data = call ptr @sollang_alloc(i64 %deque$(callIndex -> valueNameId(state))_grown_bytes)" -> println
+        Arena(0) => allocationNames!
+        "deque$(callIndex -> valueNameId(state))" -> materialize(allocationNames!)
+            -> emitAllocationGuard("_grown_data", ownerIndex, context, state)
         "  store i64 0, ptr %deque$(callIndex -> valueNameId(state))_grown_data, align 8" -> println
         "  %deque$(callIndex -> valueNameId(state))_old_payload = getelementptr i8, ptr %deque$(callIndex -> valueNameId(state))_data, i64 8" -> println
         "  %deque$(callIndex -> valueNameId(state))_grown_payload = getelementptr i8, ptr %deque$(callIndex -> valueNameId(state))_grown_data, i64 8" -> println
         "  %deque$(callIndex -> valueNameId(state))_old_mask = sub i64 %deque$(callIndex -> valueNameId(state))_capacity, 1" -> println
         "  br label %deque$(callIndex -> valueNameId(state))_copy" -> println
         "deque$(callIndex -> valueNameId(state))_copy:" -> println
-        "  %deque$(callIndex -> valueNameId(state))_copy_index = phi i64 [ 0, %deque$(callIndex -> valueNameId(state))_grow ], [ %deque$(callIndex -> valueNameId(state))_copy_next, %deque$(callIndex -> valueNameId(state))_copy_body ]" -> println
+        "  %deque$(callIndex -> valueNameId(state))_copy_index = phi i64 [ 0, %deque$(callIndex -> valueNameId(state))_allocation_ready ], [ %deque$(callIndex -> valueNameId(state))_copy_next, %deque$(callIndex -> valueNameId(state))_copy_body ]" -> println
         "  %deque$(callIndex -> valueNameId(state))_copy_active = icmp ult i64 %deque$(callIndex -> valueNameId(state))_copy_index, %deque$(callIndex -> valueNameId(state))_length" -> println
         "  br i1 %deque$(callIndex -> valueNameId(state))_copy_active, label %deque$(callIndex -> valueNameId(state))_copy_body, label %deque$(callIndex -> valueNameId(state))_copy_done" -> println
         "deque$(callIndex -> valueNameId(state))_copy_body:" -> println
@@ -1009,13 +1016,16 @@ emitHeapIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
         "  %heap$(callIndex -> valueNameId(state))_grown_capacity = select i1 %heap$(callIndex -> valueNameId(state))_capacity_zero, i64 1, i64 %heap$(callIndex -> valueNameId(state))_doubled" -> println
         "  %heap$(callIndex -> valueNameId(state))_grown_bytes = mul i64 %heap$(callIndex -> valueNameId(state))_grown_capacity, $elementSize" -> println
         "  %heap$(callIndex -> valueNameId(state))_grown_data = call ptr @sollang_alloc(i64 %heap$(callIndex -> valueNameId(state))_grown_bytes)" -> println
+        Arena(0) => allocationNames!
+        "heap$(callIndex -> valueNameId(state))" -> materialize(allocationNames!)
+            -> emitAllocationGuard("_grown_data", ownerIndex, context, state)
         "  %heap$(callIndex -> valueNameId(state))_copy_bytes = mul i64 %heap$(callIndex -> valueNameId(state))_length, $elementSize" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %heap$(callIndex -> valueNameId(state))_grown_data, ptr %heap$(callIndex -> valueNameId(state))_data, i64 %heap$(callIndex -> valueNameId(state))_copy_bytes, i1 false)" -> println
         "  call void @sollang_free(ptr %heap$(callIndex -> valueNameId(state))_data)" -> println
         "  br label %heap$(callIndex -> valueNameId(state))_ready" -> println
         "heap$(callIndex -> valueNameId(state))_ready:" -> println
-        "  %heap$(callIndex -> valueNameId(state))_active_data = phi ptr [ %heap$(callIndex -> valueNameId(state))_data, %heap$(callIndex -> valueNameId(state))_keep ], [ %heap$(callIndex -> valueNameId(state))_grown_data, %heap$(callIndex -> valueNameId(state))_grow ]" -> println
-        "  %heap$(callIndex -> valueNameId(state))_active_capacity = phi i64 [ %heap$(callIndex -> valueNameId(state))_capacity, %heap$(callIndex -> valueNameId(state))_keep ], [ %heap$(callIndex -> valueNameId(state))_grown_capacity, %heap$(callIndex -> valueNameId(state))_grow ]" -> println
+        "  %heap$(callIndex -> valueNameId(state))_active_data = phi ptr [ %heap$(callIndex -> valueNameId(state))_data, %heap$(callIndex -> valueNameId(state))_keep ], [ %heap$(callIndex -> valueNameId(state))_grown_data, %heap$(callIndex -> valueNameId(state))_allocation_ready ]" -> println
+        "  %heap$(callIndex -> valueNameId(state))_active_capacity = phi i64 [ %heap$(callIndex -> valueNameId(state))_capacity, %heap$(callIndex -> valueNameId(state))_keep ], [ %heap$(callIndex -> valueNameId(state))_grown_capacity, %heap$(callIndex -> valueNameId(state))_allocation_ready ]" -> println
         "  %heap$(callIndex -> valueNameId(state))_append = getelementptr " -> print
         elementTypeId -> writeSemanticTypeId(context, state)
         ", ptr %heap$(callIndex -> valueNameId(state))_active_data, i64 %heap$(callIndex -> valueNameId(state))_length" -> println
@@ -2215,8 +2225,9 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
         "  %push$(pushIndex -> valueNameId(state))_allocated = icmp ne ptr %push$(pushIndex -> valueNameId(state))_grown_data, null" -> println
         "  br i1 %push$(pushIndex -> valueNameId(state))_allocated, label %push$(pushIndex -> valueNameId(state))_copy, label %push$(pushIndex -> valueNameId(state))_allocation_failed" -> println
         "push$(pushIndex -> valueNameId(state))_allocation_failed:" -> println
-        "  call void @llvm.trap()" -> println
-        "  unreachable" -> println
+        Arena(0) => allocationNames!
+        "push$(pushIndex -> valueNameId(state))" -> materialize(allocationNames!) => allocationPrefix
+        request.ownerIndex -> emitRuntimeTrapForOwner(allocationPrefix, "allocation", "allocation_failed", context, state)
         "push$(pushIndex -> valueNameId(state))_copy:" -> println
         "  %push$(pushIndex -> valueNameId(state))_copy_bytes = mul i64 %push$(pushIndex -> valueNameId(state))_length, $pushElementSize" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %push$(pushIndex -> valueNameId(state))_grown_data, ptr %push$(pushIndex -> valueNameId(state))_data, i64 %push$(pushIndex -> valueNameId(state))_copy_bytes, i1 false)" -> println
