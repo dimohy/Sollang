@@ -84,6 +84,7 @@ internal abstract class LlvmRuntimePlatform
     public bool UsesDirectoryTraversal { get; set; }
     public bool UsesNetwork { get; set; }
     public bool UsesSocketCompletion { get; set; }
+    public bool UsesIoCompletion => UsesAsyncFile || UsesSocketCompletion;
     public bool UsesSecureRandom { get; set; }
     public bool UsesMouseEvents { get; set; }
     public bool UsesConcurrentStreamJoins { get; set; }
@@ -308,21 +309,20 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual void EmitAsyncPrimitives(StringBuilder functions)
     {
+        if (UsesIoCompletion)
+        {
+            functions.AppendLine(NativeRuntimePolicy.IoPushCompletionFunction());
+            functions.AppendLine(NativeRuntimePolicy.IoDrainCompletionsFunction());
+            functions.AppendLine(NativeRuntimePolicy.IoWaitIdleFunction());
+            functions.AppendLine(NativeRuntimePolicy.IoShutdownFunction());
+        }
         if (UsesAsyncFile)
         {
             functions.AppendLine(NativeRuntimePolicy.AsyncFilePushRequestFunction());
             functions.AppendLine();
-            functions.AppendLine(NativeRuntimePolicy.IoPushCompletionFunction());
-            functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileWorkerFunction());
             functions.AppendLine();
-            functions.AppendLine(NativeRuntimePolicy.IoDrainCompletionsFunction());
-            functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileSubmitFunction());
-            functions.AppendLine();
-            functions.AppendLine(NativeRuntimePolicy.IoWaitIdleFunction());
-            functions.AppendLine();
-            functions.AppendLine(NativeRuntimePolicy.IoShutdownFunction());
             functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileShutdownFunction());
             functions.AppendLine();
@@ -334,6 +334,10 @@ internal abstract class LlvmRuntimePlatform
             functions.AppendLine();
             functions.AppendLine(NativeRuntimePolicy.AsyncFileBufferTaskStartFunction());
             functions.AppendLine();
+        }
+        else if (UsesSocketCompletion)
+        {
+            functions.AppendLine(NativeRuntimePolicy.AsyncIoShutdownFunction());
         }
         else
         {

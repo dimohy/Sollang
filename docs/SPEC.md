@@ -1170,6 +1170,11 @@ Async IO queues, file worker operations, cancellation-safe completion publicatio
 completion draining and task cleanup also share compiled runtime definitions.
 The compatibility reader retains its platform storage behind the same read ABI;
 socket-only IO does not acquire a file worker merely to share completion logic.
+File-worker queues, state and platform handles follow actual async-file
+reachability. Shared completion queues, signals and completion waiter threads
+follow either async-file or socket-completion reachability. The asynchronous
+scheduler retains its outstanding IO counter even when neither IO capability
+is reachable. Socket-only shutdown uses the shared compiled IO teardown body.
 Platform IO signals and file-worker lifecycle bodies use compiled definition
 groups; file and socket-only shutdown share the IO teardown implementation.
 Compiler metadata preserves affine native/COM declarations in nominal and
@@ -1182,6 +1187,9 @@ Public library scalar ABI admission and names share compiled type bindings;
 source declaration spellings retain their own validation and diagnostic order.
 Checked intrinsic values obey the same source evaluation order as ordinary
 call operands; an earlier guard may return before their checks execute.
+A producer's mutable inputs are evaluated before a consuming await or control
+expression. Sibling aliases retain this input dependency even when their
+source spans overlap.
 Library metadata type spans are checked as bytes before constructing Text.
 Compute pool scheduling and memory output-sink functions share compiled runtime
 definitions. Direct and thread-local callback output remain explicit ABI adapters.

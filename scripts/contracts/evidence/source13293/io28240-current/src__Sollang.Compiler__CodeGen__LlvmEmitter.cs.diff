@@ -1,0 +1,55 @@
+--- 03b12bf5e18ba8ce34208b7d1c56bda4ddee77a5:src/Sollang.Compiler/CodeGen/LlvmEmitter.cs
+
++++ current:src/Sollang.Compiler/CodeGen/LlvmEmitter.cs
+
+@@ -269,7 +269,7 @@
+
+             || _reachableFunctions.Any(function =>
+                 (function.Body is not null && UsesRuntimeSleep(function.Body))
+                 || function.BlockBody.Any(UsesRuntimeSleep));
+-        _platform.UsesAsyncFile = _usesAsyncFile || _usesSocketCompletion;
++        _platform.UsesAsyncFile = _usesAsyncFile;
+         _platform.UsesProcessRuntime = UsesProcessRuntime;
+         _platform.UsesProcessCapture = _usesProcessCapture;
+         _platform.UsesProcessExit = _usesProcessExit;
+@@ -830,7 +830,7 @@
+
+             %sollang.file_handle_result = type { i64, i32 }
+             %sollang.socket_result = type { i64, i32, i32 }
+             %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
+-            %sollang.environment_result = type { ptr, i64, i1, i1 }
++            {{NativeRuntimePolicy.EnvironmentResultType()}}
+             %sollang.process_result = type { i32, i32 }
+             %sollang.process_poll_result = type { i32, i32 }
+             %sollang.process_spawn_result = type { i64, i64, i32 }
+@@ -892,11 +892,17 @@
+
+             EmitGlobalLine("@sollang_task_ready_head = internal global ptr null");
+             EmitGlobalLine("@sollang_task_ready_tail = internal global ptr null");
+             EmitGlobalLine("@sollang_task_timer_head = internal global ptr null");
++            EmitGlobalLine("@sollang_io_outstanding = internal global i64 0");
++        }
++        if (_platform.UsesIoCompletion)
++        {
++            EmitGlobalLine("@sollang_io_completion_head = internal global ptr null");
++        }
++        if (_usesAsyncFile)
++        {
+             EmitGlobalLine("@sollang_file_request_head = internal global ptr null");
+-            EmitGlobalLine("@sollang_io_completion_head = internal global ptr null");
+             EmitGlobalLine("@sollang_file_worker_started = internal global i1 false");
+             EmitGlobalLine("@sollang_file_worker_stopping = internal global i32 0");
+-            EmitGlobalLine("@sollang_io_outstanding = internal global i64 0");
+         }
+         if (_usesParallel)
+         {
+@@ -1001,7 +1007,7 @@
+
+         {
+             EmitMain();
+         }
+-        EmitFunctionLine("attributes #0 = { nounwind }");
++        EmitFunctionLine(NativeRuntimePolicy.RuntimeFunctionAttributes());
+         if (_usesAes128CpuSpecialization)
+         {
+             EmitFunctionLine("attributes #1 = { nounwind \"target-features\"=\"+aes,+sse2\" }");

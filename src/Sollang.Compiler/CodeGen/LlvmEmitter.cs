@@ -269,7 +269,7 @@ internal sealed partial class LlvmEmitter
             || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesRuntimeSleep(function.Body))
                 || function.BlockBody.Any(UsesRuntimeSleep));
-        _platform.UsesAsyncFile = _usesAsyncFile || _usesSocketCompletion;
+        _platform.UsesAsyncFile = _usesAsyncFile;
         _platform.UsesProcessRuntime = UsesProcessRuntime;
         _platform.UsesProcessCapture = _usesProcessCapture;
         _platform.UsesProcessExit = _usesProcessExit;
@@ -892,11 +892,17 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@sollang_task_ready_head = internal global ptr null");
             EmitGlobalLine("@sollang_task_ready_tail = internal global ptr null");
             EmitGlobalLine("@sollang_task_timer_head = internal global ptr null");
-            EmitGlobalLine("@sollang_file_request_head = internal global ptr null");
+            EmitGlobalLine("@sollang_io_outstanding = internal global i64 0");
+        }
+        if (_platform.UsesIoCompletion)
+        {
             EmitGlobalLine("@sollang_io_completion_head = internal global ptr null");
+        }
+        if (_usesAsyncFile)
+        {
+            EmitGlobalLine("@sollang_file_request_head = internal global ptr null");
             EmitGlobalLine("@sollang_file_worker_started = internal global i1 false");
             EmitGlobalLine("@sollang_file_worker_stopping = internal global i32 0");
-            EmitGlobalLine("@sollang_io_outstanding = internal global i64 0");
         }
         if (_usesParallel)
         {

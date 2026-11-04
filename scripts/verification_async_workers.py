@@ -2,6 +2,36 @@
 import re
 
 
+def validate_runtime_selection_contract(spec):
+    if (not isinstance(spec, dict) or set(spec) != {"fileWorker", "ioCompletion"}
+            or any(type(value) is not bool for value in spec.values())
+            or spec["fileWorker"] and not spec["ioCompletion"]):
+        raise ValueError("ASYNC_RUNTIME_SELECTION_CONTRACT_INVALID")
+
+
+def validate_runtime_selection(llvm, spec):
+    """Check definitions and owned globals, including dormant unwanted workers."""
+    validate_runtime_selection_contract(spec)
+    llvm = llvm.replace("\r\n", "\n")
+    expected = {
+        "sollang_file_worker_run": ("function", spec["fileWorker"]),
+        "sollang_file_request_head": ("global", spec["fileWorker"]),
+        "sollang_file_worker_started": ("global", spec["fileWorker"]),
+        "sollang_file_worker_stopping": ("global", spec["fileWorker"]),
+        "sollang_io_push_completion": ("function", spec["ioCompletion"]),
+        "sollang_io_completion_head": ("global", spec["ioCompletion"]),
+    }
+    observed = {}
+    for name, (kind, present) in expected.items():
+        pattern = (r"^define\b[^\n]*@" + re.escape(name) + r"\(" if kind == "function"
+                   else r"^@" + re.escape(name) + r"\s*=")
+        count = len(re.findall(pattern, llvm, re.M))
+        if count != int(present):
+            raise ValueError("ASYNC_RUNTIME_SELECTION_MISMATCH:" + name)
+        observed[name] = count
+    return observed
+
+
 def validate_worker_contract(spec):
     if (not isinstance(spec, dict)
             or type(spec.get("sourceSymbol")) is not int or spec["sourceSymbol"] < 0

@@ -281,6 +281,17 @@ isSchedulingMutationIntrinsic node: typedIr.TypedIrNode, context: ref emitterCon
         or ((node.kind == 6 or node.kind == 9) and (node.opcode -> typedIr.isRawArenaMutationOpcode))
 }
 
+# A control or await alias can consume a sibling producer. Reads in that
+# producer belong before the consumer, even when its source span starts first.
+schedulingBarrierInputOwnsRead readIndex: Int, barrierIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[barrierIndex].operand0 => inputIndex
+    inputIndex < 0 or inputIndex >= (context.ir -> len)
+        -> if { false -> return }
+    inputIndex -> aggregateValueIndex(context, state) => producerIndex
+    producerIndex == readIndex -> if { true -> return }
+    NodeAncestorRequest { nodeIndex: readIndex, ownerIndex: producerIndex } -> irDescendsFrom(context, state)
+}
+
 # Aggregate materialization captures inline values from backing storage.
 # Later mutation must not overtake that capture after its descriptor read.
 isSchedulingComparisonTextProducer node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
@@ -952,6 +963,10 @@ prepareScopedExpressionOrder functionIndex: Int, functionEnd: Int, expressionSta
                                                             -> if { true => mutableReadInsideBarrier! } else {
                                                                 context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
                                                             }
+                                                    }
+                                                not mutableReadInsideBarrier!
+                                                    -> if {
+                                                        scheduleCandidate! -> schedulingBarrierInputOwnsRead(mutableReadBarrierSearch, context, state) => mutableReadInsideBarrier!
                                                     }
                                                 false => readsCurrentRebindPreviousValue!
                                                 mutableReadBarrier -> callHasDeclaredEffects(context, state) => mutableReadBarrierHasEffects

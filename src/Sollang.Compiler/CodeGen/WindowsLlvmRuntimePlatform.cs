@@ -29,7 +29,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         {
             globals.AppendLine("@sollang_winsock_state = internal global i32 0");
         }
-        if (UsesAsyncFile || UsesSocketCompletion)
+        if (UsesIoCompletion)
         {
             globals.AppendLine("@sollang_io_completion_event = internal global ptr null");
         }
@@ -108,7 +108,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         {
             functions.AppendLine("declare dllimport i32 @CreatePipe(ptr, ptr, ptr, i32)");
         }
-        if (UsesProcessRuntime || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        if (UsesProcessRuntime || UsesIoCompletion || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
         }
@@ -134,15 +134,15 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @GetFullPathNameW(ptr, i32, ptr, ptr)");
             functions.AppendLine("declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)");
         }
-        if (UsesProcessCapture || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        if (UsesProcessCapture || UsesIoCompletion || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        if (UsesIoCompletion || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents)
+        if (UsesIoCompletion || UsesComputePool || UsesMouseEvents)
         {
             functions.AppendLine("declare dllimport i32 @SetEvent(ptr)");
         }
@@ -545,14 +545,17 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitAsyncPrimitives(StringBuilder functions)
     {
         base.EmitAsyncPrimitives(functions);
-        if (!UsesAsyncFile)
+        if (!UsesIoCompletion)
         {
             return;
         }
         functions.AppendLine(NativeRuntimePolicy.AsyncWindowsIoFunctions());
         functions.AppendLine();
-        functions.AppendLine(NativeRuntimePolicy.AsyncWindowsFileWorkerFunctions());
-        functions.AppendLine();
+        if (UsesAsyncFile)
+        {
+            functions.AppendLine(NativeRuntimePolicy.AsyncWindowsFileWorkerFunctions());
+            functions.AppendLine();
+        }
 
     }
 

@@ -3667,7 +3667,7 @@ emitLinuxLegacyIntegerRuntime declareRead: Bool, declareWrite: Bool, declareSeek
 
 # BEGIN generated NativeRuntime
 # Generated from src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs
-# source-sha256: DE005BBDF33A43123295CBE3D6099834D56E8AC3B4E0BA26496085E6BE59DB12
+# source-sha256: C8DF5F2E4AF3AE9BDC338E575A6B15FC0F7A54DDF9B0E649C51F84BE847EE379
 
 public asyncFileBufferTaskStartFunction: -> Text {
     "define internal %sollang.task @sollang_file_buffer_task_start(i64 %context_size, ptr %cancel, ptr %complete, i64 %source_handle, ptr %data, i64 %buffer_length, i64 %input_offset, i64 %length, i64 %offset, i1 %cancelled, i32 %requested_operation) #0 {\nentry:\n  %context = call ptr @sollang_alloc(i64 %context_size)\n  %allocated = icmp ne ptr %context, null\n  br i1 %allocated, label %initialize, label %allocation_failed\nallocation_failed:\n  call void @llvm.trap()\n  unreachable\ninitialize:\n  %handle = call ptr @sollang_task_start(ptr @sollang_file_operation_task_worker, ptr @sollang_free, ptr %cancel, ptr %context)\n  %started = icmp ne ptr %handle, null\n  br i1 %started, label %ready, label %start_failed\nstart_failed:\n  call void @sollang_free(ptr %context)\n  call void @llvm.trap()\n  unreachable\nready:\n  %offset_in_bounds = icmp ule i64 %input_offset, %buffer_length\n  %remaining = sub i64 %buffer_length, %input_offset\n  %length_in_bounds = icmp ule i64 %length, %remaining\n  %range_valid = and i1 %offset_in_bounds, %length_in_bounds\n  %valid_operation = select i1 %range_valid, i32 %requested_operation, i32 7\n  %operation = select i1 %cancelled, i32 8, i32 %valid_operation\n  %length_fits = icmp ule i64 %length, 2147483647\n  %bounded_length = select i1 %length_fits, i64 %length, i64 2147483647\n  %size = trunc i64 %bounded_length to i32\n  %size_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 11\n  store i32 %size, ptr %size_slot, align 4\n  %pointer = getelementptr i8, ptr %data, i64 %input_offset\n  %pointer_value = ptrtoint ptr %pointer to i64\n  %data_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 13\n  store i64 %pointer_value, ptr %data_slot, align 8\n  %owned_handle = call i64 @sollang_platform_duplicate_owned_file(i64 %source_handle)\n  %file_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 17\n  store i64 %owned_handle, ptr %file_slot, align 8\n  %offset_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 18\n  store i64 %offset, ptr %offset_slot, align 8\n  %ownership_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 19\n  store i32 1, ptr %ownership_slot, align 4\n  %operation_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 20\n  store i32 %operation, ptr %operation_slot, align 4\n  %complete_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 22\n  store ptr %complete, ptr %complete_slot, align 8\n  %task0 = insertvalue %sollang.task poison, ptr %handle, 0\n  %task = insertvalue %sollang.task %task0, ptr %context, 1\n  ret %sollang.task %task\n}"
@@ -3731,6 +3731,10 @@ public asyncFileWriteBufferName: -> Text {
 
 public asyncFileWriteBufferOperation: -> UInt64 {
     6
+}
+
+public asyncIoShutdownFunction: -> Text {
+    "define internal void @sollang_async_shutdown() #0 {\nentry:\n  call void @sollang_io_shutdown()\n  ret void\n}"
 }
 
 public asyncLinuxFileWorkerFunctions: -> Text {

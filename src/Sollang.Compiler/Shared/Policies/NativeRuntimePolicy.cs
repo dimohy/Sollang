@@ -3650,6 +3650,15 @@ internal static class NativeRuntimePolicy
         }
         """;
 
+    public static string AsyncIoShutdownFunction() =>
+        """
+        define internal void @sollang_async_shutdown() #0 {
+        entry:
+          call void @sollang_io_shutdown()
+          ret void
+        }
+        """;
+
     public static string AsyncFileShutdownFunction() =>
         """
         define internal void @sollang_async_shutdown() #0 {

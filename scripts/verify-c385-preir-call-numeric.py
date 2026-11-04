@@ -17,7 +17,8 @@ from verification_json_records import write_json_atomic
 from verification_step_diagnostics import SlowStepDiagnostics
 
 
-from verification_async_workers import validate_worker_contract, validate_workers
+from verification_async_workers import (validate_worker_contract, validate_workers,
+    validate_runtime_selection_contract, validate_runtime_selection)
 
 ROOT = Path(__file__).resolve().parent.parent
 WINDOWS_RUNTIME_LIBRARIES = ("-lws2_32", "-lshell32", "-lbcrypt", "-lole32")
@@ -469,6 +470,10 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             validate_worker_contract(case["nativeCoroutineWorkers"])
             if case["exit"] != 0 or group is not None or case.get("emittedLlvm"):
                 raise ValueError("ASYNC_WORKER_REQUIRES_DIRECT_SUCCESS")
+        if "runtimeSelection" in case:
+            validate_runtime_selection_contract(case["runtimeSelection"])
+            if case["exit"] != 0 or group is not None or case.get("emittedLlvm"):
+                raise ValueError("ASYNC_RUNTIME_SELECTION_REQUIRES_DIRECT_SUCCESS")
         if not isinstance(case.get("requireNoLlvm", False), bool):
             raise ValueError(f"NO_LLVM_EXPECTATION_INVALID: {case['id']}")
         if case.get("requireNoLlvm") and (case["exit"] != 1 or group is not None):
@@ -665,6 +670,12 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                     raise ValueError("ASYNC_WORKER_LLVM_AUTHORITY_MISSING")
                 row["nativeCoroutineWorkers"] = validate_workers(read(worker_llvm[0]), case["nativeCoroutineWorkers"])
                 row["nativeCoroutineLlvmSha256"] = sha(worker_llvm[0])
+            if passed and "runtimeSelection" in case:
+                selection_llvm = [path for path in (Path(str(exe) + ".ll"), exe.with_suffix(".ll")) if path.is_file()]
+                if len(selection_llvm) != 1:
+                    raise ValueError("ASYNC_RUNTIME_SELECTION_LLVM_MISSING")
+                row["runtimeSelection"] = validate_runtime_selection(read(selection_llvm[0]), case["runtimeSelection"])
+                row["runtimeSelectionLlvmSha256"] = sha(selection_llvm[0])
             if case.get("requireNoLlvm"):
                 row["unexpectedLlvmOutputs"] = sorted(
                     str(path.relative_to(folder)) for path in folder.rglob("*")

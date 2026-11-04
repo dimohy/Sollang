@@ -26,10 +26,13 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@sollang_stdout_buffer = internal global [65536 x i8] zeroinitializer, align 16");
         globals.AppendLine("@sollang_stdout_buffer_count = internal global i64 0");
         globals.AppendLine("@sollang_stdout_line_buffered = internal global i1 false");
+        if (UsesIoCompletion)
+        {
+            globals.AppendLine("@sollang_io_completion_event_fd = internal global i32 -1");
+        }
         if (UsesAsyncFile)
         {
             globals.AppendLine("@sollang_file_request_event_fd = internal global i32 -1");
-            globals.AppendLine("@sollang_io_completion_event_fd = internal global i32 -1");
             globals.AppendLine("@sollang_file_worker_thread = internal global i64 0");
         }
         if (UsesComputePool)
@@ -92,12 +95,12 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare i64 @strlen(ptr)");
             functions.AppendLine("declare i32 @stat(ptr, ptr)");
         }
-        if (UsesProcessCapture || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins || UsesSocketCompletion)
+        if (UsesProcessCapture || UsesIoCompletion || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
             functions.AppendLine("declare i32 @pthread_join(i64, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins || UsesSocketCompletion)
+        if (UsesIoCompletion || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare i32 @eventfd(i32, i32)");
         }
@@ -151,14 +154,17 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitAsyncPrimitives(StringBuilder functions)
     {
         base.EmitAsyncPrimitives(functions);
-        if (!UsesAsyncFile)
+        if (!UsesIoCompletion)
         {
             return;
         }
         functions.AppendLine(NativeRuntimePolicy.AsyncLinuxIoFunctions());
         functions.AppendLine();
-        functions.AppendLine(NativeRuntimePolicy.AsyncLinuxFileWorkerFunctions());
-        functions.AppendLine();
+        if (UsesAsyncFile)
+        {
+            functions.AppendLine(NativeRuntimePolicy.AsyncLinuxFileWorkerFunctions());
+            functions.AppendLine();
+        }
     }
 
     public override void EmitComputePrimitives(StringBuilder functions)
