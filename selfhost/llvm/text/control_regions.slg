@@ -409,29 +409,7 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
         regionEventKind! == 2 -> if {
             not regionTerminated! -> if {
                 true => ifActive[regionNodeIndex - regionLocalStart]
-                false => nestedIfValueUsed!
-                regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedIfValueUsed!
-                regionNode.operand0 -> aggregateValueIndex(context, state) => nestedConditionIndex
-                context.ir[nestedConditionIndex] => nestedCondition
-                (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
-                nestedShortCircuit -> if {
-                    WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex } -> emitWhileBranch(emissionOrder, context, state)
-                    "while$(regionNodeIndex -> valueNameId(state))_body:" -> println
-                    regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex, state)
-                    "while$(regionNodeIndex -> valueNameId(state))_exit:" -> println
-                    regionNode -> writeIfShortCircuitExitTarget(regionNodeIndex, state)
-                } else {
-                    "  br i1 " -> print
-                    nestedCondition.kind == 4 -> if {
-                        nestedCondition -> sourceToken(context, state) => nestedConditionToken
-                        (context.sources[nestedCondition.sourceModule] -> byte(nestedConditionToken.span.start)) == 116
-                            -> if { "1" -> print } else { "0" -> print }
-                    } else {
-                        ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
-                            -> if { "%arg" -> print } else { "%v$(nestedConditionIndex -> valueNameId(state))" -> print }
-                    }
-                    regionNode -> writeIfDirectBranchTargets(regionNodeIndex, state)
-                }
+                regionNodeIndex -> emitIfConditionBranch(ownerIndex!, emissionOrder, context, state)
                 "if$(regionNodeIndex -> valueNameId(state))_then:" -> println
                 false => regionTerminated!
             }

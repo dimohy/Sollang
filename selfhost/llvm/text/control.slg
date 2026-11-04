@@ -1745,14 +1745,12 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
     }
 }
 
-# Shared conditional value emission for direct bodies and retained interpolation.
-# A terminating arm owns its cleanup and return. Only actual continuing edges
-# may store a result, release branch locals, and branch to a merge.
-emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+# One condition and target decision for ordinary, nested and retained If emission.
+# Surrounding schedules retain ownership of arm bodies, lifetimes and joins.
+emitIfConditionBranch controlIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[controlIndex] => control
     control.operand0 -> aggregateValueIndex(context, state) => conditionalConditionIndex
     context.ir[conditionalConditionIndex] => conditionalCondition
-    controlIndex -> irValueUsed(ownerIndex, context, state) => conditionalValueUsed
     (conditionalCondition.kind == 8 and (conditionalCondition.opcode == -25 or conditionalCondition.opcode == -24) or (conditionalCondition.kind == 7 and conditionalCondition.opcode == -26)) => conditionalShortCircuit
     conditionalShortCircuit -> if {
         WhileBranchRequest { whileIndex: controlIndex, ownerIndex: ownerIndex, conditionIndex: conditionalConditionIndex } -> emitWhileBranch(emissionOrder, context, state)
@@ -1765,6 +1763,15 @@ emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int
         conditionalConditionIndex -> writeValue(ownerIndex, context, state)
         control -> writeIfDirectBranchTargets(controlIndex, state)
     }
+}
+
+# Shared conditional value emission for direct bodies and retained interpolation.
+# A terminating arm owns its cleanup and return. Only actual continuing edges
+# may store a result, release branch locals, and branch to a merge.
+emitConditionalValue controlIndex: Int, ownerIndex: Int, emissionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[controlIndex] => control
+    controlIndex -> irValueUsed(ownerIndex, context, state) => conditionalValueUsed
+    controlIndex -> emitIfConditionBranch(ownerIndex, emissionOrder, context, state)
     "if$(controlIndex -> valueNameId(state))_then:" -> println
     control.operand1 -> emitRegionState(emissionOrder, context, state) => thenTerminated
     not thenTerminated -> if {

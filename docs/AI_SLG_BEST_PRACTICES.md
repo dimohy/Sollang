@@ -110,6 +110,10 @@ For a conditional inside interpolation, retain each emitted arm's actual
 termination state before writing its result, cleanup, or merge branch. Resolve
 the condition through the common value writer; an IR index alone is not the
 LLVM name of a parameter or mutable local read.
+Share condition and target dispatch across ordinary functions, nested regions,
+and retained interpolation. Each surrounding schedule still owns its arm bodies,
+lifetimes, and joins; preserve loop-header value regeneration at the iteration
+boundary.
 Read a readonly integer subject through its canonical value type in both
 relational and range arms, preserving its width, signedness, and reference ABI.
 Keep distinct AST grammar identities disjoint. Registered expression kinds and

@@ -2230,29 +2230,9 @@ emitFunctionTerminalExpressions expressionIndex: Int, functionIndex: Int, functi
     context.ir[expressionIndex] => expression
     context.ir[functionIndex] => function
     expression.kind == 18 -> if {
-        expression.operand0 -> aggregateValueIndex(context, state) => ifConditionIndex
-        context.ir[ifConditionIndex] => ifCondition
         false => ifValueUsed!
         expressionIndex -> controlValueUsed(functionIndex, context, state) => ifValueUsed!
-        (ifCondition.kind == 8 and (ifCondition.opcode == -25 or ifCondition.opcode == -24) or (ifCondition.kind == 7 and ifCondition.opcode == -26)) => ifShortCircuit
-        ifShortCircuit -> if {
-            WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: ifConditionIndex } -> emitWhileBranch(expressionOrder, context, state)
-            "while$(expressionIndex -> valueNameId(state))_body:" -> println
-            expression -> writeIfShortCircuitBodyTarget(expressionIndex, state)
-            "while$(expressionIndex -> valueNameId(state))_exit:" -> println
-            expression -> writeIfShortCircuitExitTarget(expressionIndex, state)
-        } else {
-            "  br i1 " -> print
-            ifCondition.kind == 4 -> if {
-                ifCondition -> sourceToken(context, state) => ifConditionToken
-                (context.sources[ifCondition.sourceModule] -> byte(ifConditionToken.span.start)) == 116
-                    -> if { "1" -> print } else { "0" -> print }
-            } else {
-                ifCondition.kind == 5 and function.operand1 >= 0 and ifCondition.symbol == context.ir[function.operand1].symbol
-                    -> if { "%arg" -> print } else { "%v$(ifConditionIndex -> valueNameId(state))" -> print }
-            }
-            expression -> writeIfDirectBranchTargets(expressionIndex, state)
-        }
+        expressionIndex -> emitIfConditionBranch(functionIndex, expressionOrder, context, state)
         "if$(expressionIndex -> valueNameId(state))_then:" -> println
         expression.operand1 -> regionReturns(context, state) => thenReturns
         expression.operand1 -> emitRegion(expressionOrder, context, state)
