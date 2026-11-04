@@ -86,6 +86,17 @@ def allocation_failure_call_binding(text, call_needle, source_function, *, diagn
                 encodedDiagnostic=encoded, diagnosticByteCount=int(length))
 
 
+
+def allocation_failure_entrypoint(text):
+    """Keep an existing main or adapt the compiler's unique startup entry."""
+    mains = re.findall(r'^define (?:dso_local )?i32 @main\(\)(?: local_unnamed_addr)?(?: #[0-9]+)? \{[ \t]*$', text, re.M)
+    starts = re.findall(r'^define (?:dso_local )?i32 @sollang_start\(\)(?: local_unnamed_addr)?(?: #[0-9]+)? \{[ \t]*$', text, re.M)
+    if len(mains) > 1 or len(starts) > 1 or not mains and len(starts) != 1:
+        raise ValueError('ALLOCATION_FAILURE_ENTRY_SHAPE')
+    if mains:
+        return text
+    return text + '\ndefine i32 @main() {\nentry:\n  %value = call i32 @sollang_start()\n  ret i32 %value\n}\n'
+
 def main():
     """Reuse the guarded-allocation observer for exact shared failure cases."""
     import argparse
@@ -204,8 +215,7 @@ def main():
                 changed = text.replace(needle,
                     f"call ptr @sollang_test_fail_alloc(i64 {case['allocationBytes']})")
                 changed += '\ndefine internal ptr @sollang_test_fail_alloc(i64 %bytes) {\nentry:\n  ret ptr null\n}\n'
-                if 'define dso_local i32 @sollang_start()' in changed:
-                    changed += '\ndefine i32 @main() {\nentry:\n  %value = call i32 @sollang_start()\n  ret i32 %value\n}\n'
+                changed = allocation_failure_entrypoint(changed)
                 folder = output / ('failure-' + case['id'])
                 folder.mkdir()
                 llvm, executable = folder / 'failure.ll', folder / 'failure.exe'
