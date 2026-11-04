@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "scope": "CSharp-first ordinary user feature proof after box ownership fix: readonly Copy values remain accepted, local/move-input owned operands transfer once, readonly owned operands are rejected. No selfhost source workload or source-emitter preflight is claimed.",
+  "expectedManagedDllSha256": "29448C3844114066733E43C850D116054686EF11B4A9B1ED6E7DB8B53B0F21E3",
+  "harnessBuildJobs": 4,
+  "harnessBuildOptimization": "-O1",
+  "cases": [
+    {
+      "id": "readonly-value-boxing",
+      "source": "scripts/probes/codegen-arena-box-values/readonly.slg",
+      "exit": 0,
+      "stderr": "",
+      "stdout": "boxed-ref=7",
+      "expectedAllocations": 2
+    },
+    {
+      "id": "owned-value-boxing-transfer",
+      "source": "scripts/probes/codegen-arena-box-values/owned-transfer.slg",
+      "exit": 0,
+      "stderr": "",
+      "stdout": "transferred",
+      "expectedAllocations": 4
+    },
+    {
+      "id": "reject-borrowed-owned-boxing",
+      "source": "scripts/probes/codegen-arena-box-values/borrowed-owned.slg",
+      "exit": 1,
+      "stderr": "sollang: semantic error at 3:50: [module '<main>'] owned value 'value' is borrowed and cannot be stored in box storage; transfer ownership with a move input such as 'value: move ...', or store a borrowed view/copy the value explicitly",
+      "expectedBuildExit": 1
+    },
+    {
+      "id": "reject-box-flow-source-reuse",
+      "source": "scripts/probes/codegen-arena-box-values/use-after-flow.slg",
+      "exit": 1,
+      "stderr": "sollang: semantic error at 7:5: [module '<main>'] unknown binding 'owner'; check its spelling and lexical scope. If the value was consumed by a move input, use the owner returned by that call, borrow it before the move, or create a new owner before reuse",
+      "expectedBuildExit": 1
+    }
+  ],
+  "allocationCountAuthority": "CSharp initial heap allocation plus allocate/copy/free growth in LlvmEmitter.Containers.cs; fresh observed allocations2/releases2. Original stdout and LLVM expectations remain unchanged. The initial count1 assumption and failed audit record are retained."
+}
