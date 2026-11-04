@@ -1,6 +1,7 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.type_queries as typeQueries
@@ -160,21 +161,71 @@ asyncContextValueSize nodeIndex: Int, context: ref emitterContext.EmitContext, s
     valueSize > 0 -> if { valueSize } else { 1 }
 }
 
-asyncResultContextSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    functionIndex -> asyncContextValueSize(context, state)
+# This prefix follows the shared C# logical positions. Runtime pointer values
+# are bound by the pending function-context transport conversion.
+asyncFixedContextFieldKind fieldIndex: Int -> Int {
+    fieldIndex >= 0 and fieldIndex < enumValue("Count")
+        -> if { 1 -> return }
+    fieldIndex == Int(asyncContextInputField()) -> if { 2 -> return }
+    fieldIndex == Int(asyncContextResultField()) -> if { 3 -> return }
+    fieldIndex == Int(asyncContextChildHandleField())
+        or fieldIndex == Int(asyncContextChildContextField())
+        or fieldIndex == Int(asyncContextSpillFrameField())
+        -> if { 1 -> return }
+    0
+}
+
+asyncFixedContextLayoutStatus: -> Int {
+    enumValue("Count") < 0 or Int(asyncContextAdditionalParameterStart()) <= enumValue("Count")
+        -> if { 1 -> return }
+    0..<Int(asyncContextAdditionalParameterStart()) -> each fieldIndex {
+        (fieldIndex -> asyncFixedContextFieldKind) == 0
+            -> if { 1 -> return }
+    }
+    0
+}
+
+asyncFixedContextFieldSize functionIndex: Int, fieldIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    fieldIndex -> asyncFixedContextFieldKind => kind
+    kind == 1 -> if { context.pointerBitWidth / 8 -> return }
+    kind == 2 -> if {
+        context.ir[functionIndex].operand1 => parameter
+        parameter < 0 -> if { 1 -> return }
+        parameter -> asyncContextValueSize(context, state) -> return
+    }
+    kind == 3 -> if { functionIndex -> asyncContextValueSize(context, state) -> return }
+    # Invalid roles are rejected by asyncFixedContextLayoutStatus before emission.
+    0
+}
+
+asyncFixedContextFieldAlignment functionIndex: Int, fieldIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    fieldIndex -> asyncFixedContextFieldKind => kind
+    kind == 1 -> if { context.pointerBitWidth / 8 -> return }
+    kind == 2 -> if {
+        context.ir[functionIndex].operand1 => parameter
+        parameter < 0 -> if { 1 -> return }
+        context.ir[parameter] -> storageAlign(context, state) -> return
+    }
+    kind == 3 -> if { context.ir[functionIndex] -> storageAlign(context, state) -> return }
+    0
+}
+
+asyncFixedContextFieldOffset functionIndex: Int, requestedField: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => offset!
+    0..<Int(asyncContextAdditionalParameterStart()) -> each fieldIndex {
+        offset! -> alignedAsyncContextOffset(functionIndex -> asyncFixedContextFieldAlignment(fieldIndex, context, state)) => offset!
+        fieldIndex == requestedField -> if { offset! -> return }
+        offset! + (functionIndex -> asyncFixedContextFieldSize(fieldIndex, context, state)) => offset!
+    }
+    offset!
 }
 
 asyncParameterContextOffset functionIndex: Int, targetParameterIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    functionIndex -> asyncResultContextSize(context, state) => offset!
     context.ir[functionIndex] => function
-    function.operand1 => parameterIndex!
-    parameterIndex! >= 0 -> while {
-        context.ir[parameterIndex!] => parameter
-        offset! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => offset!
-        parameterIndex! == targetParameterIndex -> if { offset! -> return }
-        offset! + (parameterIndex! -> asyncContextValueSize(context, state)) => offset!
-        -1 => parameterIndex!
+    targetParameterIndex == function.operand1 -> if {
+        functionIndex -> asyncFixedContextFieldOffset(Int(asyncContextInputField()), context, state) -> return
     }
+    functionIndex -> asyncFixedContextFieldOffset(Int(asyncContextAdditionalParameterStart()), context, state) => offset!
     function.nextOperand => parameterIndex!
     parameterIndex! >= 0 -> while {
         context.ir[parameterIndex!] => parameter
@@ -183,20 +234,12 @@ asyncParameterContextOffset functionIndex: Int, targetParameterIndex: Int, conte
         offset! + (parameterIndex! -> asyncContextValueSize(context, state)) => offset!
         parameter.nextOperand => parameterIndex!
     }
-    -1
+    offset!
 }
 
 asyncArgumentContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    functionIndex -> asyncResultContextSize(context, state) => size!
-    context.ir[functionIndex] => function
-    function.operand1 => parameterIndex!
-    parameterIndex! >= 0 -> while {
-        context.ir[parameterIndex!] => parameter
-        size! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => size!
-        size! + (parameterIndex! -> asyncContextValueSize(context, state)) => size!
-        -1 => parameterIndex!
-    }
-    function.nextOperand => parameterIndex!
+    functionIndex -> asyncFixedContextFieldOffset(Int(asyncContextAdditionalParameterStart()), context, state) => size!
+    context.ir[functionIndex].nextOperand => parameterIndex!
     parameterIndex! >= 0 -> while {
         context.ir[parameterIndex!] => parameter
         size! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => size!
@@ -297,7 +340,7 @@ asyncHasFrame functionIndex: Int, state: ref CoreEmitterState -> Bool {
 }
 
 asyncFrameContextOffset functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    (functionIndex -> asyncArgumentContextStorageSize(context, state)) -> alignedAsyncContextOffset(context.pointerBitWidth / 8)
+    functionIndex -> asyncFixedContextFieldOffset(Int(asyncContextSpillFrameField()), context, state)
 }
 
 asyncHasAwait functionIndex: Int, state: ref CoreEmitterState -> Bool {
@@ -310,18 +353,11 @@ asyncHasAwait functionIndex: Int, state: ref CoreEmitterState -> Bool {
 }
 
 asyncChildContextOffset functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    functionIndex -> asyncFrameContextOffset(context, state) => base
-    functionIndex -> asyncHasFrame(state) -> if { base + context.pointerBitWidth / 8 } else { base }
+    functionIndex -> asyncFixedContextFieldOffset(Int(asyncContextChildHandleField()), context, state)
 }
 
 asyncBaseContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    functionIndex -> asyncHasAwait(state) -> if {
-        (functionIndex -> asyncChildContextOffset(context, state)) + 2 * context.pointerBitWidth / 8
-    } else {
-        functionIndex -> asyncHasFrame(state) -> if {
-            (functionIndex -> asyncFrameContextOffset(context, state)) + context.pointerBitWidth / 8
-        } else { functionIndex -> asyncArgumentContextStorageSize(context, state) }
-    }
+    functionIndex -> asyncArgumentContextStorageSize(context, state)
 }
 
 asyncDiagnosticHeaderOffset functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -856,6 +892,8 @@ emitAsyncFunctionCompletion functionIndex: Int, completionIndex: Int, valueName:
     context.ir[functionIndex] => function
     function.typeOrigin == 1 and function.typeSymbol == 0
         -> unless {
+            functionIndex -> asyncFixedContextFieldOffset(Int(asyncContextResultField()), context, state) => resultOffset
+            "  %async_result_address$(completionIndex) = getelementptr i8, ptr %async_context, i64 $(resultOffset)" -> println
             function -> boundedArrayValueTypeId(context, state) => boundedResultType
             boundedResultType >= 0 -> if {
                 Arena(0) => prefixStorage!
@@ -863,11 +901,11 @@ emitAsyncFunctionCompletion functionIndex: Int, completionIndex: Int, valueName:
                 prefix -> emitBoundedArrayValueFromHandle(valueName, boundedResultType, context, state)
                 "  store " -> print
                 boundedResultType -> writeValueAbiTypeId(context, state)
-                " %$(prefix), ptr %async_context, align $(context.typeAligns[boundedResultType])" -> println
+                " %$(prefix), ptr %async_result_address$(completionIndex), align $(context.typeAligns[boundedResultType])" -> println
             } else {
                 "  store " -> print
                 function -> writeIrType(context, state)
-                " $valueName, ptr %async_context, align " -> print
+                " $valueName, ptr %async_result_address$(completionIndex), align " -> print
                 function -> storageAlign(context, state) -> writeDecimalLine
             }
         }
@@ -1129,20 +1167,14 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
             headerField! + 1 => headerField!
         }
     }
-    requestedFunctionIndex -> asyncHasFrame(state)
-        -> if {
-            requestedFunctionIndex -> asyncFrameContextOffset(context, state) => initialFrameOffset
-            "  %async_initial_frame_slot = getelementptr i8, ptr %async_context, i64 $(initialFrameOffset)" -> println
-            "  store ptr null, ptr %async_initial_frame_slot, align $(context.pointerBitWidth / 8)" -> println
-        }
-    requestedFunctionIndex -> asyncHasAwait(state)
-        -> if {
-            requestedFunctionIndex -> asyncChildContextOffset(context, state) => initialChildOffset
-            "  %async_initial_child_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset)" -> println
-            "  %async_initial_child_context_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset + context.pointerBitWidth / 8)" -> println
-            "  store ptr null, ptr %async_initial_child_slot, align $(context.pointerBitWidth / 8)" -> println
-            "  store ptr null, ptr %async_initial_child_context_slot, align $(context.pointerBitWidth / 8)" -> println
-        }
+    requestedFunctionIndex -> asyncFrameContextOffset(context, state) => initialFrameOffset
+    "  %async_initial_frame_slot = getelementptr i8, ptr %async_context, i64 $(initialFrameOffset)" -> println
+    "  store ptr null, ptr %async_initial_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+    requestedFunctionIndex -> asyncChildContextOffset(context, state) => initialChildOffset
+    "  %async_initial_child_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset)" -> println
+    "  %async_initial_child_context_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset + context.pointerBitWidth / 8)" -> println
+    "  store ptr null, ptr %async_initial_child_slot, align $(context.pointerBitWidth / 8)" -> println
+    "  store ptr null, ptr %async_initial_child_context_slot, align $(context.pointerBitWidth / 8)" -> println
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => asyncStoredPrimaryParameter
         requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
@@ -1177,6 +1209,10 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "async_ready:" -> println
+    requestedFunctionIndex -> asyncFixedContextFieldOffset(Int(asyncContextResultField()), context, state) => storedResultOffset
+    "  %async_result_address = getelementptr i8, ptr %async_context, i64 $(storedResultOffset)" -> println
+    "  %async_result_address_slot = getelementptr %sollang.task_control, ptr %async_handle, i32 0, i32 $(llvmRuntime.taskResultAddressField())" -> println
+    "  store ptr %async_result_address, ptr %async_result_address_slot, align $(context.pointerBitWidth / 8)" -> println
     diagnosticsEnabled -> if {
         requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => inheritedHeaderOffset
         "  %async_inherited_header = getelementptr i8, ptr %async_context, i64 $(inheritedHeaderOffset)" -> println
