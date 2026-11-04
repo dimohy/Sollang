@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.text
 
+import sollang.compiler.llvm.runtime as llvmRuntime
+
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.llvm.emitter.context as emitterContext
@@ -586,7 +588,9 @@ emitDynExpression index: Int, ownerIndex: Int, context: ref emitterContext.EmitC
         ", 1" -> println
         "  %v$(index -> valueNameId(state))_slot = getelementptr ptr, ptr %v$(index -> valueNameId(state))_vtable, i64 $slot" -> println
         "  %v$(index -> valueNameId(state))_method = load ptr, ptr %v$(index -> valueNameId(state))_slot, align $(context.pointerBitWidth / 8)" -> println
-        "  %v$(index -> valueNameId(state)) = call i32 %v$(index -> valueNameId(state))_method(ptr %v$(index -> valueNameId(state))_data)" -> println
+        "  %v$(index -> valueNameId(state)) = call i32 %v$(index -> valueNameId(state))_method(" -> print
+        true -> llvmRuntime.writeFunctionRuntimeContext(false)
+        "ptr %v$(index -> valueNameId(state))_data)" -> println
     }
 }
 
@@ -1651,6 +1655,7 @@ emitGrowableDictionaryIndex request: WhileValueRequest, dictionaryTypeId: Int, r
                 indexedDictionaryHashMethod! >= 0 -> if {
                     context.types[indexedDictionaryKeyTypeId!] => indexedDictionaryHashKeyType
                     "  %$(prefix)_hash_value = call i32 $(indexedDictionaryHashKeyType.module -> functionSymbolName(indexedDictionaryHashMethod!, context))(" -> print
+                    true -> llvmRuntime.writeFunctionRuntimeContext(false)
                     indexedDictionaryKeyTypeId! -> writeSemanticTypeId(context, state)
                     " " -> print
                     expression.operand1 -> writeAggregateOperand(functionIndex, whileIndex, context, state)
@@ -2069,12 +2074,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex -> valueNameId(state))_sinks, i8 0, i64 %v$(expressionIndex -> valueNameId(state))_sink_bytes, i1 false)" -> println
                     "  %v$(expressionIndex -> valueNameId(state))_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 5" -> println
                     "  store ptr %v$(expressionIndex -> valueNameId(state))_sinks, ptr %v$(expressionIndex -> valueNameId(state))_sinks_slot, align 8" -> println
-                    6 => tryParallelRuntimeFieldIndex!
-                    tryParallelRuntimeFieldIndex! <= 10 -> while {
-                        "  %v$(expressionIndex -> valueNameId(state))_runtime_slot_$(tryParallelRuntimeFieldIndex!) = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 $(tryParallelRuntimeFieldIndex!)" -> println
-                        "  store ptr null, ptr %v$(expressionIndex -> valueNameId(state))_runtime_slot_$(tryParallelRuntimeFieldIndex!), align 8" -> println
-                        tryParallelRuntimeFieldIndex! + 1 => tryParallelRuntimeFieldIndex!
-                    }
+                    expressionIndex -> emitParallelRuntimeContextStore(state)
                     "  %v$(expressionIndex -> valueNameId(state))_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 11" -> println
                     "  store atomic i64 %v$(expressionIndex -> valueNameId(state))_length, ptr %v$(expressionIndex -> valueNameId(state))_failure_limit_slot release, align 8" -> println
                     "  %v$(expressionIndex -> valueNameId(state))_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 12" -> println
@@ -2130,12 +2130,7 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex -> valueNameId(state))_sinks, i8 0, i64 %v$(expressionIndex -> valueNameId(state))_sink_bytes, i1 false)" -> println
                     "  %v$(expressionIndex -> valueNameId(state))_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 5" -> println
                     "  store ptr %v$(expressionIndex -> valueNameId(state))_sinks, ptr %v$(expressionIndex -> valueNameId(state))_sinks_slot, align 8" -> println
-                    6 => parallelRuntimeFieldIndex!
-                    parallelRuntimeFieldIndex! <= 10 -> while {
-                        "  %v$(expressionIndex -> valueNameId(state))_runtime_slot_$(parallelRuntimeFieldIndex!) = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 $(parallelRuntimeFieldIndex!)" -> println
-                        "  store ptr null, ptr %v$(expressionIndex -> valueNameId(state))_runtime_slot_$(parallelRuntimeFieldIndex!), align 8" -> println
-                        parallelRuntimeFieldIndex! + 1 => parallelRuntimeFieldIndex!
-                    }
+                    expressionIndex -> emitParallelRuntimeContextStore(state)
                     "  %v$(expressionIndex -> valueNameId(state))_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 11" -> println
                     "  store atomic i64 %v$(expressionIndex -> valueNameId(state))_length, ptr %v$(expressionIndex -> valueNameId(state))_failure_limit_slot release, align 8" -> println
                     "  %v$(expressionIndex -> valueNameId(state))_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 12" -> println

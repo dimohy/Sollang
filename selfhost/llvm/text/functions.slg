@@ -2,6 +2,7 @@ namespace sollang.compiler.llvm.text
 
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.function_runtime_context as runtimeContext
 import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.type_queries as typeQueries
@@ -164,7 +165,7 @@ asyncContextValueSize nodeIndex: Int, context: ref emitterContext.EmitContext, s
 # This prefix follows the shared C# logical positions. Runtime pointer values
 # are bound by the pending function-context transport conversion.
 asyncFixedContextFieldKind fieldIndex: Int -> Int {
-    fieldIndex >= 0 and fieldIndex < enumValue("Count")
+    fieldIndex >= 0 and fieldIndex < runtimeContext.enumValue("Count")
         -> if { 1 -> return }
     fieldIndex == Int(asyncContextInputField()) -> if { 2 -> return }
     fieldIndex == Int(asyncContextResultField()) -> if { 3 -> return }
@@ -176,7 +177,7 @@ asyncFixedContextFieldKind fieldIndex: Int -> Int {
 }
 
 asyncFixedContextLayoutStatus: -> Int {
-    enumValue("Count") < 0 or Int(asyncContextAdditionalParameterStart()) <= enumValue("Count")
+    runtimeContext.enumValue("Count") < 0 or Int(asyncContextAdditionalParameterStart()) <= runtimeContext.enumValue("Count")
         -> if { 1 -> return }
     0..<Int(asyncContextAdditionalParameterStart()) -> each fieldIndex {
         (fieldIndex -> asyncFixedContextFieldKind) == 0
@@ -673,6 +674,14 @@ emitAsyncWorkerEntry functionIndex: Int, context: ref emitterContext.EmitContext
 }
 
 emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    0 => runtimeSlot!
+    runtimeSlot! < runtimeContext.enumValue("Count")
+        -> while {
+            runtimeSlot! -> runtimeContext.enumName => slotName
+            "  %runtime_$(slotName)_address = getelementptr i8, ptr %async_context, i64 $(runtimeSlot! * context.pointerBitWidth / 8)" -> println
+            "  %$(slotName) = load ptr, ptr %runtime_$(slotName)_address, align $(context.pointerBitWidth / 8)" -> println
+            runtimeSlot! + 1 => runtimeSlot!
+        }
     context.ir[functionIndex] => function
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => asyncPrimaryParameter
@@ -1055,11 +1064,13 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  %async_cancel_completed = icmp eq i32 %async_cancel_status, 2" -> println
     "  br i1 %async_cancel_completed, label %async_cancel_result, label %async_cancel_pending" -> println
     "async_cancel_result:" -> println
+    requestedFunctionIndex -> asyncFixedContextFieldOffset(Int(asyncContextResultField()), context, state) => cancelResultOffset
+    "  %async_cancel_result_address = getelementptr i8, ptr %async_cancel_context, i64 $(cancelResultOffset)" -> println
     function.typeId >= 0 and (function.typeId -> semanticTypeOwns(context, state))
         -> if {
             "  %async_cancel_result_value = load " -> print
             function -> writeFunctionValueAbiType(context, state)
-            ", ptr %async_cancel_context, align " -> print
+            ", ptr %async_cancel_result_address, align " -> print
             function -> storageAlign(context, state) -> writeDecimalLine
             context.types[function.typeId].kind == 4 -> if {
                 "  %async_cancel_result_data = extractvalue %sollang.int_slice %async_cancel_result_value, 0" -> println
@@ -1122,6 +1133,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
 
     functionDefinitionPrefix() -> print
     "%sollang.task $(requestedFunctionIndex -> functionNodeSymbolName(context))(" -> print
+    (diagnosticsEnabled or function.operand1 >= 0 or function.nextOperand >= 0) -> llvmRuntime.writeFunctionRuntimeContext(false)
     diagnosticsEnabled -> if {
         "ptr %diagnostic_parent" -> print
         function.operand1 >= 0 or function.nextOperand >= 0
@@ -1130,7 +1142,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => asyncWrapperPrimaryParameter
         asyncWrapperPrimaryParameter -> writeFunctionValueAbiType(context, state)
-        " %arg" -> print
+        " %it" -> print
         function.nextOperand >= 0 -> if { ", " -> print }
     }
     function.nextOperand => asyncWrapperAdditionalParameterIndex!
@@ -1146,6 +1158,11 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     }
     ") {" -> println
     "entry:" -> println
+    function.operand1 >= 0 -> if {
+        "  %arg = freeze " -> print
+        context.ir[function.operand1] -> writeFunctionValueAbiType(context, state)
+        " %it" -> println
+    }
     requestedFunctionIndex -> asyncContextStorageSize(context, state) => asyncContextSize
     "  %async_context = call ptr @sollang_alloc(i64 $(asyncContextSize))" -> println
     "  %async_context_allocated = icmp ne ptr %async_context, null" -> println
@@ -1154,6 +1171,14 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "async_initialize:" -> println
+    0 => runtimeSlot!
+    runtimeSlot! < runtimeContext.enumValue("Count")
+        -> while {
+            runtimeSlot! -> runtimeContext.enumName => slotName
+            "  %runtime_$(slotName)_address = getelementptr i8, ptr %async_context, i64 $(runtimeSlot! * context.pointerBitWidth / 8)" -> println
+            "  store ptr %$(slotName), ptr %runtime_$(slotName)_address, align $(context.pointerBitWidth / 8)" -> println
+            runtimeSlot! + 1 => runtimeSlot!
+        }
     diagnosticsEnabled -> if {
         requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => initialHeaderOffset
         0 => headerField!
@@ -1175,6 +1200,19 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  %async_initial_child_context_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset + context.pointerBitWidth / 8)" -> println
     "  store ptr null, ptr %async_initial_child_slot, align $(context.pointerBitWidth / 8)" -> println
     "  store ptr null, ptr %async_initial_child_context_slot, align $(context.pointerBitWidth / 8)" -> println
+    function.operand1 < 0 -> if {
+        requestedFunctionIndex -> asyncFixedContextFieldOffset(Int(asyncContextInputField()), context, state) => initialInputOffset
+        "  %async_initial_input_address = getelementptr i8, ptr %async_context, i64 $(initialInputOffset)" -> println
+        "  store i8 0, ptr %async_initial_input_address, align 1" -> println
+    }
+    requestedFunctionIndex -> asyncFixedContextFieldOffset(Int(asyncContextResultField()), context, state) => initialResultOffset
+    "  %async_initial_result_address = getelementptr i8, ptr %async_context, i64 $(initialResultOffset)" -> println
+    "  store " -> print
+    function.typeOrigin == 1 and function.typeSymbol == 0
+        -> if { "i8" -> print } else { function -> writeFunctionValueAbiType(context, state) }
+    " zeroinitializer, ptr %async_initial_result_address, align " -> print
+    function.typeOrigin == 1 and function.typeSymbol == 0
+        -> if { 1 -> writeDecimalLine } else { function -> storageAlign(context, state) -> writeDecimalLine }
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => asyncStoredPrimaryParameter
         requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
@@ -1328,6 +1366,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     symbolSuffix -> print
     "(" -> print
     function.flags / 8 % 2 == 1 -> if { "ptr %control" -> print } else {
+        ((currentFunctionCaptures -> len) > 0 or function.operand1 >= 0 or function.nextOperand >= 0) -> llvmRuntime.writeFunctionRuntimeContext(false)
         0 => functionCaptureParameterIndex!
         functionCaptureParameterIndex! < (currentFunctionCaptures -> len)
             -> while {
@@ -1345,9 +1384,8 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                     -> if { "ptr %arg_mut_struct" -> print } else { "%sollang.mutable_container %arg_borrow" -> print }
             } else {
                 parameter -> writeFunctionValueAbiType(context, state)
-                " %arg" -> print
                 (parameter -> boundedArrayValueTypeId(context, state)) >= 0
-                    -> if { "_bounded" -> print }
+                    -> if { " %arg_bounded" -> print } else { " %it" -> print }
             }
             function.nextOperand >= 0 -> if { ", " -> print }
         }
@@ -1378,6 +1416,16 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     ") {" -> println
     "entry:" -> println
     function.flags / 8 % 2 == 1 -> if { functionIndex -> emitAsyncWorkerEntry(context, state) }
+    function.flags / 8 % 2 == 0 and function.operand1 >= 0
+        -> if {
+            context.ir[function.operand1] => primaryParameter
+            primaryParameter.flags / 2 % 2 == 0 and (primaryParameter -> boundedArrayValueTypeId(context, state)) < 0
+                -> if {
+                    "  %arg = freeze " -> print
+                    primaryParameter -> writeFunctionValueAbiType(context, state)
+                    " %it" -> println
+                }
+        }
     functionIndex -> emitHoistedControlAllocas(functionIndex + 1, functionEnd!, true, false, context, state)
     functionIndex -> emitHoistedReferenceArgumentAllocas(functionIndex + 1, functionEnd!, context, state)
     function.operand1 >= 0 -> if {
@@ -1845,3 +1893,20 @@ public functionDefinitionPrefix: -> Text {
     "define internal "
 }
 # END generated FunctionRuntimeContext
+
+emitEntryRuntimeContext context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.pointerBitWidth != 32 and context.expectedPathStyle == 1
+        -> if {
+            "  %stdin = call ptr @GetStdHandle(i32 -10)" -> println
+            "  %stdout = call ptr @GetStdHandle(i32 -11)" -> println
+        } else {
+            "  %stdin = inttoptr i$(context.pointerBitWidth) 0 to ptr" -> println
+            "  %stdout = inttoptr i$(context.pointerBitWidth) 1 to ptr" -> println
+        }
+    "  %written = alloca i32, align 4" -> println
+    "  %read = alloca i32, align 4" -> println
+    "  %ok_state = alloca i1, align 1" -> println
+    "  store i32 0, ptr %written, align 4" -> println
+    "  store i32 0, ptr %read, align 4" -> println
+    "  store i1 true, ptr %ok_state, align 1" -> println
+}

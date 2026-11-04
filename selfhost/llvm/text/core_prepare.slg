@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.text
 
+import sollang.compiler.llvm.function_runtime_context as runtimeContext
+
 import sollang.compiler.ast as ast
 import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.ir.stream as streamIr
@@ -1317,6 +1319,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         "declare " -> print
                         externalCall -> writeIrType(context, state)
                         " $(externalCall.targetModule -> functionSymbolName(externalCall.symbol, context))(" -> print
+                        (externalCall.operand0 >= 0) -> llvmRuntime.writeFunctionRuntimeContext(false)
                         externalCall.operand0 >= 0 -> if { context.ir[externalCall.operand0] -> writeIrType(context, state) }
                         ")" -> println
                         declaredExternalModules! -> push(externalCall.targetModule)
@@ -1341,6 +1344,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                     parallelCallbackCaptureCount + parallelCallbackAdditionalCount => parallelCallbackEnvironmentCount
                     "define internal void @sollang_parallel_callback_$(parallelCallbackIndex!)(ptr %group, i64 %index) {" -> println
                     "entry:" -> println
+                    emitParallelRuntimeContextLoad()
                     "  %input_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 1" -> println
                     "  %input = load ptr, ptr %input_slot, align 8" -> println
                     "  %input_address = getelementptr " -> print
@@ -1395,6 +1399,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                     "  %mapped = call " -> print
                     parallelBodyCall -> writeFunctionValueAbiType(context, state)
                     " $(parallelBodyCall.targetModule -> functionSymbolName(parallelBodyCall.symbol, context))(" -> print
+                    true -> llvmRuntime.writeFunctionRuntimeContext(false)
                     0 => parallelCallbackArgumentIndex!
                     parallelCallbackArgumentIndex! < parallelCallbackCaptureCount
                         -> while {
@@ -1474,6 +1479,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                     parallelBranchCallbackIndex! -> parallelBranchArguments(context) => parallelBranchArguments
                     "define internal void @sollang_parallel_branch_$(parallelBranchCallbackIndex!)(ptr %group, i64 %index) {" -> println
                     "entry:" -> println
+                    emitParallelRuntimeContextLoad()
                     "  %environment_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 4" -> println
                     "  %environment = load ptr, ptr %environment_slot, align 8" -> println
                     "  %output_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 2" -> println
@@ -1595,6 +1601,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                 "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage$(parallelBranchStageOrdinal!) = call " -> print
                                 parallelBranchStage -> writeFunctionValueAbiType(context, state)
                                 " $(parallelBranchStage.targetModule -> functionSymbolName(parallelBranchStage.symbol, context))(" -> print
+                                true -> llvmRuntime.writeFunctionRuntimeContext(false)
                                 parallelBranchStageTarget >= 0 -> if {
                                     parallelBranchStageTarget -> functionCaptures(context, state) => parallelBranchStageCaptures
                                     0 => parallelBranchStageCaptureIndex!
@@ -1851,4 +1858,35 @@ preparationIntegrityDiagnosticCount context: ref emitterContext.EmitContext -> I
             1
         }
     }
+}
+
+# Compute runtime fields 6.. follow the same source-function pointer order.
+emitParallelRuntimeContextStore expressionIndex: Int, state: ref CoreEmitterState -> Unit uses Console {
+    0 => slot!
+    slot! < runtimeContext.enumValue("Count") -> while {
+        slot! -> runtimeContext.enumName => name
+        "  %v$(expressionIndex -> valueNameId(state))_runtime_$(name)_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex -> valueNameId(state))_group, i32 0, i32 $(6 + slot!)" -> println
+        "  store ptr %$(name), ptr %v$(expressionIndex -> valueNameId(state))_runtime_$(name)_slot, align 8" -> println
+        slot! + 1 => slot!
+    }
+}
+
+emitParallelRuntimeContextLoad: -> Unit uses Console {
+    0 => slot!
+    slot! < runtimeContext.enumValue("Count") -> while {
+        slot! -> runtimeContext.enumName => name
+        "  %runtime_$(name)_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 $(6 + slot!)" -> println
+        name == "stdout" -> if {
+            "  %parent_stdout = load ptr, ptr %runtime_$(name)_slot, align 8" -> println
+        } else {
+            "  %$(name) = load ptr, ptr %runtime_$(name)_slot, align 8" -> println
+        }
+        slot! + 1 => slot!
+    }
+    "  %runtime_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5" -> println
+    "  %runtime_sinks = load ptr, ptr %runtime_sinks_slot, align 8" -> println
+    "  %runtime_sink = getelementptr %sollang.output_sink, ptr %runtime_sinks, i64 %index" -> println
+    "  %runtime_sink_value = ptrtoint ptr %runtime_sink to i64" -> println
+    "  %runtime_sink_tagged = or i64 %runtime_sink_value, 1" -> println
+    "  %stdout = inttoptr i64 %runtime_sink_tagged to ptr" -> println
 }

@@ -2,9 +2,9 @@ namespace Sollang.Compiler.Shared;
 
 // Runtime context entries are LLVM opaque pointers. This order also owns the
 // prefix of an asynchronous function's context frame.
-[SelfHostPolicy("sollang.compiler.llvm.text",
-    "selfhost/llvm/text/core_calls.slg",
-    "src/Sollang.Compiler/Shared/Policies/FunctionRuntimeContextSlot.cs", Region = "FunctionRuntimeContextSlots")]
+[SelfHostPolicy("sollang.compiler.llvm.function_runtime_context",
+    "selfhost/llvm/function_runtime_context.slg",
+    "src/Sollang.Compiler/Shared/Policies/FunctionRuntimeContextSlot.cs")]
 internal enum FunctionRuntimeContextSlot
 {
     stdin,

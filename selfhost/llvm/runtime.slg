@@ -1,5 +1,21 @@
 namespace sollang.compiler.llvm.runtime
 
+import sollang.compiler.llvm.function_runtime_context as runtimeContext
+
+# LLVM opaque pointer parameters and call arguments have the same spelling.
+# Both writers enumerate the generated C# slot model, including its count.
+public writeFunctionRuntimeContext trailingComma: Bool, nullValues: Bool -> Unit uses Console {
+    0 => slot!
+    slot! < runtimeContext.enumValue("Count") -> while {
+        slot! > 0 -> if { ", " -> print }
+        nullValues -> if { "ptr null" -> print } else {
+            "ptr %$(slot! -> runtimeContext.enumName)" -> print
+        }
+        slot! + 1 => slot!
+    }
+    trailingComma -> if { ", " -> print }
+}
+
 # Target runtime definitions used by LLVM emitted from the self-host compiler.
 # The module index is discovered from the analyzed package, so file ordering
 # never becomes part of the runtime ABI.
@@ -255,7 +271,9 @@ public emitLinuxMappedBytes declareOpen: Bool, declareClose: Bool, declareMappin
 }
 
 emitSecureRandomFunction functions: RuntimeFunctionSymbols -> Unit uses Console {
-    "$(functions.definitionPrefix)%sollang.enum.t$(functions.secureRandomBytesType) $(functions.secureRandomBytesRef.name)(i64 %arg) {" -> println
+    "$(functions.definitionPrefix)%sollang.enum.t$(functions.secureRandomBytesType) $(functions.secureRandomBytesRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i64 %arg) {" -> println
     """
     entry:
       %empty = icmp eq i64 %arg, 0
@@ -770,32 +788,36 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
     "%sollang.read_int_result = type { i64, i32 }" -> println
     legacyReadFunction() -> println
     legacyWindowsReadFunction() -> println
-    "$(functions.definitionPrefix)void $(functions.printRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.printRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
-      call void @sollang_runtime_print(ptr %data, i64 %length, i1 false)
+      call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %length, i1 false)
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.printlnRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.printlnRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
-      call void @sollang_runtime_print(ptr %data, i64 %length, i1 true)
+      call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %length, i1 true)
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)i32 $(functions.readIntRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)i32 $(functions.readIntRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
-      call void @sollang_runtime_print(ptr %data, i64 %length, i1 false)
-      %stdin = call ptr @GetStdHandle(i32 -10)
-      %read = alloca i32, align 4
+      call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %length, i1 false)
       %result = call %sollang.read_int_result @sollang_read_i64(ptr %stdin, ptr %read)
       %ok = extractvalue %sollang.read_int_result %result, 1
       %succeeded = icmp ne i32 %ok, 0
@@ -810,7 +832,9 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
       unreachable
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.seedRandomRef.name)(i32 %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.seedRandomRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i32 %arg) {" -> println
     """
     entry:
       %seed = sext i32 %arg to i64
@@ -818,7 +842,9 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)i32 $(functions.randomBelowRef.name)(i32 %arg) {" -> println
+    "$(functions.definitionPrefix)i32 $(functions.randomBelowRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i32 %arg) {" -> println
     """
     entry:
       %valid = icmp sgt i32 %arg, 0
@@ -837,14 +863,22 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
     }
 
     """ -> println
-    "$(functions.definitionPrefix)i64 $(functions.nowMillisRef.name)() {" -> println
+    "define internal i64 @sollang_now_millis() {" -> println
     """
     entry:
       %value = call i64 @GetTickCount64()
       ret i64 %value
     }
     """ -> println
-    "$(functions.definitionPrefix)i64 $(functions.utcNowMillisRef.name)() {" -> println
+    "$(functions.definitionPrefix)i64 $(functions.nowMillisRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
+    "  %value = call i64 @sollang_now_millis()" -> println
+    "  ret i64 %value" -> println
+    "}" -> println
+    "$(functions.definitionPrefix)i64 $(functions.utcNowMillisRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
     """
     entry:
       %filetime = alloca [2 x i32], align 4
@@ -862,8 +896,12 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
       ret i64 %millis
     }
     """ -> println
-    "$(functions.definitionPrefix)i8 $(functions.monotonicSuspendPolicyRef.name)() { ret i8 0 }" -> println
-    "$(functions.definitionPrefix)void $(functions.eprintRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)i8 $(functions.monotonicSuspendPolicyRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") { ret i8 0 }" -> println
+    "$(functions.definitionPrefix)void $(functions.eprintRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -872,7 +910,9 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.eprintlnRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.eprintlnRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -881,7 +921,9 @@ public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, 
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.flushStandardOutputRef.name)() {" -> println
+    "$(functions.definitionPrefix)void $(functions.flushStandardOutputRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
     """
     entry:
       call void @sollang_runtime_flush_stdout()
@@ -898,34 +940,44 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
     declare i32 @clock_gettime(i32, ptr)
     @sollang_stage2_random_state = internal global i64 88172645463325252
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.printRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.printRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
-      call void @sollang_runtime_print(ptr %data, i64 %length, i1 false)
+      call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %length, i1 false)
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.printlnRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.printlnRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
-      call void @sollang_runtime_print(ptr %data, i64 %length, i1 true)
+      call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %length, i1 true)
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)i32 $(functions.readIntRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)i32 $(functions.readIntRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
-      %prompt_ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %length, i1 false)
+      %prompt_ok = call i1 @sollang_runtime_print_checked(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %length, i1 false)
       br i1 %prompt_ok, label %read_bytes, label %prompt_failure
     read_bytes:
       %buf = alloca [64 x i8], align 1
-      %len = call i64 @read(i32 0, ptr %buf, i64 64)
+      %stdin_value = ptrtoint ptr %stdin to i64
+      %stdin_fd = trunc i64 %stdin_value to i32
+      %len = call i64 @read(i32 %stdin_fd, ptr %buf, i64 64)
+      %read_count = trunc i64 %len to i32
+      store i32 %read_count, ptr %read, align 4
       %read_ok = icmp sgt i64 %len, 0
       br i1 %read_ok, label %prepare, label %fail
     prepare:
@@ -1016,7 +1068,9 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret i32 0
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.seedRandomRef.name)(i32 %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.seedRandomRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i32 %arg) {" -> println
     """
     entry:
       %seed = sext i32 %arg to i64
@@ -1024,7 +1078,9 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)i32 $(functions.randomBelowRef.name)(i32 %arg) {" -> println
+    "$(functions.definitionPrefix)i32 $(functions.randomBelowRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i32 %arg) {" -> println
     """
     entry:
       %valid = icmp sgt i32 %arg, 0
@@ -1042,7 +1098,7 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret i32 0
     }
     """ -> println
-    "$(functions.definitionPrefix)i64 $(functions.nowMillisRef.name)() {" -> println
+    "define internal i64 @sollang_now_millis() {" -> println
     """
     entry:
       %time = alloca [2 x i64], align 8
@@ -1057,7 +1113,15 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret i64 %value
     }
     """ -> println
-    "$(functions.definitionPrefix)i64 $(functions.utcNowMillisRef.name)() {" -> println
+    "$(functions.definitionPrefix)i64 $(functions.nowMillisRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
+    "  %value = call i64 @sollang_now_millis()" -> println
+    "  ret i64 %value" -> println
+    "}" -> println
+    "$(functions.definitionPrefix)i64 $(functions.utcNowMillisRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
     """
     entry:
       %time = alloca [2 x i64], align 8
@@ -1072,8 +1136,12 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret i64 %value
     }
     """ -> println
-    "$(functions.definitionPrefix)i8 $(functions.monotonicSuspendPolicyRef.name)() { ret i8 1 }" -> println
-    "$(functions.definitionPrefix)void $(functions.eprintRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)i8 $(functions.monotonicSuspendPolicyRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") { ret i8 1 }" -> println
+    "$(functions.definitionPrefix)void $(functions.eprintRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -1082,7 +1150,9 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.eprintlnRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.eprintlnRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -1091,7 +1161,9 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.flushStandardOutputRef.name)() {" -> println
+    "$(functions.definitionPrefix)void $(functions.flushStandardOutputRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
     """
     entry:
       call void @sollang_runtime_flush_stdout()
@@ -3223,7 +3295,9 @@ emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Uni
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.openIntWriterRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.openIntWriterRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -3233,7 +3307,9 @@ emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Uni
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.writeIntRef.name)(i32 %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.writeIntRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i32 %arg) {" -> println
     """
     entry:
       %wide = sext i32 %arg to i64
@@ -3242,7 +3318,9 @@ emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Uni
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.closeIntWriterRef.name)() {" -> println
+    "$(functions.definitionPrefix)void $(functions.closeIntWriterRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
     """
     entry:
       %ok = call i32 @sollang_legacy_int_close_write_i64_file()
@@ -3250,7 +3328,9 @@ emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Uni
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.openIntReaderRef.name)(%sollang.text %arg) {" -> println
+    "$(functions.definitionPrefix)void $(functions.openIntReaderRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -3260,7 +3340,9 @@ emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Uni
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)void $(functions.closeIntReaderRef.name)() {" -> println
+    "$(functions.definitionPrefix)void $(functions.closeIntReaderRef.name)(" -> print
+    false -> writeFunctionRuntimeContext(false)
+    ") {" -> println
     """
     entry:
       %ok = call i32 @sollang_legacy_int_platform_close_read_file()
@@ -3268,7 +3350,9 @@ emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Uni
       ret void
     }
     """ -> println
-    "$(functions.definitionPrefix)i32 $(functions.closestIntRef.name)(i32 %arg) {" -> println
+    "$(functions.definitionPrefix)i32 $(functions.closestIntRef.name)(" -> print
+    true -> writeFunctionRuntimeContext(false)
+    "i32 %arg) {" -> println
     """
     entry:
       %wide = sext i32 %arg to i64

@@ -1747,6 +1747,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                 "  %v$(entryExpressionIndex -> valueNameId(state)) = call " -> print
                 entryExpression -> writeIrType(context, state)
                 " $(entryStaticTraitReceiver.typeModule -> functionSymbolName(entryStaticTraitMethod, context))(" -> print
+                true -> llvmRuntime.writeFunctionRuntimeContext(false)
                 entryStaticTraitReceiver -> writeIrType(context, state)
                 " " -> print
                 entryExpression.operand0 -> writeValue(functionIndex, context, state)
@@ -2387,12 +2388,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                     "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex -> valueNameId(state))_sinks, i8 0, i64 %v$(entryExpressionIndex -> valueNameId(state))_sink_bytes, i1 false)" -> println
                     "  %v$(entryExpressionIndex -> valueNameId(state))_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 5" -> println
                     "  store ptr %v$(entryExpressionIndex -> valueNameId(state))_sinks, ptr %v$(entryExpressionIndex -> valueNameId(state))_sinks_slot, align 8" -> println
-                    6 => entryTryParallelRuntimeFieldIndex!
-                    entryTryParallelRuntimeFieldIndex! <= 10 -> while {
-                        "  %v$(entryExpressionIndex -> valueNameId(state))_runtime_slot_$(entryTryParallelRuntimeFieldIndex!) = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 $(entryTryParallelRuntimeFieldIndex!)" -> println
-                        "  store ptr null, ptr %v$(entryExpressionIndex -> valueNameId(state))_runtime_slot_$(entryTryParallelRuntimeFieldIndex!), align 8" -> println
-                        entryTryParallelRuntimeFieldIndex! + 1 => entryTryParallelRuntimeFieldIndex!
-                    }
+                    entryExpressionIndex -> emitParallelRuntimeContextStore(state)
                     "  %v$(entryExpressionIndex -> valueNameId(state))_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 11" -> println
                     "  store atomic i64 %v$(entryExpressionIndex -> valueNameId(state))_length, ptr %v$(entryExpressionIndex -> valueNameId(state))_failure_limit_slot release, align 8" -> println
                     "  %v$(entryExpressionIndex -> valueNameId(state))_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 12" -> println
@@ -2442,12 +2438,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                     "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex -> valueNameId(state))_sinks, i8 0, i64 %v$(entryExpressionIndex -> valueNameId(state))_sink_bytes, i1 false)" -> println
                     "  %v$(entryExpressionIndex -> valueNameId(state))_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 5" -> println
                     "  store ptr %v$(entryExpressionIndex -> valueNameId(state))_sinks, ptr %v$(entryExpressionIndex -> valueNameId(state))_sinks_slot, align 8" -> println
-                    6 => entryParallelRuntimeFieldIndex!
-                    entryParallelRuntimeFieldIndex! <= 10 -> while {
-                        "  %v$(entryExpressionIndex -> valueNameId(state))_runtime_slot_$(entryParallelRuntimeFieldIndex!) = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 $(entryParallelRuntimeFieldIndex!)" -> println
-                        "  store ptr null, ptr %v$(entryExpressionIndex -> valueNameId(state))_runtime_slot_$(entryParallelRuntimeFieldIndex!), align 8" -> println
-                        entryParallelRuntimeFieldIndex! + 1 => entryParallelRuntimeFieldIndex!
-                    }
+                    entryExpressionIndex -> emitParallelRuntimeContextStore(state)
                     "  %v$(entryExpressionIndex -> valueNameId(state))_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 11" -> println
                     "  store atomic i64 %v$(entryExpressionIndex -> valueNameId(state))_length, ptr %v$(entryExpressionIndex -> valueNameId(state))_failure_limit_slot release, align 8" -> println
                     "  %v$(entryExpressionIndex -> valueNameId(state))_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex -> valueNameId(state))_group, i32 0, i32 12" -> println
@@ -2544,7 +2535,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
         }
     entryExpression.kind == 6 and entryExpression.symbol == -102 and entryExpression.operand0 < 0
         -> if {
-            "  call void @sollang_runtime_print(ptr @sollang_runtime_newline, i64 1, i1 false)" -> println
+            "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr @sollang_runtime_newline, i64 1, i1 false)" -> println
         }
     entryExpression.kind == 6 and entryExpression.symbol == -103
         -> if {
@@ -2553,9 +2544,9 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
             entryReadPrompt.kind == 2 -> if {
                 entryReadPrompt -> sourceToken(context, state) => entryReadPromptToken
                 Int(TextLiteralRequest { sourceModule: entryReadPrompt.sourceModule, token: entryReadPromptToken } -> textLiteralLength(context, state)) => entryReadPromptLength
-                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex -> stringGlobalName(state)), i64 $entryReadPromptLength)" -> println
+                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr @sollang_str_$(entryReadPromptIndex -> stringGlobalName(state)), i64 $entryReadPromptLength)" -> println
             } else {
-                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+                "  %v$(entryExpressionIndex -> valueNameId(state)) = call i32 @sollang_runtime_read_int(ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr null, i64 0)" -> println
             }
         }
     entryExpression -> typedIr.isArenaConstructorCall
@@ -2640,15 +2631,15 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                             context.types[runtimeDisplayTypeId!].symbol == 23
                                 -> if {
                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                        -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
+                                        -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(ptr %stdout, ptr %written, ptr %ok_state, i1 " -> print }
                                 } else {
                                     entryRuntimePrintWidth == 64
                                         -> if {
                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                                -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(i64 " -> print }
+                                                -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(ptr %stdout, ptr %written, ptr %ok_state, i64 " -> print }
                                         } else {
                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                                -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(i32 " -> print }
+                                                -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(ptr %stdout, ptr %written, ptr %ok_state, i32 " -> print }
                                         }
                                 }
                             context.types[runtimeDisplayTypeId!].symbol != 23
@@ -2703,7 +2694,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                         -> if {
                                                             "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!), i64 $(entryExpressionRoot.literalLength), i1 false)" -> println
                                                         } else {
-                                                            "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!), i64 $(entryExpressionRoot.literalLength), i1 false)" -> println
+                                                            "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_literal$(entryExpressionSegment!), i64 $(entryExpressionRoot.literalLength), i1 false)" -> println
                                                         }
                                                     # Identifier operands nested inside an interpolation
                                                     # expression are not emitted by the ordinary typed-IR
@@ -3081,21 +3072,21 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                             -> if {
                                                                 "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_text_ptr, i64 %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_text_len, i1 false)" -> println
                                                             } else {
-                                                                "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_text_ptr, i64 %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_text_len, i1 false)" -> println
+                                                                "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_text_ptr, i64 %v$(entryExpressionIndex -> valueNameId(state))_expression$(entryExpressionRootSearch!)_text_len, i1 false)" -> println
                                                             }
                                                     } else {
                                                         entryExpressionRootTypeSymbol! == 23 -> if {
                                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                                                -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
+                                                                -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(ptr %stdout, ptr %written, ptr %ok_state, i1 " -> print }
                                                         } else {
                                                             entryExpressionRootWidth! == 64
                                                                 or (entryExpressionRootWidth! == 32 and not entryExpressionRootSigned)
                                                                 -> if {
                                                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                                                        -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(i64 " -> print }
+                                                                        -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(ptr %stdout, ptr %written, ptr %ok_state, i64 " -> print }
                                                                 } else {
                                                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                                                        -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(i32 " -> print }
+                                                                        -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(ptr %stdout, ptr %written, ptr %ok_state, i32 " -> print }
                                                                 }
                                                         }
                                                         entryExpressionRootTypeSymbol! != 23
@@ -3156,7 +3147,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                     "  %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $(entryExpressionSuffixStart!)" -> println
                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
                                         -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print } else {
-                                            "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print
+                                            "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %v$(entryExpressionIndex -> valueNameId(state))_expression_suffix, i64 $entryExpressionSuffixLength, i1 " -> print
                                         }
                                 } else {
                                     runtimeArgumentToken.span.start + 1 => interpolationContentStart
@@ -3228,12 +3219,12 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                 -> if {
                                                     "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!), i64 $interpolationPartLength, i1 false)" -> println
                                                 } else {
-                                                    "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!), i64 $interpolationPartLength, i1 false)" -> println
+                                                    "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_part$(interpolationPartIndex!), i64 $interpolationPartLength, i1 false)" -> println
                                                 }
                                             context.ir[interpolationBindingIr!] => interpolationBinding
                                             context.ir[interpolationBinding.operand0] => interpolationValue
                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
-                                                -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(i32 " -> print }
+                                                -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(ptr %stdout, ptr %written, ptr %ok_state, i32 " -> print }
                                             interpolationValue.kind == 3 -> if {
                                                 interpolationValue -> writeIntegerLiteral(context, state)
                                             } else { interpolationBinding.operand0 -> writeValue(functionIndex, context, state) }
@@ -3249,12 +3240,12 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                         "  %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix = getelementptr i8, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $interpolationSuffixOffset" -> println
                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
                                             -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print } else {
-                                                "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print
+                                                "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %v$(entryExpressionIndex -> valueNameId(state))_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print
                                             }
                                     } else {
                                         entryExpression.symbol == -116 or entryExpression.symbol == -117
                                             -> if { "  call void @sollang_runtime_eprint(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print } else {
-                                                "  call void @sollang_runtime_print(ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print
+                                                "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr @sollang_str_$(entryRuntimeArgumentIndex! -> stringGlobalName(state)), i64 $runtimeArgumentLength, i1 " -> print
                                             }
                                     }
                                 }
@@ -3273,7 +3264,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                 }
                                 entryExpression.symbol == -116 or entryExpression.symbol == -117
                                     -> if { "  call void @sollang_runtime_eprint(ptr %v$(entryExpressionIndex -> valueNameId(state))_runtime_ptr, i64 %v$(entryExpressionIndex -> valueNameId(state))_runtime_len, i1 " -> print } else {
-                                        "  call void @sollang_runtime_print(ptr %v$(entryExpressionIndex -> valueNameId(state))_runtime_ptr, i64 %v$(entryExpressionIndex -> valueNameId(state))_runtime_len, i1 " -> print
+                                        "  call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %v$(entryExpressionIndex -> valueNameId(state))_runtime_ptr, i64 %v$(entryExpressionIndex -> valueNameId(state))_runtime_len, i1 " -> print
                                     }
                             }
                             entryExpression.symbol == -102 or entryExpression.symbol == -116

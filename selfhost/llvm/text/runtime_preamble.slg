@@ -92,7 +92,9 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 comActivation.sourceModule -> emitGuidConstant(comClassAst.secondaryToken, false, comInterfaceAst.parent, context, state)
                 "define internal " -> print
                 comActivation -> writeIrType(context, state)
-                " $(comActivation.sourceModule -> functionSymbolName(comActivation.symbol, context))() {" -> println
+                " $(comActivation.sourceModule -> functionSymbolName(comActivation.symbol, context))(" -> print
+                false -> llvmRuntime.writeFunctionRuntimeContext(false)
+                ") {" -> println
                 "entry:" -> println
                 comClassAst.tertiaryToken < 0 -> if {
                     "  %raw = call { ptr, i32 } @sollang_com_activate_registered(ptr @sollang_com_clsid_m$(comActivation.sourceModule)_a$(comInterfaceAst.parent), ptr @sollang_com_iid_m$(comActivation.sourceModule)_s$(comActivationSymbol.parent))" -> println
@@ -149,7 +151,9 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         comClone.kind == 0
             and comClone.flags / 512 % 2 == 1
             and comClone.flags / 8192 % 2 == 1 -> if {
-                "define internal ptr $(comClone.sourceModule -> functionSymbolName(comClone.symbol, context))(ptr %arg) {" -> println
+                "define internal ptr $(comClone.sourceModule -> functionSymbolName(comClone.symbol, context))(" -> print
+                true -> llvmRuntime.writeFunctionRuntimeContext(false)
+                "ptr %arg) {" -> println
                 "entry:" -> println
                 "  %result = call ptr @sollang_com_clone(ptr %arg)" -> println
                 "  ret ptr %result" -> println
@@ -169,7 +173,9 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 context.symbols[comQueryRange.symbolStart + comQuery.symbol] => comQuerySymbol
                 "define internal " -> print
                 comQuery -> writeIrType(context, state)
-                " $(comQuery.sourceModule -> functionSymbolName(comQuery.symbol, context))(ptr %arg) {" -> println
+                " $(comQuery.sourceModule -> functionSymbolName(comQuery.symbol, context))(" -> print
+                true -> llvmRuntime.writeFunctionRuntimeContext(false)
+                "ptr %arg) {" -> println
                 "entry:" -> println
                 "  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m$(comQuery.sourceModule)_s$(comQuerySymbol.secondaryTypeNode))" -> println
                 "  %instance = extractvalue { ptr, i32 } %raw, 0" -> println
@@ -232,7 +238,9 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 context.types[comMethod.typeId].first => comMethodSuccessType
                 "define internal " -> print
                 comMethod -> writeIrType(context, state)
-                " $(comMethod.sourceModule -> functionSymbolName(comMethod.symbol, context))(ptr %arg" -> print
+                " $(comMethod.sourceModule -> functionSymbolName(comMethod.symbol, context))(" -> print
+                true -> llvmRuntime.writeFunctionRuntimeContext(false)
+                "ptr %arg" -> print
                 comMethod.nextOperand => comMethodParameter!
                 1 => comMethodParameterOrdinal!
                 comMethodParameter! >= 0 -> while {
@@ -436,13 +444,16 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                         dynConversion -> diagnostics.dynTraitImplementationFunction(dynMethod!, context) => implementationIndex
                         implementationIndex >= 0 -> if {
                             context.ir[implementationIndex] => implementation
-                            "define internal i32 @sollang_dyn_method_$(dynTableIndex!)_$(dynMethod!)(ptr %data) {" -> println
+                            "define internal i32 @sollang_dyn_method_$(dynTableIndex!)_$(dynMethod!)(" -> print
+                            true -> llvmRuntime.writeFunctionRuntimeContext(false)
+                            "ptr %data) {" -> println
                             "entry:" -> println
                             "  %receiver = load " -> print
                             dynConcrete -> writeIrType(context, state)
                             ", ptr %data, align " -> print
                             dynConcrete -> storageAlign(context, state) -> writeDecimalLine
                             "  %result = call i32 $(implementation.sourceModule -> functionSymbolName(implementation.symbol, context))(" -> print
+                            true -> llvmRuntime.writeFunctionRuntimeContext(false)
                             dynConcrete -> writeIrType(context, state)
                             " %receiver)" -> println
                             "  ret i32 %result" -> println

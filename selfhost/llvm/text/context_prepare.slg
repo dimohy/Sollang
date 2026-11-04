@@ -1023,12 +1023,13 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
     context -> emitCoreWithUnitStream(state, emitEntry, streamed)
     not (context -> preparedCodegenBoundaryReused(2))
         -> if {
+            "declare dllimport ptr @GetStdHandle(i32)" -> println
             needsSocketRuntime -> if { socketRuntime.emitWindowsRuntime() }
             needsSocketCompletionRuntime -> if { socketRuntime.emitWindowsCompletionRuntime() }
             needsDnsRuntime -> if { dnsRuntime.emitWindowsRuntime() }
             needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
             needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
-            needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime(not usesTextOutput and not capturesParallelOutput and not needsStandardInputSourceTextRuntime) }
+            needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime(false) }
             needsProcessCapture -> if { processRuntime.emitWindowsProcessCaptureRuntime() }
             needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
             needsDirectoryRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime
@@ -1049,8 +1050,6 @@ emitPreparedWindowsContextWithUnitStream context: ref emitterContext.EmitContext
                 runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
                 llvmRuntime.emitWindowsSourceText()
                 needsStandardInputSourceTextRuntime -> if {
-                    not usesTextOutput and not capturesParallelOutput
-                        -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
                     not needsOwnedFileRuntime and not needsProcessCapture
                         -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
                     llvmRuntime.emitWindowsStandardInputSourceText()

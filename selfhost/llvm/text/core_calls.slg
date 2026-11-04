@@ -3658,6 +3658,16 @@ emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext
             }
     }
     request -> diagnosticCallHasParent(context, state) => hasDiagnosticParent
+    context.ir[request.callIndex] => runtimeCall
+    not (runtimeCall -> targetsNativeFunction(context, state))
+        and not (request.callIndex -> isRangeDeferCall(context, state))
+        and not (request.callIndex -> isMouseEventsCall(context, state))
+        -> if {
+            request.callIndex -> callRuntimeArgumentHead(context, state) => argumentHead
+            argumentHead >= 0 and ((request.callIndex -> callTargetParameter(0, context, state)) >= 0
+                or not (request.callIndex -> callHasResolvedFunctionTarget(context, state))) => hasRuntimeArgument
+            (hasDiagnosticParent or (callCaptures! -> len) > 0 or hasRuntimeArgument) -> llvmRuntime.writeFunctionRuntimeContext(false)
+        }
     hasDiagnosticParent -> if {
         "ptr " -> print
         (request.callerIndex -> diagnosticCallerFunction(context)) >= 0
@@ -4571,18 +4581,19 @@ usesDeferredScalarCapture context: ref emitterContext.EmitContext, state: ref Co
 
 emitCapturedTextConsoleValue prefix: Text, typeId: Int, errorOutput: Bool, newline: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     (errorOutput -> if { "sollang_runtime_eprint" } else { "sollang_runtime_print" }) => writer
+    (errorOutput -> if { "" } else { "ptr %stdout, ptr %written, ptr %ok_state, " }) => runtimePrefix
     context.types[typeId] => valueType
     valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 1
         -> if {
             "  %$(prefix)_ptr = extractvalue %sollang.text %$(prefix)_value, 0" -> println
             "  %$(prefix)_len = extractvalue %sollang.text %$(prefix)_value, 1" -> println
-            "  call void @$(writer)(ptr %$(prefix)_ptr, i64 %$(prefix)_len, i1 " -> print
+            "  call void @$(writer)($(runtimePrefix)ptr %$(prefix)_ptr, i64 %$(prefix)_len, i1 " -> print
             newline -> if { "true)" -> println } else { "false)" -> println }
             return
         }
     valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 23
         -> if {
-            "  call void @$(writer)_i1(i1 %$(prefix)_value, i1 " -> print
+            "  call void @$(writer)_i1($(runtimePrefix)i1 %$(prefix)_value, i1 " -> print
             newline -> if { "true)" -> println } else { "false)" -> println }
             return
         }
@@ -4595,7 +4606,7 @@ emitCapturedTextConsoleValue prefix: Text, typeId: Int, errorOutput: Bool, newli
         signed -> if { "sext" -> print } else { "zext" -> print }
         " i$(width!) %$(prefix)_value to i64" -> println
     }
-    "  call void @$(writer)_i64(i64 " -> print
+    "  call void @$(writer)_i64($(runtimePrefix)i64 " -> print
     width! < 64 -> if { "%$(prefix)_wide" -> print } else { "%$(prefix)_value" -> print }
     ", i1 " -> print
     signed -> if { "true" -> print } else { "false" -> print }
@@ -4610,6 +4621,7 @@ emitCapturedDeferredTextConsoleLeaf leafIndex: Int, callIndex: Int, ownerIndex: 
 emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerIndex: Int, errorOutput: Bool, newline: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[leafIndex] => leaf
     (errorOutput -> if { "sollang_runtime_eprint" } else { "sollang_runtime_print" }) => writer
+    (errorOutput -> if { "" } else { "ptr %stdout, ptr %written, ptr %ok_state, " }) => runtimePrefix
     (leaf.kind == 2 -> if { leafIndex -> interpolatedTextRoots(context, state) } else { [Int; ~] }) => roots
     (roots -> len) == 0 -> if {
         "  %$(prefix)_value = load %sollang.text, ptr %deferred_text$(leafIndex)_value_slot, align 8" -> println
@@ -4622,7 +4634,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
     roots -> each root {
         fragments[root] => fragment
         "  %$(prefix)_literal$(root) = getelementptr i8, ptr @sollang_str_$(leafIndex -> stringGlobalName(state)), i64 $(fragment.literalStart)" -> println
-        "  call void @$(writer)(ptr %$(prefix)_literal$(root), i64 $(fragment.literalLength), i1 false)" -> println
+        "  call void @$(writer)($(runtimePrefix)ptr %$(prefix)_literal$(root), i64 $(fragment.literalLength), i1 false)" -> println
         root -> deferredTextCaptureType(fragments, leaf.sourceModule, ownerIndex, leafIndex, context, state) => typeId
         "  %$(prefix)_root$(root)_value = load " -> print
         typeId -> writeSemanticTypeId(context, state)
@@ -4634,7 +4646,7 @@ emitCapturedDeferredTextConsoleLeafNamed prefix: Text, leafIndex: Int, ownerInde
     TextLiteralRequest { sourceModule: leaf.sourceModule, token: token } -> textLiteralLength(context, state) => rawLength
     rawLength - suffixStart! => suffixLength
     "  %$(prefix)_suffix = getelementptr i8, ptr @sollang_str_$(leafIndex -> stringGlobalName(state)), i64 $(suffixStart!)" -> println
-    "  call void @$(writer)(ptr %$(prefix)_suffix, i64 $(suffixLength), i1 " -> print
+    "  call void @$(writer)($(runtimePrefix)ptr %$(prefix)_suffix, i64 $(suffixLength), i1 " -> print
     newline -> if { "true)" -> println } else { "false)" -> println }
 }
 
@@ -5799,28 +5811,3 @@ emitDiagnosticTrackCall nodeIndex: Int, ownerIndex: Int, context: ref emitterCon
     node -> writeIrType(context, state)
     ", ptr %v$(nodeIndex -> valueNameId(state))_track_result_slot, align 8" -> println
 }
-
-# BEGIN generated FunctionRuntimeContextSlots
-# Generated from src/Sollang.Compiler/Shared/Policies/FunctionRuntimeContextSlot.cs
-# source-sha256: 98ACEDAB90C67563DCF5756159B9A6F20923D1DC3CF1B8098D49753CFB31F85E
-
-public enumName identity: Int -> Text => identity -> when {
-    == 0 => "stdin"
-    == 1 => "stdout"
-    == 2 => "written"
-    == 3 => "read"
-    == 4 => "ok_state"
-    == 5 => "Count"
-    else => ""
-}
-
-public enumValue name: Text -> Int {
-    name == "stdin" -> if { 0 -> return }
-    name == "stdout" -> if { 1 -> return }
-    name == "written" -> if { 2 -> return }
-    name == "read" -> if { 3 -> return }
-    name == "ok_state" -> if { 4 -> return }
-    name == "Count" -> if { 5 -> return }
-    -1
-}
-# END generated FunctionRuntimeContextSlots

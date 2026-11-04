@@ -964,6 +964,7 @@ emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: 
         } else {
             hashMethod >= 0 and eqMethod >= 0 -> if {
                 "  %$(prefix)_hash_value = call i32 $(keyType.module -> functionSymbolName(hashMethod, context))(" -> print
+                true -> llvmRuntime.writeFunctionRuntimeContext(false)
                 keyTypeId -> writeSemanticTypeId(context, state)
                 " $(keyName))" -> println
                 "  %$(prefix)_hash_key = sext i32 %$(prefix)_hash_value to i64" -> println
@@ -1053,6 +1054,7 @@ emitBoundedDictionaryIndex nodeIndex: Int, ownerIndex: Int, context: ref emitter
     } else {
         hashMethod >= 0 and eqMethod >= 0 -> if {
             "  %$(prefix)_hash_value = call i32 $(keyType.module -> functionSymbolName(hashMethod, context))(" -> print
+            true -> llvmRuntime.writeFunctionRuntimeContext(false)
             keyTypeId -> writeSemanticTypeId(context, state)
             " %$(prefix)_query)" -> println
             "  %$(prefix)_hash_key = sext i32 %$(prefix)_hash_value to i64" -> println
@@ -1109,6 +1111,7 @@ emitBoundedDictionaryFindRequiredSlot prefix: Text, storagePointer: Text, keyNam
     } else {
         hashMethod >= 0 and eqMethod >= 0 -> if {
             "  %$(prefix)_hash_value = call i32 $(keyType.module -> functionSymbolName(hashMethod, context))(" -> print
+            true -> llvmRuntime.writeFunctionRuntimeContext(false)
             keyTypeId -> writeSemanticTypeId(context, state)
             " $(keyName))" -> println
             "  %$(prefix)_hash_key = sext i32 %$(prefix)_hash_value to i64" -> println
@@ -3519,6 +3522,8 @@ emitInterpolationCaptureEnvironment labelIndex: Int, nodeIndex: Int, functionInd
 
 writeInterpolationCaptureEnvironment labelIndex: Int, nodeIndex: Int, functionIndex: Int, ownerIndex: Int, hasExplicitArguments: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     functionIndex -> functionCaptures(context, state) => captures
+    not (context.ir[functionIndex] -> isNativeFunction(context, state))
+        -> if { ((captures -> len) > 0 or hasExplicitArguments) -> llvmRuntime.writeFunctionRuntimeContext(false) }
     0 => captureIndex!
     captureIndex! < (captures -> len) -> while {
         context.ir[captures[captureIndex!]] -> writeCaptureAbiType(context, state)

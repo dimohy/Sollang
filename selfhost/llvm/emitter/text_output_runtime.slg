@@ -1,8 +1,107 @@
 namespace sollang.compiler.llvm.emitter.text_output_runtime
 
+# Source functions carry stdout explicitly; a tagged stdout identifies the
+# item-owned sink selected by a compute callback, as in the C# emitter.
+emitContextTextRuntime windows: Bool, capturesParallelOutput: Bool -> Unit uses Console {
+    "define internal i32 @sollang_context_write(ptr %stdout, ptr %data, i64 %len, ptr %written) {" -> println
+    "entry:" -> println
+    capturesParallelOutput -> if {
+        """
+          %stdout_value = ptrtoint ptr %stdout to i64
+          %sink_tag = and i64 %stdout_value, 1
+          %tagged = icmp ne i64 %sink_tag, 0
+          %not_stdout_fd = icmp ne i64 %stdout_value, 1
+          %capturing = and i1 %tagged, %not_stdout_fd
+          br i1 %capturing, label %capture, label %write
+        capture:
+          %sink_value = and i64 %stdout_value, -2
+          %sink = inttoptr i64 %sink_value to ptr
+          call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
+          %captured_len = trunc i64 %len to i32
+          store i32 %captured_len, ptr %written, align 4
+          ret i32 1
+        """ -> println
+    } else { "  br label %write" -> println }
+    "write:" -> println
+    windows -> if {
+        """
+          %mode = alloca i32, align 4
+          %console_status = call i32 @GetConsoleMode(ptr %stdout, ptr %mode)
+          %console = icmp ne i32 %console_status, 0
+          %ok = call i32 @sollang_write_stream(ptr %stdout, ptr %data, i64 %len, ptr %written, i1 %console)
+          ret i32 %ok
+        """ -> println
+    } else {
+        """
+          %fd64 = ptrtoint ptr %stdout to i64
+          %fd = trunc i64 %fd64 to i32
+          br label %write_loop
+        write_loop:
+          %offset = phi i64 [ 0, %write ], [ %next, %advance ]
+          %done = icmp eq i64 %offset, %len
+          br i1 %done, label %success, label %write_bytes
+        write_bytes:
+          %remaining = sub i64 %len, %offset
+          %current = getelementptr i8, ptr %data, i64 %offset
+          %count = call i64 @write(i32 %fd, ptr %current, i64 %remaining)
+          %positive = icmp sgt i64 %count, 0
+          br i1 %positive, label %advance, label %failure
+        advance:
+          %next = add i64 %offset, %count
+          br label %write_loop
+        success:
+          %total = trunc i64 %offset to i32
+          store i32 %total, ptr %written, align 4
+          ret i32 1
+        failure:
+          store i32 0, ptr %written, align 4
+          ret i32 0
+        """ -> println
+    }
+    "}" -> println
+    """
+    define internal i1 @sollang_runtime_print_checked(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %data_status = call i32 @sollang_context_write(ptr %stdout, ptr %data, i64 %len, ptr %written)
+      %data_ok = icmp ne i32 %data_status, 0
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      %newline_status = call i32 @sollang_context_write(ptr %stdout, ptr @sollang_runtime_newline, i64 1, ptr %written)
+      %newline_ok = icmp ne i32 %newline_status, 0
+      %combined = and i1 %data_ok, %newline_ok
+      br label %done
+    done:
+      %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+      %previous = load i1, ptr %ok_state, align 1
+      %next_ok = and i1 %previous, %ok
+      store i1 %next_ok, ptr %ok_state, align 1
+      ret i1 %ok
+    }
+    define internal void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %ok = call i1 @sollang_runtime_print_checked(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %len, i1 %newline)
+      ret void
+    }
+    """ -> println
+    capturesParallelOutput -> if {
+        """
+        define internal void @sollang_memory_output_sink_write(ptr %group, ptr %data, i64 %len) {
+        entry:
+          %stdout_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 7
+          %stdout = load ptr, ptr %stdout_slot, align 8
+          %written_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 8
+          %written = load ptr, ptr %written_slot, align 8
+          %ok_state_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 10
+          %ok_state = load ptr, ptr %ok_state_slot, align 8
+          %ok = call i1 @sollang_runtime_print_checked(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %len, i1 false)
+          ret void
+        }
+        """ -> println
+    }
+}
+
 public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: Bool -> Unit uses Console {
     """
-    declare ptr @GetStdHandle(i32)
     declare i32 @GetConsoleMode(ptr, ptr)
     declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
     declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
@@ -240,11 +339,6 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
           store i64 %total, ptr @sollang_runtime_stdout_count, align 8
           ret void
         }
-        define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
-        entry:
-          call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-          ret void
-        }
         define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
         entry:
           %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
@@ -259,16 +353,6 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
           ret void
         direct:
           call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-          ret void
-        }
-        define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-        entry:
-          call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
-          br i1 %newline, label %write_newline, label %done
-        write_newline:
-          call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
-          br label %done
-        done:
           ret void
         }
         """ -> println
@@ -328,16 +412,6 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
           store i64 %total, ptr @sollang_runtime_stdout_count, align 8
           ret void
         }
-        define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-        entry:
-          call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
-          br i1 %newline, label %write_newline, label %done
-        write_newline:
-          call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
-          br label %done
-        done:
-          ret void
-        }
         """ -> println
     }
     usesStandardError -> if {
@@ -361,6 +435,7 @@ public emitWindowsTextRuntime capturesParallelOutput: Bool, usesStandardError: B
         }
         """ -> println
     }
+    true -> emitContextTextRuntime(capturesParallelOutput)
 }
 
 public emitLinuxTextRuntime capturesParallelOutput: Bool, usesStandardError: Bool -> Unit uses Console {
@@ -401,11 +476,6 @@ public emitLinuxTextRuntime capturesParallelOutput: Bool, usesStandardError: Boo
           %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
           ret void
         }
-        define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
-        entry:
-          call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-          ret void
-        }
         define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
         entry:
           %tls_ready = load i1, ptr @sollang_output_sink_tls_ready, align 1
@@ -437,25 +507,6 @@ public emitLinuxTextRuntime capturesParallelOutput: Bool, usesStandardError: Boo
         }
         """ -> println
     }
-    """
-    define internal i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      %data_ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
-      br i1 %newline, label %write_newline, label %done
-    write_newline:
-      %newline_ok = call i1 @sollang_runtime_append_stdout_checked(ptr @sollang_runtime_newline, i64 1)
-      %combined = and i1 %data_ok, %newline_ok
-      br label %done
-    done:
-      %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
-      ret i1 %ok
-    }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      %ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline)
-      ret void
-    }
-    """ -> println
     usesStandardError -> if {
         """
         define internal i1 @sollang_runtime_write_stderr(ptr %data, i64 %len) {
@@ -496,6 +547,7 @@ public emitLinuxTextRuntime capturesParallelOutput: Bool, usesStandardError: Boo
         }
         """ -> println
     }
+    false -> emitContextTextRuntime(capturesParallelOutput)
 }
 
 public emitWasmTextRuntime usesStandardError: Bool -> Unit uses Console {
@@ -519,20 +571,29 @@ public emitWasmTextRuntime usesStandardError: Bool -> Unit uses Console {
     entry:
       ret void
     }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    define internal void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %len, i1 %newline) {
     entry:
       %len32 = trunc i64 %len to i32
-      %written = call i32 @sollang_browser_write(ptr %data, i32 %len32)
+      %count = call i32 @sollang_browser_write(ptr %data, i32 %len32)
+      store i32 %count, ptr %written, align 4
+      %data_ok = icmp eq i32 %count, %len32
       br i1 %newline, label %write_newline, label %done
     write_newline:
-      %newline_written = call i32 @sollang_browser_write(ptr @sollang_runtime_newline, i32 1)
+      %newline_count = call i32 @sollang_browser_write(ptr @sollang_runtime_newline, i32 1)
+      store i32 %newline_count, ptr %written, align 4
+      %newline_ok = icmp eq i32 %newline_count, 1
+      %combined = and i1 %data_ok, %newline_ok
       br label %done
     done:
+      %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+      %previous = load i1, ptr %ok_state, align 1
+      %next = and i1 %previous, %ok
+      store i1 %next, ptr %ok_state, align 1
       ret void
     }
-    define internal i32 @sollang_runtime_read_int(ptr %prompt, i64 %prompt_len) {
+    define internal i32 @sollang_runtime_read_int(ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %prompt, i64 %prompt_len) {
     entry:
-      call void @sollang_runtime_print(ptr %prompt, i64 %prompt_len, i1 false)
+      call void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %prompt, i64 %prompt_len, i1 false)
       %buf = alloca [64 x i8], align 1
       %count = call i32 @sollang_browser_read(ptr %buf, i32 64)
       %has_input = icmp sgt i32 %count, 0
