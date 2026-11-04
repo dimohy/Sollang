@@ -65,30 +65,7 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine("declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)");
         EmitFunctionLine();
 
-        EmitFunctionLine("define internal i64 @sollang_cpu_features_once() {");
-        EmitFunctionLine("entry:");
-        EmitFunctionLine("  %cached = load atomic i64, ptr @sollang_cpu_features monotonic, align 8");
-        EmitFunctionLine("  %initialized = icmp ne i64 %cached, -1");
-        EmitFunctionLine("  br i1 %initialized, label %ready, label %detect");
-        EmitFunctionLine("detect:");
-        EmitFunctionLine("  %leaf1 = call { i32, i32, i32, i32 } asm \"xchgq %rbx, ${1:q}\\0Acpuid\\0Axchgq %rbx, ${1:q}\", \"={ax},=r,={cx},={dx},0,2\"(i32 1, i32 0)");
-        EmitFunctionLine("  %leaf1_ecx = extractvalue { i32, i32, i32, i32 } %leaf1, 2");
-        EmitFunctionLine("  %leaf1_edx = extractvalue { i32, i32, i32, i32 } %leaf1, 3");
-        EmitFunctionLine("  %sse2_bits = and i32 %leaf1_edx, 67108864");
-        EmitFunctionLine("  %has_sse2 = icmp ne i32 %sse2_bits, 0");
-        EmitFunctionLine("  %sse2_mask = select i1 %has_sse2, i64 1, i64 0");
-        EmitFunctionLine("  %aes_bits = and i32 %leaf1_ecx, 33554432");
-        EmitFunctionLine("  %has_aes = icmp ne i32 %aes_bits, 0");
-        EmitFunctionLine("  %aes_mask = select i1 %has_aes, i64 8, i64 0");
-        EmitFunctionLine("  %detected = or i64 %sse2_mask, %aes_mask");
-        EmitFunctionLine("  %installed = cmpxchg ptr @sollang_cpu_features, i64 -1, i64 %detected monotonic monotonic");
-        EmitFunctionLine("  %observed = extractvalue { i64, i1 } %installed, 0");
-        EmitFunctionLine("  %won = extractvalue { i64, i1 } %installed, 1");
-        EmitFunctionLine("  %features = select i1 %won, i64 %detected, i64 %observed");
-        EmitFunctionLine("  ret i64 %features");
-        EmitFunctionLine("ready:");
-        EmitFunctionLine("  ret i64 %cached");
-        EmitFunctionLine("}");
+        EmitFunctionLine(NativeRuntimePolicy.CpuFeatureDetectionFunction());
         EmitFunctionLine();
 
         EmitFunctionLine($"define internal {returnType} {x86Symbol}({parameters}) #1 {{");

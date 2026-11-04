@@ -152,32 +152,7 @@ emitAes128CpuRuntime functionIndex: Int, context: ref emitterContext.EmitContext
     "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)" -> println
     "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)" -> println
     "" -> println
-    "define internal i64 @sollang_cpu_features_once() {" -> println
-    "entry:" -> println
-    "  %cached = load atomic i64, ptr @sollang_cpu_features monotonic, align 8" -> println
-    "  %initialized = icmp ne i64 %cached, -1" -> println
-    "  br i1 %initialized, label %ready, label %detect" -> println
-    "detect:" -> println
-    """
-      %leaf1 = call { i32, i32, i32, i32 } asm "xchgq %rbx, ${1:q}\0Acpuid\0Axchgq %rbx, ${1:q}", "={ax},=r,={cx},={dx},0,2"(i32 1, i32 0)
-    """ -> println
-    "  %leaf1_ecx = extractvalue { i32, i32, i32, i32 } %leaf1, 2" -> println
-    "  %leaf1_edx = extractvalue { i32, i32, i32, i32 } %leaf1, 3" -> println
-    "  %sse2_bits = and i32 %leaf1_edx, 67108864" -> println
-    "  %has_sse2 = icmp ne i32 %sse2_bits, 0" -> println
-    "  %sse2_mask = select i1 %has_sse2, i64 1, i64 0" -> println
-    "  %aes_bits = and i32 %leaf1_ecx, 33554432" -> println
-    "  %has_aes = icmp ne i32 %aes_bits, 0" -> println
-    "  %aes_mask = select i1 %has_aes, i64 8, i64 0" -> println
-    "  %detected = or i64 %sse2_mask, %aes_mask" -> println
-    "  %installed = cmpxchg ptr @sollang_cpu_features, i64 -1, i64 %detected monotonic monotonic" -> println
-    "  %observed = extractvalue { i64, i1 } %installed, 0" -> println
-    "  %won = extractvalue { i64, i1 } %installed, 1" -> println
-    "  %features = select i1 %won, i64 %detected, i64 %observed" -> println
-    "  ret i64 %features" -> println
-    "ready:" -> println
-    "  ret i64 %cached" -> println
-    "}" -> println
+    llvmRuntime.cpuFeatureDetectionFunction() -> println
     "" -> println
 
     "define internal " -> print

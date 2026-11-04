@@ -5,6 +5,34 @@ namespace Sollang.Compiler.Shared;
     "src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs", MultilineText = true, Region = "NativeRuntime")]
 internal static class NativeRuntimePolicy
 {
+    public static string CpuFeatureDetectionFunction() =>
+        """
+        define internal i64 @sollang_cpu_features_once() {
+        entry:
+          %cached = load atomic i64, ptr @sollang_cpu_features monotonic, align 8
+          %initialized = icmp ne i64 %cached, -1
+          br i1 %initialized, label %ready, label %detect
+        detect:
+          %leaf1 = call { i32, i32, i32, i32 } asm "xchgq %rbx, ${1:q}\0Acpuid\0Axchgq %rbx, ${1:q}", "={ax},=r,={cx},={dx},0,2"(i32 1, i32 0)
+          %leaf1_ecx = extractvalue { i32, i32, i32, i32 } %leaf1, 2
+          %leaf1_edx = extractvalue { i32, i32, i32, i32 } %leaf1, 3
+          %sse2_bits = and i32 %leaf1_edx, 67108864
+          %has_sse2 = icmp ne i32 %sse2_bits, 0
+          %sse2_mask = select i1 %has_sse2, i64 1, i64 0
+          %aes_bits = and i32 %leaf1_ecx, 33554432
+          %has_aes = icmp ne i32 %aes_bits, 0
+          %aes_mask = select i1 %has_aes, i64 8, i64 0
+          %detected = or i64 %sse2_mask, %aes_mask
+          %installed = cmpxchg ptr @sollang_cpu_features, i64 -1, i64 %detected monotonic monotonic
+          %observed = extractvalue { i64, i1 } %installed, 0
+          %won = extractvalue { i64, i1 } %installed, 1
+          %features = select i1 %won, i64 %detected, i64 %observed
+          ret i64 %features
+        ready:
+          ret i64 %cached
+        }
+        """;
+
     public static ulong TaskResultAddressField() => 21UL;
     public static ulong TaskResultCompletionField() => 22UL;
 
