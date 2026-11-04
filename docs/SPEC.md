@@ -4772,6 +4772,9 @@ before initializing or publishing its payload; private LLVM block names and
 ordinals do not participate in this diagnostic. Other trap diagnostics retain
 their existing contracts.
 
+Async function context storage and live-value spill frames use that same
+checked-allocation decision before storing state or live values.
+
 The self-hosting syntax substrate defines `SourceSpan { fileId, start, length }`
 with `UIntSize` byte offsets and `SyntaxToken { kind, span }`. Byte offsets are
 shared across tokens, CST nodes, diagnostics, and source maps so Unicode column

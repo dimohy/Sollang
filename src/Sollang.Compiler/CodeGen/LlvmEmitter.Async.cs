@@ -89,8 +89,7 @@ internal sealed partial class LlvmEmitter
             ClearLocalState();
             EmitFunctionLine($"{FunctionRuntimeContextPolicy.FunctionDefinitionPrefix()}%sollang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitLabel("entry");
-            var context = NextTemp("async_context");
-            EmitCall(context, "ptr", "sollang_alloc", $"i64 {AsyncContextSize(function)}");
+            var context = EmitHeapAllocate(AsyncContextSize(function).ToString(CultureInfo.InvariantCulture));
             foreach (var slot in FunctionRuntimeContext.Slots)
             {
                 EmitAsyncContextStore(context, function.InputType, function.ReturnType, (int)slot, "ptr", $"%{slot}", 8);
@@ -1022,8 +1021,7 @@ internal sealed partial class LlvmEmitter
         var size = spills.Max(spill => spill.OwnershipFlagOffset is { } flagOffset
             ? checked(flagOffset + 1)
             : checked(spill.Offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1)));
-        var frame = NextTemp("async_spill_frame");
-        EmitCall(frame, "ptr", "sollang_alloc", $"i64 {size}");
+        var frame = EmitHeapAllocate(size.ToString(CultureInfo.InvariantCulture));
         EmitAsyncContextStore(
             "%context", function.InputType, function.ReturnType, AsyncSpillFrameField,
             "ptr", frame, 8);
