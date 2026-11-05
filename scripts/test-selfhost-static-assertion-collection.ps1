@@ -169,4 +169,32 @@ foreach ($mutation in @(
     if (-not $rejected) { throw 'Broken continuing alternative guard was not rejected' }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 31; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4 } | ConvertTo-Json
+$arrayAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -eq 'Assert-Matches' -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -ceq 'semantic composite type creation before Typed IR'
+}, $true))
+if ($arrayAssertions.Count -ne 1) { throw 'Late array assertion inventory differs' }
+$arrayAssertion = [scriptblock]::Create($arrayAssertions[0].Extent.Text)
+$lateArrayTypes = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'selfhost/semantic/late_array_types.slg'))
+$originalArrayTypes = $lateArrayTypes
+& $arrayAssertion
+$completed++
+foreach ($mutation in @(
+    $originalArrayTypes.Replace('types -> typeIds.allocateSemanticTypeSlot => typeId!', '0 => typeId!'),
+    $originalArrayTypes.Replace('} => types[typeId!]', '} => types[0]'),
+    $originalArrayTypes.Replace('first: elementType', 'first: -1'),
+    $originalArrayTypes.Replace('length: length!', 'length: 0'),
+    $originalArrayTypes.Replace('typeId: typeId!', 'typeId: 0')
+)) {
+    $lateArrayTypes = $mutation
+    $rejected = $false
+    try { & $arrayAssertion } catch {
+        if (-not $_.Exception.Message.StartsWith('semantic composite type creation before Typed IR is missing:')) { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw 'Broken late array type publication was not rejected' }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 37; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6 } | ConvertTo-Json

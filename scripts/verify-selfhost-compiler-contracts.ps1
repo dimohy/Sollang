@@ -886,7 +886,7 @@ Assert-Contains $lateArrayTypes '[Int; ~] => nearestDistanceByChild!' "late inde
 Assert-Contains $lateArrayTypes 'ancestorNode.kind == 37' "late indexed-element array ancestor selection"
 Assert-Contains $lateArrayTypes 'typedChildCount![globalAst] == directChildCount![globalAst]' "late array complete direct-child gate"
 Assert-Contains $lateArrayTypes 'and homogeneous![globalAst]' "late array homogeneous element gate"
-Assert-Contains $lateArrayTypes 'types -> push(typeIds.SemanticType {' "semantic composite type creation before Typed IR"
+Assert-Matches $lateArrayTypes '(?s)typeId! < 0 -> if \{\s+types -> typeIds\.allocateSemanticTypeSlot => typeId!\s+typeIds\.SemanticType \{\s+kind: kind!\s+origin: -1\s+module: -1\s+symbol: -1\s+first: elementType\s+second: -1\s+length: length!\s+lengthHash: 0\s+containsParameter: types\[elementType\]\.containsParameter\s+status: 0\s+\} => types\[typeId!\].*?resolved! -> push\(Resolved \{.*?typeId: typeId!' "semantic composite type creation before Typed IR"
 Assert-Contains $expressionTypeIds 'item.typeId => existing!.typeId' "late array stale expression repair"
 Assert-Contains $expressionTypeIds 'expressionIndex! => expressionIndexByAst[item.globalAst]' "late array new expression type publication"
 Assert-Contains $expressionTypeIdsPaths 'lateArrayChanged -> if { true => pathChanged! }' "late nested-array fixed-point continuation"
