@@ -235,4 +235,44 @@ foreach ($probe in $budgetMutations) {
     if (-not $rejected) { throw ('Broken budget guard was not rejected: ' + $probe.Expected) }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 44; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7 } | ConvertTo-Json
+$cleanupDescriptions = @('projected interpolation direct-call count fixture',
+    'managed enum inconsistent continuing owners drop only retained-path values before scope merge',
+    'canonical local cleanup preserves borrowed and moved-field ownership')
+$cleanupAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -eq 'Assert-Matches' -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $cleanupDescriptions
+}, $true))
+if ($cleanupAssertions.Count -ne 3) { throw 'Cleanup assertion inventory differs' }
+$cleanupAssertion = [scriptblock]::Create($cleanupAssertions.Extent.Text -join "`n")
+$enumSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Enums.cs'))
+$utilitySource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs'))
+$countSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'examples/regression/expected/1185-selfhost-projected-receiver-instance-call.selfhost.llvm.regex-counts.txt'))
+function Invoke-CleanupAssertions([string]$Enum, [string]$Utility, [string]$Counts) {
+    $managedEnumEmitter = $Enum
+    $managedUtilitiesEmitter = $Utility
+    $projectedInterpolationCallCounts = $Counts
+    & $cleanupAssertion
+}
+Invoke-CleanupAssertions $enumSource $utilitySource $countSource
+$completed++
+$cleanupMutations = @(
+    @{Enum=$enumSource.Replace('RestoreLocals(path.Scope);','');Utility=$utilitySource;Counts=$countSource;Expected=$cleanupDescriptions[1]},
+    @{Enum=$enumSource.Replace('DropOwnedLocal(name, path.Scope.Locals[name])','DropOwnedRuntimeValue(path.Scope.Locals[name])');Utility=$utilitySource;Counts=$countSource;Expected=$cleanupDescriptions[1]},
+    @{Enum=$enumSource.Replace('RemoveLocalsFromScope(path.Scope, normalizedNames)','path.Scope');Utility=$utilitySource;Counts=$countSource;Expected=$cleanupDescriptions[1]},
+    @{Enum=$enumSource;Utility=$utilitySource.Replace('_borrowedMutableLocals.Contains(name) || _borrowedOwnedLocals.Contains(name)','false');Counts=$countSource;Expected=$cleanupDescriptions[2]},
+    @{Enum=$enumSource;Utility=$utilitySource.Replace('DropOwnedStructFieldsExceptMoved(name, structure)','DropOwnedRuntimeValue(structure)');Counts=$countSource;Expected=$cleanupDescriptions[2]},
+    @{Enum=$enumSource;Utility=$utilitySource;Counts=$countSource.Replace("1`t","2`t");Expected=$cleanupDescriptions[0]},
+    @{Enum=$enumSource;Utility=$utilitySource;Counts=$countSource.Replace('@sollang_x','@sollang_m');Expected=$cleanupDescriptions[0]}
+)
+foreach ($probe in $cleanupMutations) {
+    $rejected = $false
+    try { Invoke-CleanupAssertions $probe.Enum $probe.Utility $probe.Counts } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.Expected + ' is missing:')) { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw ('Broken cleanup guard was not rejected: ' + $probe.Expected) }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 52; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8 } | ConvertTo-Json
