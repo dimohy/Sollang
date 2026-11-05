@@ -938,6 +938,12 @@ membership change rather than carrying the set owner.
 A fresh generic container constructor can be the final block or function
 result. Bind the returned owner at the caller so cleanup has an owner. This
 does not authorize moving an outer owner through a nested block result.
+An arm may construct a fresh owned result while matching a borrowed input.
+Keep the input borrowed; check the actual return operand rather than every
+lexical child of its return node. Borrowed payload transfers remain errors.
+Reuse the semantic payload binding type for its declaration and reads. Seal a
+readonly enum subject through its underlying value type, keeping the borrowed
+subject and the arm's newly created result as separate values.
 
 Size dictionary payloads from the canonical key/value entry stride, not the
 owner descriptor size. Heap and inline placement use the same entry layout;

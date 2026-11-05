@@ -6423,8 +6423,15 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                             } else {
                                 ownedEscapeParent.kind == 1 or ownedEscapeParent.kind == 23
                                     -> if {
-                                        true => reachesOwnedReturn!
-                                        ownedEscapeChild! => ownedEscapeReturnValueIr!
+                                        # Lexical siblings can feed the returned control without
+                                        # themselves being the returned ownership value.
+                                        ownedEscapeParent.operand0 == ownedEscapeChild!
+                                            -> if {
+                                                true => reachesOwnedReturn!
+                                                ownedEscapeChild! => ownedEscapeReturnValueIr!
+                                            } else {
+                                                false => ownershipPreserved!
+                                            }
                                     } else {
                                         ownedEscapeParent.kind == 0 or ownedEscapeParent.kind == 11
                                             -> if {

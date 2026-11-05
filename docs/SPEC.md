@@ -3878,6 +3878,13 @@ Function-return compatibility is checked first, so a mismatched declared
 return type retains its return-type diagnostic before ownership joins.
 The result of a terminal subject-control flow is the control's result, not
 an earlier subject whose type happens to match the declared return type.
+Matching a borrowed subject may therefore return a separately created owned
+value without transferring the subject. Ownership escape checks follow the
+canonical return value operand; a lexical sibling used to select that value
+is not itself returned. This does not permit returning its borrowed payload.
+Payload declarations and reads retain the semantic binding's canonical type.
+When the subject is a readonly reference, variant lookup uses its underlying
+enum; the match or enclosing function's result type cannot replace it.
 
 The same transfer rule applies when an aggregate containing a borrowed owned
 value enters owned container storage through `push`, `put`, heap insertion, or

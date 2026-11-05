@@ -282,229 +282,261 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
             }
         false => knownPatternReference!
         -1 => patternTypeAst!
+        -1 => patternBindingSymbol!
         expression.kind == 59 -> if { expressionAstIndex => patternTypeAst! }
         expression.kind == 15 -> if {
             resolvedSymbolByAst[expressionAstIndex] => patternResolvedSymbolIndex
             patternResolvedSymbolIndex >= 0 -> if {
                 prepared.package.symbols[sourceRange.symbolStart + patternResolvedSymbolIndex] => patternResolvedSymbol
                 prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59
-                    -> if { patternResolvedSymbol.astNode => patternTypeAst! }
+                    -> if {
+                        patternResolvedSymbol.astNode => patternTypeAst!
+                        patternResolvedSymbolIndex => patternBindingSymbol!
+                    }
             }
         }
+        expression.kind == 59 -> if {
+            0 => patternDeclarationSymbol!
+            patternDeclarationSymbol! < sourceRange.symbolCount
+                -> while {
+                    prepared.package.symbols[sourceRange.symbolStart + patternDeclarationSymbol!] => patternDeclaration
+                    patternDeclaration.kind == 35 and patternDeclaration.astNode == expressionAstIndex
+                        -> if { patternDeclarationSymbol! => patternBindingSymbol! }
+                    patternDeclarationSymbol! + 1 => patternDeclarationSymbol!
+                }
+        }
+        -1 => canonicalPatternTypeId!
+        patternBindingSymbol! >= 0
+            and sourceRange.symbolStart + patternBindingSymbol! < (recursiveTypes.lexicalBindingTypeBySymbol -> len)
+            -> if {
+                recursiveTypes.lexicalBindingTypeBySymbol[sourceRange.symbolStart + patternBindingSymbol!] => canonicalPatternTypeId!
+            }
+        canonicalPatternTypeId! >= 0 and canonicalPatternTypeId! < (frozenRecursiveSemanticTypes -> len)
+            -> if {
+                # Payload declarations and their reads share the semantic subject's
+                # variant type; an arm's result cannot replace that identity.
+                canonicalPatternTypeId! => recursiveExpressionTypeId!
+                frozenRecursiveSemanticTypes[canonicalPatternTypeId!] => canonicalPatternType
+                canonicalPatternType.origin => expressionTypeOrigin!
+                canonicalPatternType.module => expressionTypeModule!
+                canonicalPatternType.symbol => expressionTypeSymbol!
+                true => knownPatternReference!
+            }
         # Name resolution is authoritative for pattern payload
         # uses even when nominal payload typing is deferred. Keep
         # the value node independently of whether its consumer is
         # a function call or an enum constructor.
         expression.kind == 15 and patternTypeAst! >= 0
             -> if { true => knownPatternReference! }
-        patternTypeAst! >= 0 -> if {
-            prepared.package.nodes[sourceRange.astStart + patternTypeAst!] => patternTypeNode
-            patternTypeNode.parent => patternArmAst!
-            patternArmAst! >= 0 and prepared.package.nodes[sourceRange.astStart + patternArmAst!].kind == 70
-                -> if {
-                    prepared.package.nodes[sourceRange.astStart + patternArmAst!].parent => patternArmAst!
-                }
-            prepared.package.nodes[sourceRange.astStart + patternArmAst!].parent => patternMatchAst
-            prepared.package.nodes[sourceRange.astStart + patternMatchAst].parent => patternFlowAst
-            patternFlowAst => patternSubjectFlowAst
-            -1 => patternSubjectTypeId!
-            UIntSize(0) => patternSubjectStart!
-            functionNodeStart => patternSubjectPosition!
-            patternSubjectPosition! < functionNodeEnd
-                -> while {
-                    frozenFunctionNodeIndices[patternSubjectPosition!] => patternSubjectSearch
-                    prepared.package.nodes[sourceRange.astStart + patternSubjectSearch] => patternSubjectAst
-                    frozenRecursiveTypeByAst[sourceRange.astStart + patternSubjectSearch] => patternSubjectCandidateType!
-                    patternSubjectCandidateType! < 0 -> if {
-                        0 => generatedPatternCallSearch!
-                        generatedPatternCallSearch! < (prepared.calls -> len)
-                            -> while {
-                                prepared.calls[generatedPatternCallSearch!] => generatedPatternCall
-                                false => generatedPatternCallBelongs!
-                                generatedPatternCall.sourceModule == sourceIndex and generatedPatternCall.callAst >= 0 and generatedPatternCall.callAst < sourceRange.astCount
-                                    -> if {
-                                        generatedPatternCall.callAst => generatedPatternCallAncestor!
-                                        generatedPatternCallAncestor! >= 0 and not generatedPatternCallBelongs!
-                                            -> while {
-                                                generatedPatternCallAncestor! == patternSubjectSearch
-                                                    -> if {
-                                                        true => generatedPatternCallBelongs!
-                                                    } else {
-                                                        prepared.package.nodes[sourceRange.astStart + generatedPatternCallAncestor!].parent => generatedPatternCallAncestor!
-                                                    }
-                                            }
-                                    }
-                                generatedPatternCall.status == 0
-                                    and generatedPatternCall.sourceModule == sourceIndex
-                                    and generatedPatternCallBelongs!
-                                    and generatedPatternCall.targetSourceModule >= 0
-                                    and generatedPatternCall.functionSymbol >= 0
-                                    -> if {
-                                        generatedPatternCall.targetSourceModule -> functionResultTypeId(generatedPatternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCandidateType!
-                                    }
-                                generatedPatternCallSearch! + 1 => generatedPatternCallSearch!
-                            }
-                        0 => localPatternFunctionSearch!
-                        localPatternFunctionSearch! < (resolvedNames -> len)
-                            -> while {
-                                resolvedNames[localPatternFunctionSearch!] => localPatternFunctionName
-                                localPatternFunctionName.astNode => localPatternFunctionAncestor!
-                                false => localPatternFunctionBelongs!
-                                localPatternFunctionAncestor! >= 0 and not localPatternFunctionBelongs!
-                                    -> while {
-                                        localPatternFunctionAncestor! == patternSubjectSearch
-                                            -> if {
-                                                true => localPatternFunctionBelongs!
-                                            } else {
-                                                prepared.package.nodes[sourceRange.astStart + localPatternFunctionAncestor!].parent => localPatternFunctionAncestor!
-                                            }
-                                    }
-                                localPatternFunctionBelongs! -> if {
-                                    prepared.package.symbols[sourceRange.symbolStart + localPatternFunctionName.symbol] => localPatternFunction
-                                    localPatternFunction.kind == 7 or localPatternFunction.kind == 31
+        patternTypeAst! >= 0 and canonicalPatternTypeId! < 0
+            -> if {
+                prepared.package.nodes[sourceRange.astStart + patternTypeAst!] => patternTypeNode
+                patternTypeNode.parent => patternArmAst!
+                patternArmAst! >= 0 and prepared.package.nodes[sourceRange.astStart + patternArmAst!].kind == 70
+                    -> if {
+                        prepared.package.nodes[sourceRange.astStart + patternArmAst!].parent => patternArmAst!
+                    }
+                prepared.package.nodes[sourceRange.astStart + patternArmAst!].parent => patternMatchAst
+                prepared.package.nodes[sourceRange.astStart + patternMatchAst].parent => patternFlowAst
+                patternFlowAst => patternSubjectFlowAst
+                -1 => patternSubjectTypeId!
+                UIntSize(0) => patternSubjectStart!
+                functionNodeStart => patternSubjectPosition!
+                patternSubjectPosition! < functionNodeEnd
+                    -> while {
+                        frozenFunctionNodeIndices[patternSubjectPosition!] => patternSubjectSearch
+                        prepared.package.nodes[sourceRange.astStart + patternSubjectSearch] => patternSubjectAst
+                        frozenRecursiveTypeByAst[sourceRange.astStart + patternSubjectSearch] => patternSubjectCandidateType!
+                        patternSubjectCandidateType! < 0 -> if {
+                            0 => generatedPatternCallSearch!
+                            generatedPatternCallSearch! < (prepared.calls -> len)
+                                -> while {
+                                    prepared.calls[generatedPatternCallSearch!] => generatedPatternCall
+                                    false => generatedPatternCallBelongs!
+                                    generatedPatternCall.sourceModule == sourceIndex and generatedPatternCall.callAst >= 0 and generatedPatternCall.callAst < sourceRange.astCount
                                         -> if {
-                                            sourceIndex -> functionResultTypeId(localPatternFunctionName.symbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCandidateType!
+                                            generatedPatternCall.callAst => generatedPatternCallAncestor!
+                                            generatedPatternCallAncestor! >= 0 and not generatedPatternCallBelongs!
+                                                -> while {
+                                                    generatedPatternCallAncestor! == patternSubjectSearch
+                                                        -> if {
+                                                            true => generatedPatternCallBelongs!
+                                                        } else {
+                                                            prepared.package.nodes[sourceRange.astStart + generatedPatternCallAncestor!].parent => generatedPatternCallAncestor!
+                                                        }
+                                                }
                                         }
+                                    generatedPatternCall.status == 0
+                                        and generatedPatternCall.sourceModule == sourceIndex
+                                        and generatedPatternCallBelongs!
+                                        and generatedPatternCall.targetSourceModule >= 0
+                                        and generatedPatternCall.functionSymbol >= 0
+                                        -> if {
+                                            generatedPatternCall.targetSourceModule -> functionResultTypeId(generatedPatternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCandidateType!
+                                        }
+                                    generatedPatternCallSearch! + 1 => generatedPatternCallSearch!
                                 }
-                                localPatternFunctionSearch! + 1 => localPatternFunctionSearch!
-                            }
-                    }
-                    patternSubjectAst.parent == patternSubjectFlowAst => patternSubjectBelongs!
-                    not patternSubjectBelongs! and patternSubjectAst.parent >= 0
-                        -> if {
-                            prepared.package.nodes[sourceRange.astStart + patternSubjectAst.parent] => patternSubjectOwner
-                            patternSubjectOwner.kind == 10
-                                and patternSubjectOwner.parent == patternSubjectFlowAst
-                                and patternSubjectOwner.start == patternSubjectAst.start
-                                and patternSubjectOwner.length == patternSubjectAst.length
-                                -> if { true => patternSubjectBelongs! }
-                        }
-                    # A transparent value-flow owner can carry a
-                    # provisional Unit type at the same source
-                    # start as its resolved call child. Imported
-                    # instance calls can also remain unresolved in
-                    # the semantic call table until their earlier
-                    # receiver has been lowered. For an exact
-                    # subject shape the already-resolved Typed IR
-                    # call result is the nearest authority, followed
-                    # by the semantic call's declared result.
-                    patternSubjectBelongs! -> if {
-                        0 => patternSubjectIrSearch!
-                        patternSubjectIrSearch! < (nodes -> len) -> while {
-                            nodes[patternSubjectIrSearch!] => patternSubjectIr
-                            (patternSubjectIr.kind == 6 or patternSubjectIr.kind == 9)
-                                and patternSubjectIr.sourceModule == sourceIndex
-                                and patternSubjectIr.astNode >= 0
-                                and patternSubjectIr.typeId >= 0
-                                -> if {
-                                    prepared.package.nodes[sourceRange.astStart + patternSubjectIr.astNode] => patternSubjectIrAst
-                                    patternSubjectIr.astNode == patternSubjectSearch
-                                        or (patternSubjectIrAst.parent == patternSubjectSearch
-                                        and patternSubjectIrAst.start == patternSubjectAst.start
-                                        and patternSubjectIrAst.length == patternSubjectAst.length)
-                                        -> if { patternSubjectIr.typeId => patternSubjectCandidateType! }
-                                }
-                            patternSubjectIrSearch! + 1 => patternSubjectIrSearch!
-                        }
-                        0 => patternSubjectCallSearch!
-                        patternSubjectCallSearch! < (prepared.calls -> len)
-                            -> while {
-                                prepared.calls[patternSubjectCallSearch!] => patternSubjectCall
-                                patternSubjectCall.status == 0
-                                    and patternSubjectCall.sourceModule == sourceIndex
-                                    and patternSubjectCall.callAst >= 0
-                                    and patternSubjectCall.callAst < sourceRange.astCount
-                                    and patternSubjectCall.targetSourceModule >= 0
-                                    and patternSubjectCall.functionSymbol >= 0
-                                    -> if {
-                                        prepared.package.nodes[sourceRange.astStart + patternSubjectCall.callAst] => patternSubjectCallAst
-                                        patternSubjectCall.callAst == patternSubjectSearch
-                                            or (patternSubjectCallAst.parent == patternSubjectSearch
-                                            and patternSubjectCallAst.start == patternSubjectAst.start
-                                            and patternSubjectCallAst.length == patternSubjectAst.length)
+                            0 => localPatternFunctionSearch!
+                            localPatternFunctionSearch! < (resolvedNames -> len)
+                                -> while {
+                                    resolvedNames[localPatternFunctionSearch!] => localPatternFunctionName
+                                    localPatternFunctionName.astNode => localPatternFunctionAncestor!
+                                    false => localPatternFunctionBelongs!
+                                    localPatternFunctionAncestor! >= 0 and not localPatternFunctionBelongs!
+                                        -> while {
+                                            localPatternFunctionAncestor! == patternSubjectSearch
+                                                -> if {
+                                                    true => localPatternFunctionBelongs!
+                                                } else {
+                                                    prepared.package.nodes[sourceRange.astStart + localPatternFunctionAncestor!].parent => localPatternFunctionAncestor!
+                                                }
+                                        }
+                                    localPatternFunctionBelongs! -> if {
+                                        prepared.package.symbols[sourceRange.symbolStart + localPatternFunctionName.symbol] => localPatternFunction
+                                        localPatternFunction.kind == 7 or localPatternFunction.kind == 31
                                             -> if {
-                                                patternSubjectCall.targetSourceModule -> functionResultTypeId(patternSubjectCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCallTypeId
-                                                patternSubjectCallTypeId >= 0 -> if { patternSubjectCallTypeId => patternSubjectCandidateType! }
+                                                sourceIndex -> functionResultTypeId(localPatternFunctionName.symbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCandidateType!
                                             }
                                     }
-                                patternSubjectCallSearch! + 1 => patternSubjectCallSearch!
+                                    localPatternFunctionSearch! + 1 => localPatternFunctionSearch!
+                                }
+                        }
+                        patternSubjectAst.parent == patternSubjectFlowAst => patternSubjectBelongs!
+                        not patternSubjectBelongs! and patternSubjectAst.parent >= 0
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + patternSubjectAst.parent] => patternSubjectOwner
+                                patternSubjectOwner.kind == 10
+                                    and patternSubjectOwner.parent == patternSubjectFlowAst
+                                    and patternSubjectOwner.start == patternSubjectAst.start
+                                    and patternSubjectOwner.length == patternSubjectAst.length
+                                    -> if { true => patternSubjectBelongs! }
                             }
-                    }
-                    frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(patternSubjectCandidateType!) => patternSubjectCandidateType!
-                    patternSubjectBelongs! and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 1)
-                        -> if {
-                            patternSubjectTypeId! < 0 or patternSubjectAst.start > patternSubjectStart!
-                                -> if {
-                                    patternSubjectCandidateType! => patternSubjectTypeId!
-                                    patternSubjectAst.start => patternSubjectStart!
-                                }
-                        }
-                    patternSubjectPosition! + 1 => patternSubjectPosition!
-                }
-            # The semantic call table is the final subject-type
-            # authority. A normalized nullary call can own the flow
-            # AST itself; an ordinary call can sit directly below
-            # it or below the one exact same-span value-flow owner.
-            # Keep those shapes equivalent without spelling or
-            # ancestry searches.
-            patternSubjectTypeId! < 0 -> if {
-                UIntSize(0) => patternCallStart!
-                0 => patternCallSearch!
-                patternCallSearch! < (prepared.calls -> len) -> while {
-                    prepared.calls[patternCallSearch!] => patternCall
-                    patternCall.status == 0
-                        and patternCall.sourceModule == sourceIndex
-                        and patternCall.callAst >= 0
-                        and patternCall.callAst < sourceRange.astCount
-                        and patternCall.targetSourceModule >= 0
-                        and patternCall.functionSymbol >= 0
-                        -> if {
-                            prepared.package.nodes[sourceRange.astStart + patternCall.callAst] => patternCallAst
-                            patternCall.callAst == patternSubjectFlowAst
-                                or patternCallAst.parent == patternSubjectFlowAst
-                                => patternCallBelongs!
-                            not patternCallBelongs! and patternCallAst.parent >= 0
-                                -> if {
-                                    prepared.package.nodes[sourceRange.astStart + patternCallAst.parent] => patternCallOwner
-                                    patternCallOwner.kind == 10
-                                        and patternCallOwner.parent == patternSubjectFlowAst
-                                        and patternCallOwner.start == patternCallAst.start
-                                        and patternCallOwner.length == patternCallAst.length
-                                        -> if { true => patternCallBelongs! }
-                                }
-                            patternCallBelongs!
-                                and patternCallAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start
-                                and (patternSubjectTypeId! < 0 or patternCallAst.start > patternCallStart!)
-                                -> if {
-                                    patternCall.targetSourceModule -> functionResultTypeId(patternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternCallTypeId
-                                    patternCallTypeId >= 0 -> if {
-                                        patternCallTypeId => patternSubjectTypeId!
-                                        patternCallAst.start => patternCallStart!
+                        # A transparent value-flow owner can carry a
+                        # provisional Unit type at the same source
+                        # start as its resolved call child. Imported
+                        # instance calls can also remain unresolved in
+                        # the semantic call table until their earlier
+                        # receiver has been lowered. For an exact
+                        # subject shape the already-resolved Typed IR
+                        # call result is the nearest authority, followed
+                        # by the semantic call's declared result.
+                        patternSubjectBelongs! -> if {
+                            0 => patternSubjectIrSearch!
+                            patternSubjectIrSearch! < (nodes -> len) -> while {
+                                nodes[patternSubjectIrSearch!] => patternSubjectIr
+                                (patternSubjectIr.kind == 6 or patternSubjectIr.kind == 9)
+                                    and patternSubjectIr.sourceModule == sourceIndex
+                                    and patternSubjectIr.astNode >= 0
+                                    and patternSubjectIr.typeId >= 0
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + patternSubjectIr.astNode] => patternSubjectIrAst
+                                        patternSubjectIr.astNode == patternSubjectSearch
+                                            or (patternSubjectIrAst.parent == patternSubjectSearch
+                                            and patternSubjectIrAst.start == patternSubjectAst.start
+                                            and patternSubjectIrAst.length == patternSubjectAst.length)
+                                            -> if { patternSubjectIr.typeId => patternSubjectCandidateType! }
                                     }
+                                patternSubjectIrSearch! + 1 => patternSubjectIrSearch!
+                            }
+                            0 => patternSubjectCallSearch!
+                            patternSubjectCallSearch! < (prepared.calls -> len)
+                                -> while {
+                                    prepared.calls[patternSubjectCallSearch!] => patternSubjectCall
+                                    patternSubjectCall.status == 0
+                                        and patternSubjectCall.sourceModule == sourceIndex
+                                        and patternSubjectCall.callAst >= 0
+                                        and patternSubjectCall.callAst < sourceRange.astCount
+                                        and patternSubjectCall.targetSourceModule >= 0
+                                        and patternSubjectCall.functionSymbol >= 0
+                                        -> if {
+                                            prepared.package.nodes[sourceRange.astStart + patternSubjectCall.callAst] => patternSubjectCallAst
+                                            patternSubjectCall.callAst == patternSubjectSearch
+                                                or (patternSubjectCallAst.parent == patternSubjectSearch
+                                                and patternSubjectCallAst.start == patternSubjectAst.start
+                                                and patternSubjectCallAst.length == patternSubjectAst.length)
+                                                -> if {
+                                                    patternSubjectCall.targetSourceModule -> functionResultTypeId(patternSubjectCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCallTypeId
+                                                    patternSubjectCallTypeId >= 0 -> if { patternSubjectCallTypeId => patternSubjectCandidateType! }
+                                                }
+                                        }
+                                    patternSubjectCallSearch! + 1 => patternSubjectCallSearch!
                                 }
                         }
-                    patternCallSearch! + 1 => patternCallSearch!
+                        frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(patternSubjectCandidateType!) => patternSubjectCandidateType!
+                        patternSubjectBelongs! and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 1)
+                            -> if {
+                                patternSubjectTypeId! < 0 or patternSubjectAst.start > patternSubjectStart!
+                                    -> if {
+                                        patternSubjectCandidateType! => patternSubjectTypeId!
+                                        patternSubjectAst.start => patternSubjectStart!
+                                    }
+                            }
+                        patternSubjectPosition! + 1 => patternSubjectPosition!
+                    }
+                # The semantic call table is the final subject-type
+                # authority. A normalized nullary call can own the flow
+                # AST itself; an ordinary call can sit directly below
+                # it or below the one exact same-span value-flow owner.
+                # Keep those shapes equivalent without spelling or
+                # ancestry searches.
+                patternSubjectTypeId! < 0 -> if {
+                    UIntSize(0) => patternCallStart!
+                    0 => patternCallSearch!
+                    patternCallSearch! < (prepared.calls -> len) -> while {
+                        prepared.calls[patternCallSearch!] => patternCall
+                        patternCall.status == 0
+                            and patternCall.sourceModule == sourceIndex
+                            and patternCall.callAst >= 0
+                            and patternCall.callAst < sourceRange.astCount
+                            and patternCall.targetSourceModule >= 0
+                            and patternCall.functionSymbol >= 0
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + patternCall.callAst] => patternCallAst
+                                patternCall.callAst == patternSubjectFlowAst
+                                    or patternCallAst.parent == patternSubjectFlowAst
+                                    => patternCallBelongs!
+                                not patternCallBelongs! and patternCallAst.parent >= 0
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + patternCallAst.parent] => patternCallOwner
+                                        patternCallOwner.kind == 10
+                                            and patternCallOwner.parent == patternSubjectFlowAst
+                                            and patternCallOwner.start == patternCallAst.start
+                                            and patternCallOwner.length == patternCallAst.length
+                                            -> if { true => patternCallBelongs! }
+                                    }
+                                patternCallBelongs!
+                                    and patternCallAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start
+                                    and (patternSubjectTypeId! < 0 or patternCallAst.start > patternCallStart!)
+                                    -> if {
+                                        patternCall.targetSourceModule -> functionResultTypeId(patternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternCallTypeId
+                                        patternCallTypeId >= 0 -> if {
+                                            patternCallTypeId => patternSubjectTypeId!
+                                            patternCallAst.start => patternCallStart!
+                                        }
+                                    }
+                            }
+                        patternCallSearch! + 1 => patternCallSearch!
+                    }
+                }
+                patternSubjectTypeId! >= 0 -> if {
+                    frozenRecursiveSemanticTypes[patternSubjectTypeId!] => patternSubjectType
+                    prepared.package.tokens[sourceRange.tokenStart + patternTypeNode.payloadToken] => patternVariantToken
+                    patternSubjectType.kind == 7 -> if {
+                        patternSubjectType.first => recursiveExpressionTypeId!
+                        (source -> byte(patternVariantToken.span.start)) == 69
+                            -> if { patternSubjectType.second => recursiveExpressionTypeId! }
+                    } else {
+                        sourceIndex -> nominalVariantPayloadTypeId(patternSubjectType, patternVariantToken, prepared, recursiveTypes) => recursiveExpressionTypeId!
+                    }
+                    recursiveExpressionTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => patternPayloadType
+                        patternPayloadType.origin => expressionTypeOrigin!
+                        patternPayloadType.module => expressionTypeModule!
+                        patternPayloadType.symbol => expressionTypeSymbol!
+                        true => knownPatternReference!
+                    }
                 }
             }
-            patternSubjectTypeId! >= 0 -> if {
-                frozenRecursiveSemanticTypes[patternSubjectTypeId!] => patternSubjectType
-                prepared.package.tokens[sourceRange.tokenStart + patternTypeNode.payloadToken] => patternVariantToken
-                patternSubjectType.kind == 7 -> if {
-                    patternSubjectType.first => recursiveExpressionTypeId!
-                    (source -> byte(patternVariantToken.span.start)) == 69
-                        -> if { patternSubjectType.second => recursiveExpressionTypeId! }
-                } else {
-                    sourceIndex -> nominalVariantPayloadTypeId(patternSubjectType, patternVariantToken, prepared, recursiveTypes) => recursiveExpressionTypeId!
-                }
-                recursiveExpressionTypeId! >= 0 -> if {
-                    frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => patternPayloadType
-                    patternPayloadType.origin => expressionTypeOrigin!
-                    patternPayloadType.module => expressionTypeModule!
-                    patternPayloadType.symbol => expressionTypeSymbol!
-                    true => knownPatternReference!
-                }
-            }
-        }
         false => knownParameterReference!
         parameterSymbol => knownParameterReferenceSymbol!
         # The canonical resolver owns the complete name, including any Bang

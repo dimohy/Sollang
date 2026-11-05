@@ -523,158 +523,160 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                     -1 => enumPayloadTypeId!
                     enumPayloadMatch.operand0 >= 0 -> if {
                         nodes[enumPayloadMatch.operand0] => enumPayloadSubject
-                        enumPayloadSubject.typeId >= 0 -> if {
-                            frozenRecursiveSemanticTypes[enumPayloadSubject.typeId] => enumPayloadSubjectType
-                            enumPayloadSubjectType.kind == 7 and enumPayloadSubjectType.origin == 4
-                                -> if {
-                                    enumPayloadSubjectType.symbol == 0 -> if { enumPayloadSubjectType.first => enumPayloadTypeId! }
-                                    enumPayloadSubjectType.symbol == 1 -> if {
-                                        enumPayloadArm.opcode == 0 -> if { enumPayloadSubjectType.first => enumPayloadTypeId! } else { enumPayloadSubjectType.second => enumPayloadTypeId! }
-                                    }
-                                }
-                            enumPayloadSubjectType.kind == 1 -> if {
-                                enumPayloadSubjectType.module => enumPayloadOwnerSource!
-                                enumPayloadSubjectType.origin == 2 -> if {
-                                    enumPayloadSubjectType.module >= 0 and enumPayloadSubjectType.module < (prepared.modules -> len)
-                                        -> if {
-                                            prepared.modules[enumPayloadSubjectType.module].sourceIndex => enumPayloadOwnerSource!
-                                        }
-                                }
-                                enumPayloadOwnerSource! >= 0 and enumPayloadOwnerSource! < (prepared.package.ranges -> len)
+                        frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(enumPayloadSubject.typeId) => enumPayloadSubjectTypeId
+                        enumPayloadSubjectTypeId >= 0 and enumPayloadSubjectTypeId < (frozenRecursiveSemanticTypes -> len)
+                            -> if {
+                                frozenRecursiveSemanticTypes[enumPayloadSubjectTypeId] => enumPayloadSubjectType
+                                enumPayloadSubjectType.kind == 7 and enumPayloadSubjectType.origin == 4
                                     -> if {
-                                        prepared.package.ranges[enumPayloadTypeRepair!.sourceModule] => enumPayloadUseRange
-                                        -1 => enumPayloadPatternAst!
-                                        0 => enumPayloadPatternSearch!
-                                        enumPayloadPatternSearch! < enumPayloadUseRange.astCount
-                                            -> while {
-                                                prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternSearch!] => enumPayloadPatternCandidate
-                                                enumPayloadPatternCandidate.parent => enumPayloadPatternParent!
-                                                enumPayloadPatternParent! >= 0 and prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternParent!].kind == 70
-                                                    -> if {
-                                                        prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternParent!].parent => enumPayloadPatternParent!
-                                                    }
-                                                enumPayloadPatternCandidate.kind == 59 and enumPayloadPatternParent! == enumPayloadArm.astNode
-                                                    -> if { enumPayloadPatternSearch! => enumPayloadPatternAst! }
-                                                enumPayloadPatternSearch! + 1 => enumPayloadPatternSearch!
-                                            }
-                                        enumPayloadPatternAst! >= 0 -> if {
-                                            prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternAst!] => enumPayloadPattern
-                                            prepared.package.tokens[enumPayloadUseRange.tokenStart + enumPayloadPattern.payloadToken] => enumPayloadPatternName
-                                            prepared.package.ranges[enumPayloadOwnerSource!] => enumPayloadOwnerRange
-                                            0 => enumPayloadVariantOrdinal!
-                                            0 => enumPayloadVariantSearch!
-                                            enumPayloadVariantSearch! < enumPayloadOwnerRange.symbolCount
-                                                -> while {
-                                                    prepared.package.symbols[enumPayloadOwnerRange.symbolStart + enumPayloadVariantSearch!] => enumPayloadVariant
-                                                    enumPayloadVariant.kind == 27 and enumPayloadVariant.parent == enumPayloadSubjectType.symbol and enumPayloadVariant.nameToken >= 0
-                                                        -> if {
-                                                            prepared.package.tokens[enumPayloadOwnerRange.tokenStart + enumPayloadVariant.nameToken] => enumPayloadVariantName
-                                                            enumPayloadPatternName.span.length == enumPayloadVariantName.span.length => enumPayloadVariantEqual!
-                                                            UIntSize(0) => enumPayloadVariantByte!
-                                                            enumPayloadVariantEqual! and enumPayloadVariantByte! < enumPayloadPatternName.span.length
-                                                                -> while {
-                                                                    (prepared.package.sources[enumPayloadTypeRepair!.sourceModule] -> byte(enumPayloadPatternName.span.start + enumPayloadVariantByte!)) != (prepared.package.sources[enumPayloadOwnerSource!] -> byte(enumPayloadVariantName.span.start + enumPayloadVariantByte!))
-                                                                        -> if { false => enumPayloadVariantEqual! }
-                                                                    enumPayloadVariantByte! + 1 => enumPayloadVariantByte!
-                                                                }
-                                                            (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadVariant.typeNode >= 0
-                                                                -> if {
-                                                                    -1 => enumPayloadReferenceIndex!
-                                                                    enumPayloadVariant.typeNode < enumPayloadOwnerRange.astCount
-                                                                        -> if { recursiveTypes.referenceIndexByTypeAst[enumPayloadOwnerRange.astStart + enumPayloadVariant.typeNode] => enumPayloadReferenceIndex! }
-                                                                    enumPayloadReferenceIndex! >= 0 and recursiveTypes.references[enumPayloadReferenceIndex!].status == 0
-                                                                        -> if { recursiveTypes.references[enumPayloadReferenceIndex!].typeId => enumPayloadTypeId! }
-                                                                }
-                                                            (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadTypeId! < 0
-                                                                -> if {
-                                                                    0 => enumPayloadNestedReferenceSearch!
-                                                                    enumPayloadNestedReferenceSearch! < (recursiveTypes.references -> len)
-                                                                        -> while {
-                                                                            recursiveTypes.references[enumPayloadNestedReferenceSearch!] => enumPayloadNestedReference
-                                                                            enumPayloadNestedReference.status == 0 and enumPayloadNestedReference.sourceModule == enumPayloadOwnerSource! and enumPayloadNestedReference.typeAst >= 0
-                                                                                -> if {
-                                                                                    enumPayloadNestedReference.typeAst => enumPayloadNestedAncestor!
-                                                                                    false => enumPayloadNestedBelongs!
-                                                                                    enumPayloadNestedAncestor! >= 0 and not enumPayloadNestedBelongs!
-                                                                                        -> while {
-                                                                                            enumPayloadNestedAncestor! == enumPayloadVariant.astNode
-                                                                                                -> if {
-                                                                                                    true => enumPayloadNestedBelongs!
-                                                                                                } else {
-                                                                                                    prepared.package.nodes[enumPayloadOwnerRange.astStart + enumPayloadNestedAncestor!].parent => enumPayloadNestedAncestor!
-                                                                                                }
-                                                                                        }
-                                                                                    enumPayloadNestedBelongs! -> if { enumPayloadNestedReference.typeId => enumPayloadTypeId! }
-                                                                                }
-                                                                            enumPayloadNestedReferenceSearch! + 1 => enumPayloadNestedReferenceSearch!
-                                                                        }
-                                                                }
-                                                            (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadTypeId! < 0
-                                                                -> if {
-                                                                    0 => enumPayloadNominalSearch!
-                                                                    enumPayloadNominalSearch! < (prepared.nominal -> len)
-                                                                        -> while {
-                                                                            prepared.nominal[enumPayloadNominalSearch!] => enumPayloadNominal
-                                                                            enumPayloadNominal.status == 0 and enumPayloadNominal.sourceModule == enumPayloadOwnerSource! and enumPayloadNominal.typeAst >= 0
-                                                                                -> if {
-                                                                                    enumPayloadNominal.typeAst => enumPayloadNominalAncestor!
-                                                                                    false => enumPayloadNominalBelongs!
-                                                                                    enumPayloadNominalAncestor! >= 0 and not enumPayloadNominalBelongs!
-                                                                                        -> while {
-                                                                                            enumPayloadNominalAncestor! == enumPayloadVariant.astNode
-                                                                                                -> if {
-                                                                                                    true => enumPayloadNominalBelongs!
-                                                                                                } else {
-                                                                                                    prepared.package.nodes[enumPayloadOwnerRange.astStart + enumPayloadNominalAncestor!].parent => enumPayloadNominalAncestor!
-                                                                                                }
-                                                                                        }
-                                                                                    enumPayloadNominalBelongs! -> if { enumPayloadNominal.canonical => enumPayloadTypeId! }
-                                                                                }
-                                                                            enumPayloadNominalSearch! + 1 => enumPayloadNominalSearch!
-                                                                        }
-                                                                }
-                                                            enumPayloadVariantOrdinal! + 1 => enumPayloadVariantOrdinal!
-                                                        }
-                                                    enumPayloadVariantSearch! + 1 => enumPayloadVariantSearch!
-                                                }
-                                        }
-                                        # The arm opcode is the canonical declaration
-                                        # ordinal.  Pattern AST wrappers are source-shape
-                                        # metadata and may be normalized away, so payload
-                                        # typing must not depend on rediscovering one.
-                                        enumPayloadTypeId! < 0 -> if {
-                                            prepared.package.ranges[enumPayloadOwnerSource!] => enumPayloadOrdinalRange
-                                            0 => enumPayloadOrdinal!
-                                            0 => enumPayloadOrdinalSymbolSearch!
-                                            enumPayloadOrdinalSymbolSearch! < enumPayloadOrdinalRange.symbolCount
-                                                -> while {
-                                                    prepared.package.symbols[enumPayloadOrdinalRange.symbolStart + enumPayloadOrdinalSymbolSearch!] => enumPayloadOrdinalVariant
-                                                    enumPayloadOrdinalVariant.kind == 27 and enumPayloadOrdinalVariant.parent == enumPayloadSubjectType.symbol
-                                                        -> if {
-                                                            enumPayloadOrdinal! == enumPayloadArm.opcode and enumPayloadOrdinalVariant.typeNode >= 0
-                                                                -> if {
-                                                                    -1 => enumPayloadOrdinalReferenceIndex!
-                                                                    enumPayloadOrdinalVariant.typeNode < enumPayloadOrdinalRange.astCount
-                                                                        -> if { recursiveTypes.referenceIndexByTypeAst[enumPayloadOrdinalRange.astStart + enumPayloadOrdinalVariant.typeNode] => enumPayloadOrdinalReferenceIndex! }
-                                                                    enumPayloadOrdinalReferenceIndex! >= 0 and recursiveTypes.references[enumPayloadOrdinalReferenceIndex!].status == 0
-                                                                        -> if { recursiveTypes.references[enumPayloadOrdinalReferenceIndex!].typeId => enumPayloadTypeId! }
-                                                                    0 => enumPayloadOrdinalNominalSearch!
-                                                                    enumPayloadOrdinalNominalSearch! < (prepared.nominal -> len) and enumPayloadTypeId! < 0
-                                                                        -> while {
-                                                                            prepared.nominal[enumPayloadOrdinalNominalSearch!] => enumPayloadOrdinalNominal
-                                                                            enumPayloadOrdinalNominal.status == 0 and enumPayloadOrdinalNominal.sourceModule == enumPayloadOwnerSource! and enumPayloadOrdinalNominal.typeAst == enumPayloadOrdinalVariant.typeNode
-                                                                                -> if { enumPayloadOrdinalNominal.canonical => enumPayloadTypeId! }
-                                                                            enumPayloadOrdinalNominalSearch! + 1 => enumPayloadOrdinalNominalSearch!
-                                                                        }
-                                                                }
-                                                            enumPayloadOrdinal! + 1 => enumPayloadOrdinal!
-                                                        }
-                                                    enumPayloadOrdinalSymbolSearch! + 1 => enumPayloadOrdinalSymbolSearch!
-                                                }
+                                        enumPayloadSubjectType.symbol == 0 -> if { enumPayloadSubjectType.first => enumPayloadTypeId! }
+                                        enumPayloadSubjectType.symbol == 1 -> if {
+                                            enumPayloadArm.opcode == 0 -> if { enumPayloadSubjectType.first => enumPayloadTypeId! } else { enumPayloadSubjectType.second => enumPayloadTypeId! }
                                         }
                                     }
+                                enumPayloadSubjectType.kind == 1 -> if {
+                                    enumPayloadSubjectType.module => enumPayloadOwnerSource!
+                                    enumPayloadSubjectType.origin == 2 -> if {
+                                        enumPayloadSubjectType.module >= 0 and enumPayloadSubjectType.module < (prepared.modules -> len)
+                                            -> if {
+                                                prepared.modules[enumPayloadSubjectType.module].sourceIndex => enumPayloadOwnerSource!
+                                            }
+                                    }
+                                    enumPayloadOwnerSource! >= 0 and enumPayloadOwnerSource! < (prepared.package.ranges -> len)
+                                        -> if {
+                                            prepared.package.ranges[enumPayloadTypeRepair!.sourceModule] => enumPayloadUseRange
+                                            -1 => enumPayloadPatternAst!
+                                            0 => enumPayloadPatternSearch!
+                                            enumPayloadPatternSearch! < enumPayloadUseRange.astCount
+                                                -> while {
+                                                    prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternSearch!] => enumPayloadPatternCandidate
+                                                    enumPayloadPatternCandidate.parent => enumPayloadPatternParent!
+                                                    enumPayloadPatternParent! >= 0 and prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternParent!].kind == 70
+                                                        -> if {
+                                                            prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternParent!].parent => enumPayloadPatternParent!
+                                                        }
+                                                    enumPayloadPatternCandidate.kind == 59 and enumPayloadPatternParent! == enumPayloadArm.astNode
+                                                        -> if { enumPayloadPatternSearch! => enumPayloadPatternAst! }
+                                                    enumPayloadPatternSearch! + 1 => enumPayloadPatternSearch!
+                                                }
+                                            enumPayloadPatternAst! >= 0 -> if {
+                                                prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternAst!] => enumPayloadPattern
+                                                prepared.package.tokens[enumPayloadUseRange.tokenStart + enumPayloadPattern.payloadToken] => enumPayloadPatternName
+                                                prepared.package.ranges[enumPayloadOwnerSource!] => enumPayloadOwnerRange
+                                                0 => enumPayloadVariantOrdinal!
+                                                0 => enumPayloadVariantSearch!
+                                                enumPayloadVariantSearch! < enumPayloadOwnerRange.symbolCount
+                                                    -> while {
+                                                        prepared.package.symbols[enumPayloadOwnerRange.symbolStart + enumPayloadVariantSearch!] => enumPayloadVariant
+                                                        enumPayloadVariant.kind == 27 and enumPayloadVariant.parent == enumPayloadSubjectType.symbol and enumPayloadVariant.nameToken >= 0
+                                                            -> if {
+                                                                prepared.package.tokens[enumPayloadOwnerRange.tokenStart + enumPayloadVariant.nameToken] => enumPayloadVariantName
+                                                                enumPayloadPatternName.span.length == enumPayloadVariantName.span.length => enumPayloadVariantEqual!
+                                                                UIntSize(0) => enumPayloadVariantByte!
+                                                                enumPayloadVariantEqual! and enumPayloadVariantByte! < enumPayloadPatternName.span.length
+                                                                    -> while {
+                                                                        (prepared.package.sources[enumPayloadTypeRepair!.sourceModule] -> byte(enumPayloadPatternName.span.start + enumPayloadVariantByte!)) != (prepared.package.sources[enumPayloadOwnerSource!] -> byte(enumPayloadVariantName.span.start + enumPayloadVariantByte!))
+                                                                            -> if { false => enumPayloadVariantEqual! }
+                                                                        enumPayloadVariantByte! + 1 => enumPayloadVariantByte!
+                                                                    }
+                                                                (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadVariant.typeNode >= 0
+                                                                    -> if {
+                                                                        -1 => enumPayloadReferenceIndex!
+                                                                        enumPayloadVariant.typeNode < enumPayloadOwnerRange.astCount
+                                                                            -> if { recursiveTypes.referenceIndexByTypeAst[enumPayloadOwnerRange.astStart + enumPayloadVariant.typeNode] => enumPayloadReferenceIndex! }
+                                                                        enumPayloadReferenceIndex! >= 0 and recursiveTypes.references[enumPayloadReferenceIndex!].status == 0
+                                                                            -> if { recursiveTypes.references[enumPayloadReferenceIndex!].typeId => enumPayloadTypeId! }
+                                                                    }
+                                                                (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadTypeId! < 0
+                                                                    -> if {
+                                                                        0 => enumPayloadNestedReferenceSearch!
+                                                                        enumPayloadNestedReferenceSearch! < (recursiveTypes.references -> len)
+                                                                            -> while {
+                                                                                recursiveTypes.references[enumPayloadNestedReferenceSearch!] => enumPayloadNestedReference
+                                                                                enumPayloadNestedReference.status == 0 and enumPayloadNestedReference.sourceModule == enumPayloadOwnerSource! and enumPayloadNestedReference.typeAst >= 0
+                                                                                    -> if {
+                                                                                        enumPayloadNestedReference.typeAst => enumPayloadNestedAncestor!
+                                                                                        false => enumPayloadNestedBelongs!
+                                                                                        enumPayloadNestedAncestor! >= 0 and not enumPayloadNestedBelongs!
+                                                                                            -> while {
+                                                                                                enumPayloadNestedAncestor! == enumPayloadVariant.astNode
+                                                                                                    -> if {
+                                                                                                        true => enumPayloadNestedBelongs!
+                                                                                                    } else {
+                                                                                                        prepared.package.nodes[enumPayloadOwnerRange.astStart + enumPayloadNestedAncestor!].parent => enumPayloadNestedAncestor!
+                                                                                                    }
+                                                                                            }
+                                                                                        enumPayloadNestedBelongs! -> if { enumPayloadNestedReference.typeId => enumPayloadTypeId! }
+                                                                                    }
+                                                                                enumPayloadNestedReferenceSearch! + 1 => enumPayloadNestedReferenceSearch!
+                                                                            }
+                                                                    }
+                                                                (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadTypeId! < 0
+                                                                    -> if {
+                                                                        0 => enumPayloadNominalSearch!
+                                                                        enumPayloadNominalSearch! < (prepared.nominal -> len)
+                                                                            -> while {
+                                                                                prepared.nominal[enumPayloadNominalSearch!] => enumPayloadNominal
+                                                                                enumPayloadNominal.status == 0 and enumPayloadNominal.sourceModule == enumPayloadOwnerSource! and enumPayloadNominal.typeAst >= 0
+                                                                                    -> if {
+                                                                                        enumPayloadNominal.typeAst => enumPayloadNominalAncestor!
+                                                                                        false => enumPayloadNominalBelongs!
+                                                                                        enumPayloadNominalAncestor! >= 0 and not enumPayloadNominalBelongs!
+                                                                                            -> while {
+                                                                                                enumPayloadNominalAncestor! == enumPayloadVariant.astNode
+                                                                                                    -> if {
+                                                                                                        true => enumPayloadNominalBelongs!
+                                                                                                    } else {
+                                                                                                        prepared.package.nodes[enumPayloadOwnerRange.astStart + enumPayloadNominalAncestor!].parent => enumPayloadNominalAncestor!
+                                                                                                    }
+                                                                                            }
+                                                                                        enumPayloadNominalBelongs! -> if { enumPayloadNominal.canonical => enumPayloadTypeId! }
+                                                                                    }
+                                                                                enumPayloadNominalSearch! + 1 => enumPayloadNominalSearch!
+                                                                            }
+                                                                    }
+                                                                enumPayloadVariantOrdinal! + 1 => enumPayloadVariantOrdinal!
+                                                            }
+                                                        enumPayloadVariantSearch! + 1 => enumPayloadVariantSearch!
+                                                    }
+                                            }
+                                            # The arm opcode is the canonical declaration
+                                            # ordinal.  Pattern AST wrappers are source-shape
+                                            # metadata and may be normalized away, so payload
+                                            # typing must not depend on rediscovering one.
+                                            enumPayloadTypeId! < 0 -> if {
+                                                prepared.package.ranges[enumPayloadOwnerSource!] => enumPayloadOrdinalRange
+                                                0 => enumPayloadOrdinal!
+                                                0 => enumPayloadOrdinalSymbolSearch!
+                                                enumPayloadOrdinalSymbolSearch! < enumPayloadOrdinalRange.symbolCount
+                                                    -> while {
+                                                        prepared.package.symbols[enumPayloadOrdinalRange.symbolStart + enumPayloadOrdinalSymbolSearch!] => enumPayloadOrdinalVariant
+                                                        enumPayloadOrdinalVariant.kind == 27 and enumPayloadOrdinalVariant.parent == enumPayloadSubjectType.symbol
+                                                            -> if {
+                                                                enumPayloadOrdinal! == enumPayloadArm.opcode and enumPayloadOrdinalVariant.typeNode >= 0
+                                                                    -> if {
+                                                                        -1 => enumPayloadOrdinalReferenceIndex!
+                                                                        enumPayloadOrdinalVariant.typeNode < enumPayloadOrdinalRange.astCount
+                                                                            -> if { recursiveTypes.referenceIndexByTypeAst[enumPayloadOrdinalRange.astStart + enumPayloadOrdinalVariant.typeNode] => enumPayloadOrdinalReferenceIndex! }
+                                                                        enumPayloadOrdinalReferenceIndex! >= 0 and recursiveTypes.references[enumPayloadOrdinalReferenceIndex!].status == 0
+                                                                            -> if { recursiveTypes.references[enumPayloadOrdinalReferenceIndex!].typeId => enumPayloadTypeId! }
+                                                                        0 => enumPayloadOrdinalNominalSearch!
+                                                                        enumPayloadOrdinalNominalSearch! < (prepared.nominal -> len) and enumPayloadTypeId! < 0
+                                                                            -> while {
+                                                                                prepared.nominal[enumPayloadOrdinalNominalSearch!] => enumPayloadOrdinalNominal
+                                                                                enumPayloadOrdinalNominal.status == 0 and enumPayloadOrdinalNominal.sourceModule == enumPayloadOwnerSource! and enumPayloadOrdinalNominal.typeAst == enumPayloadOrdinalVariant.typeNode
+                                                                                    -> if { enumPayloadOrdinalNominal.canonical => enumPayloadTypeId! }
+                                                                                enumPayloadOrdinalNominalSearch! + 1 => enumPayloadOrdinalNominalSearch!
+                                                                            }
+                                                                    }
+                                                                enumPayloadOrdinal! + 1 => enumPayloadOrdinal!
+                                                            }
+                                                        enumPayloadOrdinalSymbolSearch! + 1 => enumPayloadOrdinalSymbolSearch!
+                                                    }
+                                            }
+                                        }
+                                }
                             }
-                        }
                     }
                     enumPayloadTypeId! >= 0 and enumPayloadTypeId! < (frozenRecursiveSemanticTypes -> len)
                         -> if {
