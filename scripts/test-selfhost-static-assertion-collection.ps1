@@ -143,4 +143,30 @@ foreach ($probe in $layoutMutations) {
     if (-not $layoutRejected) { throw ('Declared layout mutation was not rejected: ' + $probe.Expected) }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 27; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7 } | ConvertTo-Json
+$continuationAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -eq 'Assert-Matches' -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -ceq 'ownership joins compare continuing alternatives only'
+}, $true))
+if ($continuationAssertions.Count -ne 1) { throw 'Continuation assertion inventory differs' }
+$continuationAssertion = [scriptblock]::Create($continuationAssertions[0].Extent.Text)
+$semanticOwnership = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'selfhost/semantic/ownership_check.slg'))
+$originalOwnership = $semanticOwnership
+& $continuationAssertion
+$completed++
+foreach ($mutation in @(
+    $originalOwnership.Replace('not terminatingControls[retainingAlternativeRegion]', 'terminatingControls[retainingAlternativeRegion]'),
+    $originalOwnership.Replace('not terminatingControls[retainingAlternativeRegion]', 'true'),
+    $originalOwnership.Replace('alternativeRegion -> alternativeBody => retainingAlternativeRegion', 'alternativeRegion => retainingAlternativeRegion')
+)) {
+    $semanticOwnership = $mutation
+    $rejected = $false
+    try { & $continuationAssertion } catch {
+        if (-not $_.Exception.Message.StartsWith('ownership joins compare continuing alternatives only is missing:')) { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw 'Broken continuing alternative guard was not rejected' }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 31; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4 } | ConvertTo-Json

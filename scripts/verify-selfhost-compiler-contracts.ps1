@@ -814,7 +814,7 @@ Assert-Contains $semanticOwnership 'bindingDeclaredBeforeControl moveEvent: type
 Assert-Contains $semanticOwnership 'moveConsumesWholeBinding moveEvent: typedIr.MoveEvent -> Bool' "ownership joins classify canonical whole-binding move sites"
 Assert-Matches $semanticOwnership '(?s)moveConsumesWholeBinding moveEvent: typedIr\.MoveEvent -> Bool.*?moveSite\.kind == 6.*?moveSite\.kind == 9.*?moveSite\.kind == 24.*?moveSite\.kind == 25.*?moveSite\.kind == 5.*?moveSite\.typeKind == 4.*?moveSite\.typeFlags / 2 % 2 == 1' "whole-binding move-site contract"
 Assert-Contains $semanticOwnership 'typed[alternativeControlIndex].kind == 18' "ownership joins inspect conditional alternatives"
-Assert-Contains $semanticOwnership 'not terminatingControls[retainingAlternativeRegion!]' "ownership joins compare continuing alternatives only"
+Assert-Matches $semanticOwnership '(?s)alternativeRegions! -> each alternativeRegion.*?alternativeRegion -> alternativeBody => retainingAlternativeRegion\s+not terminatingControls\[retainingAlternativeRegion\]\s+-> if \{\s+retainingAlternativeRegion -> regionTransfersBindingResult\(alternativeMove\)' "ownership joins compare continuing alternatives only"
 Assert-Contains $semanticOwnership 'and (alternativeMove -> moveConsumesWholeBinding)' "ownership joins exclude non-consuming projection events"
 Assert-Contains $semanticOwnership 'existingAlternativeDiagnostic.code == 33' "ownership joins deduplicate mixed-alternative diagnostics"
 Assert-Contains $emitterDiagnostics 'diagnostic.code == 33 -> if {' "mixed-alternative ownership diagnostic emission"
