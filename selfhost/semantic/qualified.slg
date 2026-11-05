@@ -814,9 +814,79 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             symbolIndex! + 1 => symbolIndex!
                                         }
                                         # The import facade is the first source of a
-                                        # logical module. If a top-level member lives
+                                        # logical module. If a member or enum variant lives
                                         # in another source fragment, continue the
                                         # lookup across identities with the same path.
+                                        -1 => missingEnumOwnerModule!
+                                        -1 => missingEnumOwnerSymbol!
+                                        false => missingEnumVariant!
+                                        targetSymbol! < 0 and identifierCount! == 3 -> if {
+                                            package -> enumOwnerInSource(sourceIndex!, secondIdentifier!, targetSourceIndex) => facadeEnumOwner
+                                            facadeEnumOwner >= 0 -> if {
+                                                targetModule => missingEnumOwnerModule!
+                                                facadeEnumOwner => missingEnumOwnerSymbol!
+                                            }
+                                        }
+                                        targetSymbol! < 0 and identifierCount! <= 3 -> if {
+                                            identities[targetModule].pathHash => targetPathHash
+                                            0 => fragmentModuleIndex!
+                                            fragmentModuleIndex! < (identities -> len) -> while {
+                                                identities[fragmentModuleIndex!] => fragmentIdentity
+                                                fragmentIdentity.pathHash == targetPathHash and fragmentModuleIndex! != targetModule
+                                                    and modules.sameLogicalAnalyzedSource(package.sources, identities, identities[targetModule].sourceIndex, fragmentIdentity.sourceIndex, package.tokens, package.ranges)
+                                                    -> if {
+                                                        fragmentIdentity.sourceIndex => fragmentSourceIndex
+                                                        package.sources[fragmentSourceIndex] -> len => fragmentSourceLength
+                                                        package.sources[fragmentSourceIndex] -> slice(UIntSize(0), fragmentSourceLength) => fragmentSource
+                                                        package.ranges[fragmentSourceIndex] => fragmentRange
+                                                        identifierCount! == 3 -> if {
+                                                            package -> enumVariantInSource(sourceIndex!, secondIdentifier!, lastIdentifier!, fragmentSourceIndex) => fragmentVariant
+                                                            fragmentVariant >= 0 -> if {
+                                                                package.symbols[fragmentRange.symbolStart + fragmentVariant] => variant
+                                                                package.symbols[fragmentRange.symbolStart + variant.parent] => owner
+                                                                fragmentVariant => targetSymbol!
+                                                                fragmentModuleIndex! => selectedTargetModule!
+                                                                owner.flags / 4 % 2 == 1 => targetPublic!
+                                                            } else {
+                                                                package -> enumOwnerInSource(sourceIndex!, secondIdentifier!, fragmentSourceIndex) => fragmentEnumOwner
+                                                                fragmentEnumOwner >= 0 and missingEnumOwnerSymbol! < 0
+                                                                    -> if {
+                                                                        fragmentModuleIndex! => missingEnumOwnerModule!
+                                                                        fragmentEnumOwner => missingEnumOwnerSymbol!
+                                                                    }
+                                                            }
+                                                        } else {
+                                                            0 => fragmentSymbolIndex!
+                                                            fragmentSymbolIndex! < fragmentRange.symbolCount
+                                                                -> while {
+                                                                    package.symbols[fragmentRange.symbolStart + fragmentSymbolIndex!] => fragmentCandidate
+                                                                    fragmentCandidate.parent < 0 and fragmentCandidate.kind != 6
+                                                                        -> if {
+                                                                            package.tokens[fragmentRange.tokenStart + fragmentCandidate.nameToken] => fragmentCandidateName
+                                                                            package.tokens[sourceRange.tokenStart + lastIdentifier!] => fragmentMemberName
+                                                                            fragmentCandidateName.span.length == fragmentMemberName.span.length => fragmentMemberEqual!
+                                                                            UIntSize(0) => fragmentMemberByte!
+                                                                            fragmentMemberEqual! and fragmentMemberByte! < fragmentCandidateName.span.length
+                                                                                -> while {
+                                                                                    (fragmentSource -> byte(fragmentCandidateName.span.start + fragmentMemberByte!)) != (source -> byte(fragmentMemberName.span.start + fragmentMemberByte!))
+                                                                                        -> if {
+                                                                                            false => fragmentMemberEqual!
+                                                                                        }
+                                                                                    fragmentMemberByte! + 1 => fragmentMemberByte!
+                                                                                }
+                                                                            fragmentMemberEqual! -> if {
+                                                                                fragmentSymbolIndex! => targetSymbol!
+                                                                                fragmentCandidate.flags >= 4 -> if { true => targetPublic! }
+                                                                                fragmentModuleIndex! => selectedTargetModule!
+                                                                            }
+                                                                        }
+                                                                    fragmentSymbolIndex! + 1 => fragmentSymbolIndex!
+                                                                }
+                                                        }
+                                                    }
+                                                fragmentModuleIndex! + 1 => fragmentModuleIndex!
+                                            }
+                                        }
                                         targetSymbol! < 0 and identifierCount! == 3 -> if {
                                             package.tokens[sourceRange.tokenStart + secondIdentifier!] => ownerToken
                                             package.tokens[sourceRange.tokenStart + lastIdentifier!] => memberToken
@@ -829,55 +899,24 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                 method.isAccessible => targetPublic!
                                             }
                                         }
-                                        targetSymbol! < 0 and identifierCount! < 3 -> if {
-                                            identities[targetModule].pathHash => targetPathHash
-                                            0 => fragmentModuleIndex!
-                                            fragmentModuleIndex! < (identities -> len) -> while {
-                                                identities[fragmentModuleIndex!] => fragmentIdentity
-                                                fragmentIdentity.pathHash == targetPathHash and fragmentModuleIndex! != targetModule
-                                                    and modules.sameLogicalAnalyzedSource(package.sources, identities, identities[targetModule].sourceIndex, fragmentIdentity.sourceIndex, package.tokens, package.ranges)
-                                                    -> if {
-                                                        fragmentIdentity.sourceIndex => fragmentSourceIndex
-                                                        package.sources[fragmentSourceIndex] -> len => fragmentSourceLength
-                                                        package.sources[fragmentSourceIndex] -> slice(UIntSize(0), fragmentSourceLength) => fragmentSource
-                                                        package.ranges[fragmentSourceIndex] => fragmentRange
-                                                        0 => fragmentSymbolIndex!
-                                                        fragmentSymbolIndex! < fragmentRange.symbolCount
-                                                            -> while {
-                                                                package.symbols[fragmentRange.symbolStart + fragmentSymbolIndex!] => fragmentCandidate
-                                                                fragmentCandidate.parent < 0 and fragmentCandidate.kind != 6
-                                                                    -> if {
-                                                                        package.tokens[fragmentRange.tokenStart + fragmentCandidate.nameToken] => fragmentCandidateName
-                                                                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => fragmentMemberName
-                                                                        fragmentCandidateName.span.length == fragmentMemberName.span.length => fragmentMemberEqual!
-                                                                        UIntSize(0) => fragmentMemberByte!
-                                                                        fragmentMemberEqual! and fragmentMemberByte! < fragmentCandidateName.span.length
-                                                                            -> while {
-                                                                                (fragmentSource -> byte(fragmentCandidateName.span.start + fragmentMemberByte!)) != (source -> byte(fragmentMemberName.span.start + fragmentMemberByte!))
-                                                                                    -> if {
-                                                                                        false => fragmentMemberEqual!
-                                                                                    }
-                                                                                fragmentMemberByte! + 1 => fragmentMemberByte!
-                                                                            }
-                                                                        fragmentMemberEqual! -> if {
-                                                                            fragmentSymbolIndex! => targetSymbol!
-                                                                            fragmentCandidate.flags >= 4 -> if { true => targetPublic! }
-                                                                            fragmentModuleIndex! => selectedTargetModule!
-                                                                        }
-                                                                    }
-                                                                fragmentSymbolIndex! + 1 => fragmentSymbolIndex!
-                                                            }
-                                                    }
-                                                fragmentModuleIndex! + 1 => fragmentModuleIndex!
+                                        targetSymbol! < 0 and missingEnumOwnerSymbol! >= 0
+                                            -> if {
+                                                missingEnumOwnerModule! => selectedTargetModule!
+                                                missingEnumOwnerSymbol! => targetSymbol!
+                                                package.ranges[identities[selectedTargetModule!].sourceIndex] => enumOwnerRange
+                                                package.symbols[enumOwnerRange.symbolStart + targetSymbol!] => owner
+                                                owner.flags / 4 % 2 == 1 => targetPublic!
+                                                true => missingEnumVariant!
                                             }
-                                        }
                                         2 => status!
                                         targetSymbol! >= 0 -> if {
                                             # Visibility belongs to the selected declaration's logical
                                             # module, including another fragment behind an import facade.
                                             modules.sameLogicalAnalyzedSource(package.sources, identities, sourceIndex!, identities[selectedTargetModule!].sourceIndex, package.tokens, package.ranges)
                                                 -> if { true => targetPublic! }
-                                            targetPublic! -> if { 0 => status! } else { 3 => status! }
+                                            targetPublic! -> if {
+                                                not missingEnumVariant! -> if { 0 => status! }
+                                            } else { 3 => status! }
                                         }
                                         QualifiedResolution {
                                             sourceModule: sourceIndex!
@@ -1064,12 +1103,11 @@ localNominalFunction package: ref analysis.PackageAnalysis, sourceIndex: Int, ow
 }
 
 # A declared variant is a nominal value or constructor, never a module alias.
-enumVariantInSource package: ref analysis.PackageAnalysis, requestingSource: Int, ownerToken: Int, memberToken: Int, targetSource: Int -> Int {
+# Share its owner lookup with missing-leaf diagnostics.
+enumOwnerInSource package: ref analysis.PackageAnalysis, requestingSource: Int, ownerToken: Int, targetSource: Int -> Int {
     package.ranges[requestingSource] => queryRange
     package.tokens[queryRange.tokenStart + ownerToken] => owner
-    package.tokens[queryRange.tokenStart + memberToken] => member
     package.sources[requestingSource] -> slice(owner.span.start, owner.span.length) => ownerName
-    package.sources[requestingSource] -> slice(member.span.start, member.span.length) => memberName
     package.ranges[targetSource] => targetRange
     0 => enumIndex!
     enumIndex! < targetRange.symbolCount -> while {
@@ -1078,21 +1116,30 @@ enumVariantInSource package: ref analysis.PackageAnalysis, requestingSource: Int
             -> if {
                 package.tokens[targetRange.tokenStart + enumeration.nameToken] => name
                 (package.sources[targetSource] -> slice(name.span.start, name.span.length)) == ownerName
-                    -> if {
-                        0 => variantIndex!
-                        variantIndex! < targetRange.symbolCount -> while {
-                            package.symbols[targetRange.symbolStart + variantIndex!] => variant
-                            variant.kind == 27 and variant.parent == enumIndex!
-                                -> if {
-                                    package.tokens[targetRange.tokenStart + variant.nameToken] => variantName
-                                    (package.sources[targetSource] -> slice(variantName.span.start, variantName.span.length)) == memberName
-                                        -> if { variantIndex! -> return }
-                                }
-                            variantIndex! + 1 => variantIndex!
-                        }
-                    }
+                    -> if { enumIndex! -> return }
             }
         enumIndex! + 1 => enumIndex!
+    }
+    -1
+}
+
+enumVariantInSource package: ref analysis.PackageAnalysis, requestingSource: Int, ownerToken: Int, memberToken: Int, targetSource: Int -> Int {
+    package -> enumOwnerInSource(requestingSource, ownerToken, targetSource) => enumIndex
+    enumIndex < 0 -> if { -1 -> return }
+    package.ranges[requestingSource] => queryRange
+    package.tokens[queryRange.tokenStart + memberToken] => member
+    package.sources[requestingSource] -> slice(member.span.start, member.span.length) => memberName
+    package.ranges[targetSource] => targetRange
+    0 => variantIndex!
+    variantIndex! < targetRange.symbolCount -> while {
+        package.symbols[targetRange.symbolStart + variantIndex!] => variant
+        variant.kind == 27 and variant.parent == enumIndex
+            -> if {
+                package.tokens[targetRange.tokenStart + variant.nameToken] => variantName
+                (package.sources[targetSource] -> slice(variantName.span.start, variantName.span.length)) == memberName
+                    -> if { variantIndex! -> return }
+            }
+        variantIndex! + 1 => variantIndex!
     }
     -1
 }

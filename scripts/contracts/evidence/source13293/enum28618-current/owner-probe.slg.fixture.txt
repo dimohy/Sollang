@@ -1,0 +1,46 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.qualified as qualified
+import sys.file as file
+
+report paths: [Text; ~], label: Text -> Unit uses Console, File {
+    [file.SourceText; ~] => sources!
+    paths -> each path {
+        path -> file.mapText => source
+        sources! -> push(source)
+    }
+    sources! -> analysis.analyzeSources => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> qualified.resolveAnalyzed => resolved
+    resolved -> each result {
+        result.sourceModule == 0 and result.targetModule >= 0 and result.targetSymbol >= 0
+            -> if {
+                identities[result.targetModule].sourceIndex => targetSource
+                package.ranges[targetSource] => range
+                package.symbols[range.symbolStart + result.targetSymbol] => variant
+                variant.kind == 4 and result.status == 2 -> if {
+                    package.tokens[range.tokenStart + variant.nameToken] => enumToken
+                    package.sources[targetSource] -> slice(enumToken.span.start, enumToken.span.length) => enumName
+                    "$label:enum=$enumName:source=$targetSource:status=$(result.status)" -> println
+                }
+                variant.kind == 27 and variant.parent >= 0 -> if {
+                    package.symbols[range.symbolStart + variant.parent] => owner
+                    package.tokens[range.tokenStart + owner.nameToken] => ownerToken
+                    package.tokens[range.tokenStart + variant.nameToken] => variantToken
+                    package.sources[targetSource] -> slice(ownerToken.span.start, ownerToken.span.length) => ownerName
+                    package.sources[targetSource] -> slice(variantToken.span.start, variantToken.span.length) => variantName
+                    "$label:$ownerName.$variantName:source=$targetSource:status=$(result.status)" -> println
+                }
+            }
+    }
+}
+
+main {
+    ["examples/regression/2855-imported-split-enum-constructor.slg", "examples/regression/fixtures/2855-enum-split-anchor.slg", "examples/regression/fixtures/2855-enum-split-types.slg"; ~] -> report("public")
+    ["examples/regression/diagnostics/2856-split-enum-private-constructor.slg", "examples/regression/fixtures/2855-enum-split-anchor.slg", "examples/regression/fixtures/2856-enum-split-private.slg"; ~] -> report("private")
+    ["examples/regression/2855-imported-split-enum-constructor.slg", "examples/regression/fixtures/2855-enum-split-types.slg", "examples/regression/fixtures/2855-enum-split-anchor.slg"; ~] -> report("public-reordered")
+    ["examples/regression/diagnostics/2856-split-enum-private-constructor.slg", "examples/regression/fixtures/2856-enum-split-private.slg", "examples/regression/fixtures/2855-enum-split-anchor.slg"; ~] -> report("private-reordered")
+    ["examples/regression/diagnostics/2857-split-enum-missing-variant.slg", "examples/regression/fixtures/2855-enum-split-anchor.slg", "examples/regression/fixtures/2855-enum-split-types.slg"; ~] -> report("missing")
+    ["examples/regression/diagnostics/2857-split-enum-missing-variant.slg", "examples/regression/fixtures/2855-enum-split-types.slg", "examples/regression/fixtures/2855-enum-split-anchor.slg"; ~] -> report("missing-reordered")
+
+}

@@ -321,6 +321,9 @@ Do not encode module identity through source order or manifest position.
 Within that module, use `Type.Variant` and `Type.Variant(payload)` even when the
 enum is declared in another file. A same-named local value keeps its ordinary
 field projection; an explicit `alias.Type.Variant` keeps the import's owner.
+The alias exposes variants declared in any file of that logical module, with
+the declaring enum's visibility and payload type. The first imported source
+file does not become the variant's owner.
 
 Keep runtime and foreign authority explicit. `library ... from`, `native ...
 from`, native `handle ... drop`, and `com ... class` declarations are ABI
