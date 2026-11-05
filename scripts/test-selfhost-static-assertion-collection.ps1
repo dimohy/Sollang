@@ -276,11 +276,12 @@ foreach ($probe in $cleanupMutations) {
     $completed++
 }
 $ssaCases = @(Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts/contracts/selfhost-ssa-contract-guards.json') -Raw | ConvertFrom-Json)
-if ($ssaCases.Count -ne 15 -or @($ssaCases.description | Select-Object -Unique).Count -ne 15) { throw 'SSA guard case inventory differs' }
+if ($ssaCases.Count -ne 20 -or @($ssaCases.description | Select-Object -Unique).Count -ne 20) { throw 'SSA guard case inventory differs' }
 function Read-SsaModules([string[]]$Names) {
     ($Names | ForEach-Object { [IO.File]::ReadAllText((Join-Path $RepositoryRoot ('selfhost/llvm/text/' + $_ + '.slg'))) }) -join "`n"
 }
 $ssaSources = @{
+    platformIo = Read-SsaModules @('platform_io')
     ownership = Read-SsaModules @('ownership')
     foundation = Read-SsaModules @('foundation')
     coreCalls = Read-SsaModules @('core_calls','call_arguments','aggregate_values')
@@ -326,4 +327,40 @@ foreach ($probe in $ssaCases) {
     if (-not $rejected) { throw ('Broken SSA source contract was not rejected: ' + $probe.description) }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 68; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 16 } | ConvertTo-Json
+$handleDescriptions = @('selfhost Windows child-only stdout handle selection',
+    'managed Windows child-only stdin handle selection', 'managed Windows child-only stdout handle selection',
+    'managed Windows child-only stderr handle selection', 'process runtime imports canonical handle provider',
+    'selfhost process consumes shared handle selection', 'selfhost handle provider exports actual method',
+    'managed process consumes shared handle selection', 'managed handle provider exports actual method')
+$handleAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-Contains' -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $handleDescriptions
+}, $true))
+if ($handleAssertions.Count -ne 9) { throw 'Shared handle assertion inventory differs' }
+$handleSources = @{
+    processRuntime = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'selfhost/llvm/emitter/process_runtime.slg'))
+    sharedLlvmRuntime = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'selfhost/llvm/runtime.slg'))
+    nativeRuntimePolicy = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'src/Sollang.Compiler/Shared/Policies/NativeRuntimePolicy.cs'))
+    managedWindowsProcessRuntime = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs'))
+}
+foreach ($assertion in $handleAssertions) {
+    Invoke-SsaAssertion ([scriptblock]::Create($assertion.Extent.Text)) $handleSources
+}
+$completed++
+foreach ($assertion in $handleAssertions) {
+    $mutated = $handleSources.Clone()
+    $name = $assertion.CommandElements[1].VariablePath.UserPath
+    $needle = $assertion.CommandElements[2].Value
+    $original = $mutated[$name]
+    $mutated[$name] = $original.Replace($needle, '__disconnected_handle_contract__')
+    if ($mutated[$name] -ceq $original) { throw 'Handle mutation did not change the source' }
+    $rejected = $false
+    try { Invoke-SsaAssertion ([scriptblock]::Create($assertion.Extent.Text)) $mutated } catch {
+        if (-not $_.Exception.Message.StartsWith($assertion.CommandElements[-1].Value + ' is missing:')) { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw 'Disconnected handle body or consumer was not rejected' }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 83; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10 } | ConvertTo-Json
