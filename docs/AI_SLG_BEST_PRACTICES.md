@@ -1354,6 +1354,17 @@ operand. Thus `ready and text -> predicate` means
 `(text -> len) < limit`. Do not add parentheses around those value flows.
 Control and junction targets consume the completed outer expression.
 
+A completed value control can feed a continuation on the next line:
+
+```sollang
+ready -> if { "ready" } else { "waiting" }
+    -> println
+```
+
+The conditional supplies Text and `println` returns Unit. Preserve these separate
+types through the canonical control owner; trailing whitespace does not change
+the input's identity or type.
+
 Use `unless` for a failure-only validity guard:
 
 ```sollang

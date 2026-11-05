@@ -103,6 +103,10 @@ Structured control flow is retained through typed IR. An `if` owns ordered
 creates explicit basic blocks and branches; it creates a merge `phi` only when
 the conditional is value-producing. This keeps branch-local type, ownership,
 and lifetime analysis independent of target-specific CFG text emission.
+A completed conditional used as a following flow's input retains its branch
+result type. Whitespace between the closing branch and the continuation does
+not change that type. The following call has its own result type; a Unit-returning
+consumer does not turn its conditional input into Unit.
 Independent effectful calls and control regions retain source order even when
 their value dependencies would otherwise allow topological reordering.
 Nested value conditionals compose by using the innermost result-producing merge

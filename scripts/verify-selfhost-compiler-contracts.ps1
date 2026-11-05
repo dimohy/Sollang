@@ -1054,6 +1054,7 @@ if ($nativePrepareCalls -ne 2 -or $serialPrepareCalls -ne 1) {
 
 Assert-Matches $typedCore '(?s)resolvedFlowIntrinsicOpcode source:.*?selectedConsole! -> if \{ -1 -> return \}\s+prepared\.package\.nodes\[globalAst\] => flowNode' "selected final printer cannot inherit a producer intrinsic opcode"
 Assert-Contains $expressionTypeIdsPaths 'and sourceType.symbol == expectedReceiver and not selectedDeclaredFunction!' "declared materialize target precedes builtin type seeding"
+Assert-Matches $expressionTypeIdsPaths '(?s)controlResultNode\.parent >= 0.*?controlResultNode\.parent < controlResultRange\.astCount.*?\.kind == 10.*?and \(prepared\.controlProducerWrapperByAst\[controlResultRange\.astStart \+ controlResultNode\.parent\].*?or controlResultNode\.start \+ controlResultNode\.length ==.*?controlFlowGlobalAst.*?controlResultType! => existingControlFlow!\.typeId' "completed control prefixes publish their result type across trailing whitespace using the canonical structural index"
 Assert-Contains $semanticDiagnostics 'flowSource! >= 0 and materializeTarget! >= 0 and not declaredArenaTarget!' "declared materialize target precedes builtin argument diagnosis"
 Assert-Contains $typedCore "public isSocketRuntimeOpcode" "socket runtime opcode predicate"
 Assert-Contains $ast "methodIntrinsicToken!" "inherent intrinsic declaration scan"
