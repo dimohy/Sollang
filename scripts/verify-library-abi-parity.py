@@ -1,5 +1,6 @@
 """Check the original library ABI cases against current CSharp declarations."""
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -72,6 +73,15 @@ def main():
              ROOT / 'scripts/verification_source_proof.py', ROOT / 'scripts/verification_fingerprints.py',
              *sorted((ROOT / 'stdlib').rglob('*.slg')),
              *[ROOT / c['source'] for c in contract['cases']], ROOT / contract['positive']['source']]
+    consumer = contract['positive'].get('consumer')
+    if consumer:
+        assert set(consumer) == {'source', 'stdout'}, 'LIBRARY_CONSUMER_CONTRACT_INVALID'
+        paths.append(ROOT / consumer['source'])
+    metadata_controls = contract['positive'].get('metadataRejections', [])
+    assert not metadata_controls or consumer, 'LIBRARY_METADATA_CONTROLS_REQUIRE_CONSUMER'
+    for control in metadata_controls:
+        assert set(control) == {'id', 'member', 'value', 'stderr'}, 'LIBRARY_METADATA_CONTROL_INVALID'
+        assert control['member'] in {'name', 'symbol', 'parameterName'}, 'LIBRARY_METADATA_MEMBER_INVALID'
     reference = None
     if args.native_compiler:
         assert args.managed_result and args.source_comparison, 'Native requires current CSharp proof and source comparison'
@@ -147,6 +157,55 @@ def main():
                                             json.dumps(call_inputs), 'matrix' if matrix else 'single'],
                                            directory / 'call', timeout=remaining())
                     assert called.returncode == 0 and not called.stderr and called.stdout == expected_output
+                    if consumer:
+                        consumer_source = directory / 'consumer.slg'
+                        consumer_source.write_bytes((ROOT / consumer['source']).read_bytes())
+                        executable = directory / 'consumer.exe'
+                        consumer_command = [str(compiler), 'build', str(consumer_source), '-o', str(executable),
+                                            '--target', 'windows-x64', '--llvm', str(llvm), '--jobs', '1', '-O0']
+                        if args.native_compiler:
+                            consumer_command += ['--stdlib', str(ROOT / 'stdlib')]
+                        imported = execution.run(consumer_command, directory / 'consumer-build', timeout=remaining())
+                        assert imported.returncode == 0 and not imported.stderr, imported.stdout + imported.stderr
+                        executed = execution.run([str(executable)], directory / 'consumer-run', timeout=remaining())
+                        assert executed.returncode == 0 and not executed.stderr and executed.stdout == consumer['stdout'], (
+                            executed.returncode, executed.stdout, executed.stderr)
+                        result['consumer'] = dict(passed=True, stdout=executed.stdout,
+                                                  sourceSha256=sha(consumer_source))
+                        original_interface = interface.read_bytes()
+                        rejections = []
+                        try:
+                            for control in metadata_controls:
+                                modified = copy.deepcopy(metadata)
+                                exported = modified['exports'][0]
+                                if control['member'] == 'parameterName':
+                                    exported['parameters'][0]['name'] = control['value']
+                                else:
+                                    exported[control['member']] = control['value']
+                                if control['member'] == 'name':
+                                    prefix, separator, _ = exported['qualifiedName'].rpartition('.')
+                                    exported['qualifiedName'] = prefix + separator + control['value']
+                                # Keep integrity valid so a rejection proves identifier admission,
+                                # rather than an unrelated name mismatch or stale hash.
+                                for entry in modified['exports']:
+                                    material = entry['name'] + '\0' + entry['symbol'] + '\0' + '\0'.join(
+                                        p['name'] + ':' + p['type'] for p in entry['parameters']) + '\0->' + entry['result']
+                                    entry['signatureHash'] = hashlib.sha256(material.encode('utf-8')).hexdigest()
+                                abi_material = '\n'.join(entry['qualifiedName'] + '\0' + '\0'.join(
+                                    p['type'] for p in entry['parameters']) + '\0->' + entry['result']
+                                    for entry in sorted(modified['exports'], key=lambda entry: entry['qualifiedName']))
+                                modified['abiHash'] = hashlib.sha256(abi_material.encode('utf-8')).hexdigest()
+                                mutated_bytes = (json.dumps(modified, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                                (directory / (control['id'] + '.json')).write_bytes(mutated_bytes)
+                                interface.write_bytes(mutated_bytes)
+                                rejected = execution.run(consumer_command, directory / control['id'], timeout=remaining())
+                                expected_error = control['stderr'].replace('{interface}', str(interface))
+                                assert rejected.returncode == 1 and not rejected.stdout and rejected.stderr == expected_error, (
+                                    control['id'], rejected.returncode, rejected.stdout, rejected.stderr)
+                                rejections.append(dict(id=control['id'], passed=True, stderr=rejected.stderr))
+                        finally:
+                            interface.write_bytes(original_interface)
+                        result['metadataRejections'] = rejections
                     result['interface'] = metadata
                     result['cases'].append(dict(id='positive', passed=True, exit=0, stdout=called.stdout,
                                                 actualLibraryCalls=len(calls)))

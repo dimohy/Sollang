@@ -447,7 +447,7 @@ internal static class SollangLibraryManifest
             || qualifiedParts.Length == 0
             || qualifiedParts.Any(static part => !IsIdentifier(part))
             || qualifiedParts[^1] != export.Name
-            || !IsIdentifier(export.Symbol))
+            || !IsIdentifier(export.Symbol, asciiOnly: true))
         {
             throw new SollangException(
                 $"invalid export name, qualified name, or symbol for '{export.Name}' in '{path}'");
@@ -501,16 +501,18 @@ internal static class SollangLibraryManifest
             character is >= '0' and <= '9'
             or >= 'a' and <= 'f');
 
-    private static bool IsIdentifier(string value)
+    private static bool IsIdentifier(string value, bool asciiOnly = false)
     {
         if (value.Length == 0
-            || !(char.IsAsciiLetter(value[0]) || value[0] == '_'))
+            || !(value[0] == '_'
+                || (asciiOnly ? char.IsAsciiLetter(value[0]) : char.IsLetter(value[0]))))
         {
             return false;
         }
         for (var index = 1; index < value.Length; index++)
         {
-            if (!(char.IsAsciiLetterOrDigit(value[index]) || value[index] == '_'))
+            if (!(value[index] == '_'
+                || (asciiOnly ? char.IsAsciiLetterOrDigit(value[index]) : char.IsLetterOrDigit(value[index]))))
             {
                 return false;
             }

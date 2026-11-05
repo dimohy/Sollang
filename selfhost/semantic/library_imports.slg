@@ -257,11 +257,17 @@ public resolveQualified package: ref analysis.PackageAnalysis, catalog: ref Libr
         0 => astIndex!
         astIndex! < range.astCount -> while {
             package.nodes[range.astStart + astIndex!] => node
-            # Only the member-access node owns the qualified alias/export
-            # pair. Scanning its enclosing identifier path also captures later
-            # flow targets (for example `fixture.add(...) -> println`) and can
-            # incorrectly project the outer call as the library function.
-            node.kind == 36 -> if {
+            # A direct call's member-access node or a flow target's exact Path
+            # owns the alias/export pair. Do not scan the enclosing flow;
+            # its later targets and nested arguments have separate owners.
+            false => flowTargetPath!
+            node.kind == 16 and node.cstRuleId == grammar.ruleIdPath() and node.parent >= 0
+                -> if {
+                    package.nodes[range.astStart + node.parent] => parent
+                    parent.kind == 10 and parent.cstRuleId == grammar.ruleIdValueFlowExpression()
+                        => flowTargetPath!
+                }
+            node.kind == 36 or flowTargetPath! -> if {
                 -1 => firstIdentifier!
                 -1 => secondIdentifier!
                 -1 => lastIdentifier!

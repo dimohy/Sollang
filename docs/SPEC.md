@@ -842,6 +842,15 @@ Notes:
   interface lookup, and an invalid earlier interface stops processing before
   a later missing interface. Semantic interface diagnostics retain the failing
   export and parameter identity independently of the JSON decoding cursor.
+  Export names, qualified-name components, and parameter names follow source
+  identifier rules: underscore or a BMP Unicode letter first, then underscores,
+  BMP Unicode letters or digits. Native export symbols retain ASCII identifier
+  rules. Producing and loading a library preserve this distinction without
+  changing the ABI or signature hash material.
+  Imported library functions support ordinary calls and value-flow targets.
+  Both forms resolve the same qualified alias/export identity and retain the
+  declared parameter and result types; nested argument calls keep their own
+  target identities.
   Missing or null interface strings, export/parameter arrays, and their object
   entries are rejected as invalid interface data before ABI semantic checks.
   The diagnostic identifies the declaration location, interface path, and

@@ -2110,6 +2110,12 @@ current metadata keys or successful-link requirement for persistent cache reuse.
 Library interface producers and integrity validation share the canonical ABI
 and signature material helpers. Preserve qualified-name ordering, NUL field
 separators, complete SHA-256 hashes, and lowercase hexadecimal bytes.
+Keep decoded source identifiers separate from native export symbols: reuse the
+existing Unicode identifier classifier for source names and retain ASCII symbol
+admission. Consume whole UTF-8 characters within each metadata span.
+Imported library declarations retain interface module identities after physical
+source modules. Include both in global auxiliary-name tables, and use the shared
+native-call classifier to keep dynamic calls out of physical-source prototypes.
 
 For UTF-8 grammar inputs, keep mapped `SourceText` owners alive and use the
 shared `source_decoding.utf8Text` borrowed view before parsing or hashing.

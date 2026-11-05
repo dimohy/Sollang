@@ -2,6 +2,7 @@ namespace sollang.compiler.semantic.library_interfaces
 
 import sys.file as file
 import sollang.compiler.semantic.type_name_policy as typeNamePolicy
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
 import std.crypto.sha256 as sha256
 import std.text.json as json
 import std.text.json.error as jsonErrors
@@ -190,6 +191,19 @@ identifierSpan source: Text, span: MetadataSpan -> Bool {
     true
 }
 
+sourceIdentifierSpan source: Text, span: MetadataSpan -> Bool {
+    span.length == 0 -> if { false -> return }
+    source -> unicodeIdentifier.startWidth(span.start) => firstWidth
+    firstWidth == 0 or firstWidth > span.length -> if { false -> return }
+    firstWidth => index!
+    index! < span.length -> while {
+        source -> unicodeIdentifier.continueWidth(span.start + index!) => width
+        width == 0 or width > span.length - index! -> if { false -> return }
+        index! + width => index!
+    }
+    true
+}
+
 qualifiedMatches source: Text, qualified: MetadataSpan, name: MetadataSpan -> Bool {
     qualified.start => start!
     qualified.start => index!
@@ -198,7 +212,7 @@ qualifiedMatches source: Text, qualified: MetadataSpan, name: MetadataSpan -> Bo
         index! == end or (source -> byte(index!)) == '.'
             -> if {
                 MetadataSpan { start: start!, length: index! - start! } => part
-                source -> identifierSpan(part) -> unless { false -> return }
+                source -> sourceIdentifierSpan(part) -> unless { false -> return }
                 index! == end -> if { source -> sameSpan(part, name) -> return }
                 index! + 1 => start!
             }
@@ -311,14 +325,15 @@ validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: 
     0 => signatureIndex!
     signatureIndex! < (document.exports -> len) -> while {
         document.exports[signatureIndex!] => exported
-        not (source -> identifierSpan(exported.name))
+        not (source -> sourceIdentifierSpan(exported.name))
             or not (source -> qualifiedMatches(exported.qualifiedName, exported.name))
             or not (source -> identifierSpan(exported.symbol))
             -> if { 64 -> validationIssue(signatureIndex!, -1) -> return }
         0 => validationOrdinal!
         validationOrdinal! < exported.parameterCount -> while {
             document.parameters[exported.parameterStart + validationOrdinal!] => parameter
-            source -> identifierSpan(parameter.name) -> unless { 63 -> validationIssue(signatureIndex!, validationOrdinal!) -> return }
+            source -> sourceIdentifierSpan(parameter.name)
+                -> unless { 63 -> validationIssue(signatureIndex!, validationOrdinal!) -> return }
             0 => previousParameter!
             previousParameter! < validationOrdinal! -> while {
                 source -> sameSpan(document.parameters[exported.parameterStart + previousParameter!].name, parameter.name)
