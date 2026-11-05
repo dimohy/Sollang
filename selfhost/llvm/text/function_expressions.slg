@@ -2138,6 +2138,10 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                     "  store ptr null, ptr %v$(expressionIndex -> valueNameId(state))_initialized_slot, align 8" -> println
                     "  call void @sollang_compute_execute(ptr %v$(expressionIndex -> valueNameId(state))_group)" -> println
                 } else {
+                    expressionIndex -> parallelHasDirectBodyCall(context, state)
+                        -> if {
+                            expression.operand1 -> emitParallelAdditionalArgumentValues(functionIndex, context, state)
+                        }
                     "  %v$(expressionIndex -> valueNameId(state))_index_slot = alloca i64, align 8" -> println
                     "  store i64 0, ptr %v$(expressionIndex -> valueNameId(state))_index_slot, align 8" -> println
                     "  br label %parallel$(expressionIndex)_header" -> println
@@ -2156,7 +2160,6 @@ emitFunctionOperatorExpressions expressionIndex: Int, functionIndex: Int, functi
                     expressionIndex -> parallelHasDirectBodyCall(context, state)
                         -> if {
                             CallEnvironmentRequest { callerIndex: functionIndex, callIndex: expressionIndex, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
-                            expression.operand1 -> emitParallelAdditionalArgumentValues(functionIndex, context, state)
                             "  %v$(expressionIndex -> valueNameId(state))_mapped = call " -> print
                             parallelBodyCall -> writeFunctionValueAbiType(context, state)
                             " $(parallelBodyCall.targetModule -> functionSymbolName(parallelBodyCall.symbol, context))(" -> print

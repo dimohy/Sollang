@@ -1954,6 +1954,11 @@ Synthetic callbacks read references already published under their IR value ids;
 they have no ordinary caller parameter or field-address namespace. A stored
 reference field forwards its loaded pointer, while borrowing a value field
 forwards that field's address.
+A direct parallel worker specialization admits only non-role named additional
+arguments. Materialize their exact lexical reads through the canonical named-place
+reader before ABI preparation and capture stores. Ordinary, entry, control-region
+and sequential tryParallel paths share this preparation. General callback
+expressions and role reads remain worker-owned.
 Dyn trait method compatibility follows this same path: `DynTraitPolicy` owns
 the readonly-self, additional-input and Int-result decision. C# semantics and
 the SLG diagnostic adapter supply those facts; associated-type rejection and

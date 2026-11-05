@@ -1,0 +1,30 @@
+shift value: Int, delta: Int -> Int => value + delta
+checked value: Int, delta: Int -> Result<Int, Text> => Result<Int, Text>.Ok(value + delta)
+run values: [Int; ~], delta: Int -> [Int; ~] {
+    values -> parallel value { value -> shift(delta) } => mapped
+    mapped
+}
+main {
+    7 => delta
+    [1, 2; ~] -> run(delta) => ordinary
+    "$(ordinary[0]),$(ordinary[1])" -> println
+    false -> if { "unexpected" -> println } else {
+        [3, 4; ~] -> parallel value { value -> shift(delta) } => nested
+        "$(nested[0]),$(nested[1])" -> println
+    }
+    [5; ~] -> tryParallel value { value -> checked(delta) } => direct
+    direct -> when {
+        Ok(values) { values[0] -> println }
+        Err(error) { error -> println }
+    }
+    false -> if { "unexpected" -> println } else {
+        [6; ~] -> tryParallel value { value -> checked(delta) } => nested
+        nested -> when {
+            Ok(values) { values[0] -> println }
+            Err(error) { error -> println }
+        }
+    }
+    [Int; ~] => empty
+    empty -> parallel value { value -> shift(delta) } => emptyResult
+    "empty=$(emptyResult -> len)" -> println
+}

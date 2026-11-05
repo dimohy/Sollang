@@ -888,7 +888,11 @@ Notes:
   retain their shared-link contract.
   `wasm32-browser` compiles a WebAssembly object and links it with `wasm-ld`,
   exporting `sollang_start`, `sollang_alloc`, and memory without a native entry
-  point. All three targets use common checked preparation and target-keyed
+  point. The `sollang_browser_write(ptr, len)` host import returns a nonzero
+  success flag, including for zero-length writes, and zero on failure. The
+  runtime publishes the requested byte length only on success, rejects lengths
+  above `2147483647` before the import, and preserves any prior output failure.
+  All three targets use common checked preparation and target-keyed
   semantic and codegen cache admission. A target-specific linker does not
   replace source, interface, type, diagnostic, or cache validation.
   `run` requires the current native host target before build work begins;
@@ -2185,7 +2189,12 @@ SSA phi value for the item binding, with no heap allocation, function pointer,
 closure object, or dynamic block dispatch.
 
 An intrinsic `parallel` or `tryParallel` call evaluates its source once before
-entering the callback. Its input role has the source element type and denotes
+entering the callback. A direct worker specialization can transport explicit
+additional arguments only when they name values outside the input role. These
+exact lexical reads and their ABI preparation precede the capture-environment
+stores or a sequential direct-call loop. General callback argument expressions
+remain part of each callback invocation.
+Its input role has the source element type and denotes
 the current element even when referenced only inside interpolation. Nested
 callbacks preserve the lexical owner of each role. Ordinary user declarations
 with the same spelling retain their declared input and callback contracts.

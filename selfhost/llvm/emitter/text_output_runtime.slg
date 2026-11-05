@@ -571,17 +571,30 @@ public emitWasmTextRuntime usesStandardError: Bool -> Unit uses Console {
     entry:
       ret void
     }
+    define internal i32 @sollang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) {
+    entry:
+      %too_large = icmp ugt i64 %len64, 2147483647
+      br i1 %too_large, label %fail, label %write
+    write:
+      %len = trunc i64 %len64 to i32
+      %ok = call i32 @sollang_browser_write(ptr %data, i32 %len)
+      %is_ok = icmp ne i32 %ok, 0
+      br i1 %is_ok, label %success, label %fail
+    success:
+      store i32 %len, ptr %written, align 4
+      ret i32 1
+    fail:
+      store i32 0, ptr %written, align 4
+      ret i32 0
+    }
     define internal void @sollang_runtime_print(ptr %stdout, ptr %written, ptr %ok_state, ptr %data, i64 %len, i1 %newline) {
     entry:
-      %len32 = trunc i64 %len to i32
-      %count = call i32 @sollang_browser_write(ptr %data, i32 %len32)
-      store i32 %count, ptr %written, align 4
-      %data_ok = icmp eq i32 %count, %len32
+      %data_status = call i32 @sollang_write(ptr %stdout, ptr %data, i64 %len, ptr %written)
+      %data_ok = icmp ne i32 %data_status, 0
       br i1 %newline, label %write_newline, label %done
     write_newline:
-      %newline_count = call i32 @sollang_browser_write(ptr @sollang_runtime_newline, i32 1)
-      store i32 %newline_count, ptr %written, align 4
-      %newline_ok = icmp eq i32 %newline_count, 1
+      %newline_status = call i32 @sollang_write(ptr %stdout, ptr @sollang_runtime_newline, i64 1, ptr %written)
+      %newline_ok = icmp ne i32 %newline_status, 0
       %combined = and i1 %data_ok, %newline_ok
       br label %done
     done:

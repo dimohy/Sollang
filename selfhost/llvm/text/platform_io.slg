@@ -3601,6 +3601,10 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder: 
     context.ir[expression.operand0] => source
     context.ir[expression.operand1] => callback
     context.typeSizes[callback.typeId] => callbackStride
+    request.expressionIndex -> parallelHasDirectBodyCall(context, state)
+        -> if {
+            expression.operand1 -> emitParallelAdditionalArgumentValues(request.ownerIndex, context, state)
+        }
     "  %v$(request.expressionIndex -> valueNameId(state))_failure_limit_slot = alloca i64, align 8" -> println
     "  store i64 %v$(request.expressionIndex -> valueNameId(state))_length, ptr %v$(request.expressionIndex -> valueNameId(state))_failure_limit_slot, align 8" -> println
     "  %v$(request.expressionIndex -> valueNameId(state))_index_slot = alloca i64, align 8" -> println
@@ -3621,7 +3625,6 @@ emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder: 
     request.expressionIndex -> parallelHasDirectBodyCall(context, state)
         -> if {
             CallEnvironmentRequest { callerIndex: request.ownerIndex, callIndex: request.expressionIndex, targetModule: callback.targetModule, targetSymbol: callback.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
-            expression.operand1 -> emitParallelAdditionalArgumentValues(request.ownerIndex, context, state)
             "  %v$(request.expressionIndex -> valueNameId(state))_mapped = call " -> print
             callback -> writeIrType(context, state)
             " $(callback.targetModule -> functionSymbolName(callback.symbol, context))(" -> print

@@ -1841,6 +1841,10 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
                     "  store ptr null, ptr %v$(regionNodeIndex -> valueNameId(state))_initialized_slot, align 8" -> println
                     "  call void @sollang_compute_execute(ptr %v$(regionNodeIndex -> valueNameId(state))_group)" -> println
                 } else {
+                    regionNodeIndex -> parallelHasDirectBodyCall(context, state)
+                        -> if {
+                            regionNode.operand1 -> emitParallelAdditionalArgumentValues(ownerIndex, context, state)
+                        }
                     "  %v$(regionNodeIndex -> valueNameId(state))_index_slot = alloca i64, align 8" -> println
                     "  store i64 0, ptr %v$(regionNodeIndex -> valueNameId(state))_index_slot, align 8" -> println
                     "  br label %parallel$(regionNodeIndex)_header" -> println
@@ -1859,7 +1863,6 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
                     regionNodeIndex -> parallelHasDirectBodyCall(context, state)
                         -> if {
                             CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: regionNodeIndex, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
-                            context.ir[regionParallelBodyCall.operand0].nextOperand -> emitReferenceArgumentValues(regionNode.operand1, ownerIndex, 1, context, state)
                             "  %v$(regionNodeIndex -> valueNameId(state))_mapped = call " -> print
                             regionParallelBodyCall -> writeIrType(context, state)
                             " $(regionParallelBodyCall.targetModule -> functionSymbolName(regionParallelBodyCall.symbol, context))(" -> print

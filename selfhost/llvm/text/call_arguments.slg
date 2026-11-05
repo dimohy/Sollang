@@ -1164,9 +1164,15 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
     " }" -> print
 }
 emitParallelAdditionalArgumentValues bodyCallIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
-    bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentIndex
-    argumentIndex -> emitCallIntegerArgumentPromotions(bodyCallIndex, ownerIndex, 1, context, state)
-    argumentIndex -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
+    bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentStart
+    argumentStart => argumentIndex!
+    argumentIndex! >= 0 and context.ir[argumentIndex!].parent == bodyCallIndex
+        -> while {
+            argumentIndex! -> emitNamedPlaceRead(ownerIndex, context, state)
+            context.ir[argumentIndex!].nextOperand => argumentIndex!
+        }
+    argumentStart -> emitCallIntegerArgumentPromotions(bodyCallIndex, ownerIndex, 1, context, state)
+    argumentStart -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
 }
 
 emitParallelCaptureEnvironment parallelIndex: Int, bodyCallIndex: Int, ownerIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {

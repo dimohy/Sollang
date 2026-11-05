@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -363,4 +363,82 @@ foreach ($assertion in $handleAssertions) {
     if (-not $rejected) { throw 'Disconnected handle body or consumer was not rejected' }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 83; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10 } | ConvertTo-Json
+$parallelDescriptions = @('shared parallel additional values skip the synthesized item before reference arguments',
+    'parallel callback environments use shared additional values and exact body-call ownership',
+    'function parallel fallback delegates additional reference and promoted values',
+    'sequential tryParallel prepares arguments before its loop',
+    'sequential tryParallel prepares additional arguments once',
+    'sequential parallel prepares additional arguments once',
+    'control parallel fallback prepares shared values before its loop',
+    'entry parallel fallback prepares shared values before its loop',
+    'direct parallel specialization admits only external named arguments')
+$parallelAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -in @('Assert-Matches','Assert-MatchCount') -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $parallelDescriptions
+}, $true))
+if ($parallelAssertions.Count -ne 9) { throw 'Parallel argument assertion inventory differs' }
+$parallelSources = @{ coreCalls=$ssaSources.coreCalls; functions=$ssaSources.functions; platformIo=$ssaSources.platformIo; controlRegions=$ssaSources.control; text=(Read-SsaModules @('entry_expressions')) }
+$parallelAssertion = [scriptblock]::Create($parallelAssertions.Extent.Text -join "`n")
+Invoke-SsaAssertion $parallelAssertion $parallelSources
+$completed++
+$functionPreparation='expression.operand1 -> emitParallelAdditionalArgumentValues(functionIndex, context, state)'
+$platformPreparation='expression.operand1 -> emitParallelAdditionalArgumentValues(request.ownerIndex, context, state)'
+$parallelMutations = @(
+    @{Name='coreCalls';Before='argumentIndex! -> emitNamedPlaceRead(ownerIndex, context, state)';After='';Expected=$parallelDescriptions[0]},
+    @{Name='coreCalls';Before='argumentStart -> emitCallIntegerArgumentPromotions(bodyCallIndex, ownerIndex, 1';After='argumentStart -> emitCallIntegerArgumentPromotions(bodyCallIndex, ownerIndex, 0';Expected=$parallelDescriptions[0]},
+    @{Name='coreCalls';Before='bodyCallIndex -> emitParallelAdditionalArgumentValues(ownerIndex, context, state)';After='';Expected=$parallelDescriptions[1]},
+    @{Name='functions';Before=$functionPreparation;After='';Append=$functionPreparation;Expected=$parallelDescriptions[2]},
+    @{Name='platformIo';Before=$platformPreparation;After='';Append=$platformPreparation;Expected=$parallelDescriptions[3]},
+    @{Name='controlRegions';Before='regionNode.operand1 -> emitParallelAdditionalArgumentValues(ownerIndex, context, state)';After='';Expected=$parallelDescriptions[6]},
+    @{Name='text';Before='entryExpression.operand1 -> emitParallelAdditionalArgumentValues(functionIndex, context, state)';After='';Expected=$parallelDescriptions[7]},
+    @{Name='coreCalls';Before='argument.kind != 5';After='argument.kind != 6';Expected=$parallelDescriptions[8]}
+)
+foreach ($probe in $parallelMutations) {
+    $mutated = $parallelSources.Clone()
+    $original = $mutated[$probe.Name]
+    $mutated[$probe.Name] = $original.Replace($probe.Before, $probe.After)
+    if ($probe.ContainsKey('Append')) { $mutated[$probe.Name] += "`n" + $probe.Append }
+    if ($mutated[$probe.Name] -ceq $original) { throw 'Parallel mutation did not change its source' }
+    $rejected = $false
+    try { Invoke-SsaAssertion $parallelAssertion $mutated } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.Expected + ' is missing:')) { throw }
+        $rejected=$true
+    }
+    if (-not $rejected) { throw ('Broken parallel argument preparation was not rejected: ' + $probe.Expected) }
+    $completed++
+}
+$wasmDescriptions = @('WASM write status preserves length and failure contract',
+    'WASM printing uses status adapter for data and newline', 'WASM print failures remain sticky')
+$wasmAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-Matches' -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $wasmDescriptions
+}, $true))
+if ($wasmAssertions.Count -ne 3) { throw 'WASM write assertion inventory differs' }
+$wasmAssertion = [scriptblock]::Create($wasmAssertions.Extent.Text -join "`n")
+$wasmSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../selfhost/llvm/emitter/text_output_runtime.slg'))
+Invoke-SsaAssertion $wasmAssertion @{textOutputRuntime=$wasmSource}
+$completed++
+$wasmMutations = @(
+    @{Before='%too_large = icmp ugt i64 %len64, 2147483647';After='%too_large = icmp ugt i64 %len64, 4294967295';Expected=$wasmDescriptions[0]},
+    @{Before='%is_ok = icmp ne i32 %ok, 0';After='%is_ok = icmp eq i32 %ok, %len';Expected=$wasmDescriptions[0]},
+    @{Before='store i32 %len, ptr %written, align 4';After='store i32 %ok, ptr %written, align 4';Expected=$wasmDescriptions[0]},
+    @{Before='fail:' + "`n" + '      store i32 0, ptr %written, align 4';After='fail:' + "`n" + '      store i32 1, ptr %written, align 4';Expected=$wasmDescriptions[0]},
+    @{Before='%data_status = call i32 @sollang_write(ptr %stdout, ptr %data, i64 %len, ptr %written)';After='%data_status = call i32 @sollang_browser_write(ptr %data, i32 1)';Expected=$wasmDescriptions[1]},
+    @{Before='%newline_status = call i32 @sollang_write(ptr %stdout, ptr @sollang_runtime_newline, i64 1, ptr %written)';After='%newline_status = call i32 @sollang_browser_write(ptr @sollang_runtime_newline, i32 1)';Expected=$wasmDescriptions[1]},
+    @{Before='%next = and i1 %previous, %ok';After='%next = or i1 %previous, %ok';Expected=$wasmDescriptions[2]}
+)
+foreach ($probe in $wasmMutations) {
+    $mutated=$wasmSource.Replace($probe.Before,$probe.After)
+    if ($mutated -ceq $wasmSource) { throw 'WASM mutation did not change source' }
+    $rejected=$false
+    try { Invoke-SsaAssertion $wasmAssertion @{textOutputRuntime=$mutated} } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.Expected + ' is missing:')) { throw }
+        $rejected=$true
+    }
+    if (-not $rejected) { throw ('Broken WASM write contract was not rejected: ' + $probe.Expected) }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 100; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8 } | ConvertTo-Json
