@@ -251,16 +251,25 @@ lineWhitespace source: file.SourceText, line: LineSpan -> Bool {
 }
 
 trimLine source: file.SourceText, line: LineSpan -> LineSpan {
+    source -> slice(0, source -> len) => sourceText
     line.start => start!
     line.start + line.length => end!
-    start! < end! and ((source -> byte(start!)) -> isWhitespace)
-        -> while {
-            start! + 1 => start!
+    start! < end! -> while {
+        sourceText -> unicodeIdentifier.whitespaceWidth(start!, end!) => width
+        width == 0 -> if { break }
+        start! + width => start!
+    }
+    end! > start! -> while {
+        end! - 1 => lastStart!
+        lastStart! > start! -> while {
+            source -> byte(lastStart!) => lastByte
+            lastByte < 128 or lastByte >= 192 -> if { break }
+            lastStart! - 1 => lastStart!
         }
-    end! > start! and ((source -> byte(end! - 1)) -> isWhitespace)
-        -> while {
-            end! - 1 => end!
-        }
+        sourceText -> unicodeIdentifier.whitespaceWidth(lastStart!, end!) => width
+        width == 0 or lastStart! + width != end! -> if { break }
+        lastStart! => end!
+    }
     LineSpan { start: start!, length: end! - start! }
 }
 

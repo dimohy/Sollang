@@ -1553,6 +1553,9 @@ and `while` conditions using the same lexical boundary.
 Formatting treats ordinary and raw string contents as literal data. Control
 arrows inside those literals do not select code-layout rewrites; formatting
 must preserve the literal value.
+Nonraw line boundaries use Unicode whitespace trimming, including trailing
+whitespace in line comments. This does not expand lexical whitespace outside
+literals and comments beyond the language lexer contract.
 Trailing spaces and tabs on nonblank raw-string content lines are part of
 that value; indentation adjustment must not trim those suffixes.
 Indentation shifts leave empty raw-string lines empty. When reducing indentation,

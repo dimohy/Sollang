@@ -16,6 +16,54 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
 
 
+def managed_reference_inputs(record_path, root=ROOT):
+    """Admit canonical proofs or the existing synchronous formatter producer."""
+    record_path = Path(record_path)
+    record = json.loads(record_path.read_text(encoding='utf-8-sig'))
+    if record.get('status') != 'passed' or record.get('inputsStable') is not True:
+        raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_FAILED')
+    if 'inputHashes' in record:
+        if (type(record.get('completed')) is not int or record['completed'] <= 0
+                or type(record.get('total')) is not int
+                or record['completed'] != record.get('total')
+                or record.get('processesStopped') is not True):
+            raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_INCOMPLETE')
+        hashes = record['inputHashes']
+    elif record.get('phase') == 'managed-first':
+        # This producer waits for each direct formatter process with subprocess.run.
+        # Validate its actual pinned contract/oracles rather than inventing counts.
+        hashes = record.get('inputHashesStart')
+        if not hashes or hashes != record.get('inputHashesEnd'):
+            raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_INPUT_CHANGED')
+        producer = Path(root) / 'scripts/verify-managed-first-fixture.py'
+        contract_path = Path(record['contract'])
+        if str(producer.resolve()) not in hashes or str(contract_path) not in hashes:
+            raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_PRODUCER_MISSING')
+        contract = json.loads(contract_path.read_text(encoding='utf-8-sig'))
+        cases, rows = contract.get('cases'), record.get('cases')
+        if (contract.get('schemaVersion') != 1 or not isinstance(cases, list)
+                or not cases or not isinstance(rows, list) or len(cases) != len(rows)
+                or len({case['id'] for case in cases}) != len(cases)):
+            raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_CASES_INVALID')
+        for case, row in zip(cases, rows):
+            source = record_path.parent / (case['id'] + '.slg')
+            if (case.get('mode') != 'format-stdin' or row.get('id') != case['id']
+                    or row.get('passed') is not True
+                    or row.get('observed') != case.get('expected')
+                    or str(source.resolve()) not in hashes
+                    or hashes.get(str(source.resolve()), '').upper() != row.get('sourceSha256')
+                    or row.get('sourceSha256') != hashlib.sha256(
+                        case['source'].encode('utf-8')).hexdigest().upper()):
+                raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_ORACLE_MISMATCH')
+    else:
+        raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_UNSUPPORTED')
+    if not isinstance(hashes, dict) or not hashes or any(
+            not Path(path).is_file() or sha(path) != digest.upper()
+            for path, digest in hashes.items()):
+        raise ValueError('SOURCE_EMITTER_MANAGED_PROOF_INPUT_CHANGED')
+    return record, list(map(Path, hashes))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('compiler', 'output', 'semantic-result', 'source-comparison'):
@@ -30,7 +78,7 @@ def main():
     assert budget['maximumBuilds'] == 1 and budget['timeoutSeconds'] == 180
     assert not output.exists(), 'SOURCE_EMITTER_BUILD_BUDGET_ALREADY_USED'
     reference_path = ROOT / comparison['csharpFirst']
-    reference = json.loads(reference_path.read_text(encoding='utf-8'))
+    reference, reference_inputs = managed_reference_inputs(reference_path)
     semantic = json.loads(args.semantic_result.read_text(encoding='utf-8'))
     preflight_paths = [ROOT / name for name in comparison.get('requiredNativePreflights', [])]
     preflight_inputs = []
@@ -40,9 +88,8 @@ def main():
         assert preflight['inputsStable'] and preflight['processesStopped'], 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INCOMPLETE'
         assert all(sha(path) == value for path, value in preflight['inputHashes'].items()), 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INPUT_CHANGED'
         preflight_inputs.extend(map(Path, preflight['inputHashes']))
-    for result in (reference, semantic):
-        assert result['status'] == 'passed' and result['completed'] == result['total']
-        assert result['inputsStable'] and result['processesStopped']
+    assert semantic['status'] == 'passed' and semantic['completed'] == semantic['total']
+    assert semantic['inputsStable'] and semantic['processesStopped']
     assert semantic['total'] == 4
     manifest = ROOT / 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'
     sources = [ROOT / line for line in manifest.read_text(encoding='utf-8-sig').splitlines()
@@ -57,7 +104,7 @@ def main():
     llvm = ROOT / '.tools/llvm-22.1.8'
     assert (llvm / 'bin/clang.exe').is_file() and (llvm / 'bin/llvm-as.exe').is_file()
     paths = [Path(__file__), compiler, *managed_runtime_inputs(compiler), args.semantic_result,
-             *preflight_paths, *preflight_inputs,
+             *preflight_paths, *preflight_inputs, *reference_inputs,
              args.source_comparison, reference_path, manifest, wrapper, *support, *sources,
              *sorted((ROOT / 'stdlib').rglob('*.slg'))]
     inputs = {str(path.resolve()): sha(path) for path in paths}
