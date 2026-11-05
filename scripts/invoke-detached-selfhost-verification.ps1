@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory)]
     [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ArrayInherent", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "C437CurrentSource", "C456Focused", "C457Focused", "ExpressionBatch", "PortableMemoryIo", "PortableAsyncSocketCurrent", "SocketCompletionFocused", "AsyncObservabilityManagedMatrix", "ZipDeflateMethod8", "Quic1291And1297", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe")]
     [string]$Verification,
@@ -7,6 +7,7 @@ param(
     [ValidateRange(1, 64)]
     [int]$Jobs = 8,
     [string]$Distribution = "Ubuntu",
+    [string]$CompilerLinkBridgeProof = "",
     [switch]$ResumeCandidate,
     [string]$RunId = "",
     [string]$LogPath = "",
@@ -105,6 +106,9 @@ param(
 $ErrorActionPreference = "Stop"
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $scratchRoot = Join-Path $repositoryRoot "artifacts\scratch"
+if ($Verification -notin @('Stage2','Stage3') -and -not [string]::IsNullOrWhiteSpace($CompilerLinkBridgeProof)) {
+    throw 'CompilerLinkBridgeProof is valid only for Windows Stage2 or Stage3'
+}
 if ($Verification -eq "Stage3" -and $SeedMode -eq "Stage2Bridge") {
     throw "Stage3 does not accept SeedMode Stage2Bridge"
 }
@@ -133,7 +137,7 @@ if (($Verification -eq "ExpressionBatch") -ne (-not [string]::IsNullOrWhiteSpace
 if ($Verification -ne "ExpressionBatch" -and
     ($ExpressionBatchFixture.Count -gt 0 -or $ExpressionBatchManifest -ne "" -or
         $ExpressionBatchManifestSha256 -ne "" -or
-        ($ValidateInputsOnly -and $Verification -notin @("PortableMemoryIo", "PortableAsyncSocketCurrent", "SocketCompletionFocused", "C437CurrentSource", "AsyncObservabilityManagedMatrix", "ZipDeflateMethod8", "Quic1291And1297", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "C341FinalSelfhost", "C394FinalCandidate")))) {
+        ($ValidateInputsOnly -and $Verification -notin @("PortableMemoryIo", "PortableAsyncSocketCurrent", "SocketCompletionFocused", "C437CurrentSource", "AsyncObservabilityManagedMatrix", "ZipDeflateMethod8", "Quic1291And1297", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "C341FinalSelfhost", "C394FinalCandidate", "Stage2", "Stage3")))) {
     throw "Expression batch selection and input validation require Verification ExpressionBatch"
 }
 $portableMemoryIoInputsPresent = -not [string]::IsNullOrWhiteSpace($PortableMemoryIoCompiler) -or
@@ -861,6 +865,25 @@ if ($Verification -eq "LinuxOwnershipStorage") {
     }
 }
 
+function Get-WindowsStageLinkArguments([string]$Proof) {
+    @('-CompilerLinkBridgeProof', (ConvertTo-ProcessArgument $Proof))
+}
+if ($Verification -in @('Stage2','Stage3')) {
+    if ([string]::IsNullOrWhiteSpace($CompilerLinkBridgeProof)) { throw 'CPU_AES_LINK_BRIDGE_PROOF_REQUIRED' }
+    $CompilerLinkBridgeProof = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($CompilerLinkBridgeProof)) {
+        $CompilerLinkBridgeProof
+    } else { Join-Path $repositoryRoot $CompilerLinkBridgeProof }))
+    $bridgePython = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $bridgePreflightJson = & $bridgePython (Join-Path $PSScriptRoot 'verify-cpu-aes-dispatch.py') --bridge-proof $CompilerLinkBridgeProof --validate-bridge-only
+    if ($LASTEXITCODE -ne 0) { throw 'SUPERVISOR_AES_LINK_BRIDGE_PREFLIGHT_FAILED' }
+    if ($ValidateInputsOnly) {
+        [ordered]@{verification=$Verification; validated=$true; codegenInvoked=$false; supervisorStarted=$false;
+            compilerLinkBridgeProof=$CompilerLinkBridgeProof;
+            linkArguments=@(Get-WindowsStageLinkArguments $CompilerLinkBridgeProof)} | ConvertTo-Json -Compress
+        return
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($RunId)) {
     $RunId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N").Substring(0, 8))
 }
@@ -923,6 +946,7 @@ if (-not $Supervisor) {
         "-ProbeOutcome", $ProbeOutcome,
         "-IncrementalStage1Optimization", $IncrementalStage1Optimization
     )
+    if ($Verification -in @('Stage2','Stage3')) { $argumentList += @(Get-WindowsStageLinkArguments $CompilerLinkBridgeProof) }
     if ($BrowserCandidateCompiler -ne "") {
         $argumentList += @(
             "-BrowserCandidateCompiler", (ConvertTo-ProcessArgument $BrowserCandidateCompiler),
@@ -1383,6 +1407,7 @@ try {
     $targetArguments = @("-NoProfile", "-File", (ConvertTo-ProcessArgument $targetScript))
     switch ($Verification) {
         "Stage2" {
+            $targetArguments += @(Get-WindowsStageLinkArguments $CompilerLinkBridgeProof)
             $targetArguments += @(
                 "-SeedMode", $SeedMode,
                 "-Stage2BuildJobs", $Jobs.ToString(),
@@ -1393,6 +1418,7 @@ try {
             if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" }
         }
         "Stage3" {
+            $targetArguments += @(Get-WindowsStageLinkArguments $CompilerLinkBridgeProof)
             $targetArguments += @(
                 "-SeedMode", $SeedMode,
                 "-Jobs", $Jobs.ToString(),

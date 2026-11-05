@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$RebuildStage2,
     [ValidateSet("Slg", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -8,7 +8,8 @@ param(
     [switch]$ResumeCandidate,
     [string]$CancellationRequestPath = "",
     [string]$CancellationRunId = "",
-    [string]$CancellationAcknowledgementPath = ""
+    [string]$CancellationAcknowledgementPath = "",
+    [string]$CompilerLinkBridgeProof = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +37,15 @@ foreach ($publicationPath in @($stage3PublicationCommitPath, $stage3PublicationC
 }
 trap [OperationCanceledException] { exit 130 }
 Assert-VerificationCancellationNotRequested
+if ([string]::IsNullOrWhiteSpace($CompilerLinkBridgeProof)) { throw 'CPU_AES_LINK_BRIDGE_PROOF_REQUIRED' }
+$bridgePython = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$bridgePreflightJson = & $bridgePython (Join-Path $PSScriptRoot 'verify-cpu-aes-dispatch.py') --bridge-proof $CompilerLinkBridgeProof --validate-bridge-only
+if ($LASTEXITCODE -ne 0) { throw 'STAGE_AES_LINK_BRIDGE_PREFLIGHT_FAILED' }
+$bridgePreflight = $bridgePreflightJson | ConvertFrom-Json
+$aesVerificationInputs = @($bridgePreflight.inputPaths) + @(
+    (Join-Path $PSScriptRoot 'verify-selfhost-stage2.ps1'),
+    (Join-Path $PSScriptRoot 'verify-selfhost-stage3.ps1'),
+    (Join-Path $PSScriptRoot 'invoke-detached-selfhost-verification.ps1'))
 $selfHostVerificationLock = Enter-SelfHostVerificationLock
 try {
 
@@ -582,7 +592,7 @@ if ($RebuildStage2) {
         "$CancellationAcknowledgementPath.stage2"
     }
     Assert-VerificationCancellationNotRequested
-    & (Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1") -Rebuild -Stage2BuildJobs $Jobs -SeedMode $SeedMode -SlgSeedCompiler $SlgSeedCompiler `
+    & (Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1") -CompilerLinkBridgeProof $CompilerLinkBridgeProof -Rebuild -Stage2BuildJobs $Jobs -SeedMode $SeedMode -SlgSeedCompiler $SlgSeedCompiler `
         -CancellationRequestPath $CancellationRequestPath -CancellationRunId $CancellationRunId `
         -CancellationAcknowledgementPath $stage2CancellationAcknowledgementPath
     Assert-VerificationCancellationNotRequested
@@ -600,7 +610,7 @@ if (-not (Test-Stage2ArtifactReceipt `
 }
 
 $sourcePaths = @($stageCompilationInputs.CompilerSources + $stageCompilationInputs.StandardLibrarySources)
-$fingerprintInputs = @($stage1Path) + $stageCompilationInputs.FingerprintPaths
+$fingerprintInputs = @($stage1Path) + $stageCompilationInputs.FingerprintPaths + $aesVerificationInputs
 $currentStage2Fingerprint = Get-ContentFingerprint $fingerprintInputs
 if (-not (Test-Path -LiteralPath $stage2FingerprintPath) -or
     [System.IO.File]::ReadAllText($stage2FingerprintPath).Trim() -ne $currentStage2Fingerprint) {
@@ -774,12 +784,14 @@ Assert-VerificationCancellationNotRequested
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-cpu-aes-dispatch.ps1") `
+    -CompilerLinkBridgeProof $CompilerLinkBridgeProof `
     -Compiler $stage3Path `
     -Label "stage3-candidate" `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-cpu-aes-dispatch-differential.ps1") `
+    -CompilerLinkBridgeProof $CompilerLinkBridgeProof `
     -SelfhostCompiler $stage3Path `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

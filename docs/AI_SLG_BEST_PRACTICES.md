@@ -2414,6 +2414,20 @@ explicit while scheduling partitions, join every started child after a failure,
 and read captured logs through the file reader, which also admits empty logs.
 Use a claimed stage's `.slg-tmp` directory for linker intermediates so completed
 verification can clean them through the common artifact lifecycle.
+
+AES verification uses the production `build --keep-temps` path and its
+`<executable>.ll` output. Forced backend checks link through the compiled
+`WindowsLinkPolicy` and `WindowsLinker`, never another entry name or import list.
+Explicitly prepare that tool with `scripts/build-compiler-link-bridge.py --output
+<fresh-owned-directory>` and the current reusable compiler selection. The builder
+uses a byte-identical isolated project so earlier `obj` files stay protected.
+Pass its `result.json` as `-CompilerLinkBridgeProof` to the self-host AES,
+differential AES, Stage2/Stage3 and AES benchmark commands. Their preflight must
+reject a missing, changed or incomplete proof before compilation. Stage input
+fingerprints include these verification consumers and tool inputs. A benchmark
+retains its products while measurements are pending, seals the consumer only
+after the existing thresholds pass, then uses the common artifact cleanup.
+
 Initial files pinned in a result's input hashes remain input fixtures even when
 their extension is `.ll` or `.bc`. The cleanup planner and executor must protect
 them while removing newly produced intermediates.

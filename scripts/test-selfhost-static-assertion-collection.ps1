@@ -511,4 +511,39 @@ foreach($probe in $ownerCallMutations){
     if(-not $rejected){throw ('Broken owner/call contract was not rejected: '+$probe.Expected)}
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 116; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8; captureAbiControls = 5; ownerCallControls = 11 } | ConvertTo-Json
+$aesDispatchDescriptions=@('shared function emission chooses AES specialization before ordinary body',
+    'logical module emits ordered functions through shared dispatch',
+    'logical module bounds keep AES and ordinary functions in one serial unit',
+    'logical module function bodies remain serial',
+    'parallel dispatch owns whole logical modules before the entry boundary')
+$aesDispatchAssertions=@($tree.FindAll({param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in @('Assert-Matches','Assert-MatchCount','Assert-NotMatches') -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $aesDispatchDescriptions
+},$true))
+if($aesDispatchAssertions.Count -ne 5){throw 'AES dispatch assertion inventory differs'}
+$aesDispatchAssertion=[scriptblock]::Create($aesDispatchAssertions.Extent.Text -join "`n")
+$aesDispatchSource=Read-OwnerCallSource 'llvm/text'
+Invoke-SsaAssertion $aesDispatchAssertion @{text=$aesDispatchSource}
+$completed++
+$aesDispatchMutations=@(
+    @{Before='usesAes and (functionIndex -> isAes128EncryptBlockFunction(context, state))';After='false';Expected=$aesDispatchDescriptions[0]},
+    @{Before='functionIndex -> emitAes128FunctionSet(context, state) -> return';After='functionIndex -> emitAes128FunctionSet(context, state)';Expected=$aesDispatchDescriptions[0]},
+    @{Before='functionIndex -> emitFunction(context, state)';After='functionIndex';Expected=$aesDispatchDescriptions[0]},
+    @{Before='groups.functions[index!] -> emitCodegenFunction(context, state, usesAes)';After='groups.functions[first] -> emitCodegenFunction(context, state, usesAes)';Expected=$aesDispatchDescriptions[1]},
+    @{Before='first + groups.lengths[groupIndex] => end';After='groups.lengths[groupIndex] => end';Expected=$aesDispatchDescriptions[2]},
+    @{Before='    end' + "`n" + '}' + "`n`n" + 'emitCoreWithEntry';After='    [1] -> parallel ignored { ignored } => invalid' + "`n" + '    end' + "`n" + '}' + "`n`n" + 'emitCoreWithEntry';Expected=$aesDispatchDescriptions[3]},
+    @{Before='groupIndex -> emitCodegenModule(groups, context, state, usesAes128Specialization, streamed)';After='groupIndex';Expected=$aesDispatchDescriptions[4]}
+)
+foreach($probe in $aesDispatchMutations){
+    $mutated=$aesDispatchSource.Replace($probe.Before,$probe.After)
+    if($mutated -ceq $aesDispatchSource){throw 'AES dispatch mutation did not change source'}
+    $rejected=$false
+    try{Invoke-SsaAssertion $aesDispatchAssertion @{text=$mutated}}catch{
+        if(-not $_.Exception.Message.StartsWith($probe.Expected)){throw}
+        $rejected=$true
+    }
+    if(-not $rejected){throw ('Broken AES dispatch was not rejected: '+$probe.Expected)}
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 124; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8; captureAbiControls = 5; ownerCallControls = 11; aesDispatchControls = 8 } | ConvertTo-Json

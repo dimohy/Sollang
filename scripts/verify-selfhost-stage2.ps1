@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Rebuild,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -8,7 +8,8 @@ param(
     [switch]$ResumeCandidate,
     [string]$CancellationRequestPath = "",
     [string]$CancellationRunId = "",
-    [string]$CancellationAcknowledgementPath = ""
+    [string]$CancellationAcknowledgementPath = "",
+    [string]$CompilerLinkBridgeProof = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +33,15 @@ if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
 }
 trap [OperationCanceledException] { exit 130 }
 Assert-VerificationCancellationNotRequested
+if ([string]::IsNullOrWhiteSpace($CompilerLinkBridgeProof)) { throw 'CPU_AES_LINK_BRIDGE_PROOF_REQUIRED' }
+$bridgePython = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$bridgePreflightJson = & $bridgePython (Join-Path $PSScriptRoot 'verify-cpu-aes-dispatch.py') --bridge-proof $CompilerLinkBridgeProof --validate-bridge-only
+if ($LASTEXITCODE -ne 0) { throw 'STAGE_AES_LINK_BRIDGE_PREFLIGHT_FAILED' }
+$bridgePreflight = $bridgePreflightJson | ConvertFrom-Json
+$aesVerificationInputs = @($bridgePreflight.inputPaths) + @(
+    (Join-Path $PSScriptRoot 'verify-selfhost-stage2.ps1'),
+    (Join-Path $PSScriptRoot 'verify-selfhost-stage3.ps1'),
+    (Join-Path $PSScriptRoot 'invoke-detached-selfhost-verification.ps1'))
 $selfHostVerificationLock = Enter-SelfHostVerificationLock
 try {
 
@@ -225,7 +235,7 @@ function Get-ContentFingerprint {
 }
 
 function Get-Stage2InputFingerprint {
-    $paths = @($stage1Path) + $stageCompilationInputs.FingerprintPaths
+    $paths = @($stage1Path) + $stageCompilationInputs.FingerprintPaths + $aesVerificationInputs
     return Get-ContentFingerprint $paths
 }
 
@@ -735,11 +745,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     -LlvmHome $llvmDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot "verify-selfhost-cpu-aes-dispatch.ps1") `
+    -CompilerLinkBridgeProof $CompilerLinkBridgeProof `
     -Compiler $stage2Path `
     -Label "stage2-candidate" `
     -LlvmHome $llvmDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot "verify-cpu-aes-dispatch-differential.ps1") `
+    -CompilerLinkBridgeProof $CompilerLinkBridgeProof `
     -SelfhostCompiler $stage2Path `
     -LlvmHome $llvmDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

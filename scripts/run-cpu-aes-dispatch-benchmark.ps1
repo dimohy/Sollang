@@ -1,10 +1,13 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$SelfhostCompiler = "",
     [string]$ManagedCompilerAssembly = "",
     [string]$LlvmHome = "",
     [ValidateRange(3, 21)]
-    [int]$Samples = 7
+    [int]$Samples = 7,
+    [string]$CompilerLinkBridgeProof = "",
+    [string[]]$ReusableCompilerDirectories = @(),
+    [string]$ArtifactDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,10 +26,15 @@ if ([string]::IsNullOrWhiteSpace($LlvmHome)) {
 }
 $fixture = Join-Path $repoRoot "benchmarks\cpu-aes\runner.slg"
 $expectedPath = Join-Path $repoRoot "benchmarks\cpu-aes\expected.txt"
-$artifacts = Join-Path $repoRoot "artifacts\cpu-aes-benchmark"
+$artifacts = if ($ArtifactDirectory) { [IO.Path]::GetFullPath($ArtifactDirectory) } else {
+    Join-Path $repoRoot ("artifacts/cpu-aes-benchmark/" + [DateTimeOffset]::UtcNow.ToString("yyyyMMddTHHmmssfffffff"))
+}
 $differential = Join-Path $PSScriptRoot "verify-cpu-aes-dispatch-differential.ps1"
 
 & $differential `
+    -CompilerLinkBridgeProof $CompilerLinkBridgeProof `
+    -ReusableCompilerDirectories $ReusableCompilerDirectories `
+    -KeepProducts `
     -SelfhostCompiler $SelfhostCompiler `
     -ManagedCompilerAssembly $ManagedCompilerAssembly `
     -LlvmHome $LlvmHome `
@@ -56,6 +64,7 @@ foreach ($backend in @("managed", "selfhost")) {
         }
         $warmup = Invoke-VerificationProcessCapture `
             -FilePath $executables[$mode] `
+            -ExecutionRecordPath (Join-Path $artifacts "$backend-$mode.warmup.execution.json") `
             -Description "$backend CPU AES $mode benchmark warmup"
         if ($warmup.ExitCode -ne 0 -or $warmup.Stdout.Replace("`r`n", "`n").TrimEnd("`n") -ne $expected) {
             throw "$backend CPU AES $mode benchmark warmup failed"
@@ -76,6 +85,7 @@ foreach ($backend in @("managed", "selfhost")) {
             $watch = [Diagnostics.Stopwatch]::StartNew()
             $run = Invoke-VerificationProcessCapture `
                 -FilePath $executables[$mode] `
+                -ExecutionRecordPath (Join-Path $artifacts "$backend-$mode.sample$sample.execution.json") `
                 -Description "$backend CPU AES $mode benchmark sample $($sample + 1)" `
                 -CapturePeakWorkingSet
             $watch.Stop()
@@ -154,5 +164,40 @@ foreach ($backend in $results.Keys) {
 if ($failed.Count -gt 0) {
     throw "CPU AES x64 AES-NI path exceeded the frozen 0.90 time ratio, 1.05 peak-memory ratio, or 16 MiB absolute peak; see $reportPath"
 }
+
+$completionPath = Join-Path $artifacts 'result.json'
+$completion = Get-Content -LiteralPath $completionPath -Raw | ConvertFrom-Json -AsHashtable
+if ($completion.status -cne 'awaiting-consumer' -or $completion.pendingConsumer -cne 'cpu-aes-benchmark' -or
+    -not $completion.inputsStable -or -not $completion.processesStopped -or
+    $completion.completed -ne 4 -or $completion.total -ne 4) { throw 'CPU_AES_BENCHMARK_PRODUCER_NOT_PENDING' }
+foreach ($path in $completion.inputHashes.Keys) {
+    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $completion.inputHashes[$path]) {
+        throw 'CPU_AES_BENCHMARK_INPUT_CHANGED'
+    }
+}
+$observations = @(Get-ChildItem -LiteralPath $artifacts -Filter '*.execution.json')
+if ($observations.Count -ne (4 + 4 * $Samples)) { throw 'CPU_AES_BENCHMARK_OBSERVATION_COUNT_MISMATCH' }
+foreach ($observation in $observations) {
+    $observed = Get-Content -LiteralPath $observation.FullName -Raw | ConvertFrom-Json
+    if ($observed.status -cne 'passed' -or $observed.exit -ne 0 -or -not $observed.processesStopped) {
+        throw 'CPU_AES_BENCHMARK_OBSERVATION_INCOMPLETE'
+    }
+    foreach ($path in @($observation.FullName, $observed.stdoutPath, $observed.stderrPath)) {
+        $completion.inputHashes[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    }
+}
+$completion.inputHashes[$reportPath] = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash
+$completion.consumerCompletion = @{status='passed'; report=$reportPath; observations=$observations.Count;
+    samplesPerMode=$Samples; thresholdsUnchanged=$true; finishedAtUtc=[DateTimeOffset]::UtcNow.ToString('o')}
+$completion.Remove('pendingConsumer')
+$completion.status = 'passed'
+Write-VerificationExecutionRecord -Path $completionPath -Record $completion
+$cleanupPlan = Join-Path $artifacts 'artifact-cleanup-plan.json'
+$cleanupArguments = @('--repo', $repoRoot, '--output-directory', $artifacts, '--plan', $cleanupPlan)
+foreach ($directory in $ReusableCompilerDirectories) { $cleanupArguments += @('--reusable-directory', $directory) }
+$python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+& $python (Join-Path $PSScriptRoot 'completed_artifact_plan.py') @cleanupArguments
+if ($LASTEXITCODE -ne 0) { throw 'CPU_AES_BENCHMARK_CLEANUP_PLAN_FAILED' }
+& (Join-Path $PSScriptRoot 'Invoke-CompletedArtifactCleanup.ps1') -Plan $cleanupPlan -Execute
 
 Write-Host "[CPU AES benchmark] PASS windows-x64 PE32+ on both backends under frozen AES-NI/portable time 0.90, peak-memory 1.05, and AES-NI absolute 16 MiB limits; report $reportPath"
