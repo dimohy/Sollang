@@ -13,6 +13,17 @@ spec.loader.exec_module(runner)
 
 
 class ContextTimeoutAuthorityTests(unittest.TestCase):
+    def test_authorized_context_deadline_survives_the_old_180_second_boundary(self):
+        now = [0.0]
+        budget = runner.CaseBudget(clock=lambda: now[0], seconds=1200)
+        now[0] = 200.0
+        self.assertEqual(budget.remaining(['context-build'], 1200), 1000)
+
+    def test_selected_case_budget_keeps_managed_and_ordinary_limits(self):
+        self.assertEqual(runner.case_budget_for_mode('paired', 1200).seconds, 1200)
+        self.assertEqual(runner.case_budget_for_mode('paired', 180).seconds, 180)
+        self.assertEqual(runner.case_budget_for_mode('managed', 1200).seconds, 180)
+
     def setUp(self):
         stem = "examples/regression/expected/1999-selfhost-context-fixture-suite"
         sources = runner.read(ROOT / (stem + ".sources.txt")).splitlines()

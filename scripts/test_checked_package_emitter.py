@@ -283,6 +283,34 @@ class NumericCheckedProducerTests(unittest.TestCase):
             binary.unlink()
             self.assertFalse(self.numeric.binary_inputs_stable(pins))
 
+    def test_emission_link_bridge_requires_complete_current_birth_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            bridge, source, proof = (root / name for name in ('bridge.dll', 'Program.cs', 'build.json'))
+            bridge.write_bytes(b'bridge')
+            source.write_bytes(b'source')
+            record = dict(status='passed', completed=1, total=1, inputsStable=True,
+                          processesStopped=True, bridgeSha256=self.numeric.sha(bridge),
+                          inputHashes={str(source): self.numeric.sha(source)})
+            contract = {'cases': [{'emittedLlvm': True}],
+                        'windowsLinkBridge': {'bridge': 'bridge.dll', 'buildResult': 'build.json'}}
+            with patch.object(self.numeric, 'ROOT', root), \
+                    patch.object(self.numeric, 'managed_runtime_inputs', return_value=[]):
+                proof.write_text(json.dumps(record))
+                self.assertEqual(self.numeric.emission_windows_link_bridge(contract)[0], bridge)
+                for changes in ({'status': 'cancelled'}, {'completed': 0, 'total': 0},
+                                {'inputsStable': False}, {'processesStopped': False},
+                                {'bridgeSha256': '0' * 64}, {'inputHashes': {}}):
+                    proof.write_text(json.dumps(record | changes))
+                    with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, 'PROOF_CHANGED'):
+                        self.numeric.emission_windows_link_bridge(contract)
+                proof.write_text(json.dumps(record))
+                source.write_bytes(b'drift')
+                with self.assertRaisesRegex(ValueError, 'PROOF_CHANGED'):
+                    self.numeric.emission_windows_link_bridge(contract)
+                with self.assertRaisesRegex(ValueError, 'REQUIRED_BEFORE_BUILD'):
+                    self.numeric.emission_windows_link_bridge({'cases': [{'emittedLlvm': True}]})
+
     def fake_dispatch(self, fault=None, runtime_names=None):
         """Exercise supervision wiring without compiling or running a program."""
         workspace = tempfile.TemporaryDirectory()
@@ -291,9 +319,11 @@ class NumericCheckedProducerTests(unittest.TestCase):
         for name in (
                 'driver.slg', 'helper.slg', 'program.slg', 'second.slg', 'stdlib/library.slg',
                 'fixture.project', 'managed.exe', 'managed.dll',
+                'tools/bridge.dll',
                 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs',
                 'scripts/verification_execution.py', 'scripts/verification_step_diagnostics.py',
                 'scripts/verification_json_records.py', 'scripts/verification_async_workers.py',
+                'scripts/verification_llvm_allocation.py',
                 'scripts/verification_observed_sources.py', 'scripts/verification_contract_lease.py',
                 'scripts/verify-checked-package-emitter.py', 'scripts/generate-selection-result-emitter.py',
                 'scripts/contracts/checked-producer-reuse-acceptance.json',
@@ -319,11 +349,19 @@ class NumericCheckedProducerTests(unittest.TestCase):
         runtime_names = ['fixture.project'] if runtime_names is None else runtime_names
         for name in runtime_names:
             (root / name).write_text(name, encoding='utf-8')
+        bridge_record = {'status': 'passed', 'completed': 1, 'total': 1,
+                         'inputsStable': True, 'processesStopped': True,
+                         'bridgeSha256': self.numeric.sha(root / 'tools/bridge.dll'),
+                         'inputHashes': {str(root / 'scripts/verification_execution.py'):
+                                         self.numeric.sha(root / 'scripts/verification_execution.py')}}
+        (root / 'tools/build.json').write_text(json.dumps(bridge_record), encoding='utf-8')
         contract = {'schemaVersion': 1, 'reusableCheckedProducer': group, 'cases': cases,
+                    'windowsLinkBridge': {'bridge': 'tools/bridge.dll', 'buildResult': 'tools/build.json'},
                     'runtimeInputFiles': runtime_names}
         contract_path = root / 'contract.json'
         contract_path.write_text(json.dumps(contract), encoding='utf-8')
         commands = []
+        managed_hash = self.numeric.sha(root / 'managed.dll')
 
         class FakeExecution:
             def __init__(self, _root, _output, result, stable, _sha):
@@ -334,14 +372,20 @@ class NumericCheckedProducerTests(unittest.TestCase):
                     raise ValueError('INPUT_DRIFT before command')
                 commands.append((prefix.name, command))
                 stdout = ''
-                if prefix.name == 'build':
+                if prefix.name == 'windows-entry-policy':
+                    stdout = json.dumps({'status': 'passed', 'compilerAssemblySha256': managed_hash,
+                                         'entryPoint': 'sollang_start'})
+                elif prefix.name == 'build':
                     Path(command[command.index('-o') + 1]).write_bytes(b'one checked producer')
                 elif prefix.name == 'run':
                     if fault == 'cancel' and command[1] == 'second.slg':
                         raise KeyboardInterrupt()
-                    stdout = ('define i32 @main() { ret i32 0 }\n' if command[1] == 'program.slg'
+                    stdout = ('define i32 @sollang_start() { ret i32 0 }\n' if command[1] == 'program.slg'
                               else cases[1]['stdout'])
-                elif prefix.name in ('assemble', 'native-link', 'audit-link'):
+                elif prefix.name == 'native-link':
+                    Path(command[7]).write_bytes(b'generated artifact')
+                    stdout = json.dumps({'status': 'passed', 'entryPoint': 'sollang_start'})
+                elif prefix.name in ('assemble', 'audit-link'):
                     Path(command[command.index('-o') + 1]).write_bytes(b'generated artifact')
                 elif prefix.name == 'native-run':
                     stdout = cases[0]['stdout']
@@ -358,7 +402,7 @@ class NumericCheckedProducerTests(unittest.TestCase):
                         (root / 'second.slg').write_text('changed original\n', encoding='utf-8')
                     elif fault == 'runtime-input':
                         (root / runtime_names[-1]).write_text('changed data\n', encoding='utf-8')
-                return SimpleNamespace(returncode=0)
+                return SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
 
         args = SimpleNamespace(contract=contract_path, output=root / 'output', mode='managed',
                                managed_compiler=root / 'managed.exe',
@@ -507,29 +551,37 @@ class NumericCheckedProducerTests(unittest.TestCase):
                                      ['program.slg'])
 class EmittedEntryPointTests(unittest.TestCase):
     def test_native_and_wasm_entry_identity_ignores_return_type(self):
-        for target, entry in (("windows", "main"), ("wasm", "sollang_start")):
+        for target, entry in (("windows", "sollang_start"), ("wasm", "sollang_start")):
             for result in ("void", "i32"):
                 with self.subTest(target=target, result=result):
                     llvm = f"define dso_local {result} @{entry}() {{\n}}\n"
-                    self.assertEqual(validator.validate_emitted_entrypoint(llvm, target), entry)
+                    self.assertEqual(validator.validate_emitted_entrypoint(
+                        llvm, target, windows_entry_point=entry), entry)
 
     def test_previous_native_checked_as_wasm_failure_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "EMISSION_ENTRY_DEFINITION_COUNT"):
             validator.validate_emitted_entrypoint("define i32 @main() { ret i32 0 }", "wasm")
 
     def test_declaration_and_duplicate_definitions_are_rejected(self):
-        for llvm in ("declare i32 @main()", "define i32 @main() {}\ndefine void @main() {}"):
+        for llvm in ("declare i32 @sollang_start()", "define i32 @sollang_start() {}\ndefine void @sollang_start() {}"):
             with self.subTest(llvm=llvm):
                 with self.assertRaisesRegex(ValueError, "EMISSION_ENTRY_DEFINITION_COUNT"):
-                    validator.validate_emitted_entrypoint(llvm, "windows")
+                    validator.validate_emitted_entrypoint(llvm, "windows", windows_entry_point="sollang_start")
 
     def test_another_function_body_or_comment_cannot_define_entry(self):
-        for llvm in ("define i32 @other() { call i32 @main(); ret i32 0 }",
-                     "define i32 @other() { ret i32 0 } ; @main()",
-                     "; define i32 @main() { ret i32 0 }"):
+        for llvm in ("define i32 @other() { call i32 @sollang_start(); ret i32 0 }",
+                     "define i32 @other() { ret i32 0 } ; @sollang_start()",
+                     "; define i32 @sollang_start() { ret i32 0 }"):
             with self.subTest(llvm=llvm):
                 with self.assertRaisesRegex(ValueError, "EMISSION_ENTRY_DEFINITION_COUNT"):
-                    validator.validate_emitted_entrypoint(llvm, "windows")
+                    validator.validate_emitted_entrypoint(llvm, "windows", windows_entry_point="sollang_start")
+
+    def test_windows_entry_requires_explicit_compiled_policy(self):
+        with self.assertRaisesRegex(ValueError, 'EMISSION_WINDOWS_ENTRY_AUTHORITY_REQUIRED'):
+            validator.validate_emitted_entrypoint('define i32 @sollang_start() {}', 'windows')
+        with self.assertRaisesRegex(ValueError, 'EMISSION_ENTRY_DEFINITION_COUNT'):
+            validator.validate_emitted_entrypoint('define i32 @main() {}', 'windows',
+                                                windows_entry_point='sollang_start')
 
     def test_unknown_target_cannot_choose_a_default_entry(self):
         with self.assertRaisesRegex(ValueError, "EMISSION_ENTRY_TARGET_UNSUPPORTED"):

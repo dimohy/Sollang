@@ -93,7 +93,7 @@ def main():
         work = output / "link-work"
         work.mkdir()
         target = output / "query.exe"
-        done = run(["dotnet", bridge / "CompilerLinkBridge.dll", "link-slg-main", managed.with_suffix(".dll"),
+        done = run(["dotnet", bridge / "CompilerLinkBridge.dll", "link", managed.with_suffix(".dll"),
                     digest(managed.with_suffix(".dll")), llvm, module, target, work, "-O0", "1"], "link")
         assert done.returncode == 0 and done.stderr == "", "COM_QUERY_SOURCE_LINK"
         for index, expected in enumerate([case["expected"] for case in managed_record["cases"]]):

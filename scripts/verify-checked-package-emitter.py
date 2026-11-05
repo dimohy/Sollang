@@ -10,11 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / "scripts/generate-selection-result-emitter.py"
 
 
-def validate_emitted_entrypoint(llvm_text, target):
+def validate_emitted_entrypoint(llvm_text, target, *, windows_entry_point=None):
     """Check target entry identity; LLVM-as remains the LLVM syntax authority."""
-    entry = {"windows": "main", "windows-x64": "main",
-             "wasm": "sollang_start", "wasm32-browser": "sollang_start"}.get(target)
-    if entry is None:
+    if target in ("windows", "windows-x64"):
+        if not isinstance(windows_entry_point, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", windows_entry_point):
+            raise ValueError("EMISSION_WINDOWS_ENTRY_AUTHORITY_REQUIRED")
+        entry = windows_entry_point
+    elif target in ("wasm", "wasm32-browser"):
+        entry = "sollang_start"
+    else:
         raise ValueError("EMISSION_ENTRY_TARGET_UNSUPPORTED")
     definitions = re.findall(r"^\s*define\b[^@\r\n]*@" + entry + r"\s*\(", llvm_text, re.M)
     if len(definitions) != 1:

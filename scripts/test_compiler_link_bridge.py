@@ -33,16 +33,15 @@ def main():
     slg_sample = args.slg_sample.resolve() if args.slg_sample else None
     if slg_sample is not None:
         paths.append(slg_sample)
-        allocator = output / 'invalid-allocator.ll.fixture.txt'
-        allocator.write_text('target triple = "x86_64-pc-windows-msvc"\n'
-                             'define i32 @main() {\n  ret i32 0\n}\n'
-                             'declare ptr @malloc(i32)\n')
-        paths.append(allocator)
-        crt = output / 'invalid-crt.ll.fixture.txt'
-        crt.write_text('target triple = "x86_64-pc-windows-msvc"\n'
-                       'define i32 @main() {\n  ret i32 0\n}\n'
-                       'declare i32 @_get_osfhandle(i32)\n')
-        paths.append(crt)
+    fixtures = {}
+    for name, body in {
+            'legacy-main': 'define i32 @main() { ret i32 0 }',
+            'duplicate-entry': 'define i32 @sollang_start() { ret i32 0 }\ndefine i32 @sollang_start() { ret i32 0 }',
+            'declaration-only': 'declare i32 @sollang_start()'}.items():
+        path = output / (name + '.ll.fixture.txt')
+        path.write_text('target triple = "x86_64-pc-windows-msvc"\n' + body + '\n')
+        fixtures[name] = path
+        paths.append(path)
     pins = {str(p): sha(p) for p in paths}
     stable = lambda: all(Path(p).is_file() and sha(Path(p)) == digest for p, digest in pins.items())
     result = dict(schemaVersion=1, scope='compiler-link-bridge-input-contract', status='running',
@@ -57,18 +56,15 @@ def main():
                 ('wrong-target', sha(compiler), target, '-O1', 'COMPILER_LINK_BRIDGE_TARGET_ABI_MISMATCH'),
                 ('missing-entry', sha(compiler), entry, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED')]
         if slg_sample is not None:
-            rows.extend([
-                ('native-normal', sha(compiler), slg_sample, '-O1', None),
-                ('managed-reject-native', sha(compiler), slg_sample, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED'),
-                ('native-reject-managed', sha(compiler), sample, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED'),
-                ('native-wrong-target', sha(compiler), target, '-O1', 'COMPILER_LINK_BRIDGE_TARGET_ABI_MISMATCH'),
-                ('native-missing-entry', sha(compiler), entry, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED'),
-                ('native-invalid-allocator', sha(compiler), allocator, '-O1', 'COMPILER_LINK_BRIDGE_ALLOCATOR_ABI_MISMATCH'),
-                ('native-invalid-crt', sha(compiler), crt, '-O1', 'COMPILER_LINK_BRIDGE_CRT_ABI_MISMATCH')])
+            rows.append(('native-normal', sha(compiler), slg_sample, '-O1', None))
+        rows.extend((name, sha(compiler), path, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED')
+                    for name, path in fixtures.items())
+        rows.append(('legacy-mode', sha(compiler), sample, '-O1',
+                     'COMPILER_LINK_BRIDGE_LEGACY_ENTRY_UNSUPPORTED'))
         result['total'] = len(rows)
         for name, digest, source, optimization, failure in rows:
             exe = output / (name + '.exe')
-            mode = 'probe-slg-main' if name.startswith('native-') else 'probe'
+            mode = 'probe-slg-main' if name == 'legacy-mode' else 'probe'
             run = runner.run(['dotnet', str(bridge), mode, str(compiler), digest,
                               str(llvm), str(source), str(exe), str(output), optimization], output / name, timeout=30)
             valid = (run.returncode == 0 and not run.stderr.strip()

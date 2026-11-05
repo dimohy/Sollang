@@ -37,7 +37,10 @@ class CaseBudget:
     """One deadline covers compilation, execution, linking and allocation audit."""
     seconds = 180
 
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, *, seconds=180):
+        if type(seconds) is not int or seconds < 1:
+            raise ValueError('CASE_BUDGET_SECONDS_INVALID')
+        self.seconds = seconds
         self.clock = clock
         self.started = clock()
 
@@ -49,6 +52,12 @@ class CaseBudget:
         if remaining <= 0:
             raise subprocess.TimeoutExpired(command, self.seconds)
         return min(step_limit, remaining)
+
+
+def case_budget_for_mode(mode, native_timeout):
+    if mode not in ('managed', 'paired'):
+        raise ValueError('CASE_BUDGET_MODE_INVALID')
+    return CaseBudget(seconds=native_timeout if mode == 'paired' else 180)
 
 
 def native_build_timeout(contract, mode="paired"):
@@ -141,6 +150,27 @@ def contract_runtime_inputs(contract):
     return unique_input_files(paths, duplicate_error="RUNTIME_INPUT_PATH_DUPLICATE")
 
 
+def emission_windows_link_bridge(contract):
+    if not any(case.get('emittedLlvm') for case in contract['cases']):
+        return None, []
+    selection = contract.get('windowsLinkBridge')
+    if (not isinstance(selection, dict) or set(selection) != {'bridge', 'buildResult'}
+            or any(not isinstance(value, str) or not value for value in selection.values())):
+        raise ValueError('EMISSION_WINDOWS_LINK_BRIDGE_REQUIRED_BEFORE_BUILD')
+    bridge, record_path = [(ROOT / selection[key]).resolve() for key in ('bridge', 'buildResult')]
+    if any(not p.is_relative_to(ROOT.resolve()) or not p.is_file() for p in (bridge, record_path)):
+        raise ValueError('EMISSION_WINDOWS_LINK_BRIDGE_INVALID_PATH')
+    record = json.loads(read(record_path))
+    pins = record.get('inputHashes')
+    if (record.get('status') != 'passed' or record.get('inputsStable') is not True or record.get('processesStopped') is not True
+            or type(record.get('completed')) is not int or record['completed'] <= 0
+            or record.get('bridgeSha256') != sha(bridge) or record.get('completed') != record.get('total')
+            or not isinstance(pins, dict) or not pins
+            or any(sha(Path(p)) != digest for p, digest in pins.items())):
+        raise ValueError('EMISSION_WINDOWS_LINK_BRIDGE_PROOF_CHANGED')
+    return bridge, [record_path, *managed_runtime_inputs(bridge), *map(Path, pins)]
+
+
 def reusable_producer(contract):
     group = contract.get("reusableCheckedProducer")
     if group is None:
@@ -186,10 +216,11 @@ def binary_inputs_stable(pins):
 
 def producer_lease_paths(args, contract):
     """Protect shared producer inputs through every case, including cancellation."""
+    _, link_inputs = emission_windows_link_bridge(contract)
     if contract.get("reusableCheckedProducer") is None:
-        return []
+        return link_inputs
     managed = args.managed_compiler.resolve()
-    paths = [*managed_runtime_inputs(managed), Path(__file__),
+    paths = [*link_inputs, *managed_runtime_inputs(managed), Path(__file__),
              ROOT / "scripts/verification_async_workers.py",
              ROOT / "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
              *[p for case in contract["cases"] for p in case_sources(case)],
@@ -486,11 +517,12 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
     semantic_proof_inputs = emission_semantic_proof(contract, cases)
     managed = args.managed_compiler.resolve()
     managed_inputs = managed_runtime_inputs(managed)
+    windows_bridge, windows_link_inputs = emission_windows_link_bridge(contract)
     expected_managed_hash = contract.get("expectedManagedDllSha256")
     if expected_managed_hash is not None and sha(managed.with_suffix(".dll")) != expected_managed_hash:
         raise ValueError("MANAGED_COMPILER_CONTRACT_HASH_MISMATCH")
     compiler = managed
-    paths = [*managed_inputs, contract_path, Path(__file__), *semantic_proof_inputs, *timeout_inputs,
+    paths = [*windows_link_inputs, *managed_inputs, contract_path, Path(__file__), *semantic_proof_inputs, *timeout_inputs,
              *stdlib_proof_inputs,
              ROOT / 'scripts/verification_execution.py', ROOT / 'scripts/verification_json_records.py', ROOT / 'scripts/verification_step_diagnostics.py',
              ROOT / 'scripts/verification_observed_sources.py', *observed, *runtime_inputs,
@@ -535,7 +567,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                   ROOT / "scripts/generate-selection-result-emitter.py",
                   ROOT / "scripts/contracts/checked-producer-reuse-acceptance.json"]
     if any(case.get("emittedLlvm") for case in cases):
-        paths += [ROOT / ".tools/llvm-22.1.8/bin/llvm-as.exe"]
+        paths += [ROOT / ".tools/llvm-22.1.8/bin/llvm-as.exe", ROOT / 'scripts/verify-checked-package-emitter.py']
     if any("expectedAllocations" in case for case in cases):
         paths += [ROOT / "tests/native-interop/owned_array_audit.c"]
     hashes = {str(p): sha(p) for p in paths}
@@ -592,6 +624,20 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
     save()
     terminal_error = None
     try:
+        if windows_bridge is not None:
+            compiler_dll = managed.with_suffix('.dll')
+            policy = execution.run(['dotnet', str(windows_bridge), 'policy', str(compiler_dll), sha(compiler_dll)],
+                                   output / 'windows-entry-policy', timeout=30)
+            if policy.returncode or policy.stderr.strip():
+                raise ValueError('EMISSION_WINDOWS_ENTRY_POLICY_FAILED')
+            policy_record = json.loads(policy.stdout)
+            if (not isinstance(policy_record, dict) or policy_record.get('status') != 'passed'
+                    or policy_record.get('compilerAssemblySha256') != sha(compiler_dll)
+                    or not isinstance(policy_record.get('entryPoint'), str)
+                    or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', policy_record['entryPoint'])):
+                raise ValueError('EMISSION_WINDOWS_ENTRY_POLICY_IDENTITY_CHANGED')
+            result['windowsEntryPolicy'] = policy_record
+            save()
         if format_paths:
             format_exit = run([str(args.format_compiler.resolve()), "format", "--check",
                                *[str(p) for p in format_paths]], output / "format-preflight")
@@ -601,11 +647,11 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             if format_exit != 0:
                 raise ValueError("FORMAT_PREFLIGHT_FAILED_BEFORE_BUILD")
         for case in cases:
-            case_budget = CaseBudget()
+            case_budget = case_budget_for_mode(args.mode, native_timeout)
             folder = output / case["id"]
             folder.mkdir()
             row = {"id": case["id"], "status": "running", "passed": False,
-                   "expectedBuildExit": case["exit"], "wholeCaseBudgetSeconds": CaseBudget.seconds}
+                   "expectedBuildExit": case["exit"], "wholeCaseBudgetSeconds": case_budget.seconds}
             result["cases"].append(row)
             save()
             if group is not None:
@@ -691,14 +737,19 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                         spec = importlib.util.spec_from_file_location("numeric_emission_entry_validator", validator_path)
                         validator = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(validator)
-                        row["emittedEntryPoint"] = validator.validate_emitted_entrypoint(read(llvm), "windows")
+                        row["emittedEntryPoint"] = validator.validate_emitted_entrypoint(
+                            read(llvm), "windows", windows_entry_point=result['windowsEntryPolicy'].get('entryPoint'))
                     if passed:
                         native = folder / "emitted.exe"
-                        row["nativeLinkExit"] = run([
-                            str(ROOT / ".tools/llvm-22.1.8/bin/clang.exe"),
-                            "-Wno-override-module", str(llvm), "-O1", "-o", str(native),
-                            *WINDOWS_RUNTIME_LIBRARIES], folder / "native-link")
+                        row["nativeLinkExit"] = run(['dotnet', str(windows_bridge), 'link',
+                            str(managed.with_suffix('.dll')), sha(managed.with_suffix('.dll')),
+                            str(ROOT / '.tools/llvm-22.1.8'), str(llvm), str(native), str(folder), '-O1', '1'],
+                            folder / "native-link")
                         passed = row["nativeLinkExit"] == 0 and not read(folder / "native-link.stderr").strip()
+                        if passed:
+                            row['windowsLink'] = json.loads(read(folder / 'native-link.stdout'))
+                            passed = (row['windowsLink'].get('status') == 'passed'
+                                      and row['windowsLink'].get('entryPoint') == row['emittedEntryPoint'])
                     if passed:
                         row["nativeRunExit"] = run([str(native)], folder / "native-run")
                         row["nativeRunStdout"] = read(folder / "native-run.stdout").strip()
@@ -721,7 +772,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                     audit_source, folder, case["expectedAllocations"], case["stdout"], run)
                 row.update(audit_row)
                 passed = passed and audit_passed
-            case_budget.remaining(["case-completion", case["id"]], CaseBudget.seconds)
+            case_budget.remaining(["case-completion", case["id"]], case_budget.seconds)
             row["wholeCaseElapsedSeconds"] = round(case_budget.elapsed(), 6)
             row["status"] = "passed" if passed else "failed"
             row["passed"] = passed
