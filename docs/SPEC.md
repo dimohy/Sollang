@@ -1553,6 +1553,10 @@ and `while` conditions using the same lexical boundary.
 Formatting treats ordinary and raw string contents as literal data. Control
 arrows inside those literals do not select code-layout rewrites; formatting
 must preserve the literal value.
+Formatting validates lexical input before rewriting, then validates the resulting
+formatted syntax. Lexical failures refer to the original input; syntax failures
+refer to the formatted text. Diagnostics retain their source bytes and selected
+issue through CLI reporting instead of re-analyzing a different source.
 Nonraw line boundaries use Unicode whitespace trimming, including trailing
 whitespace in line comments. This does not expand lexical whitespace outside
 literals and comments beyond the language lexer contract.

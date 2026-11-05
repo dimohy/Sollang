@@ -30,12 +30,32 @@ struct SourceControlParentheses {
 public struct FormatResult {
     public status: Int
     public bytes: [UInt8; ~]
+    public diagnosticSource: [UInt8; ~]
+    public diagnostics: [diagnostics.SyntaxDiagnostic; ~]
 }
 
-invalidFormat: -> FormatResult {
-    [UInt8; ~] => bytes
-    FormatResult { status: 1, bytes: bytes } => result
-    result
+makeFormatResult bytes: move [UInt8; ~], syntaxDiagnostics: move [diagnostics.SyntaxDiagnostic; ~] -> FormatResult {
+    [UInt8; ~] => empty
+    (syntaxDiagnostics -> len) > 0 -> if {
+        FormatResult {
+            status: 1
+            bytes: empty
+            diagnosticSource: bytes
+            diagnostics: syntaxDiagnostics
+        } -> return
+    }
+    FormatResult {
+        status: 0
+        bytes: bytes
+        diagnosticSource: empty
+        diagnostics: syntaxDiagnostics
+    }
+}
+
+invalidFormat source: file.SourceText, syntaxDiagnostics: move [diagnostics.SyntaxDiagnostic; ~] -> FormatResult {
+    [UInt8; ~] => bytes!
+    bytes! -> appendSource(source, 0, source -> len)
+    bytes! -> makeFormatResult(syntaxDiagnostics)
 }
 
 appendSource bytes: mut [UInt8; ~], source: file.SourceText, start: UIntSize, length: UIntSize -> Unit {
@@ -143,8 +163,7 @@ sourceParenthesesBeginExpression tokens: ref [syntax.SyntaxToken; ~], opening: I
         or kind == grammar.tokenIdFatArrow()
 }
 
-sourceControlParentheses source: file.SourceText -> [SourceControlParentheses; ~] {
-    source -> lexer.lexSource => tokens
+sourceControlParentheses source: file.SourceText, tokens: ref [syntax.SyntaxToken; ~] -> [SourceControlParentheses; ~] {
     [SourceControlParentheses; ~] => pairs!
     0 => arrowIndex!
     arrowIndex! < (tokens -> len) -> while {
@@ -173,8 +192,8 @@ sourceControlParentheses source: file.SourceText -> [SourceControlParentheses; ~
     pairs!
 }
 
-removeSourceControlParentheses source: file.SourceText -> [UInt8; ~] {
-    source -> sourceControlParentheses => pairs
+removeSourceControlParentheses source: file.SourceText, tokens: ref [syntax.SyntaxToken; ~] -> [UInt8; ~] {
+    source -> sourceControlParentheses(tokens) => pairs
     [UInt8; ~] => normalized!
     (pairs -> len) == 0 -> if {
         normalized! -> appendSource(source, 0, source -> len)
@@ -394,12 +413,13 @@ sourceLines source: file.SourceText -> [LineSpan; ~] {
 public format source: file.SourceText -> FormatResult {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => sourceView
-    sourceView -> diagnostics.analyze => syntaxDiagnostics
-    (syntaxDiagnostics -> len) > 0 -> if {
-        invalidFormat() -> return
+    source -> lexer.lexSource => tokens
+    sourceView -> diagnostics.analyzeLexical(tokens) => lexicalDiagnostics
+    (lexicalDiagnostics -> len) > 0 -> if {
+        source -> invalidFormat(lexicalDiagnostics) -> return
     }
 
-    source -> removeSourceControlParentheses => normalizedBytes
+    source -> removeSourceControlParentheses(tokens) => normalizedBytes
     normalizedBytes -> file.borrowBytes => normalizedSource
     normalizedSource -> slice(0, normalizedSource -> len) => normalizedView
     normalizedView -> sourceStyle.longInlineControlArrows => controlArrows
@@ -495,8 +515,10 @@ public format source: file.SourceText -> FormatResult {
         }
         lineIndex! + 1 => lineIndex!
     }
-    FormatResult { status: 0, bytes: output! } => result
-    result
+    output! -> file.borrowBytes => formattedSource
+    formattedSource -> slice(0, formattedSource -> len) => formattedView
+    formattedView -> diagnostics.analyze => syntaxDiagnostics
+    output! -> makeFormatResult(syntaxDiagnostics)
 }
 
 sameBytes source: file.SourceText, formatted: ref FormatResult -> Bool {
@@ -517,11 +539,10 @@ writeSucceeded result: Result<Unit, Text> -> Bool {
     }
 }
 
-writeSyntaxDiagnostic source: file.SourceText -> Unit uses Console {
-    source -> len => sourceLength
-    source -> slice(UIntSize(0), sourceLength) => sourceView
-    sourceView -> diagnostics.analyze => syntaxDiagnostics
-    sourceView -> diagnostics.emit(syntaxDiagnostics[0])
+writeSyntaxDiagnostic formatted: ref FormatResult -> Unit uses Console {
+    formatted.diagnosticSource -> file.borrowBytes => source
+    source -> slice(0, source -> len) => sourceView
+    sourceView -> diagnostics.emit(formatted.diagnostics[0])
 }
 
 writeFormatted destination: Text, formatted: ref FormatResult -> Bool uses File {
@@ -559,7 +580,7 @@ public formatStandardInput owner: file.SourceText -> Int uses Console {
     owner -> sourceDecoding.utf8Text -> file.borrowText => source
     source -> format => formatted
     formatted.status != 0 -> if {
-        source -> writeSyntaxDiagnostic
+        formatted -> writeSyntaxDiagnostic
         1 -> return
     }
     formatted.bytes -> file.borrowBytes => formattedSource
@@ -616,7 +637,7 @@ public run: -> CommandResult uses Console, File, Process {
         owner -> sourceDecoding.utf8Text -> file.borrowText => source
         source -> format => formatted
         formatted.status != 0 -> if {
-            source -> writeSyntaxDiagnostic
+            formatted -> writeSyntaxDiagnostic
             CommandResult.Completed(1) -> return
         }
         source -> sameBytes(formatted) -> unless {

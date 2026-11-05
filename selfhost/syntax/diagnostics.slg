@@ -44,6 +44,41 @@ public numericExtentSyntaxMessage code: Int -> Text {
     }
 }
 
+lexicalDiagnosticCode source: Text, span: syntax.SourceSpan -> Int {
+    span.length > 0 and (source -> byte(span.start)) == 34
+        -> if {
+            span.length >= 3
+                and (source -> byte(span.start + 1)) == 34
+                and (source -> byte(span.start + 2)) == 34
+                -> if { 7 -> return } else { 3 -> return }
+        }
+    span.length > 0 and (source -> byte(span.start)) == 39
+        -> if {
+            span.length > 1 and (source -> byte(span.start + span.length - 1)) == 39
+                -> if { 4 -> return } else { 5 -> return }
+        }
+    1
+}
+
+public analyzeLexical source: Text, tokens: ref [syntax.SyntaxToken; ~] -> [SyntaxDiagnostic; ~] {
+    [SyntaxDiagnostic; ~] => diagnostics!
+    0 => tokenIndex!
+    tokenIndex! < (tokens -> len) -> while {
+        tokens[tokenIndex!] => token
+        token.kind == grammar.tokenIdInvalid() -> if {
+            diagnostics! -> push(SyntaxDiagnostic {
+                code: source -> lexicalDiagnosticCode(token.span)
+                span: token.span
+                foundKind: token.kind
+                tokenIndex: tokenIndex!
+            })
+            diagnostics! -> return
+        }
+        tokenIndex! + 1 => tokenIndex!
+    }
+    diagnostics!
+}
+
 public analyze source: Text -> [SyntaxDiagnostic; ~] {
     source -> analyzeRule(grammar.startRule())
 }
@@ -117,22 +152,7 @@ analyzePreparedRule source: Text, startRule: Int, tokens: ref [syntax.SyntaxToke
             found.kind => foundKind!
         }
         foundKind! == grammar.tokenIdInvalid() -> if {
-            failureSpan!.length > 0
-                and (source -> byte(failureSpan!.start)) == 34
-                -> if {
-                    failureSpan!.length >= 3
-                        and (source -> byte(failureSpan!.start + 1)) == 34
-                        and (source -> byte(failureSpan!.start + 2)) == 34
-                        -> if { 7 } else { 3 }
-                } else {
-                    failureSpan!.length > 0
-                        and (source -> byte(failureSpan!.start)) == 39
-                        -> if {
-                            failureSpan!.length > 1
-                                and (source -> byte(failureSpan!.start + failureSpan!.length - 1)) == 39
-                                -> if { 4 } else { 5 }
-                        } else { 1 }
-                }
+            source -> lexicalDiagnosticCode(failureSpan!)
         } else { 2 } => code!
         code! == 2 -> if {
             false => expressionRequired!
