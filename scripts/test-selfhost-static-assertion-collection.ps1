@@ -471,4 +471,44 @@ foreach ($probe in $captureAbiMutations) {
     if (-not $rejected) { throw ('Broken capture ABI was not rejected: ' + $probe.Expected) }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 105; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8; captureAbiControls = 5 } | ConvertTo-Json
+$ownerCallDescriptions = @('whole-binding move-site contract',
+    'semantic preparation indexes named moves from canonical declared argument bindings',
+    'named move reads include only exact direct receivers', 'intrinsic method body exclusion',
+    'projected receiver requires an indexed lexical value root', 'aggregate fields cannot become projected receiver roots',
+    'contextual intrinsic collision callables are indexed once per package',
+    'contextual intrinsic collision index has one package producer')
+$ownerCallAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in @('Assert-Matches','Assert-MatchCount') -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $ownerCallDescriptions
+}, $true))
+if ($ownerCallAssertions.Count -ne 8) { throw 'Owner/call assertion inventory differs' }
+$ownerCallAssertion=[scriptblock]::Create($ownerCallAssertions.Extent.Text -join "`n")
+function Read-OwnerCallSource([string]$Name) { [IO.File]::ReadAllText((Join-Path $PSScriptRoot ('../selfhost/'+$Name+'.slg'))) }
+$ownerCallSources=@{semanticOwnership=(Read-OwnerCallSource 'semantic/ownership_check');semanticContext=(Read-OwnerCallSource 'semantic/context');calls=(Read-OwnerCallSource 'semantic/calls')+"`n"+(Read-OwnerCallSource 'semantic/call_resolution_sources');text=(Read-OwnerCallSource 'llvm/text')}
+Invoke-SsaAssertion $ownerCallAssertion $ownerCallSources
+$completed++
+$ownerCallMutations=@(
+    @{Name='semanticOwnership';Before='moveEvent.awaited -> if { true => consumes! }';After='';Expected=$ownerCallDescriptions[0]},
+    @{Name='semanticOwnership';Before='moveEvent.memberIr < 0';After='moveEvent.memberIr >= 0';Expected=$ownerCallDescriptions[0]},
+    @{Name='semanticOwnership';Before='and moveEvent.siteIr < (typed -> len)';After='';Expected=$ownerCallDescriptions[0]},
+    @{Name='semanticOwnership';Before='or moveSite.kind == 43';After='';Expected=$ownerCallDescriptions[0]},
+    @{Name='semanticContext';Before='and (package -> callArgumentIsNamedRead(binding.sourceModule, binding.callAst, binding.argumentAst))';After='and true';Expected=$ownerCallDescriptions[1]},
+    @{Name='semanticContext';Before='(package -> directCallReceiverAst(sourceModule, callAst)) == argumentAst';After='true';Expected=$ownerCallDescriptions[2]},
+    @{Name='text';Before='and not (context.ir[index!] -> isIntrinsicDeclaration)';After='';Expected=$ownerCallDescriptions[3]},
+    @{Name='calls';Before='package -> receiverSymbolIsRuntimeValue(sourceIndex, indexedName.symbol)';After='true';Expected=$ownerCallDescriptions[4]},
+    @{Name='calls';Before='owner.kind == 3 or owner.kind == 4';After='owner.kind == 3';Expected=$ownerCallDescriptions[5]},
+    @{Name='calls';Before='ModuleCallFacts { declarations: declarations, references: referenceIndex, intrinsicNames: intrinsicNames }';After='ModuleCallFacts { declarations: declarations, references: referenceIndex, intrinsicNames: [] }';Expected=$ownerCallDescriptions[6]}
+)
+foreach($probe in $ownerCallMutations){
+    $mutated=$ownerCallSources.Clone();$mutated[$probe.Name]=$mutated[$probe.Name].Replace($probe.Before,$probe.After)
+    if($mutated[$probe.Name] -ceq $ownerCallSources[$probe.Name]){throw 'Owner/call mutation did not change source'}
+    $rejected=$false
+    try{Invoke-SsaAssertion $ownerCallAssertion $mutated}catch{
+        if(-not $_.Exception.Message.StartsWith($probe.Expected+' is missing:')){throw}
+        $rejected=$true
+    }
+    if(-not $rejected){throw ('Broken owner/call contract was not rejected: '+$probe.Expected)}
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 116; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8; captureAbiControls = 5; ownerCallControls = 11 } | ConvertTo-Json
