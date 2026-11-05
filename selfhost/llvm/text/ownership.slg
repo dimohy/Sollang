@@ -4,6 +4,7 @@ import sollang.compiler.ast as ast
 import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.ir.stream as streamIr
 import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.function_value_abi_policy as functionValueAbi
 import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.number_format as numberFormat
@@ -3253,6 +3254,25 @@ writeFunctionValueAbiType node: typedIr.TypedIrNode, context: ref emitterContext
     node -> boundedArrayValueTypeId(context, state) => typeId
     typeId >= 0
         -> if { typeId -> writeValueAbiTypeId(context, state) } else { node -> writeIrType(context, state) }
+}
+
+# Unit is void only in result position. Materialized inputs/storage share the
+# compiled C# value policy; a Task returning Unit remains a Task value.
+isMaterializedUnit node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    node -> isAsyncTaskValue(context) -> if { false -> return }
+    node -> effectiveTypeId(context, state) => typeId
+    typeId < 0 or typeId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[typeId] => valueType
+    valueType.kind == 1 and valueType.origin == 1
+        and (valueType.symbol -> typeIds.builtinEnumName) == "Unit"
+}
+
+writeMaterializedValueAbiType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    node -> isMaterializedUnit(context, state)
+        -> if { functionValueAbi.unitValueLlvmType() -> print } else {
+            node -> writeFunctionValueAbiType(context, state)
+        }
 }
 
 writeBoundedArrayBackingType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {

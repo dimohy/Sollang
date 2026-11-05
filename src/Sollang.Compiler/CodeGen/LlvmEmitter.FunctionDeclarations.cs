@@ -725,7 +725,7 @@ internal sealed partial class LlvmEmitter
             }
             else
             {
-                parts.Add($"{LlvmType(parameter.Type)} {name}");
+                parts.Add($"{LlvmValueType(parameter.Type)} {name}");
             }
         }
         return string.Join(", ", parts);
@@ -813,6 +813,7 @@ internal sealed partial class LlvmEmitter
 
         return function.InputType switch
         {
+            BoundType.Unit => $"{LlvmValueType(BoundType.Unit)} %it",
             BoundType.Arguments => "i64 %it",
             null => "",
             BoundType.Int => "i64 %it",
@@ -881,6 +882,12 @@ internal sealed partial class LlvmEmitter
             _locals.Add(
                 function.InputName ?? "it",
                 DematerializeAsyncResult(asyncInputType, "%it"));
+            return;
+        }
+
+        if (function.InputType == BoundType.Unit)
+        {
+            _locals.Add(function.InputName ?? "it", RuntimeUnit.Instance);
             return;
         }
 

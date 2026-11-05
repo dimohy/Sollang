@@ -1951,6 +1951,14 @@ callback layouts and lifecycle lowering separate from that policy decision.
 Public library ABI type admission and C names use TypeNamePolicy compiled
 bindings in both backends and interface validators. Preserve declared-name
 rejection separately from bound-type naming, including source alias diagnostics.
+Unit parameters and materialized storage use FunctionValueAbiPolicy compiled
+from C#, while Unit function returns remain void. Keep these roles explicit in
+emitter helpers. A Unit operand materializes the shared zero literal after its
+producer effects; a Task returning Unit retains its Task representation.
+Unit inputs need no source casts or dummy numeric arguments.
+After awaiting Task<Unit>, pass the completed Unit through ordinary flow;
+retain semantic checks for subsequent targets instead of treating Unit as
+an implicit termination marker.
 Materialized intrinsic calls and their enclosing call operands keep source
 evaluation order across earlier guards, just as ordinary calls do. Transparent
 value-flow wrappers do not create an evaluation boundary.

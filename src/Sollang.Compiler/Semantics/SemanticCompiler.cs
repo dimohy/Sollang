@@ -11236,7 +11236,7 @@ internal sealed partial class SemanticCompiler
                 out var containerFlowResult))
             {
                 _resolvedContainerFlowTargets.Add(target);
-                if (containerFlowResult.Type == BoundType.Unit)
+                if (containerFlowResult.Type == BoundType.Unit && isLast)
                 {
                     // A mutation can also be a block's terminal expression,
                     // without an enclosing ExpressionStatement to record it.
@@ -13783,8 +13783,7 @@ internal sealed partial class SemanticCompiler
             throw new SollangException(
                 $"generic file {operation} supports Bool, CodePoint, and fixed-width numeric scalars; got {FormatType(actualType)}");
         }
-        if (actualType is BoundType.Unit
-            or BoundType.IntSlice
+        if (actualType is BoundType.IntSlice
             or BoundType.StaticIntArray
             or BoundType.DynamicIntArray
             or BoundType.IntDictionaryView

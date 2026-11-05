@@ -4,6 +4,7 @@ import sollang.compiler.ast as ast
 import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.ir.stream as streamIr
 import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.function_value_abi_policy as functionValueAbi
 import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.floating_literals as floatingLiterals
 import sollang.compiler.llvm.runtime as llvmRuntime
@@ -1852,7 +1853,7 @@ writeParallelBranchArgumentType argumentIndex: Int, context: ref emitterContext.
     context.ir[argumentIndex].parent => callIndex
     argumentIndex -> parallelBranchArgumentOrdinal(context) => ordinal
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
-    parameterIndex >= 0 -> if { context.ir[parameterIndex] -> writeFunctionValueAbiType(context, state) } else { context.ir[argumentIndex] -> writeFunctionValueAbiType(context, state) }
+    parameterIndex >= 0 -> if { context.ir[parameterIndex] -> writeMaterializedValueAbiType(context, state) } else { context.ir[argumentIndex] -> writeMaterializedValueAbiType(context, state) }
 }
 
 parallelBranchSourceUsesPointer source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
@@ -1887,7 +1888,7 @@ emitParallelBranchQuery stageIndex: Int, context: ref emitterContext.EmitContext
 writeParallelBranchSourceType source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     source -> parallelBranchSourceUsesPointer(context, state)
         -> if { "ptr" -> print } else {
-            source -> writeFunctionValueAbiType(context, state)
+            source -> writeMaterializedValueAbiType(context, state)
         }
 }
 
@@ -2348,7 +2349,7 @@ captureUsesBorrowAbi binding: typedIr.TypedIrNode, context: ref emitterContext.E
 writeCaptureAbiType binding: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     binding -> captureUsesBorrowAbi(context, state)
         -> if { "ptr" -> print } else {
-            binding -> writeFunctionValueAbiType(context, state)
+            binding -> writeMaterializedValueAbiType(context, state)
         }
 }
 
@@ -3996,6 +3997,10 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
             "sollang compiler error S052: LLVM value writer received invalid IR index $nodeIndex (owner $ownerIndex, ownerKind $(ownerKind!), ownerSource $(ownerSource!), ownerAst $(ownerAst!), ownerSymbol $(ownerSymbol!), ownerByte $(ownerByte!), ownerLength $(ownerLength!), irCount $irCount); this is a compiler-integrity defect, not a source error" -> runtime.eprintln
         }
     context.ir[nodeIndex] => value
+    value -> isMaterializedUnit(context, state) -> if {
+        functionValueAbi.unitValueLiteral() -> print
+        return
+    }
     # A caller-inline lexical scope produces its operand value, not an SSA
     # instruction of its own. Preserve the original scope for scheduling and
     # ownership while exposing its canonical result to ordinary consumers.

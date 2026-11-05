@@ -129,13 +129,13 @@ internal sealed partial class LlvmEmitter
         var parameters = new List<string>();
         if (function.InputType is { } inputType)
         {
-            parameters.Add($"{LlvmType(inputType)} %it");
+            parameters.Add($"{LlvmValueType(inputType)} %it");
         }
         var additional = function.AdditionalParameters ?? [];
         for (var index = 0; index < additional.Count; index++)
         {
             parameters.Add(
-                $"{LlvmType(additional[index].Type)} "
+                $"{LlvmValueType(additional[index].Type)} "
                 + $"%arg_{index.ToString(CultureInfo.InvariantCulture)}");
         }
         return string.Join(", ", parameters);
@@ -146,13 +146,13 @@ internal sealed partial class LlvmEmitter
         var arguments = FunctionRuntimeContext.Arguments(static _ => "null").ToList();
         if (function.InputType is { } inputType)
         {
-            arguments.Add($"{LlvmType(inputType)} %it");
+            arguments.Add($"{LlvmValueType(inputType)} %it");
         }
         var additional = function.AdditionalParameters ?? [];
         for (var index = 0; index < additional.Count; index++)
         {
             arguments.Add(
-                $"{LlvmType(additional[index].Type)} "
+                $"{LlvmValueType(additional[index].Type)} "
                 + $"%arg_{index.ToString(CultureInfo.InvariantCulture)}");
         }
         return string.Join(", ", arguments);

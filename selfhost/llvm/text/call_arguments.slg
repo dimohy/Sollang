@@ -945,12 +945,17 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
                 "ptr %callref$(callIndex -> valueNameId(state))_arg$(ordinal)_address" -> print
             } else {
                 argumentParameterIndex >= 0 -> if {
-                    context.ir[argumentParameterIndex] -> writeIrType(context, state)
+                    context.ir[argumentParameterIndex] -> writeMaterializedValueAbiType(context, state)
                 } else {
-                    argument -> writeIrType(context, state)
+                    argument -> writeMaterializedValueAbiType(context, state)
                 }
                 " " -> print
                 callIndex -> writeNativeScalarArgumentAttributes(argumentParameterIndex, context, state)
+                argument -> isMaterializedUnit(context, state)
+                    -> if {
+                        argumentValueIndex -> writeValue(callOwnerIndex, context, state)
+                        return
+                    }
                 argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state)
                     -> if {
                         "%call$(callIndex)_arg$(ordinal)_integer" -> print
@@ -1148,9 +1153,9 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
             fieldIndex! > 0 -> if { ", " -> print }
             callIndex -> callTargetParameter(parameterOrdinal!, context, state) => parameterIndex
             parameterIndex >= 0 -> if {
-                context.ir[parameterIndex] -> writeFunctionValueAbiType(context, state)
+                context.ir[parameterIndex] -> writeMaterializedValueAbiType(context, state)
             } else {
-                context.ir[argumentIndex!] -> writeFunctionValueAbiType(context, state)
+                context.ir[argumentIndex!] -> writeMaterializedValueAbiType(context, state)
             }
             fieldIndex! + 1 => fieldIndex!
             parameterOrdinal! + 1 => parameterOrdinal!

@@ -691,7 +691,7 @@ emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitC
         "  %arg" -> print
         asyncPrimaryBoundedType >= 0 -> if { "_bounded" -> print }
         " = load " -> print
-        asyncPrimaryParameter -> writeFunctionValueAbiType(context, state)
+        asyncPrimaryParameter -> writeMaterializedValueAbiType(context, state)
         ", ptr %async_arg_address, align " -> print
         asyncPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
         asyncPrimaryBoundedType >= 0 -> if {
@@ -708,7 +708,7 @@ emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitC
         "  %arg$(asyncAdditionalParameterOrdinal!)" -> print
         asyncAdditionalBoundedType >= 0 -> if { "_bounded" -> print }
         " = load " -> print
-        asyncAdditionalParameter -> writeFunctionValueAbiType(context, state)
+        asyncAdditionalParameter -> writeMaterializedValueAbiType(context, state)
         ", ptr %async_arg$(asyncAdditionalParameterOrdinal!)_address, align " -> print
         asyncAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
         asyncAdditionalBoundedType >= 0 -> if {
@@ -942,7 +942,7 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                         -> if {
                             "  %async_cancel_owned_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
                             "  %async_cancel_owned_value$(point.state)_$(bindingIndex!) = load " -> print
-                            binding -> writeFunctionValueAbiType(context, state)
+                            binding -> writeMaterializedValueAbiType(context, state)
                             ", ptr %async_cancel_owned_address$(point.state)_$(bindingIndex!), align " -> print
                             binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                         }
@@ -1136,7 +1136,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     }
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => asyncWrapperPrimaryParameter
-        asyncWrapperPrimaryParameter -> writeFunctionValueAbiType(context, state)
+        asyncWrapperPrimaryParameter -> writeMaterializedValueAbiType(context, state)
         " %it" -> print
         function.nextOperand >= 0 -> if { ", " -> print }
     }
@@ -1144,7 +1144,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     1 => asyncWrapperAdditionalParameterOrdinal!
     asyncWrapperAdditionalParameterIndex! >= 0 -> while {
         context.ir[asyncWrapperAdditionalParameterIndex!] => asyncWrapperAdditionalParameter
-        asyncWrapperAdditionalParameter -> writeFunctionValueAbiType(context, state)
+        asyncWrapperAdditionalParameter -> writeMaterializedValueAbiType(context, state)
         " %arg$(asyncWrapperAdditionalParameterOrdinal!)" -> print
         asyncWrapperAdditionalParameter.nextOperand >= 0
             -> if { ", " -> print }
@@ -1155,7 +1155,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "entry:" -> println
     function.operand1 >= 0 -> if {
         "  %arg = freeze " -> print
-        context.ir[function.operand1] -> writeFunctionValueAbiType(context, state)
+        context.ir[function.operand1] -> writeMaterializedValueAbiType(context, state)
         " %it" -> println
     }
     requestedFunctionIndex -> asyncContextStorageSize(context, state) => asyncContextSize
@@ -1208,7 +1208,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
         "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredPrimaryOffset)" -> println
         "  store " -> print
-        asyncStoredPrimaryParameter -> writeFunctionValueAbiType(context, state)
+        asyncStoredPrimaryParameter -> writeMaterializedValueAbiType(context, state)
         " %arg, ptr %async_arg_address, align " -> print
         asyncStoredPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
     }
@@ -1219,7 +1219,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         requestedFunctionIndex -> asyncParameterContextOffset(asyncStoredAdditionalParameterIndex!, context, state) => asyncStoredAdditionalOffset
         "  %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredAdditionalOffset)" -> println
         "  store " -> print
-        asyncStoredAdditionalParameter -> writeFunctionValueAbiType(context, state)
+        asyncStoredAdditionalParameter -> writeMaterializedValueAbiType(context, state)
         " %arg$(asyncStoredAdditionalParameterOrdinal!), ptr %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address, align " -> print
         asyncStoredAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
         asyncStoredAdditionalParameter.nextOperand => asyncStoredAdditionalParameterIndex!
@@ -1374,7 +1374,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                 parameter -> mutableBorrowUsesStructPointer(context)
                     -> if { "ptr %arg_mut_struct" -> print } else { "%sollang.mutable_container %arg_borrow" -> print }
             } else {
-                parameter -> writeFunctionValueAbiType(context, state)
+                parameter -> writeMaterializedValueAbiType(context, state)
                 (parameter -> boundedArrayValueTypeId(context, state)) >= 0
                     -> if { " %arg_bounded" -> print } else { " %it" -> print }
             }
@@ -1393,7 +1393,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                             "%sollang.mutable_container %arg$(additionalSignatureParameterOrdinal!)_borrow" -> print
                         }
                 } else {
-                    additionalSignatureParameter -> writeFunctionValueAbiType(context, state)
+                    additionalSignatureParameter -> writeMaterializedValueAbiType(context, state)
                     " %arg$(additionalSignatureParameterOrdinal!)" -> print
                     (additionalSignatureParameter -> boundedArrayValueTypeId(context, state)) >= 0
                         -> if { "_bounded" -> print }
@@ -1413,7 +1413,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
             primaryParameter.flags / 2 % 2 == 0 and (primaryParameter -> boundedArrayValueTypeId(context, state)) < 0
                 -> if {
                     "  %arg = freeze " -> print
-                    primaryParameter -> writeFunctionValueAbiType(context, state)
+                    primaryParameter -> writeMaterializedValueAbiType(context, state)
                     " %it" -> println
                 }
         }

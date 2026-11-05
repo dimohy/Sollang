@@ -15,6 +15,28 @@ from verification_source_proof import current_build_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 
+LIBRARY_CALL_SOURCE = '''import ctypes,json,sys
+from pathlib import Path
+metadata=json.loads(Path(sys.argv[2]).read_text(encoding="utf-8-sig"))
+library=ctypes.CDLL(sys.argv[1])
+types={"Int8":ctypes.c_int8,"Int16":ctypes.c_int16,"Int32":ctypes.c_int32,
+       "Int64":ctypes.c_int64,"UInt8":ctypes.c_uint8,"UInt16":ctypes.c_uint16,
+       "UInt32":ctypes.c_uint32,"UInt64":ctypes.c_uint64,
+       "Float32":ctypes.c_float,"Float64":ctypes.c_double}
+def abi_type(name,result=False):
+    return (None if result else ctypes.c_uint8) if name=="Unit" else types[name]
+exports={entry["name"]:entry for entry in metadata["exports"]}
+results=[]
+for call in json.loads(sys.argv[3]):
+    entry=exports[call["export"]]
+    assert len(call["arguments"])==len(entry["parameters"])
+    function=getattr(library,entry["symbol"])
+    function.argtypes=[abi_type(parameter["type"]) for parameter in entry["parameters"]]
+    function.restype=abi_type(entry["result"],True)
+    results.append(function(*call["arguments"]))
+print(results[0] if sys.argv[4]=="single" else json.dumps(results))
+'''
+
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
@@ -38,6 +60,12 @@ def main():
     assert contract['schemaVersion'] == 1 and len(contract['cases']) == 7
     assert contract['target'] == 'windows-x64' and contract['optimization'] == 'O0'
     assert contract['jobs'] == 1 and contract['wholeCaseSeconds'] == 180
+    if 'calls' in contract['positive']:
+        calls = contract['positive']['calls']
+        assert isinstance(calls, list) and calls, 'LIBRARY_CALL_MATRIX_EMPTY'
+        assert all(isinstance(call, dict) and set(call) == {'export', 'arguments', 'expected'}
+                   and isinstance(call['export'], str) and isinstance(call['arguments'], list)
+                   for call in calls), 'LIBRARY_CALL_MATRIX_INVALID'
     compiler = args.compiler.resolve()
     paths = [Path(__file__), args.contract, compiler, *managed_runtime_inputs(compiler),
              ROOT / 'scripts/verification_execution.py', ROOT / 'scripts/verification_contract_lease.py',
@@ -109,15 +137,19 @@ def main():
                     metadata = read(interface)
                     if reference:
                         assert metadata == reference['interface'], 'Library interface differs from CSharp'
-                    code = ('import ctypes,json,sys;from pathlib import Path;'
-                            'j=json.loads(Path(sys.argv[2]).read_text(encoding="utf-8-sig"));'
-                            'lib=ctypes.CDLL(sys.argv[1]);f=getattr(lib,j["exports"][0]["symbol"]);'
-                            'f.argtypes=[ctypes.c_int32];f.restype=ctypes.c_int32;print(f(int(sys.argv[3])))')
-                    called = execution.run([sys.executable, '-c', code, str(dll), str(interface), str(row['argument'])],
+                    matrix = 'calls' in row
+                    calls = row['calls'] if matrix else [dict(export=metadata['exports'][0]['name'],
+                        arguments=[row['argument']], expected=row['expected'])]
+                    call_inputs = [{key: call[key] for key in ('export', 'arguments')} for call in calls]
+                    expected_output = (json.dumps([call['expected'] for call in calls]) if matrix
+                                       else str(row['expected'])) + '\n'
+                    called = execution.run([sys.executable, '-c', LIBRARY_CALL_SOURCE, str(dll), str(interface),
+                                            json.dumps(call_inputs), 'matrix' if matrix else 'single'],
                                            directory / 'call', timeout=remaining())
-                    assert called.returncode == 0 and not called.stderr and called.stdout == str(row['expected']) + '\n'
+                    assert called.returncode == 0 and not called.stderr and called.stdout == expected_output
                     result['interface'] = metadata
-                    result['cases'].append(dict(id='positive', passed=True, exit=0, stdout=called.stdout))
+                    result['cases'].append(dict(id='positive', passed=True, exit=0, stdout=called.stdout,
+                                                actualLibraryCalls=len(calls)))
                 assert time.monotonic() - started <= 180
                 result['completed'] += 1
                 execution.save()

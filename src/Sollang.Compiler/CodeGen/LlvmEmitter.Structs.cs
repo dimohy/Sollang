@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Shared;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
@@ -967,6 +968,7 @@ internal sealed partial class LlvmEmitter
     {
         return value switch
         {
+            RuntimeUnit => (LlvmValueType(BoundType.Unit), FunctionValueAbiPolicy.UnitValueLiteral()),
             RuntimeArguments arguments => ("i64", arguments.LengthName),
             RuntimeInt integer => (LlvmType(integer.Type), integer.ValueName),
             RuntimeFloat floating => (LlvmType(floating.Type), floating.ValueName),
@@ -1387,6 +1389,9 @@ internal sealed partial class LlvmEmitter
         EmitAssign(capacity, $"extractvalue %sollang.int_dictionary {aggregate}, 2");
         return (pointer, length, capacity);
     }
+
+    private string LlvmValueType(BoundType type) =>
+        type == BoundType.Unit ? FunctionValueAbiPolicy.UnitValueLlvmType() : LlvmType(type);
 
     private string LlvmType(BoundType type)
     {

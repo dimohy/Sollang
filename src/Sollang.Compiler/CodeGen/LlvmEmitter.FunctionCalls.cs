@@ -2169,6 +2169,8 @@ internal sealed partial class LlvmEmitter
 
         return argument switch
         {
+            RuntimeUnit when function.InputType == BoundType.Unit =>
+                $"{LlvmValueType(BoundType.Unit)} {FunctionValueAbiPolicy.UnitValueLiteral()}",
             RuntimeArguments arguments when function.InputType == BoundType.Arguments =>
                 $"i64 {arguments.LengthName}",
             RuntimeText text when function.InputType == BoundType.Text =>

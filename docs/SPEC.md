@@ -2048,6 +2048,14 @@ adapters, async factories and workers, and CPU dispatch bodies, use `internal`
 linkage. Raw Arena helpers generated for a lexical owner are internal too.
 Entry points and library ABI export wrappers retain their required external
 linkage.
+`Unit` is a value type in primary and additional inputs, forwarding, generic
+specialization, and async inputs. Evaluate each Unit-producing expression once
+before its consumer. LLVM value and parameter positions use an ignored `i8`
+placeholder; source calls materialize `0`. Unit function results remain `void`.
+Public library exports use the same byte parameter representation, accepting
+any incoming byte as the single Unit value, and use `void` for Unit results.
+An `await` yielding Unit may flow into a Unit input. Semantic analysis still
+resolves and checks every following target; Unit alone does not end a flow.
 Stored field reads constrain an omitted signature through the receiver's
 canonical declared field type, including nested fields and readonly receivers.
 An inferred product receiver preserves its ordered field labels and positional

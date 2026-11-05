@@ -1914,16 +1914,16 @@ internal sealed partial class LlvmEmitter
     }
 
     private string AsyncStorageLlvmType(BoundType? type) =>
-        type is null or BoundType.Unit ? "i8" : LlvmType(type.Value);
+        LlvmValueType(type ?? BoundType.Unit);
 
     private int AsyncStorageAlignment(BoundType? type) =>
         type is null ? 1 : RuntimeAlignment(type.Value);
 
     private (string TypeName, string ValueName) MaterializeAsyncResult(RuntimeValue value) =>
-        value is RuntimeUnit ? ("i8", "0") : MaterializeAggregateValue(value);
+        MaterializeAggregateValue(value);
 
     private RuntimeValue DematerializeAsyncResult(BoundType type, string value) =>
-        type == BoundType.Unit ? RuntimeUnit.Instance : DematerializeAggregateValue(type, value);
+        DematerializeAggregateValue(type, value);
 
     private void DropFailedAsyncInput(BoundFunction function)
     {
