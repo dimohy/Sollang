@@ -441,4 +441,34 @@ foreach ($probe in $wasmMutations) {
     if (-not $rejected) { throw ('Broken WASM write contract was not rejected: ' + $probe.Expected) }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 100; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8 } | ConvertTo-Json
+$captureAbiDescriptions = @('parallel callback additional arguments share declared-parameter or exact actual-value ABI type fallback',
+    'shared capture ABI preserves borrow pointers and value carriers')
+$captureAbiAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-Matches' -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $captureAbiDescriptions
+}, $true))
+if ($captureAbiAssertions.Count -ne 2) { throw 'Capture ABI assertion inventory differs' }
+$captureAbiAssertion = [scriptblock]::Create($captureAbiAssertions.Extent.Text -join "`n")
+$captureAbiSources = @{text=(Read-SsaModules @('core_prepare'));coreCalls=(Read-SsaModules @('core_calls'))}
+Invoke-SsaAssertion $captureAbiAssertion $captureAbiSources
+$completed++
+$captureAbiMutations = @(
+    @{Name='text';Before='context.ir[parallelCallbackParameterIndex] -> writeMaterializedValueAbiType';After='context.ir[parallelCallbackParameterIndex] -> writeFunctionValueAbiType';Expected=$captureAbiDescriptions[0]},
+    @{Name='text';Before='context.ir[parallelCallbackAdditionalIndex!] -> writeMaterializedValueAbiType';After='context.ir[parallelCallbackAdditionalIndex!] -> writeFunctionValueAbiType';Expected=$captureAbiDescriptions[0]},
+    @{Name='coreCalls';Before='binding -> writeMaterializedValueAbiType';After='binding -> writeFunctionValueAbiType';Expected=$captureAbiDescriptions[1]},
+    @{Name='coreCalls';Before='-> if { "ptr" -> print } else {';After='-> if { "i64" -> print } else {';Expected=$captureAbiDescriptions[1]}
+)
+foreach ($probe in $captureAbiMutations) {
+    $mutated=$captureAbiSources.Clone()
+    $mutated[$probe.Name]=$mutated[$probe.Name].Replace($probe.Before,$probe.After)
+    if ($mutated[$probe.Name] -ceq $captureAbiSources[$probe.Name]) { throw 'Capture ABI mutation did not change source' }
+    $rejected=$false
+    try { Invoke-SsaAssertion $captureAbiAssertion $mutated } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.Expected + ' is missing:')) { throw }
+        $rejected=$true
+    }
+    if (-not $rejected) { throw ('Broken capture ABI was not rejected: ' + $probe.Expected) }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 105; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 21; sharedHandleControls = 10; parallelArgumentControls = 9; wasmWriteControls = 8; captureAbiControls = 5 } | ConvertTo-Json
