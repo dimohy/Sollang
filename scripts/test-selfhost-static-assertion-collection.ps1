@@ -275,4 +275,55 @@ foreach ($probe in $cleanupMutations) {
     if (-not $rejected) { throw ('Broken cleanup guard was not rejected: ' + $probe.Expected) }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 52; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8 } | ConvertTo-Json
+$ssaCases = @(Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts/contracts/selfhost-ssa-contract-guards.json') -Raw | ConvertFrom-Json)
+if ($ssaCases.Count -ne 15 -or @($ssaCases.description | Select-Object -Unique).Count -ne 15) { throw 'SSA guard case inventory differs' }
+function Read-SsaModules([string[]]$Names) {
+    ($Names | ForEach-Object { [IO.File]::ReadAllText((Join-Path $RepositoryRoot ('selfhost/llvm/text/' + $_ + '.slg'))) }) -join "`n"
+}
+$ssaSources = @{
+    ownership = Read-SsaModules @('ownership')
+    foundation = Read-SsaModules @('foundation')
+    coreCalls = Read-SsaModules @('core_calls','call_arguments','aggregate_values')
+    functions = Read-SsaModules @('functions','function_expressions','function_calls','function_returns')
+    control = Read-SsaModules @('control','control_regions','control_region_expressions')
+    containers = Read-SsaModules @('containers','container_control')
+}
+function Invoke-SsaAssertion([scriptblock]$Assertion, [hashtable]$Sources) {
+    foreach ($name in $Sources.Keys) { Set-Variable -Name $name -Value $Sources[$name] -Scope Local }
+    & $Assertion
+}
+$ssaCommands = @{}
+foreach ($probe in $ssaCases) {
+    $matches = @($tree.FindAll({ param($node)
+        $node -is [Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -in @('Assert-Contains','Assert-NotContains','Assert-Matches') -and
+        $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+        $node.CommandElements[-1].Value -ceq $probe.description
+    }, $true))
+    if ($matches.Count -ne 1) { throw ('SSA assertion inventory differs: ' + $probe.description) }
+    $ssaCommands[$probe.description] = $matches[0]
+    Invoke-SsaAssertion ([scriptblock]::Create($matches[0].Extent.Text)) $ssaSources
+}
+$completed++
+foreach ($probe in $ssaCases) {
+    $command = $ssaCommands[$probe.description]
+    $mutated = $ssaSources.Clone()
+    $original = $mutated[$probe.source]
+    if ($probe.mutation -ceq 'branch-allocation') {
+        $mutated[$probe.source] += "`n" + $command.CommandElements[2].Value
+    } elseif ($probe.mutation -ceq 'projection-step') {
+        $mutated[$probe.source] = $original.Replace('_step$(indexedBaseProjectionDepth!)', '')
+    } else {
+        $mutated[$probe.source] = $original.Replace('$(' + $probe.mutation + ' -> valueNameId(state))', '$(' + $probe.mutation + ')')
+    }
+    if ($mutated[$probe.source] -ceq $original) { throw ('SSA mutation did not change its source: ' + $probe.description) }
+    $rejected = $false
+    try { Invoke-SsaAssertion ([scriptblock]::Create($command.Extent.Text)) $mutated } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.description + ' is missing:') -and
+            -not $_.Exception.Message.StartsWith($probe.description + ' retained forbidden text:')) { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw ('Broken SSA source contract was not rejected: ' + $probe.description) }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 68; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7; cleanupControls = 8; ssaControls = 16 } | ConvertTo-Json
