@@ -2225,10 +2225,10 @@ Assert-Contains $eachCallResultVerifier '--stdlib $stdlibRoot' "candidate each-c
 Assert-Contains $incrementalVerifier 'verify-llvm-direct-call-closure.ps1' "focused LLVM direct-call closure gate"
 Assert-Contains $incrementalVerifier '. (Join-Path $PSScriptRoot "verification-process.ps1")' "shared bounded verification process helper"
 Assert-Contains $incrementalVerifier '[int]$CompilerTimeoutMilliseconds = 3600000' "measured bounded selfhost compiler emission default"
-Assert-Contains $nativeExactFixtureVerifier '[int]$TimeoutMilliseconds = 3600000' "native exact fixture measured timeout default"
-Assert-Contains $nativeExactFixtureVerifier '-TimeoutMilliseconds $TimeoutMilliseconds' "native exact fixture timeout routing"
-Assert-Contains $nativeExactFixtureBatchVerifier '[int]$TimeoutMilliseconds = 3600000' "native exact batch measured timeout default"
-Assert-Contains $nativeExactFixtureBatchVerifier '-TimeoutMilliseconds $using:TimeoutMilliseconds' "native exact batch timeout routing"
+Assert-Contains $nativeExactFixtureVerifier '[ValidateRange(1000, 180000)][int]$TimeoutMilliseconds = 180000' "native exact fixture measured timeout default"
+Assert-MatchCount $nativeExactFixtureVerifier '-TimeoutMilliseconds \(Get-NativeExactRemainingCaseMilliseconds\)' 8 "native exact fixture timeout routing"
+Assert-Contains $nativeExactFixtureBatchVerifier '[ValidateRange(1000, 180000)][int]$TimeoutMilliseconds = 180000' "native exact batch measured timeout default"
+Assert-Matches $nativeExactFixtureBatchVerifier '(?s)\$caseParameters = \[ordered\]@\{.*?TimeoutMilliseconds=\$using:TimeoutMilliseconds.*?\$transcript = Invoke-NativeExactBudgetedFixture -VerifierPath \$using:verifierPath -Parameters \$caseParameters' "native exact batch timeout routing"
 $sharedTimeoutDefaults = ([regex]::Matches($verificationProcess, '\[int\]\$TimeoutMilliseconds = 3600000')).Count
 if ($sharedTimeoutDefaults -ne 4) {
     Register-StaticAssertionFailure "shared verification timeout defaults drifted: expected 4, actual $sharedTimeoutDefaults"
@@ -2678,7 +2678,7 @@ Assert-Contains $typedResolvedContextFinalize 'finalReturnedMatch => finalReturn
 Assert-Contains $nativeExactFixtureBatchVerifier '"1253-readonly-self-consecutive-owned-enum-fields"' "native exact expression-bodied nested enum result fixture"
 Assert-Contains $nativeExactFixtureBatchVerifier '"1397-selfhost-while-chained-wide-match-result"' "native exact chained wide-match while regression fixture"
 Assert-Contains $nativeExactFixtureBatchVerifier 'Get-NativeExactWindowsCommonInputFingerprint `' "native exact batch hashes shared Windows inputs once"
-Assert-Contains $nativeExactFixtureBatchVerifier '-CommonInputFingerprint $using:commonInputFingerprint' "native exact batch forwards shared input identity"
+Assert-Matches $nativeExactFixtureBatchVerifier '(?s)\$caseParameters = \[ordered\]@\{.*?CommonInputFingerprint=\$using:commonInputFingerprint.*?\$transcript = Invoke-NativeExactBudgetedFixture -VerifierPath \$using:verifierPath -Parameters \$caseParameters' "native exact batch forwards shared input identity"
 Assert-Contains $nativeExactBatchProfiler 'if (-not $IsWindows)' "native exact performance measurement is explicitly Windows-only"
 Assert-Contains $nativeExactBatchProfiler 'Get-CimInstance Win32_Process' "native exact performance measurement observes the complete process tree"
 Assert-Contains $nativeExactBatchProfiler '$progress.Add([ordered]@{' "native exact performance measurement retains completion chronology"

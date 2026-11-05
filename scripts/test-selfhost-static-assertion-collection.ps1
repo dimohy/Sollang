@@ -197,4 +197,42 @@ foreach ($mutation in @(
     if (-not $rejected) { throw 'Broken late array type publication was not rejected' }
     $completed++
 }
-@{ status = 'passed'; completed = $completed; total = 37; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6 } | ConvertTo-Json
+$budgetDescriptions = @('native exact fixture measured timeout default', 'native exact fixture timeout routing',
+    'native exact batch measured timeout default', 'native exact batch timeout routing',
+    'native exact batch forwards shared input identity')
+$budgetAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -in @('Assert-Contains','Assert-Matches','Assert-MatchCount') -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $budgetDescriptions
+}, $true))
+if ($budgetAssertions.Count -ne 5) { throw 'Budget assertion inventory differs' }
+$budgetAssertion = [scriptblock]::Create($budgetAssertions.Extent.Text -join "`n")
+$originalFixture = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts/verify-native-exact-fixture.ps1'))
+$originalBatch = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts/verify-native-exact-fixture-batch.ps1'))
+function Invoke-BudgetAssertions([string]$Fixture, [string]$Batch) {
+    $nativeExactFixtureVerifier = $Fixture
+    $nativeExactFixtureBatchVerifier = $Batch
+    & $budgetAssertion
+}
+Invoke-BudgetAssertions $originalFixture $originalBatch
+$completed++
+$budgetMutations = @(
+    @{Fixture=$originalFixture.Replace('180000','3600000');Batch=$originalBatch;Expected='native exact fixture measured timeout default'},
+    @{Fixture=$originalFixture.Replace('-TimeoutMilliseconds (Get-NativeExactRemainingCaseMilliseconds)', '-TimeoutMilliseconds $TimeoutMilliseconds');Batch=$originalBatch;Expected='native exact fixture timeout routing'},
+    @{Fixture=$originalFixture;Batch=$originalBatch.Replace('180000','3600000');Expected='native exact batch measured timeout default'},
+    @{Fixture=$originalFixture;Batch=$originalBatch.Replace('TimeoutMilliseconds=$using:TimeoutMilliseconds','TimeoutMilliseconds=180000');Expected='native exact batch timeout routing'},
+    @{Fixture=$originalFixture;Batch=$originalBatch.Replace('Invoke-NativeExactBudgetedFixture -VerifierPath $using:verifierPath -Parameters $caseParameters','& $using:verifierPath @caseParameters');Expected='native exact batch timeout routing'},
+    @{Fixture=$originalFixture;Batch=$originalBatch.Replace('CommonInputFingerprint=$using:commonInputFingerprint','CommonInputFingerprint=""');Expected='native exact batch forwards shared input identity'}
+)
+foreach ($probe in $budgetMutations) {
+    $rejected = $false
+    try { Invoke-BudgetAssertions $probe.Fixture $probe.Batch } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.Expected + ' is missing:') -and
+            -not $_.Exception.Message.StartsWith($probe.Expected + ' count differs:')) { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw ('Broken budget guard was not rejected: ' + $probe.Expected) }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 44; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7; continuationControls = 4; lateArrayControls = 6; budgetControls = 7 } | ConvertTo-Json
