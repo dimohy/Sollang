@@ -99,4 +99,48 @@ $lateSource = $source.Replace('"verify-socket-reactor-contract.ps1"', '"__source
 $lateSourceTree = [Management.Automation.Language.Parser]::ParseInput($lateSource, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -ne 0 -or (Test-StaticExecutionOrder $lateSourceTree)) { throw 'Source contracts after expensive probes were not rejected' }
 $completed++
-@{ status = 'passed'; completed = $completed; total = 20; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4 } | ConvertTo-Json
+$layoutDescriptions = @(
+    'declared layout refinement logical module',
+    'by-value layout dependency graph',
+    'cycle rejection precedes numeric layout iteration',
+    'declared layout preparation consumer',
+    'declared layout refinement source closure'
+)
+$layoutAssertions = @($tree.FindAll({ param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -in @('Assert-Contains', 'Assert-Matches') -and
+    $node.CommandElements[-1] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+    $node.CommandElements[-1].Value -cin $layoutDescriptions
+}, $true))
+if ($layoutAssertions.Count -ne 5) { throw 'Declared layout assertion inventory differs' }
+$layoutAssertionText = $layoutAssertions.Extent.Text -join "`n"
+function Invoke-DeclaredLayoutAssertions([string]$Context, [string]$Layout, [string]$Manifest) {
+    $textContext = $Context
+    $finalTypeLayouts = $Layout
+    $selfhostDriverSources = $Manifest
+    & ([scriptblock]::Create($layoutAssertionText))
+}
+$layoutContext = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'selfhost/llvm/text/context_prepare.slg'))
+$layoutImplementation = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'selfhost/llvm/final_type_layouts.slg'))
+$layoutManifest = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'))
+$CollectStaticAssertionFailures = $false
+Invoke-DeclaredLayoutAssertions $layoutContext $layoutImplementation $layoutManifest
+$completed++
+$layoutMutations = @(
+    @{ Context = $layoutContext; Layout = $layoutContext; Manifest = $layoutManifest; Expected = 'by-value layout dependency graph' },
+    @{ Context = $layoutContext.Replace('semanticTypes! -> refineDeclaredTypeLayouts(', 'semanticTypes! -> disconnectedLayouts('); Layout = $layoutImplementation; Manifest = $layoutManifest; Expected = 'declared layout preparation consumer' },
+    @{ Context = $layoutContext; Layout = $layoutImplementation.Replace('typeIds.valueLayoutCycles(', 'typeIds.missingLayoutCycles('); Manifest = $layoutManifest; Expected = 'by-value layout dependency graph' },
+    @{ Context = $layoutContext; Layout = $layoutImplementation.Replace('not hasCyclicLayout! => aggregateLayoutChanged!', 'true => aggregateLayoutChanged!'); Manifest = $layoutManifest; Expected = 'cycle rejection precedes numeric layout iteration' },
+    @{ Context = $layoutContext; Layout = $layoutImplementation; Manifest = [regex]::Replace($layoutManifest, '(?m)^selfhost/llvm/final_type_layouts\.slg\r?\n?', ''); Expected = 'declared layout refinement source closure' },
+    @{ Context = $layoutContext; Layout = $layoutImplementation.Replace('namespace sollang.compiler.llvm.text', 'namespace unrelated.layout'); Manifest = $layoutManifest; Expected = 'declared layout refinement logical module' }
+)
+foreach ($probe in $layoutMutations) {
+    $layoutRejected = $false
+    try { Invoke-DeclaredLayoutAssertions $probe.Context $probe.Layout $probe.Manifest } catch {
+        if (-not $_.Exception.Message.StartsWith($probe.Expected + ' is missing:')) { throw }
+        $layoutRejected = $true
+    }
+    if (-not $layoutRejected) { throw ('Declared layout mutation was not rejected: ' + $probe.Expected) }
+    $completed++
+}
+@{ status = 'passed'; completed = $completed; total = 27; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4; declaredLayoutControls = 7 } | ConvertTo-Json

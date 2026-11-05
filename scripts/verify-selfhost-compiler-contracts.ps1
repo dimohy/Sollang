@@ -167,6 +167,7 @@ $platformIoPath = Join-Path $RepositoryRoot "selfhost/llvm/text/platform_io.slg"
 $windowsSocketRuntimePath = Join-Path $RepositoryRoot "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.Socket.cs"
 $linuxSocketRuntimePath = Join-Path $RepositoryRoot "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.Socket.cs"
 $textContextPath = Join-Path $RepositoryRoot "selfhost/llvm/text/context_prepare.slg"
+$finalTypeLayoutsPath = Join-Path $RepositoryRoot "selfhost/llvm/final_type_layouts.slg"
 $entrypointsPath = Join-Path $RepositoryRoot "selfhost/llvm/text/entrypoints.slg"
 $incrementalVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-incremental.ps1"
 $directOwnedFieldBindingContractPath = Join-Path $RepositoryRoot "scripts/contracts/direct-owned-field-binding.json"
@@ -338,6 +339,7 @@ $mutableOwnedProjectionEnumFixturePath = Join-Path $RepositoryRoot "examples/reg
 $flowAggregateOwnedProjectionDiagnosticPath = Join-Path $RepositoryRoot "examples/regression/diagnostics/flow-aggregate-owned-projection-borrow.stderr.contains.txt"
 $runtimeSupportManifestPath = Join-Path $RepositoryRoot "tests/Sollang.ExampleTests/Fixtures/selfhost-compiler-runtime.sources.txt"
 $selfhostDriverPath = Join-Path $RepositoryRoot "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg"
+$selfhostDriverSourcesPath = [IO.Path]::ChangeExtension($selfhostDriverPath, '.sources.txt')
 $exampleRunnerPath = Join-Path $RepositoryRoot "tests/Sollang.ExampleTests/Program.cs"
 $textEqualityFixturePath = Join-Path $RepositoryRoot "examples/regression/1327-selfhost-text-equality.slg"
 $textOrderingDiagnosticPath = Join-Path $RepositoryRoot "examples/regression/diagnostics/1328-text-ordering-requires-explicit-api.stderr.contains.txt"
@@ -442,6 +444,8 @@ $platformIo = [IO.File]::ReadAllText($platformIoPath)
 $windowsSocketRuntime = [IO.File]::ReadAllText($windowsSocketRuntimePath)
 $linuxSocketRuntime = [IO.File]::ReadAllText($linuxSocketRuntimePath)
 $textContext = [IO.File]::ReadAllText($textContextPath)
+$finalTypeLayouts = [IO.File]::ReadAllText($finalTypeLayoutsPath)
+$selfhostDriverSources = [IO.File]::ReadAllText($selfhostDriverSourcesPath)
 $entrypoints = [IO.File]::ReadAllText($entrypointsPath)
 
 Assert-Contains $coreCalls `
@@ -1640,8 +1644,11 @@ Assert-NotContains $functionScheduling 'containmentIfSearch! < functionEnd' "per
 Assert-Contains $ownership 'sameNominalTypeIdentity leftTypeId: Int, rightTypeId: Int' "nominal enum payload identity guard"
 # Recursive layout admission uses the complete dependency graph. Omitting a
 # constructor/self payload was never a semantic rejection and misses mutual cycles.
-Assert-Contains $textContext 'valueLayoutCycles' "by-value layout dependency graph"
-Assert-Matches $textContext '(?s)valueLayoutCycles\(semanticFields!.*?not hasCyclicLayout! => aggregateLayoutChanged!' "cycle rejection precedes numeric layout iteration"
+Assert-Matches $finalTypeLayouts '(?m)^namespace sollang\.compiler\.llvm\.text\r?$' "declared layout refinement logical module"
+Assert-Matches $finalTypeLayouts '(?s)public refineDeclaredTypeLayouts .*?types -> typeIds\.valueLayoutCycles\(fields, references, ranges, declarations, referenceByAst\) => valueCycles' "by-value layout dependency graph"
+Assert-Matches $finalTypeLayouts '(?s)valueLayoutCycles\(fields, references, ranges, declarations, referenceByAst\).*?valueCycles\.cyclic => cyclicLayouts.*?3 => statuses\[cyclicLayoutIndex!\].*?true => hasCyclicLayout!.*?not hasCyclicLayout! => aggregateLayoutChanged!' "cycle rejection precedes numeric layout iteration"
+Assert-Contains $textContext 'semanticTypes! -> refineDeclaredTypeLayouts(semanticFields!, signatureTypeReferences!, analysisRanges!, analysisSymbols!, analysisNodes!, recursiveTypes!.referenceIndexByTypeAst, typeSizes!, typeAligns!, typeLayoutStatuses!, typeTraits!)' "declared layout preparation consumer"
+Assert-Matches $selfhostDriverSources '(?m)^selfhost/llvm/final_type_layouts\.slg\r?$' "declared layout refinement source closure"
 Assert-Contains $textContext 'recursiveTypes!.referenceIndexByTypeAst' "canonical annotation index reuse"
 Assert-Contains $typeIds '((current.kind == 4 and current.length > 0) or current.kind == 12)' "fixed and bounded array dependency edges"
 Assert-Contains $typeIds 'current.kind == 13' "bounded dictionary dependency edges"
