@@ -4266,6 +4266,12 @@ words, so mutations update the caller storage without an allocation or copy.
 The same address contract applies to additional inputs, forwarding, and
 mutable BitSet fields.
 
+A readonly `ref Set<T>` input may be iterated directly with `each`. Iteration
+reads the referenced dictionary descriptor before extracting storage and bucket
+capacity, then visits occupied keys. It borrows the descriptor and any owned
+key payloads; it neither transfers ownership nor destroys the caller's keys.
+An empty set produces no iterations.
+
 `Set<T>.insert(value)` and `Set<T>.remove(value)` return `Bool` to report whether
 membership changed. Their result can continue to another value-flow target;
 mutation still requires writable owner storage and the canonical element type.

@@ -10,6 +10,43 @@ import unittest
 
 admit = runpy.run_path(str(Path(__file__).with_name('build-focused-source-emitter.py')))[
     'managed_reference_inputs']
+plans = runpy.run_path(str(Path(__file__).with_name('build-focused-source-emitter.py')))[
+    'diagnostics_plans']
+
+
+class SourceBuildDiagnosticsAdmissionTests(unittest.TestCase):
+    def test_missing_plan_keeps_sampling_opt_in(self):
+        self.assertEqual(plans(None, True, {}), {})
+
+    def test_all_selected_phases_are_required_with_exact_deadlines(self):
+        budget = dict(emissionTimeoutSeconds=180, linkTimeoutSeconds=240)
+        phase = lambda name, timeout: dict(stage=name, softLimitSeconds=10,
+            hardTimeoutSeconds=timeout, sampleIntervalSeconds=5, maxSamples=60)
+        config = dict(schemaVersion=1, phases={key:phase(key, timeout)
+            for key,timeout in [('emit',180),('grammar',30),('link',240)]})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'plans.json'
+            path.write_text(json.dumps(config))
+            self.assertEqual(set(plans(path, True, budget)), {'emit','grammar','link'})
+            changed = copy.deepcopy(config)
+            changed['phases']['link']['hardTimeoutSeconds'] = 1200
+            path.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, 'TIMEOUT_MISMATCH'):
+                plans(path, True, budget)
+            del config['phases']['emit']
+            path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, 'PHASES_INVALID'):
+                plans(path, True, budget)
+
+    def test_combined_plan_cannot_enable_separated_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'plans.json'
+            config = dict(schemaVersion=1, phases=dict(build=dict(stage='build',
+                softLimitSeconds=60, hardTimeoutSeconds=180, sampleIntervalSeconds=5, maxSamples=40)))
+            path.write_text(json.dumps(config))
+            self.assertEqual(set(plans(path, False, dict(timeoutSeconds=180))), {'build'})
+            with self.assertRaisesRegex(ValueError, 'PHASES_INVALID'):
+                plans(path, True, dict(emissionTimeoutSeconds=180, linkTimeoutSeconds=240))
 
 
 class ManagedReferenceAdmissionTests(unittest.TestCase):

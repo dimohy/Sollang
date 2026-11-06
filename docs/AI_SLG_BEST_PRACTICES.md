@@ -930,6 +930,9 @@ The `capacity` query checks whether that bucket count fits its public `Int`
 result; a wide hint remains valid even when querying its capacity would trap.
 Use `mut Set<T>`, `mut Deque<T>`, or `mut BinaryHeap<T>` when a function
 borrows these concrete owners for mutation.
+Use `ref Set<T>` to inspect a caller-owned set, including direct `each`
+iteration. Read the underlying descriptor before using its storage and capacity;
+the readonly reference and iterated owned keys remain borrowed.
 
 Set `insert` and `remove` return `Bool`, which can flow directly to a consumer
 such as `println`. Keep the set owner mutable; the returned value reports the
@@ -2454,6 +2457,25 @@ and `linkTimeoutSeconds: 240`. Select the canonical CLI with `--cli`, or a
 validated reusable checked package with `--checked-package-contract`. The latter
 keeps its declared `-O1`/24-worker harness configuration; the CLI uses `-O2`/24.
 The original combined build mode and its budget remain separate.
+For bounded observations of these build phases, pass `--diagnostics-plan` with
+`schemaVersion: 1` and a `phases` object containing `emit`, `grammar`, and `link`
+plans. Each plan uses the common `SlowStepDiagnostics` fields and must declare
+the selected phase's exact hard timeout (180, 30, and 240 seconds). A combined
+build accepts only a `build` plan with its 180-second timeout. Invalid or missing
+phase coverage is rejected before launch; omitting the option keeps sampling
+disabled. Sampling never changes a deadline or starts another build.
+
+Consume a verified reusable checked producer with
+`scripts/verify-prebuilt-checked-emitter.py --source-build-proof <result.json>
+--contract <same-checked-contract.json> --managed-compiler <apphost.exe>
+--output <fresh-owned-directory>` and the current reusable compiler selection.
+This command reuses the focused admission, whole-case budget, production linker,
+LLVM grammar and ownership-audit APIs. It verifies the exact producer, source
+inputs and contract again under their read leases before execution. Its contract
+covers checked LLVM output, runtime output and optional allocation counts;
+unsupported checks fail before launch. Pass the focused 180-second
+`--diagnostics-plan` explicitly when sampling is needed. Failed outputs remain
+protected; successful consumer cleanup retains the producer for later inputs.
 
 Initial files pinned in a result's input hashes remain input fixtures even when
 their extension is `.ll` or `.bc`. The cleanup planner and executor must protect

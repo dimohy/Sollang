@@ -4794,7 +4794,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
         eachContainerTypeId! >= 0 and context.types[eachContainerTypeId!].kind == 8
             -> if {
                 context.types[eachContainerTypeId!].first => eachContainerTypeId!
-                context.types[eachContainerTypeId!].kind == 3 or eachText
+                context.types[eachContainerTypeId!].kind == 3 or eachText or eachSet
                     -> if {
                         true => eachReadonlyReference!
                         "  %each$(eachIndex -> valueNameId(state))_source = load " -> print
@@ -4809,10 +4809,14 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
         } else {
             eachSet -> if {
                 "  %each$(eachIndex -> valueNameId(state))_storage = extractvalue %sollang.int_dictionary " -> print
-                eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                eachReadonlyReference! -> if { "%each$(eachIndex -> valueNameId(state))_source" -> print } else {
+                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                }
                 ", 0" -> println
                 "  %each$(eachIndex -> valueNameId(state))_length = extractvalue %sollang.int_dictionary " -> print
-                eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                eachReadonlyReference! -> if { "%each$(eachIndex -> valueNameId(state))_source" -> print } else {
+                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                }
                 ", 2" -> println
                 context.types[eachContainerTypeId!].first => eachSetElementType
                 context.typeSizes[eachSetElementType] -> dictionaryEntryLayout(context.typeAligns[eachSetElementType], 0, 1) => eachSetEntryLayout
