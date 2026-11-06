@@ -19044,13 +19044,9 @@ internal sealed partial class SemanticCompiler
         }
 
         bool result;
-        if (_types.IsStaticArray(type))
+        if (TryGetContextualArrayElementType(type, out var arrayElementType))
         {
-            result = TypeContains(_types.GetStaticArray(type).ElementType, expected, visiting);
-        }
-        else if (_types.IsDynamicArray(type))
-        {
-            result = TypeContains(_types.GetDynamicArray(type).ElementType, expected, visiting);
+            result = TypeContains(arrayElementType, expected, visiting);
         }
         else if (_types.IsDictionary(type))
         {

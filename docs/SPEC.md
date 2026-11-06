@@ -4572,10 +4572,13 @@ Container rules:
   the final stage, including the origins selected or replaced by earlier calls.
   Parenthesizing an intermediate flow does not change its return origins.
   The same origin union is inferred recursively when borrowed
-  `Text` values are stored in a returned struct, fixed or growable array, or
-  dictionary, including explicit early-return paths. Passing such an aggregate
-  through a `Text`-containing function parameter transfers its existing origin
-  union without treating an aggregate made only from static or owned `Text` as
+  `Text` values are stored in a returned struct, fixed, growable, or bounded
+  array, readonly array view, or dictionary, including explicit early-return
+  paths. Containment follows nested nominal fields independently of declaration
+  order and both key and value types of growable or bounded dictionaries.
+  Passing such an aggregate through a `Text`-containing function parameter
+  transfers its existing origin union without treating an aggregate made only
+  from static or owned `Text` as
   borrowed. Field and index projections inherit the aggregate's origins.
   An owned carrier of `Text` spans owns its descriptors, not the referenced
   UTF-8 bytes. Returning an externally backed `Text` payload may outlive a

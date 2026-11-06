@@ -2853,7 +2853,7 @@ semanticTypeIsSourceText prepared: ref semanticContext.SemanticSnapshot, types: 
 }
 
 parallelResultSourceTextSupported prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], resultTypeId: Int, fallible: Bool -> Bool {
-    not (prepared -> semanticTypeContainsStorageKind(types, resultTypeId, 0, false, true))
+    not (prepared -> semanticTypeContainsContent(types, resultTypeId, StorageContentQuery.SourceTextValue))
         -> if { true -> return }
     not fallible or resultTypeId < 0 or resultTypeId >= (types -> len)
         -> if { false -> return }
@@ -2863,21 +2863,28 @@ parallelResultSourceTextSupported prepared: ref semanticContext.SemanticSnapshot
         -> if { false -> return }
     [resultType.first, resultType.second] -> each payloadTypeId {
         not (prepared -> semanticTypeIsSourceText(types, payloadTypeId))
-            and (prepared -> semanticTypeContainsStorageKind(types, payloadTypeId, 0, false, true))
+            and (prepared -> semanticTypeContainsContent(types, payloadTypeId, StorageContentQuery.SourceTextValue))
             -> if { false -> return }
     }
     true
 }
 
 semanticTypeContainsBorrowKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, borrowKind: Int -> Bool {
-    prepared -> semanticTypeContainsStorageKind(types, typeId, borrowKind, false, false)
+    prepared -> semanticTypeContainsContent(types, typeId, StorageContentQuery.StorageKind(borrowKind))
 }
 
 semanticTypeContainsByteStorage prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
-    prepared -> semanticTypeContainsStorageKind(types, typeId, 3, true, false)
+    prepared -> semanticTypeContainsContent(types, typeId, StorageContentQuery.CanonicalByteArray)
 }
 
-semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, storageKind: Int, canonicalByteArrayOnly: Bool, sourceTextOnly: Bool -> Bool {
+enum StorageContentQuery {
+    StorageKind(Int)
+    CanonicalByteArray
+    SourceTextValue
+    TextValue
+}
+
+semanticTypeContainsContent prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, query: StorageContentQuery -> Bool {
     [Int; ~] => pending!
     [Int; ~] => visited!
     false => contains!
@@ -2896,90 +2903,95 @@ semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, 
                 -> if {
                     visited! -> push(currentTypeId)
                     types[currentTypeId] => currentType
-                    ((not sourceTextOnly and currentType.kind == storageKind)
-                        or (sourceTextOnly and (prepared -> semanticTypeIsSourceText(types, currentTypeId))))
-                        and (not canonicalByteArrayOnly or (types -> borrowedTextCanonicalByteArrayType(currentTypeId)))
-                        -> if {
-                            true => contains!
-                        } else {
-                            currentType.kind == 1 -> if {
-                                currentType.module => ownerSourceModule!
-                                currentType.origin == 2 -> if {
-                                    currentType.module >= 0 and currentType.module < (prepared.modules -> len)
-                                        -> if {
-                                            prepared.modules[currentType.module].sourceIndex => ownerSourceModule!
-                                        }
-                                }
-                                -1 => ownerDeclarationAst!
-                                ownerSourceModule! >= 0 and ownerSourceModule! < (prepared.package.ranges -> len)
+                    query -> when {
+                        StorageKind(kind) { currentType.kind == kind }
+                        CanonicalByteArray {
+                            currentType.kind == 3 and (types -> borrowedTextCanonicalByteArrayType(currentTypeId))
+                        }
+                        SourceTextValue { prepared -> semanticTypeIsSourceText(types, currentTypeId) }
+                        TextValue { currentType.kind == 1 and currentType.origin == 1 and currentType.symbol == 1 }
+                    } => matches
+                    matches -> if {
+                        true => contains!
+                    } else {
+                        currentType.kind == 1 -> if {
+                            currentType.module => ownerSourceModule!
+                            currentType.origin == 2 -> if {
+                                currentType.module >= 0 and currentType.module < (prepared.modules -> len)
                                     -> if {
-                                        prepared.package.ranges[ownerSourceModule!] => ownerRange
-                                        currentType.symbol >= 0 and currentType.symbol < ownerRange.symbolCount
-                                            -> if {
-                                                prepared.package.symbols[ownerRange.symbolStart + currentType.symbol] => ownerSymbol
-                                                ownerSymbol.astNode >= 0 -> if { ownerSymbol.astNode => ownerDeclarationAst! }
-                                            }
-                                    }
-                                false => ownerIsEnum!
-                                ownerDeclarationAst! >= 0 -> if {
-                                    prepared.package.ranges[ownerSourceModule!] => ownerRange
-                                    prepared.package.nodes[ownerRange.astStart + ownerDeclarationAst!].kind == 4
-                                        -> if { true => ownerIsEnum! }
-                                }
-                                ownerIsEnum! -> if {
-                                    0 => payloadReferenceIndex!
-                                    payloadReferenceIndex! < (prepared.semantic.references -> len)
-                                        -> while {
-                                            prepared.semantic.references[payloadReferenceIndex!] => payloadReference
-                                            payloadReference.status == 0 and payloadReference.sourceModule == ownerSourceModule! and payloadReference.typeAst >= 0
-                                                -> if {
-                                                    payloadReference.typeAst => payloadAncestor!
-                                                    false => payloadBelongs!
-                                                    prepared.package.ranges[ownerSourceModule!] => payloadRange
-                                                    payloadAncestor! >= 0 and payloadAncestor! < payloadRange.astCount and not payloadBelongs!
-                                                        -> while {
-                                                            prepared.package.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
-                                                            payloadNode.kind == 27 and payloadNode.parent == ownerDeclarationAst!
-                                                                -> if {
-                                                                    true => payloadBelongs!
-                                                                } else {
-                                                                    payloadNode.parent => payloadAncestor!
-                                                                }
-                                                        }
-                                                    payloadBelongs! -> if { pending! -> push(payloadReference.typeId) }
-                                                }
-                                            payloadReferenceIndex! + 1 => payloadReferenceIndex!
-                                        }
-                                } else {
-                                    0 => fieldIndex!
-                                    fieldIndex! < (prepared.semantic.fields -> len)
-                                        -> while {
-                                            prepared.semantic.fields[fieldIndex!] => field
-                                            field.status == 0 and field.ownerType == currentTypeId
-                                                -> if {
-                                                    pending! -> push(field.fieldType)
-                                                }
-                                            fieldIndex! + 1 => fieldIndex!
-                                        }
-                                }
-                            } else {
-                                # A structural product's first type is its field
-                                # chain. Each field carries its value type in
-                                # first and the remaining fields in second.
-                                currentType.kind == 2 or currentType.kind == 3 or currentType.kind == 4 or currentType.kind == 6 or currentType.kind == 8 or currentType.kind == 10 or currentType.kind == 12
-                                    -> if {
-                                        pending! -> push(currentType.first)
-                                    } else {
-                                        currentType.kind == 5 or currentType.kind == 11 or currentType.kind == 13
-                                            or (currentType.kind == 7 and currentType.origin == 4
-                                            and (currentType.symbol == 0 or currentType.symbol == 1))
-                                            -> if {
-                                                pending! -> push(currentType.first)
-                                                pending! -> push(currentType.second)
-                                            }
+                                        prepared.modules[currentType.module].sourceIndex => ownerSourceModule!
                                     }
                             }
+                            -1 => ownerDeclarationAst!
+                            ownerSourceModule! >= 0 and ownerSourceModule! < (prepared.package.ranges -> len)
+                                -> if {
+                                    prepared.package.ranges[ownerSourceModule!] => ownerRange
+                                    currentType.symbol >= 0 and currentType.symbol < ownerRange.symbolCount
+                                        -> if {
+                                            prepared.package.symbols[ownerRange.symbolStart + currentType.symbol] => ownerSymbol
+                                            ownerSymbol.astNode >= 0 -> if { ownerSymbol.astNode => ownerDeclarationAst! }
+                                        }
+                                }
+                            false => ownerIsEnum!
+                            ownerDeclarationAst! >= 0 -> if {
+                                prepared.package.ranges[ownerSourceModule!] => ownerRange
+                                prepared.package.nodes[ownerRange.astStart + ownerDeclarationAst!].kind == 4
+                                    -> if { true => ownerIsEnum! }
+                            }
+                            ownerIsEnum! -> if {
+                                0 => payloadReferenceIndex!
+                                payloadReferenceIndex! < (prepared.semantic.references -> len)
+                                    -> while {
+                                        prepared.semantic.references[payloadReferenceIndex!] => payloadReference
+                                        payloadReference.status == 0 and payloadReference.sourceModule == ownerSourceModule! and payloadReference.typeAst >= 0
+                                            -> if {
+                                                payloadReference.typeAst => payloadAncestor!
+                                                false => payloadBelongs!
+                                                prepared.package.ranges[ownerSourceModule!] => payloadRange
+                                                payloadAncestor! >= 0 and payloadAncestor! < payloadRange.astCount and not payloadBelongs!
+                                                    -> while {
+                                                        prepared.package.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
+                                                        payloadNode.kind == 27 and payloadNode.parent == ownerDeclarationAst!
+                                                            -> if {
+                                                                true => payloadBelongs!
+                                                            } else {
+                                                                payloadNode.parent => payloadAncestor!
+                                                            }
+                                                    }
+                                                payloadBelongs! -> if { pending! -> push(payloadReference.typeId) }
+                                            }
+                                        payloadReferenceIndex! + 1 => payloadReferenceIndex!
+                                    }
+                            } else {
+                                0 => fieldIndex!
+                                fieldIndex! < (prepared.semantic.fields -> len)
+                                    -> while {
+                                        prepared.semantic.fields[fieldIndex!] => field
+                                        field.status == 0 and field.ownerType == currentTypeId
+                                            -> if {
+                                                pending! -> push(field.fieldType)
+                                            }
+                                        fieldIndex! + 1 => fieldIndex!
+                                    }
+                            }
+                        } else {
+                            # A structural product's first type is its field
+                            # chain. Each field carries its value type in
+                            # first and the remaining fields in second.
+                            currentType.kind == 2 or currentType.kind == 3 or currentType.kind == 4 or currentType.kind == 6 or currentType.kind == 8 or currentType.kind == 10 or currentType.kind == 12
+                                -> if {
+                                    pending! -> push(currentType.first)
+                                } else {
+                                    currentType.kind == 5 or currentType.kind == 11 or currentType.kind == 13
+                                        or (currentType.kind == 7 and currentType.origin == 4
+                                        and (currentType.symbol == 0 or currentType.symbol == 1))
+                                        -> if {
+                                            pending! -> push(currentType.first)
+                                            pending! -> push(currentType.second)
+                                        }
+                                }
                         }
+                    }
                 }
             pendingIndex! + 1 => pendingIndex!
         }
@@ -7246,53 +7258,17 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
         referenceBindingIndex! + 1 => referenceBindingIndex!
     }
 
-    # Semantic type children precede their owners. Classify Text containment
-    # once so aggregate-origin discovery is allocation-free and target-stable.
+    # Cache complete graph queries. Nominal field dependencies may follow
+    # their owners; the shared traversal handles cycles and container shapes.
     [Bool; ~] => borrowedTextTypes!
     [Bool; ~] => borrowedTextViewTypes!
     0 => borrowedTextTypeIndex!
     borrowedTextTypeIndex! < (types -> len)
         -> while {
-            types[borrowedTextTypeIndex!] => borrowedTextType
-            (borrowedTextType.kind == 1 and borrowedTextType.origin == 1 and borrowedTextType.symbol == 1) => borrowedTextTypeContains!
-            borrowedTextTypeContains! or (borrowedTextType.kind == 1 and borrowedTextType.origin == 1 and borrowedTextType.symbol == 24) => borrowedTextViewContains!
-            borrowedTextType.kind == 2 or borrowedTextType.kind == 3 or borrowedTextType.kind == 4 or borrowedTextType.kind == 6 or borrowedTextType.kind == 7 or borrowedTextType.kind == 8 or borrowedTextType.kind == 10 or borrowedTextType.kind == 11
-                -> if {
-                    borrowedTextType.first >= 0 and borrowedTextType.first < (borrowedTextTypes! -> len) and borrowedTextTypes![borrowedTextType.first]
-                        -> if { true => borrowedTextTypeContains! }
-                    borrowedTextType.first >= 0 and borrowedTextType.first < (borrowedTextViewTypes! -> len) and borrowedTextViewTypes![borrowedTextType.first]
-                        -> if { true => borrowedTextViewContains! }
-                }
-            # Result payloads and both structural field-chain edges can retain
-            # a borrowed Text/SourceText origin.
-            borrowedTextType.kind == 5 or borrowedTextType.kind == 11 or (borrowedTextType.kind == 7
-                and borrowedTextType.origin == 4 and borrowedTextType.symbol == 1)
-                -> if {
-                    borrowedTextType.first >= 0 and borrowedTextType.first < (borrowedTextTypes! -> len) and borrowedTextTypes![borrowedTextType.first]
-                        -> if { true => borrowedTextTypeContains! }
-                    borrowedTextType.second >= 0 and borrowedTextType.second < (borrowedTextTypes! -> len) and borrowedTextTypes![borrowedTextType.second]
-                        -> if { true => borrowedTextTypeContains! }
-                    borrowedTextType.first >= 0 and borrowedTextType.first < (borrowedTextViewTypes! -> len) and borrowedTextViewTypes![borrowedTextType.first]
-                        -> if { true => borrowedTextViewContains! }
-                    borrowedTextType.second >= 0 and borrowedTextType.second < (borrowedTextViewTypes! -> len) and borrowedTextViewTypes![borrowedTextType.second]
-                        -> if { true => borrowedTextViewContains! }
-                }
-            borrowedTextType.kind == 1 -> if {
-                0 => borrowedTextFieldIndex!
-                borrowedTextFieldIndex! < (prepared.semantic.fields -> len)
-                    -> while {
-                        prepared.semantic.fields[borrowedTextFieldIndex!] => borrowedTextField
-                        borrowedTextField.ownerType == borrowedTextTypeIndex! and borrowedTextField.fieldType >= 0 and borrowedTextField.fieldType < (borrowedTextTypes! -> len) and borrowedTextTypes![borrowedTextField.fieldType]
-                            -> if {
-                                true => borrowedTextTypeContains!
-                            }
-                        borrowedTextField.ownerType == borrowedTextTypeIndex! and borrowedTextField.fieldType >= 0 and borrowedTextField.fieldType < (borrowedTextViewTypes! -> len) and borrowedTextViewTypes![borrowedTextField.fieldType]
-                            -> if { true => borrowedTextViewContains! }
-                        borrowedTextFieldIndex! + 1 => borrowedTextFieldIndex!
-                    }
-            }
-            borrowedTextTypes! -> push(borrowedTextTypeContains!)
-            borrowedTextViewTypes! -> push(borrowedTextViewContains!)
+            prepared -> semanticTypeContainsContent(types, borrowedTextTypeIndex!, StorageContentQuery.TextValue) => containsText
+            containsText or (prepared -> semanticTypeContainsContent(types, borrowedTextTypeIndex!, StorageContentQuery.SourceTextValue)) => containsView
+            borrowedTextTypes! -> push(containsText)
+            borrowedTextViewTypes! -> push(containsView)
             borrowedTextTypeIndex! + 1 => borrowedTextTypeIndex!
         }
 
