@@ -15,17 +15,22 @@ def allocation_failure_binding(text, byte_count, source_function, *, diagnostic_
         diagnostic_code=diagnostic_code)
 
 
-def allocation_failure_call_binding(text, call_needle, source_function, *, diagnostic_code=None):
+def allocation_failure_call_binding(text, call_needle, source_function, *, diagnostic_code=None, allocation_site=None):
     """Use one explicit, previously assembled allocation or resize call site."""
     if (not source_function or not isinstance(call_needle, str)
             or re.fullmatch(r'call ptr @sollang_(?:alloc|resize)\([^\n()]+\)', call_needle) is None):
         raise ValueError('ALLOCATION_FAILURE_CONTRACT_INVALID')
     text = text.replace('\r\n', '\n')
-    matches = list(re.finditer(
-        rf'^\s*(%[-\w.$]+) = {re.escape(call_needle)}\s*$', text, re.M))
-    if len(matches) != 1:
-        raise ValueError('ALLOCATION_FAILURE_CALL_NOT_UNIQUE')
-    allocation = matches[0]
+    if allocation_site is not None:
+        allocation = _allocation_site_match(text, allocation_site)
+        if allocation[2] != call_needle:
+            raise ValueError('ALLOCATION_FAILURE_SITE_CALL_MISMATCH')
+    else:
+        matches = list(re.finditer(
+            rf'^\s*(%[-\w.$]+) = ({re.escape(call_needle)})\s*$', text, re.M))
+        if len(matches) != 1:
+            raise ValueError('ALLOCATION_FAILURE_CALL_NOT_UNIQUE')
+        allocation = matches[0]
     owners = list(re.finditer(r'^define[^\n]*\{[ \t]*$', text[:allocation.start()], re.M))
     closing = re.search(r'^}', text[allocation.end():], re.M)
     if not owners or closing is None:
@@ -87,6 +92,7 @@ def allocation_failure_call_binding(text, call_needle, source_function, *, diagn
     if len(payload) != int(length) or diagnostic != source_function + ':' + identity:
         raise ValueError('ALLOCATION_FAILURE_DIAGNOSTIC_OWNER_MISMATCH')
     return dict(allocationPointer=allocation[1], condition=condition, testedPointer=tested_pointer,
+                callStart=allocation.start(2), callEnd=allocation.end(2),
                 readyBlock=branch[2], failureBlock=fail, diagnostic=diagnostic,
                 encodedDiagnostic=encoded, diagnosticByteCount=int(length),
                 diagnosticStart=literal_offset + literal.start(2),
@@ -105,6 +111,30 @@ def allocation_failure_entrypoint(text):
     return text + '\ndefine i32 @main() {\nentry:\n  %value = call i32 @sollang_start()\n  ret i32 %value\n}\n'
 
 
+def _allocation_site_match(text, site):
+    if (not isinstance(site, dict) or set(site) != {'functionSymbol', 'index', 'count'}
+            or not isinstance(site['functionSymbol'], str)
+            or re.fullmatch(r'[-\w.$]+', site['functionSymbol']) is None
+            or type(site['index']) is not int or type(site['count']) is not int
+            or not 0 <= site['index'] < site['count']):
+        raise ValueError('ALLOCATION_FAILURE_CASE_CALL_INVALID')
+    if text is None:
+        return None
+    text = text.replace('\r\n', '\n')
+    functions = list(re.finditer(
+        rf'^define[^\n]* @{re.escape(site["functionSymbol"])}\([^\n]*\)[^\n]*\{{[ \t]*\n(.*?)^}}',
+        text, re.M | re.S))
+    if len(functions) != 1:
+        raise ValueError('ALLOCATION_FAILURE_SITE_FUNCTION_NOT_UNIQUE')
+    start, end = functions[0].span(1)
+    calls = [match for match in re.finditer(
+        r'^\s*(%[-\w.$]+) = (call ptr @sollang_alloc\(i64 [^()\n]+\))\s*$', text, re.M)
+        if start <= match.start() and match.end() <= end]
+    if len(calls) != site['count']:
+        raise ValueError('ALLOCATION_FAILURE_SITE_COUNT_MISMATCH')
+    return calls[site['index']]
+
+
 def allocation_failure_case_call(case, text=None):
     """Resolve one constant, observed call or declaration-owned allocation site."""
     selectors = [key for key in ('allocationBytes', 'allocationCall', 'allocationSite') if key in case]
@@ -116,26 +146,10 @@ def allocation_failure_case_call(case, text=None):
             raise ValueError('ALLOCATION_FAILURE_CASE_CALL_INVALID')
         return f'call ptr @sollang_alloc(i64 {size})'
     if selectors[0] == 'allocationSite':
-        site = case['allocationSite']
-        if (not isinstance(site, dict) or set(site) != {'functionSymbol', 'index', 'count'}
-                or not isinstance(site['functionSymbol'], str)
-                or re.fullmatch(r'[-\w.$]+', site['functionSymbol']) is None
-                or type(site['index']) is not int or type(site['count']) is not int
-                or not 0 <= site['index'] < site['count']):
-            raise ValueError('ALLOCATION_FAILURE_CASE_CALL_INVALID')
-        # Before compiling a managed input, validate the selector's shape only.
-        if text is None:
+        match = _allocation_site_match(text, case['allocationSite'])
+        if match is None:
             return None
-        functions = re.findall(
-            rf'^define[^\n]* @{re.escape(site["functionSymbol"])}\([^\n]*\)[^\n]*\{{[ \t]*\n(.*?)^}}',
-            text.replace('\r\n', '\n'), re.M | re.S)
-        if len(functions) != 1:
-            raise ValueError('ALLOCATION_FAILURE_SITE_FUNCTION_NOT_UNIQUE')
-        calls = re.findall(r'^\s*%[-\w.$]+ = (call ptr @sollang_alloc\(i64 [^()\n]+\))\s*$',
-                           functions[0], re.M)
-        if len(calls) != site['count']:
-            raise ValueError('ALLOCATION_FAILURE_SITE_COUNT_MISMATCH')
-        call = calls[site['index']]
+        call = match[2]
     else:
         call = case['allocationCall']
     if (not isinstance(call, str) or re.fullmatch(
@@ -300,7 +314,8 @@ def main():
                 else:
                     needle = allocation_failure_case_call(case, text)
                     observe = lambda value: allocation_failure_call_binding(value, needle,
-                        case['sourceFunction'], diagnostic_code=case['diagnosticCode'])
+                        case['sourceFunction'], diagnostic_code=case['diagnosticCode'],
+                        allocation_site=case.get('allocationSite'))
                     binding = observe(text)
                     moved = text.replace(binding['failureBlock'], binding['failureBlock'] + '_moved')
                     observe(moved)
@@ -315,7 +330,9 @@ def main():
                             continue
                         raise ValueError('ALLOCATION_FAILURE_MUTATION_ACCEPTED')
                     result['controls'].append(dict(id=case['id'], completed=4, total=4))
-                    changed = text.replace(needle, needle.replace('@sollang_alloc', '@sollang_test_fail_alloc'))
+                    changed = (text[:binding['callStart']]
+                               + needle.replace('@sollang_alloc', '@sollang_test_fail_alloc')
+                               + text[binding['callEnd']:])
                     changed += '\ndefine internal ptr @sollang_test_fail_alloc(i64 %bytes) {\nentry:\n  ret ptr null\n}\n'
                     changed = allocation_failure_entrypoint(changed)
                 folder = output / ('failure-' + case['id'])

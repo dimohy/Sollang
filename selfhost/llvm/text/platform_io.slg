@@ -302,6 +302,11 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
                 "  " -> print
                 request -> writeEnumStorageIdentity("_payload_copy_data", state)
                 " = call ptr @sollang_alloc(i64 $(context.typeSizes[request.payloadTypeId]))" -> println
+                Arena(0) => copyNames!
+                (request.resultDomain == 1 -> if {
+                    "v$(request.labelIndex -> valueNameId(state))_expression$(request.resultIndex)_payload_copy" -> materialize(copyNames!)
+                } else { "v$(request.resultIndex -> valueNameId(state))_payload_copy" -> materialize(copyNames!) }) => copyPrefix
+                copyPrefix -> emitAllocationGuard("_data", request.ownerIndex, context, state)
                 "  call void @llvm.memcpy.p0.p0.i64(ptr " -> print
                 request -> writeEnumStorageIdentity("_payload_copy_data", state)
                 ", ptr " -> print
@@ -330,9 +335,9 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
                 request -> writeEnumStoragePayload(interpolationNodes, context, state)
                 "" -> println
                 request.resultDomain == 1 -> if {
-                    "%v$(request.labelIndex -> valueNameId(state))_expression$(request.resultIndex)_payload_copy" -> emitCopyableFixedStructValue("%v$(request.labelIndex -> valueNameId(state))_expression$(request.resultIndex)_payload_copy_source", request.payloadTypeId, context, state)
+                    "%v$(request.labelIndex -> valueNameId(state))_expression$(request.resultIndex)_payload_copy" -> emitCopyableFixedStructValue("%v$(request.labelIndex -> valueNameId(state))_expression$(request.resultIndex)_payload_copy_source", request.payloadTypeId, request.ownerIndex, context, state)
                 } else {
-                    "%v$(request.resultIndex -> valueNameId(state))_payload_copy" -> emitCopyableFixedStructValue("%v$(request.resultIndex -> valueNameId(state))_payload_copy_source", request.payloadTypeId, context, state)
+                    "%v$(request.resultIndex -> valueNameId(state))_payload_copy" -> emitCopyableFixedStructValue("%v$(request.resultIndex -> valueNameId(state))_payload_copy_source", request.payloadTypeId, request.ownerIndex, context, state)
                 }
             }
         context.typeSizes[request.payloadTypeId] > 0 or context.types[request.payloadTypeId].kind == 4

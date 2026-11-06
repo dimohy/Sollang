@@ -1573,25 +1573,26 @@ directCopyableFixedStructType typeId: Int, context: ref emitterContext.EmitConte
 }
 
 # Fixed arrays and aggregate fields share one backing-copy implementation.
-emitCopyableFixedArrayValue prefix: Text, sourceName: Text, typeId: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+emitCopyableFixedArrayValue prefix: Text, sourceName: Text, typeId: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     "  $(prefix)_data = extractvalue %sollang.int_slice $(sourceName), 0" -> println
     "  $(prefix)_length = extractvalue %sollang.int_slice $(sourceName), 1" -> println
     context.typeSizes[typeId] => allocationBytes!
     allocationBytes! == 0 and context.types[typeId].first >= 0
         -> if { context.typeSizes[context.types[typeId].first] => allocationBytes! }
     "  $(prefix)_owned = call ptr @sollang_alloc(i64 $(allocationBytes!))" -> println
+    prefix -> slice(1, (prefix -> len) - 1) -> emitAllocationGuard("_owned", ownerIndex, context, state)
     "  call void @llvm.memcpy.p0.p0.i64(ptr $(prefix)_owned, ptr $(prefix)_data, i64 $(context.typeSizes[typeId]), i1 false)" -> println
     "  $(prefix)_slice0 = insertvalue %sollang.int_slice poison, ptr $(prefix)_owned, 0" -> println
     "  $(prefix) = insertvalue %sollang.int_slice $(prefix)_slice0, i64 $(prefix)_length, 1" -> println
 }
 
-emitCopyableFixedStorageValue prefix: Text, sourceName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitCopyableFixedStorageValue prefix: Text, sourceName: Text, typeId: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.types[typeId].kind == 4 -> if {
-        prefix -> emitCopyableFixedArrayValue(sourceName, typeId, context)
-    } else { prefix -> emitCopyableFixedStructValue(sourceName, typeId, context, state) }
+        prefix -> emitCopyableFixedArrayValue(sourceName, typeId, ownerIndex, context, state)
+    } else { prefix -> emitCopyableFixedStructValue(sourceName, typeId, ownerIndex, context, state) }
 }
 
-emitCopyableFixedStructValue prefix: Text, sourceName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitCopyableFixedStructValue prefix: Text, sourceName: Text, typeId: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     -1 => previousCopiedField!
     0 => fieldIndex!
     fieldIndex! < (context.fields -> len) -> while {
@@ -1606,7 +1607,7 @@ emitCopyableFixedStructValue prefix: Text, sourceName: Text, typeId: Int, contex
                 } else { " $(prefix)_copy_aggregate_$(previousCopiedField!)" -> print }
                 ", $(field.ordinal)" -> println
                 context.types[field.fieldType].kind == 4 -> if {
-                    "$(prefix)_copy_slice_$(field.ordinal)" -> emitCopyableFixedArrayValue("$(prefix)_copy_field$(field.ordinal)", field.fieldType, context)
+                    "$(prefix)_copy_slice_$(field.ordinal)" -> emitCopyableFixedArrayValue("$(prefix)_copy_field$(field.ordinal)", field.fieldType, ownerIndex, context, state)
                     "  $(prefix)_copy_aggregate_$(field.ordinal) = insertvalue " -> print
                     typeId -> writeSemanticTypeId(context, state)
                     previousCopiedField! < 0 -> if {
@@ -1614,7 +1615,7 @@ emitCopyableFixedStructValue prefix: Text, sourceName: Text, typeId: Int, contex
                     } else { " $(prefix)_copy_aggregate_$(previousCopiedField!)" -> print }
                     ", %sollang.int_slice $(prefix)_copy_slice_$(field.ordinal), $(field.ordinal)" -> println
                 } else {
-                    "$(prefix)_copy_nested$(field.ordinal)" -> emitCopyableFixedStructValue("$(prefix)_copy_field$(field.ordinal)", field.fieldType, context, state)
+                    "$(prefix)_copy_nested$(field.ordinal)" -> emitCopyableFixedStructValue("$(prefix)_copy_field$(field.ordinal)", field.fieldType, ownerIndex, context, state)
                     "  $(prefix)_copy_aggregate_$(field.ordinal) = insertvalue " -> print
                     typeId -> writeSemanticTypeId(context, state)
                     previousCopiedField! < 0 -> if { " $(sourceName)" -> print } else {
@@ -1633,8 +1634,8 @@ emitCopyableFixedStructValue prefix: Text, sourceName: Text, typeId: Int, contex
     " $(prefix)_copy_aggregate_$(previousCopiedField!)" -> println
 }
 
-emitDirectCopyableFixedStructCopy valueIndex: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    "%v$(valueIndex -> valueNameId(state))" -> emitCopyableFixedStructValue("%v$(valueIndex -> valueNameId(state))_copy_source", typeId, context, state)
+emitDirectCopyableFixedStructCopy valueIndex: Int, typeId: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "%v$(valueIndex -> valueNameId(state))" -> emitCopyableFixedStructValue("%v$(valueIndex -> valueNameId(state))_copy_source", typeId, ownerIndex, context, state)
 }
 
 # Only the two borrowing intrinsics construct SourceText with a literal null

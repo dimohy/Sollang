@@ -509,7 +509,7 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
                     }
             }
             bindingCopyTypeId >= 0 -> if {
-                "%v$(expressionIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(expressionIndex -> valueNameId(state))", bindingCopyTypeId, context, state)
+                "%v$(expressionIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(expressionIndex -> valueNameId(state))", bindingCopyTypeId, functionIndex, context, state)
             }
         }
 }
@@ -903,7 +903,7 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
                         " " -> print
                         emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
                         "" -> println
-                        "%v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_source_value", targetFieldTypeId!, context, state)
+                        "%v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_source_value", targetFieldTypeId!, functionIndex, context, state)
                     }
                 targetFieldTypeId! >= 0 and context.types[targetFieldTypeId!].kind == 4
                     and context.types[targetFieldTypeId!].first >= 0
@@ -921,6 +921,7 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
                         fieldAllocationBytes! == 0
                             -> if { context.typeSizes[context.types[targetFieldTypeId!].first] => fieldAllocationBytes! }
                         "  %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_owned = call ptr @sollang_alloc(i64 $(fieldAllocationBytes!))" -> println
+                        "v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)" -> emitAllocationGuard("_owned", functionIndex, context, state)
                         "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_owned, ptr %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_source, i64 $(context.typeSizes[targetFieldTypeId!]), i1 false)" -> println
                         "  %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_owned, 0" -> println
                         "  %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_copy = insertvalue %sollang.int_slice %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_copy0, i64 %v$(expressionIndex -> valueNameId(state))_field$(fieldPosition!)_length, 1" -> println
@@ -1340,7 +1341,7 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
             }
         expressionIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyTypeId
         bindingCopyTypeId >= 0 -> if {
-            "%v$(expressionIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(expressionIndex -> valueNameId(state))", bindingCopyTypeId, context, state)
+            "%v$(expressionIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(expressionIndex -> valueNameId(state))", bindingCopyTypeId, functionIndex, context, state)
         }
         context.ir[expressionIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
         boundedMemberTypeId >= 0 -> if {

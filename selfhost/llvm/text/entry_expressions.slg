@@ -1434,7 +1434,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                         entryTargetFieldTypeId! -> directCopyableFixedStructType(context)
                             -> if {
                                 true => copyEntryFixedStructField!
-                                "%v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(entryEmittedFieldIndex -> valueNameId(state))", entryTargetFieldTypeId!, context, state)
+                                "%v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(entryEmittedFieldIndex -> valueNameId(state))", entryTargetFieldTypeId!, functionIndex, context, state)
                             } else {
                                 true => copyEntryFixedArrayField!
                                 "  %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_source = extractvalue %sollang.int_slice %v$(entryEmittedFieldIndex -> valueNameId(state)), 0" -> println
@@ -1444,6 +1444,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                     context.typeSizes[context.types[entryTargetFieldTypeId!].first] => entryFieldAllocationBytes!
                                 }
                                 "  %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_owned = call ptr @sollang_alloc(i64 $(entryFieldAllocationBytes!))" -> println
+                                "v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)" -> emitAllocationGuard("_owned", functionIndex, context, state)
                                 "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_owned, ptr %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_source, i64 $(context.typeSizes[entryTargetFieldTypeId!]), i1 false)" -> println
                                 "  %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_owned, 0" -> println
                                 "  %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_copy = insertvalue %sollang.int_slice %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_copy0, i64 %v$(entryExpressionIndex -> valueNameId(state))_field$(entryFieldPosition!)_length, 1" -> println
@@ -1707,7 +1708,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
             }
         entryExpressionIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyTypeId
         bindingCopyTypeId >= 0 -> if {
-            "%v$(entryExpressionIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(entryExpressionIndex -> valueNameId(state))", bindingCopyTypeId, context, state)
+            "%v$(entryExpressionIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(entryExpressionIndex -> valueNameId(state))", bindingCopyTypeId, functionIndex, context, state)
         }
         context.ir[entryExpressionIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
         boundedMemberTypeId >= 0 -> if {

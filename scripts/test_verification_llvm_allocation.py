@@ -127,6 +127,67 @@ class AllocationFailureDeclaredSiteTests(unittest.TestCase):
                     allocation_failure_case_call({'allocationSite': site})
 
 
+class AllocationFailureScopedSiteTests(unittest.TestCase):
+    literal = '@diagnostic = private constant [22 x i8] c"main:allocation_failed"\n'
+
+    @staticmethod
+    def function(name, guarded=True):
+        body = ('  %p = call ptr @sollang_alloc(i64 8)\n'
+                '  %ok = icmp ne ptr %p, null\n'
+                '  br i1 %ok, label %ready, label %failed\nfailed:\n'
+                '  call void @sollang_runtime_eprint(ptr @diagnostic, i64 22, i1 false)\n'
+                '  call void @llvm.trap()\n  unreachable\nready:\n  ret i32 0\n')
+        if not guarded:
+            body = '  %p = call ptr @sollang_alloc(i64 8)\n  ret i32 0\n'
+        return 'define i32 @' + name + '() {\nentry:\n' + body + '}\n'
+
+    def test_equal_calls_in_other_functions_do_not_change_selected_guard_or_injection(self):
+        text = self.literal + self.function('first', False) + self.function('second')
+        needle = 'call ptr @sollang_alloc(i64 8)'
+        with self.assertRaisesRegex(ValueError, 'CALL_NOT_UNIQUE'):
+            allocation_failure_call_binding(text, needle, 'main', diagnostic_code='allocation_failed')
+        site = dict(functionSymbol='second', index=0, count=1)
+        binding = allocation_failure_call_binding(text, needle, 'main',
+            diagnostic_code='allocation_failed', allocation_site=site)
+        self.assertGreater(binding['callStart'], text.index('define i32 @second'))
+        changed = text[:binding['callStart']] + needle.replace('@sollang_alloc', '@fail') + text[binding['callEnd']:]
+        self.assertEqual(changed.count('call ptr @fail(i64 8)'), 1)
+        self.assertIn('call ptr @sollang_alloc(i64 8)', changed[:changed.index('define i32 @second')])
+        with self.assertRaisesRegex(ValueError, 'GUARD_MISSING_BEFORE_USE'):
+            allocation_failure_call_binding(text, needle, 'main', diagnostic_code='allocation_failed',
+                allocation_site=dict(functionSymbol='first', index=0, count=1))
+
+    def test_equal_calls_inside_one_function_keep_the_declared_ordinal(self):
+        first = self.function('same').replace('%p', '%first').replace('%ok', '%first_ok')
+        first = first.replace('ret i32 0\n}', 'SECOND\n}')
+        second = self.function('unused').split('entry:\n', 1)[1].rsplit('}', 1)[0]
+        second = second.replace('%p', '%second').replace('%ok', '%second_ok')
+        second = second.replace('ready', 'ready2').replace('failed', 'failed2')
+        # Preserve the diagnostic code while giving only the blocks distinct names.
+        second = second.replace('allocation_failed2', 'allocation_failed')
+        text = self.literal + first.replace('SECOND', second)
+        needle = 'call ptr @sollang_alloc(i64 8)'
+        site = dict(functionSymbol='same', index=1, count=2)
+        self.assertEqual(allocation_failure_case_call(dict(allocationSite=site), text), needle)
+        binding = allocation_failure_call_binding(text, needle, 'main',
+            diagnostic_code='allocation_failed', allocation_site=site)
+        self.assertEqual(binding['allocationPointer'], '%second')
+        changed = text[:binding['callStart']] + needle.replace('@sollang_alloc', '@fail') + text[binding['callEnd']:]
+        self.assertIn('%first = call ptr @sollang_alloc(i64 8)', changed)
+        self.assertIn('%second = call ptr @fail(i64 8)', changed)
+        bad = text.replace('%second_ok = icmp ne ptr %second, null', '%second_ok = icmp ne ptr %first, null')
+        with self.assertRaisesRegex(ValueError, 'GUARD_MISSING_BEFORE_USE'):
+            allocation_failure_call_binding(bad, needle, 'main', diagnostic_code='allocation_failed', allocation_site=site)
+
+    def test_count_and_selected_instruction_must_match(self):
+        text = self.literal + self.function('one')
+        with self.assertRaisesRegex(ValueError, 'SITE_COUNT_MISMATCH'):
+            allocation_failure_case_call(dict(allocationSite=dict(functionSymbol='one', index=0, count=2)), text)
+        with self.assertRaisesRegex(ValueError, 'SITE_CALL_MISMATCH'):
+            allocation_failure_call_binding(text, 'call ptr @sollang_alloc(i64 9)', 'main',
+                diagnostic_code='allocation_failed', allocation_site=dict(functionSymbol='one', index=0, count=1))
+
+
 class AllocationFailureDiagnosticSiteTests(unittest.TestCase):
     def test_identical_diagnostic_text_binds_to_selected_call(self):
         text = ('@first = private constant [22 x i8] c"main:allocation_failed"\n'

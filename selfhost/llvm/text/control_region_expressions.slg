@@ -436,7 +436,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                         regionTargetFieldTypeId! -> directCopyableFixedStructType(context)
                             -> if {
                                 true => regionCopyNamedFixedStructField!
-                                "%v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_copy_source", regionTargetFieldTypeId!, context, state)
+                                "%v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_struct_copy" -> emitCopyableFixedStructValue("%v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_copy_source", regionTargetFieldTypeId!, ownerIndex, context, state)
                             } else {
                                 true => regionCopyNamedFixedField!
                                 "  %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_source = extractvalue %sollang.int_slice %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_copy_source, 0" -> println
@@ -446,6 +446,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                     context.typeSizes[context.types[regionTargetFieldTypeId!].first] => regionFieldAllocationBytes!
                                 }
                                 "  %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_owned = call ptr @sollang_alloc(i64 $(regionFieldAllocationBytes!))" -> println
+                                "v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)" -> emitAllocationGuard("_owned", ownerIndex, context, state)
                                 "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_owned, ptr %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_source, i64 $(context.typeSizes[regionTargetFieldTypeId!]), i1 false)" -> println
                                 "  %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_owned, 0" -> println
                                 "  %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_copy = insertvalue %sollang.int_slice %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_copy0, i64 %v$(regionNodeIndex -> valueNameId(state))_field$(regionFieldPosition!)_length, 1" -> println
@@ -773,7 +774,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
             }
         regionNodeIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyTypeId
         bindingCopyTypeId >= 0 -> if {
-            "%v$(regionNodeIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(regionNodeIndex -> valueNameId(state))", bindingCopyTypeId, context, state)
+            "%v$(regionNodeIndex -> valueNameId(state))_binding_copy" -> emitCopyableFixedStorageValue("%v$(regionNodeIndex -> valueNameId(state))", bindingCopyTypeId, ownerIndex, context, state)
         }
         context.ir[regionNodeIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
         boundedMemberTypeId >= 0 -> if {
