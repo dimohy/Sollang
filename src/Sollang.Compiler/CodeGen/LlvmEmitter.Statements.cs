@@ -2096,8 +2096,7 @@ internal sealed partial class LlvmEmitter
             EmitStore("ptr", captureEnvironment, captureSlot, 8);
             var sinkBytes = NextTemp("parallel_sink_bytes");
             EmitInstruction($"{sinkBytes} = mul i64 {length}, 24");
-            var sinks = NextTemp("parallel_sinks");
-            EmitCall(sinks, "ptr", "sollang_alloc", $"i64 {sinkBytes}");
+            var sinks = EmitHeapAllocate(sinkBytes);
             EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {sinks}, i8 0, i64 {sinkBytes}, i1 false");
             var sinksSlot = NextTemp("parallel_sinks_slot");
             EmitInstruction($"{sinksSlot} = getelementptr %sollang.compute_group, ptr {group}, i32 0, i32 5");
@@ -2322,15 +2321,12 @@ internal sealed partial class LlvmEmitter
             var callbackStride = _program.Types.InlineSizeOf(callbackResultType);
             var callbackBytes = NextTemp("try_parallel_callback_bytes");
             EmitInstruction($"{callbackBytes} = mul i64 {length}, {callbackStride.ToString(CultureInfo.InvariantCulture)}");
-            var callbackResults = NextTemp("try_parallel_callback_results");
-            EmitCall(callbackResults, "ptr", "sollang_alloc", $"i64 {callbackBytes}");
-            var initialized = NextTemp("try_parallel_initialized");
-            EmitCall(initialized, "ptr", "sollang_alloc", $"i64 {length}");
+            var callbackResults = EmitHeapAllocate(callbackBytes);
+            var initialized = EmitHeapAllocate(length);
             EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {initialized}, i8 0, i64 {length}, i1 false");
             var sinksBytes = NextTemp("try_parallel_sink_bytes");
             EmitInstruction($"{sinksBytes} = mul i64 {length}, 24");
-            var sinks = NextTemp("try_parallel_sinks");
-            EmitCall(sinks, "ptr", "sollang_alloc", $"i64 {sinksBytes}");
+            var sinks = EmitHeapAllocate(sinksBytes);
             EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {sinks}, i8 0, i64 {sinksBytes}, i1 false");
 
             var inputPointer = source switch

@@ -386,8 +386,7 @@ internal sealed partial class LlvmEmitter
         StoreComputeGroupField(group, 4, "ptr", environment, 8, "parallel_branch_environment");
         var sinkBytes = NextTemp("parallel_branch_sink_bytes");
         EmitInstruction($"{sinkBytes} = mul i64 {expression.Arms.Count.ToString(CultureInfo.InvariantCulture)}, 24");
-        var sinks = NextTemp("parallel_branch_sinks");
-        EmitCall(sinks, "ptr", "sollang_alloc", $"i64 {sinkBytes}");
+        var sinks = EmitHeapAllocate(sinkBytes);
         EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {sinks}, i8 0, i64 {sinkBytes}, i1 false");
         StoreComputeGroupField(group, 5, "ptr", sinks, 8, "parallel_branch_sinks");
         var runtimeValues = new[] { "%stdin", "%stdout", "%written", "%read", "%ok_state" };

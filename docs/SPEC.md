@@ -2211,6 +2211,13 @@ call is a producer even when it is the only direct child of the callback. The
 callback body wrapper and a value-control owner are transparent regions; their
 provisional type must not create an additional array or `Result` specialization.
 
+For `parallel`, `tryParallel`, and `parallel branch`, lowering checks each
+nullable heap allocation it emits for result storage, callback-result storage,
+initialization flags, or output-sink descriptor arrays. Checks precede
+initialization, publication, or worker scheduling. A null allocation reports the
+enclosing source function identity followed by `allocation_failed` and traps.
+`tryParallel` does not convert allocation failure into a callback `Err` result.
+
 When one `tryParallel` branch fails, the runtime still cancels and joins the
 remaining work before destroying results. Every initialized result payload that
 completed but was not selected is destroyed exactly once according to the
