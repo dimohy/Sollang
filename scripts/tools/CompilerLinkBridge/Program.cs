@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Text;
+using System.Collections;
+using System.Runtime.ExceptionServices;
 
 static (Assembly Assembly, string Digest) LoadPinnedCompiler(string path, string expected)
 {
@@ -21,6 +24,105 @@ static string CompilerEntryPoint(Assembly assembly)
     if (value is null || !Regex.IsMatch(value, @"\A[A-Za-z_][A-Za-z_0-9]*\z"))
         throw new InvalidOperationException("COMPILER_LINK_BRIDGE_ENTRY_POLICY_INVALID");
     return value;
+}
+
+static object InvokeCompiler(MethodInfo method, object? owner, object?[] arguments)
+{
+    try { return method.Invoke(owner, arguments)!; }
+    catch (TargetInvocationException error) when (error.InnerException is { } inner)
+    {
+        ExceptionDispatchInfo.Capture(inner).Throw();
+        throw;
+    }
+}
+
+// Reuse the production frontend and streaming emitter without invoking a linker.
+// The supervising verification consumer owns separate emission and link budgets.
+if (args.Length == 5 && args[0] == "emit")
+{
+    try
+    {
+        var (compiler, compilerDigest) = LoadPinnedCompiler(Path.GetFullPath(args[1]), args[2]);
+        using var manifest = JsonDocument.Parse(File.ReadAllBytes(args[3]));
+        var contract = manifest.RootElement;
+        if (contract.GetProperty("schemaVersion").GetInt32() != 1
+            || contract.GetProperty("target").GetString() != "windows-x64"
+            || contract.GetProperty("outputKind").GetString() != "executable")
+            throw new InvalidOperationException("COMPILER_EMISSION_CONTRACT_INVALID");
+        var sources = contract.GetProperty("sourcePaths").EnumerateArray()
+            .Select(item => item.GetString() ?? throw new InvalidOperationException("COMPILER_EMISSION_SOURCE_INVALID"))
+            .ToArray();
+        var pins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in contract.GetProperty("inputHashes").EnumerateObject())
+        {
+            if (!Path.IsPathFullyQualified(property.Name)
+                || !pins.TryAdd(Path.GetFullPath(property.Name), property.Value.GetString() ?? ""))
+                throw new InvalidOperationException("COMPILER_EMISSION_INPUT_INVALID");
+        }
+        if (sources.Length == 0 || sources.Any(path => !Path.IsPathFullyQualified(path)
+                || !pins.ContainsKey(Path.GetFullPath(path)))
+            || sources.Distinct(StringComparer.OrdinalIgnoreCase).Count() != sources.Length)
+            throw new InvalidOperationException("COMPILER_EMISSION_SOURCES_INVALID");
+        void CheckPins()
+        {
+            foreach (var (path, expected) in pins)
+                if (!File.Exists(path) || Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))) != expected)
+                    throw new InvalidOperationException("COMPILER_EMISSION_INPUT_DRIFT: " + path);
+        }
+        CheckPins();
+        var llvmOutput = Path.GetFullPath(args[4]);
+        if (File.Exists(llvmOutput) || Directory.Exists(llvmOutput)
+            || !Directory.Exists(Path.GetDirectoryName(llvmOutput)))
+            throw new InvalidOperationException("COMPILER_EMISSION_OUTPUT_INVALID");
+        var app = compiler.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
+        var target = Enum.Parse(compiler.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
+        var loaded = InvokeCompiler(app.GetMethod("LoadProgram", BindingFlags.Static | BindingFlags.NonPublic)!,
+            null, [sources.Select(Path.GetFullPath).ToArray(), null, target]);
+        void CheckLoadedInput(object input)
+        {
+            var type = input.GetType();
+            var path = Path.GetFullPath((string)type.GetProperty("Path")!.GetValue(input)!);
+            var bytesProperty = type.GetProperty("SourceBytes") ?? type.GetProperty("Bytes")!;
+            var bytes = (byte[])bytesProperty.GetValue(input)!;
+            if (!pins.TryGetValue(path, out var expected)
+                || Convert.ToHexString(SHA256.HashData(bytes)) != expected)
+                throw new InvalidOperationException("COMPILER_EMISSION_UNDECLARED_LOADED_INPUT: " + path);
+        }
+        foreach (var source in (IEnumerable)loaded.GetType().GetProperty("Sources")!.GetValue(loaded)!)
+        {
+            CheckLoadedInput(source);
+            if (source.GetType().GetProperty("AdditionalInputs")!.GetValue(source) is IEnumerable additional)
+                foreach (var dependency in additional) CheckLoadedInput(dependency);
+        }
+        var program = loaded.GetType().GetProperty("Program")!.GetValue(loaded)!;
+        var semanticType = compiler.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
+        var semantic = Activator.CreateInstance(semanticType,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, [program, 64], null)!;
+        var bound = InvokeCompiler(semanticType.GetMethod("Compile", BindingFlags.Instance | BindingFlags.Public)!,
+            semantic, [null]);
+        var warnings = ((IEnumerable)bound.GetType().GetProperty("Warnings")!.GetValue(bound)!)
+            .Cast<object>().Select(warning => warning.ToString()).ToArray();
+        var generator = compiler.GetType("Sollang.Compiler.CodeGen.LlvmIrGenerator", true)!;
+        using (var stream = new FileStream(llvmOutput, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+            InvokeCompiler(generator.GetMethod("WriteProgram", BindingFlags.Static | BindingFlags.Public)!,
+                null, [bound, target, writer, false]);
+        CheckPins();
+        if (Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(args[1]))) != compilerDigest)
+            throw new InvalidOperationException("COMPILER_LINK_BRIDGE_ASSEMBLY_DRIFT");
+        Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", mode = "emit",
+            scope = "llvm-generation-only-not-compiler-acceptance", compilerAssemblySha256 = compilerDigest,
+            sourceCount = sources.Length, declaredInputCount = pins.Count, warnings,
+            outputSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(llvmOutput))),
+            outputBytes = new FileInfo(llvmOutput).Length }));
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine("sollang: " + error.Message);
+        Console.WriteLine(JsonSerializer.Serialize(new { status = "failed", mode = "emit" }));
+        Environment.ExitCode = 1;
+    }
+    return;
 }
 
 if (args.Length == 3 && args[0] == "policy")

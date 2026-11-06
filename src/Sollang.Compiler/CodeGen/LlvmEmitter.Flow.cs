@@ -1151,7 +1151,8 @@ internal sealed partial class LlvmEmitter
                         && _program.Types.IsStruct(inlineDictionary.ValueType)
                             ? EmitContextualStructLiteral(contextualValue, inlineDictionary.ValueType)
                             : EmitExpression(target.Arguments[1]);
-                    var inlineUpdated = EmitInlineDictionaryPut(inlineDictionary, inlineKey, inlineValue);
+                    var inlineUpdated = EmitInlineDictionaryPut(
+                        inlineDictionary, inlineKey, inlineValue, DictionaryCapacityProof.RequiresCheck);
                     RemoveOwnedLiteralSources(target.Arguments[0], inlineDictionary.KeyType);
                     RemoveOwnedLiteralSources(target.Arguments[1], inlineDictionary.ValueType);
                     StoreMutableContainer(inlineName, inlineUpdated);
@@ -1177,7 +1178,8 @@ internal sealed partial class LlvmEmitter
                 var dictionaryName = RequireMutableContainerSource(source, "put");
                 var key = EmitIntExpression(target.Arguments[0]);
                 var value = EmitIntExpression(target.Arguments[1]);
-                var updatedDictionary = EmitDictionaryPut(dictionary, key.ValueName, value.ValueName);
+                var updatedDictionary = EmitDictionaryPut(
+                    dictionary, key.ValueName, value.ValueName, DictionaryCapacityProof.RequiresCheck);
                 StoreMutableContainer(dictionaryName, updatedDictionary);
                 _locals[dictionaryName] = updatedDictionary;
                 result = new RuntimeFlowResult(null, null, _mainOk);

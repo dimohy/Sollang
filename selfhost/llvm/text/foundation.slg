@@ -201,6 +201,16 @@ struct DictionaryLiteralSlotRequest {
     entryLayout: DictionaryEntryLayout
 }
 
+struct DictionaryLiteralReplacement {
+    prefix: Text
+    exists: Text
+    incomingKey: Text
+    previousValuePointer: Text
+    keyTypeId: Int
+    valueTypeId: Int
+    valueAlign: Int
+}
+
 struct SocketCallRequest {
     callIndex: Int
     ownerIndex: Int
@@ -982,22 +992,46 @@ emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: 
         "  %$(prefix)_h2_value = select i1 %$(prefix)_h2_zero, i64 1, i64 %$(prefix)_h2_raw" -> println
         "  %$(prefix)_h2 = trunc i64 %$(prefix)_h2_value to i8" -> println
         prefix -> emitBoundedDictionaryProbe("%v$(nodeIndex -> valueNameId(state))_storage", keyName, "%$(prefix)_hash", "%$(prefix)_h2", dictionaryTypeId, false, context, state)
-        "  br label %$(prefix)_insert" -> println
-        "$(prefix)_insert:" -> println
+        Arena(0) => previousLengthStorage!
+        entryIndex! == 0 -> if { "0" } else {
+            "%bd$(nodeIndex)_$(entryIndex! - 1)_length" -> materialize(previousLengthStorage!)
+        } => previousLength
+        "  %$(prefix)_next_length = add i64 $(previousLength), 1" -> println
+        "  %$(prefix)_length = select i1 %$(prefix)_exists, i64 $(previousLength), i64 %$(prefix)_next_length" -> println
+        "$(prefix)_previous_value" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", layout.valueOffset, layout)
+        Arena(0) => existsStorage!
+        "%$(prefix)_exists" -> materialize(existsStorage!) => exists
+        Arena(0) => previousValueStorage!
+        "%$(prefix)_previous_value_ptr" -> materialize(previousValueStorage!) => previousValuePointer
+        DictionaryLiteralReplacement {
+            prefix: prefix
+            exists: exists
+            incomingKey: keyName
+            previousValuePointer: previousValuePointer
+            keyTypeId: keyTypeId
+            valueTypeId: valueTypeId
+            valueAlign: layout.valueAlign
+        } -> emitDictionaryLiteralReplacement(context, state)
         "$(prefix)_key" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", 0, layout)
         "  store " -> print
         keyTypeId -> writeSemanticTypeId(context, state)
         " $(keyName), ptr %$(prefix)_key_ptr, align $(layout.keyAlign)" -> println
+        "$(prefix)_control" -> emitBoundedDictionaryControlStore("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", "%$(prefix)_h2", layout)
+        "  br label %$(prefix)_key_done" -> println
+        "$(prefix)_key_done:" -> println
         "$(prefix)_value" -> emitBoundedDictionaryEntryPointer("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", layout.valueOffset, layout)
         "  store " -> print
         valueTypeId -> writeAggregateFieldTypeId(context, state)
         " $(valueName), ptr %$(prefix)_value_ptr, align $(layout.valueAlign)" -> println
-        "$(prefix)_control" -> emitBoundedDictionaryControlStore("%v$(nodeIndex -> valueNameId(state))_storage", "%$(prefix)_slot", "%$(prefix)_h2", layout)
         valueNode.nextOperand => keyIndex!
         entryIndex! + 1 => entryIndex!
     }
+    Arena(0) => finalLengthStorage!
+    entryIndex! > 0 -> if {
+        "%bd$(nodeIndex)_$(entryIndex! - 1)_length" -> materialize(finalLengthStorage!)
+    } else { "0" } => finalLength
     "  %v$(nodeIndex -> valueNameId(state))_length_ptr = getelementptr inbounds %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex -> valueNameId(state))_owner, i32 0, i32 0" -> println
-    "  store i64 $(entryIndex!), ptr %v$(nodeIndex -> valueNameId(state))_length_ptr, align 8" -> println
+    "  store i64 $(finalLength), ptr %v$(nodeIndex -> valueNameId(state))_length_ptr, align 8" -> println
     "  %v$(nodeIndex -> valueNameId(state)) = load %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex -> valueNameId(state))_owner, align $(layout.align)" -> println
 }
 

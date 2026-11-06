@@ -7,6 +7,12 @@ namespace Sollang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private enum DictionaryCapacityProof
+    {
+        RequiresCheck,
+        SufficientForAllEntries
+    }
+
     private string BuildDictionaryAggregate(string pointer, string length, string capacity)
     {
         var aggregate0 = NextTemp("generic_dict_value");
@@ -27,11 +33,12 @@ internal sealed partial class LlvmEmitter
         var dictionary = new RuntimeInlineDictionary(
             dictionaryType, definition.KeyType, definition.ValueType,
             EmitInlineDictionaryAllocate(capacity.ToString(CultureInfo.InvariantCulture), definition),
-            entries.Count.ToString(CultureInfo.InvariantCulture),
+            "0",
             capacity.ToString(CultureInfo.InvariantCulture));
         foreach (var entry in entries)
         {
-            EmitInlineDictionaryInsertUnique(dictionary, entry.Key, entry.Value);
+            dictionary = EmitInlineDictionaryPut(
+                dictionary, entry.Key, entry.Value, DictionaryCapacityProof.SufficientForAllEntries);
         }
         return dictionary;
     }
@@ -40,13 +47,11 @@ internal sealed partial class LlvmEmitter
         BoundType dictionaryType,
         IReadOnlyList<(RuntimeValue Key, RuntimeValue Value)> entries)
     {
-        var dictionary = EmitEmptyBoundedInlineDictionary(dictionaryType) with
-        {
-            LengthName = entries.Count.ToString(CultureInfo.InvariantCulture)
-        };
+        var dictionary = EmitEmptyBoundedInlineDictionary(dictionaryType);
         foreach (var entry in entries)
         {
-            EmitInlineDictionaryInsertUnique(dictionary, entry.Key, entry.Value);
+            dictionary = EmitInlineDictionaryPut(
+                dictionary, entry.Key, entry.Value, DictionaryCapacityProof.SufficientForAllEntries);
         }
         return dictionary;
     }
@@ -728,7 +733,8 @@ internal sealed partial class LlvmEmitter
     }
 
     private RuntimeInlineDictionary EmitInlineDictionaryPut(
-        RuntimeInlineDictionary dictionary, RuntimeValue key, RuntimeValue value)
+        RuntimeInlineDictionary dictionary, RuntimeValue key, RuntimeValue value,
+        DictionaryCapacityProof capacityProof)
     {
         var found = EmitInlineDictionaryFindSlot(dictionary, key);
         var update = NextLabel("generic_dict_put_update");
@@ -746,29 +752,29 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = insert;
         var nextLength = NextTemp("generic_dict_next_len");
         EmitBinary(nextLength, "add", "i64", dictionary.LengthName, "1");
-        if (_program.Types.IsBoundedDictionary(dictionary.DictionaryType))
+        var boundedStorage = _program.Types.IsBoundedDictionary(dictionary.DictionaryType);
+        if (boundedStorage || capacityProof == DictionaryCapacityProof.SufficientForAllEntries)
         {
-            var bounded = _program.Types.GetBoundedDictionary(dictionary.DictionaryType);
-            var withinBound = NextTemp("bounded_dict_within_capacity");
-            EmitCompare(withinBound, "ule", "i64", nextLength,
-                bounded.MaxEntries.ToString(CultureInfo.InvariantCulture));
-            EmitTrapUnless(withinBound, "bounded_dictionary_capacity");
+            if (boundedStorage)
+            {
+                var bounded = _program.Types.GetBoundedDictionary(dictionary.DictionaryType);
+                var withinBound = NextTemp("bounded_dict_within_capacity");
+                EmitCompare(withinBound, "ule", "i64", nextLength,
+                    bounded.MaxEntries.ToString(CultureInfo.InvariantCulture));
+                EmitTrapUnless(withinBound, "bounded_dictionary_capacity");
+            }
             StoreInlineDictionaryEntry(dictionary, found.SlotName, key, value);
             StoreInlineDictionaryControl(dictionary, found.SlotName, found.H2ByteName);
             EmitBranch(done);
             var boundedInsertEnd = _currentBlockLabel;
             EmitFunctionLine();
             EmitLabel(done);
-            var boundedPointer = NextTemp("bounded_dict_ptr");
-            EmitPhi(boundedPointer, "ptr",
-                (dictionary.PointerName, updateEnd),
-                (dictionary.PointerName, boundedInsertEnd));
             var boundedLength = NextTemp("bounded_dict_len");
             EmitPhi(boundedLength, "i64",
                 (dictionary.LengthName, updateEnd),
                 (nextLength, boundedInsertEnd));
             _currentBlockLabel = done;
-            return dictionary with { PointerName = boundedPointer, LengthName = boundedLength };
+            return dictionary with { LengthName = boundedLength };
         }
         var numerator = NextTemp("generic_dict_load_num");
         var denominator = NextTemp("generic_dict_load_den");

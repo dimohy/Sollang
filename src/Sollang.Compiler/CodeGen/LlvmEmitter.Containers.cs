@@ -195,9 +195,21 @@ internal sealed partial class LlvmEmitter
         return array;
     }
 
-    private RuntimeIntDictionary EmitDictionaryPut(RuntimeIntDictionary dictionary, string key, string value)
+    private RuntimeIntDictionary EmitDictionaryPut(
+        RuntimeIntDictionary dictionary, string key, string value, DictionaryCapacityProof capacityProof)
     {
         var found = EmitDictionaryFindSlot(dictionary, key);
+        if (capacityProof == DictionaryCapacityProof.SufficientForAllEntries)
+        {
+            StoreDictionaryEntry(dictionary, found.SlotName, key, value);
+            StoreDictionaryControl(dictionary, found.SlotName, found.H2ByteName);
+            var nextLiteralLength = NextTemp("dict_literal_next_len");
+            EmitBinary(nextLiteralLength, "add", "i64", dictionary.LengthName, "1");
+            var literalLength = NextTemp("dict_literal_len");
+            EmitAssign(literalLength,
+                $"select i1 {found.FoundName}, i64 {dictionary.LengthName}, i64 {nextLiteralLength}");
+            return dictionary with { LengthName = literalLength };
+        }
 
         var updateLabel = NextLabel("dict_put_update");
         var insertLabel = NextLabel("dict_put_insert");
@@ -313,7 +325,7 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeIntDictionary EmitDictionaryUpdatedMove(RuntimeIntDictionary dictionary, string key, string value)
     {
-        return EmitDictionaryPut(dictionary, key, value);
+        return EmitDictionaryPut(dictionary, key, value, DictionaryCapacityProof.RequiresCheck);
     }
 
     private RuntimeIntDictionary EmitDictionaryReserve(RuntimeIntDictionary dictionary, string requestedEntries)

@@ -4396,6 +4396,15 @@ Container rules:
   buckets, without wrapping or narrowing the source hint range. Initial
   entries use the dictionary's hash and probing rules to
   choose buckets, so spare capacity does not change lookup or insertion.
+  Repeated equal keys in a populated literal replace the resident value;
+  the last value wins and `len` counts distinct keys. Replacement keeps the
+  resident key, destroys an incoming owned equal key and the previous owned
+  value exactly once, and transfers the new value into that slot. New keys
+  increment the length. These rules apply to growable and bounded literals
+  in entry, function and nested control-flow expressions. A bounded literal
+  still admits capacity by the parsed initializer count, before deduplication;
+  repeated keys cannot bypass that syntax check. Literal preallocation uses
+  the initializer count as an upper bound and needs no table growth.
   `{Key: Value; keyExpression: valueExpression, ...}` gives nonempty entries
   an explicit type context. Key and value annotations accept imported qualified
   paths and the same recursive type syntax as function signatures.

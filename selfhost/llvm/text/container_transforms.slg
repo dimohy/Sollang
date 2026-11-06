@@ -19,6 +19,31 @@ writeDictionaryLiteralItem itemIndex: Int, ownerIndex: Int, context: ref emitter
     }
 }
 
+# Equal-key insertion retains the resident key and releases the incoming key
+# and previous owned payload. The caller writes a new key only in key_insert,
+# then joins key_done before writing the new value on both paths.
+emitDictionaryLiteralReplacement request: DictionaryLiteralReplacement, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  br i1 $(request.exists), label %$(request.prefix)_key_update, label %$(request.prefix)_key_insert" -> println
+    "$(request.prefix)_key_update:" -> println
+    request.keyTypeId -> semanticTypeOwns(context, state)
+        -> if {
+            "  call void @sollang_drop_t$(request.keyTypeId)(" -> print
+            request.keyTypeId -> writeSemanticTypeId(context, state)
+            " $(request.incomingKey))" -> println
+        }
+    request.valueTypeId -> semanticTypeOwns(context, state)
+        -> if {
+            "  %$(request.prefix)_previous_value = load " -> print
+            request.valueTypeId -> writeAggregateFieldTypeId(context, state)
+            ", ptr $(request.previousValuePointer), align $(request.valueAlign)" -> println
+            "  call void @sollang_drop_t$(request.valueTypeId)(" -> print
+            request.valueTypeId -> writeAggregateFieldTypeId(context, state)
+            " %$(request.prefix)_previous_value)" -> println
+        }
+    "  br label %$(request.prefix)_key_done" -> println
+    "$(request.prefix)_key_insert:" -> println
+}
+
 # Establish the same open-addressed bucket placement used by literal insertion
 # and lookup. Values use the selected slot emitted for their preceding key.
 emitDictionaryLiteralSlot request: DictionaryLiteralSlotRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -106,6 +131,33 @@ emitDictionaryLiteralSlot request: DictionaryLiteralSlotRequest, context: ref em
     } => literalProbe
     literalProbe -> emitDictionaryFindSlot(context, state)
     "  %v$(dictionaryIndex -> valueNameId(state))_literal$(position)_slot = add i64 %v$(dictionaryIndex -> valueNameId(state))_literal$(position)_find_slot, 0" -> println
+    Arena(0) => prefixStorage!
+    "v$(dictionaryIndex -> valueNameId(state))_literal$(position)" -> materialize(prefixStorage!) => prefix
+    Arena(0) => previousLengthStorage!
+    position == 0 -> if { "0" } else {
+        "%v$(dictionaryIndex -> valueNameId(state))_literal$(position - 1)_length" -> materialize(previousLengthStorage!)
+    } => previousLength
+    "  %$(prefix)_next_length = add i64 $(previousLength), 1" -> println
+    "  %$(prefix)_length = select i1 %$(prefix)_find_found, i64 $(previousLength), i64 %$(prefix)_next_length" -> println
+    "  %$(prefix)_previous_value_ptr = getelementptr " -> print
+    request.entryLayout -> writeDictionaryEntryStorageType
+    ", ptr %v$(dictionaryIndex -> valueNameId(state))_values, i64 %$(prefix)_slot" -> println
+    Arena(0) => existsStorage!
+    "%$(prefix)_find_found" -> materialize(existsStorage!) => exists
+    Arena(0) => previousValueStorage!
+    "%$(prefix)_previous_value_ptr" -> materialize(previousValueStorage!) => previousValuePointer
+    request.valueTypeId >= 0 -> if { context.typeAligns[request.valueTypeId] } else {
+        request.valueSymbol -> legacyStorageAlign(context, state)
+    } => valueAlign
+    DictionaryLiteralReplacement {
+        prefix: prefix
+        exists: exists
+        incomingKey: literalProbeQuery
+        previousValuePointer: previousValuePointer
+        keyTypeId: request.keyTypeId
+        valueTypeId: request.valueTypeId
+        valueAlign: valueAlign
+    } -> emitDictionaryLiteralReplacement(context, state)
 }
 
 # Mutation and owner-returning transforms share allocation/update kernels.

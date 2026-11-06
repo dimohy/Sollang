@@ -1033,6 +1033,10 @@ of adding a type annotation to work around inference.
 
 For a populated bounded dictionary, place `; <=N` after the entries. `N` must
 be positive and at least the number of initializer entries.
+Equal keys in a dictionary literal keep the last value, and `len` counts
+distinct keys. Replacement releases an incoming owned equal key and the old
+owned value once. Repeated keys still count toward the bounded literal's
+initializer-capacity check; they do not make an otherwise invalid bound valid.
 The bound is part of the type: `{Int: Int; <=2}` and `{Int: Int; <=3}` are
 different types. A bounded dictionary carries its table inline through calls
 and returns. Pass it readonly to inspect it; use `move` only when its type
@@ -2430,6 +2434,26 @@ reject a missing, changed or incomplete proof before compilation. Stage input
 fingerprints include these verification consumers and tool inputs. A benchmark
 retains its products while measurements are pending, seals the consumer only
 after the existing thresholds pass, then uses the common artifact cleanup.
+
+For explicitly separated LLVM generation and native linking, the same bridge
+accepts `emit <compiler.dll> <SHA256> <manifest.json> <fresh-output.ll>`.
+The manifest declares `schemaVersion: 1`, `target: "windows-x64"`,
+`outputKind: "executable"`, ordered absolute `sourcePaths`, and absolute
+`inputHashes` for every loaded source and additional input. The bridge calls
+the production `LoadProgram`, `SemanticCompiler.Compile` and streaming
+`LlvmIrGenerator.WriteProgram` APIs. It rejects changed or undeclared inputs
+and existing output, and checks hashes again after emission. Consumers must
+validate LLVM grammar, retain separate supervised phase results and use the
+production linker. Successful separated phases do not prove an earlier
+combined time budget, compiler acceptance or Stage2/Stage3 completion.
+`scripts/build-focused-source-emitter.py --separate-llvm-phases
+<bridge-build-result.json>` consumes this bridge through its existing supervised
+runner. Freeze `separatedSourceBuildBudget` in the source comparison before
+execution: a fresh `output`, `maximumBuilds: 1`, `emissionTimeoutSeconds: 180`
+and `linkTimeoutSeconds: 240`. Select the canonical CLI with `--cli`, or a
+validated reusable checked package with `--checked-package-contract`. The latter
+keeps its declared `-O1`/24-worker harness configuration; the CLI uses `-O2`/24.
+The original combined build mode and its budget remain separate.
 
 Initial files pinned in a result's input hashes remain input fixtures even when
 their extension is `.ll` or `.bc`. The cleanup planner and executor must protect

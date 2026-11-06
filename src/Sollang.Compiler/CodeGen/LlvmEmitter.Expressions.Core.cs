@@ -1210,16 +1210,17 @@ internal sealed partial class LlvmEmitter
             storage == RuntimeContainerStorage.Stack
                 ? InitializeStackDictionary(EmitStackLifetimeStart(expression), capacity)
                 : EmitDictionaryAllocate(capacity.ToString(CultureInfo.InvariantCulture)),
-            length.ToString(CultureInfo.InvariantCulture),
+            "0",
             capacity.ToString(CultureInfo.InvariantCulture),
             storage);
 
         foreach (var entry in entries)
         {
-            EmitDictionaryInsertUnique(
+            dictionary = EmitDictionaryPut(
                 dictionary,
                 ((RuntimeInt)entry.Key).ValueName,
-                ((RuntimeInt)entry.Value).ValueName);
+                ((RuntimeInt)entry.Value).ValueName,
+                DictionaryCapacityProof.SufficientForAllEntries);
         }
 
         return dictionary;

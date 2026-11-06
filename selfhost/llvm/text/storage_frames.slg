@@ -358,6 +358,10 @@ storageLifetimeUnitCompleted unitIndex: Int, sourceUnitAst: Int, ownerIndex: Int
 # Slot aliases remain available for element initialization, while the owner
 # directly carries the selected slot. Heap owners retain their data pointer.
 emitDictionaryLiteralOwner nodeIndex: Int, length: Int, capacity: Int64, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    Arena(0) => lengthStorage!
+    length == 0 -> if { "0" } else {
+        "%v$(nodeIndex -> valueNameId(state))_literal$(length - 1)_length" -> materialize(lengthStorage!)
+    } => distinctLength
     nodeIndex -> isPlannedIntDictionaryPayload(context, state)
         -> if {
             nodeIndex -> checkedStorageAllocation(context) -> when {
@@ -367,11 +371,11 @@ emitDictionaryLiteralOwner nodeIndex: Int, length: Int, capacity: Int64, context
                     return
                 }
                 Some(allocation) {
-                    "v$(nodeIndex -> valueNameId(state))" -> emitGrowableDictionaryOwner("%stack_slot$(allocation.slot)", "$(length)", "$(capacity)")
+                    "v$(nodeIndex -> valueNameId(state))" -> emitGrowableDictionaryOwner("%stack_slot$(allocation.slot)", distinctLength, "$(capacity)")
                 }
             }
         } else {
-            "v$(nodeIndex -> valueNameId(state))" -> emitGrowableDictionaryOwner("%v$(nodeIndex -> valueNameId(state))_storage", "$(length)", "$(capacity)")
+            "v$(nodeIndex -> valueNameId(state))" -> emitGrowableDictionaryOwner("%v$(nodeIndex -> valueNameId(state))_storage", distinctLength, "$(capacity)")
         }
 }
 
