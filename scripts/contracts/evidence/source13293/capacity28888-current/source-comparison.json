@@ -1,0 +1,42 @@
+{
+  "status": "compared-before-slg-edit",
+  "observedAtUtc": "2026-11-06T01:12:39.067421+00:00",
+  "csharpFirst": "artifacts/scratch/resume-20261106-review/boundary-managed-final01/result.json",
+  "csharpBoundaryBuild": "artifacts/scratch/resume-20261106-review/capacity-boundary-diagnostic01/result.json",
+  "csharpBoundaryLlvm": "artifacts/scratch/resume-20261106-review/boundary-managed-llvm.json",
+  "nativeBoundaryBaseline": "artifacts/scratch/resume-20261106-review/boundary-native-before-llvm.json",
+  "decisions": [
+    "CSharp lexer normalizes numeric tokens and parser admits the full nonnegative Int32 capacity. EmitTypedEmptyArray keeps logical length0, capacity as its original Int32 numeric value, and promotes capacity to long before element-byte multiplication. Its actual LLVM has allocations4000000000,8585934588,8585934592,8589934588 and passes the existing common LLVM assertion path.",
+    "SLG collection source capacity is parsed into Int, then arrayCapacityHint adds1000000 before storing in opcode. The result overflows above2146483647 and is discarded by the nonnegative guard. Shared arrayLiteralLength consequently treats the capacity token as a repeat count.",
+    "Native baseline raw LLVM independently shows nonzero empty-array lengths2146483648/2147483647 and negative allocation byte arguments-294967296,-4000004,-4000000,-4. Actual disabled-branch programs return safe in both compilers; these controls do not test giant allocations.",
+    "Store an array literal capacity directly in its existing opcode, with-1 as absence. Bounds and source diagnostics remain owned by parser/semantic admission. Bounded canonical capacity keeps precedence; fixed repeats retain logical length. Remove the unnecessary offset encoding and its redundant wrapper; share the source-capacity reader between arrays and dictionaries.",
+    "The legacy while materializer duplicates length/capacity decoding. Route it through the same arrayLiteralLength and arrayLiteralCapacity decisions as entry, ordinary and control-region consumers.",
+    "Compute literal backing byte counts once through a shared Int64 multiplication before calling the shared array backing writer. Widen that writer and its stack sibling to Int64 and explicitly convert existing narrow empty-element byte counts. Interpolation uses the same byte-count authority. Runtime ownership, allocation guards, zero backing and ABI descriptors remain unchanged."
+  ],
+  "sourceHashes": {
+    "src/Sollang.Compiler.Generators/LexerSourceGenerator.cs": "D4D139E9B6EC1F13529766A00E7C0AE8EB3ED2F2A592C92008BD99ACD7BBCCD6",
+    "src/Sollang.Compiler.Generators/ParserSourceGenerator.cs": "9048502361810ED2512804ED841E186D2D00900FEC3303525E43AADF8B891F9F",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs": "8873B3E6E4B76AAD4E248F0CD2E500DF3539236943FD56C776E58422CD467156",
+    "selfhost/ir/typed.slg": "B79143ED7C43BB39B7CB93FC440CDDDC6A546A39128674DB23E9174DDEA5E654",
+    "selfhost/ir/typed/source_lowering.slg": "A34B91F5478D0D277F2F57EE264116255A8351353932164B04AC415CEBD64DE4",
+    "selfhost/ir/typed/ordinary_function_expressions.slg": "32282F5FE4B60283878F4B32F37606697C367EA39B4A6BB3BF871EBEC8A5FB66",
+    "selfhost/llvm/text/foundation.slg": "AE12CFE0B8B0A8645F1FD77855E82E7D2441A0890D620B62FF7D3B2FBA44315C",
+    "selfhost/llvm/text/function_expressions.slg": "9181B3F1565EFF438A6AEE11DECDDD1FF08C375C710A90EE78707C59A6B6BB91",
+    "selfhost/llvm/text/entry_expressions.slg": "704408A3D415FCF0544D928423462C59512F11183326DA27AE174CDE2F28C012",
+    "selfhost/llvm/text/control_region_expressions.slg": "D9C01C80F37F1216A5E82F409D4A19B423570E214DF8E73071AE656FF9FBA8E5",
+    "selfhost/llvm/text/container_control.slg": "CB49764E64694030068E82E2F6C736BA077DF893BE50C0CF7B5304C5A2D84FB7",
+    "selfhost/llvm/text/platform_io.slg": "B4CB84F1E6BE247D5F9E067E284F51130944C42BEF5D22767972927AA1B16BA9"
+  },
+  "sourceEmitterBudget": {
+    "output": "artifacts/scratch/resume-20261106-review/boundary-native-cli01",
+    "maximumBuilds": 1,
+    "timeoutSeconds": 180
+  },
+  "requiredNativePreflights": [
+    "artifacts/scratch/resume-20261106-review/boundary-stdlib02/result.json",
+    "artifacts/scratch/resume-20261106-review/boundary-checked02/result.json"
+  ],
+  "claimsGoalComplete": false,
+  "positiveGiantAllocationExecuted": false,
+  "checkedSlgLlvmAssertions": "artifacts/scratch/resume-20261106-review/boundary-checked-llvm.json"
+}

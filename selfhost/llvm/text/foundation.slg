@@ -3053,7 +3053,7 @@ emitInterpolationArray labelIndex: Int, nodeIndex: Int, nodes: ref [interpolatio
         -> if { literal.storageLength => capacity! }
     arrayType.kind == 12 -> if { arrayType.length => capacity! }
     ArrayStorageIdentity { resultDomain: 1, resultIndex: nodeIndex, labelIndex: labelIndex } => identity
-    capacity! * (literal.elementTypeId -> arrayElementStorageSize(context, state)) => byteLength
+    capacity! -> arrayStorageByteLength(literal.elementTypeId -> arrayElementStorageSize(context, state)) => byteLength
     arrayType.kind != 12 -> if { identity -> emitArrayHeapBacking(byteLength, ownerIndex, context, state) }
     0 => position!
     position! < length -> while {
@@ -4437,13 +4437,13 @@ arrayLiteralCapacity node: typedIr.TypedIrNode, length: Int, context: ref emitte
     node.typeId >= 0 and node.typeId < (context.types -> len)
         and context.types[node.typeId].kind == 12
         -> if { context.types[node.typeId].length -> return }
-    node.opcode >= 1_000_000 -> if { node.opcode - 1_000_000 -> return }
+    node.opcode >= 0 -> if { node.opcode -> return }
     length
 }
 
 arrayLiteralLength node: typedIr.TypedIrNode, operandCount: Int, context: ref emitterContext.EmitContext -> Int {
     # A typed empty capacity hint reserves backing without creating elements.
-    node.opcode >= 1_000_000 and operandCount == 0
+    node.opcode >= 0 and operandCount == 0
         -> if { 0 -> return }
     node.typeId >= 0 and node.typeId < (context.types -> len)
         and context.types[node.typeId].kind == 4 and context.types[node.typeId].length >= 0

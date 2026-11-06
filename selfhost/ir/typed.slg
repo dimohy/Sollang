@@ -1049,7 +1049,7 @@ legacyTypes recursive: ref expressionTypeIds.ExpressionTypeIdSet -> [expressionT
 # Typed-empty dictionaries have no value-expression child for their capacity.
 # Preserve the source capacity hint in the flat IR opcode so LLVM lowering does
 # not have to reinterpret a type child as an integer literal.
-dictionaryCapacityHint source: Text, node: ast.AstNode -> Int {
+collectionCapacityHint source: Text, node: ast.AstNode -> Int {
     -1 => capacity!
     0 => value!
     false => afterSemicolon!
@@ -1078,13 +1078,6 @@ dictionaryCapacityHint source: Text, node: ast.AstNode -> Int {
     }
     validHint! -> if { value! => capacity! }
     capacity!
-}
-
-# Array IR already uses small nonnegative opcodes for bounded storage. Encode a
-# growable array's source capacity hint in a disjoint range for LLVM lowering.
-arrayCapacityHint source: Text, node: ast.AstNode -> Int {
-    source -> dictionaryCapacityHint(node) => capacity
-    capacity >= 0 -> if { capacity + 1_000_000 } else { -1 }
 }
 
 lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, parallelFunctions: Bool, profileStopAfter: Int, profileSourceLimit: Int, profileFunctionLimit: Int -> [TypedIrNode; ~] {

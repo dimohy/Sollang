@@ -996,6 +996,9 @@ Digit separators are valid in these numbers: `4_096` means `4096`. Empty-array
 capacity hints and numeric repeat counts allow zero and must fit a nonnegative
 `Int`. A hint is checked before `~`; a repeat count is checked after `]`, so a
 missing closing bracket takes priority over an invalid repeat count.
+Keep the full admitted capacity when lowering literals, and widen before
+multiplying by element size. A backing byte count is distinct from the `Int`
+element count; neither may replace an empty literal's zero logical length.
 Bounded dictionary type capacities and `BitSet<N>` sizes must be positive
 integers fitting `Int`; zero, fractions, and overflow are diagnosed before the
 closing type delimiter. Digit-separated positive sizes remain valid.

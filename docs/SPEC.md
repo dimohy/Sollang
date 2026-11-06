@@ -4327,6 +4327,9 @@ Container rules:
   A typed empty-array capacity hint and a numeric repeat count must be in
   `0..2147483647`, including zero. A capacity hint reserves backing without
   adding elements: `[T; N~]` starts with length zero and capacity `N`.
+  Lowering preserves that entire capacity range. Backing byte counts are
+  calculated in 64-bit arithmetic before allocation; a valid capacity must not
+  wrap its byte count or become a logical repeat length.
   A repeat count creates elements. The capacity hint is checked before its
   trailing `~` and closing bracket. A repeat count is checked after the closing
   bracket, so a missing `]` takes priority over an invalid repeat count.

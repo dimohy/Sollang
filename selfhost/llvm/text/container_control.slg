@@ -1255,23 +1255,14 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 whileArrayOperandCount! + 1 => whileArrayOperandCount!
                                                 context.ir[whileArrayCountIndex!].nextOperand => whileArrayCountIndex!
                                             }
-                                            whileArrayOperandCount! => whileArrayLength!
-                                            valueNode.typeId >= 0
-                                                and context.types[valueNode.typeId].kind == 4
-                                                and context.types[valueNode.typeId].length >= 0
-                                                -> if { context.types[valueNode.typeId].length => whileArrayLength! }
-                                            whileArrayLength! => whileArrayCapacity!
-                                            valueNode.opcode >= 1_000_000 -> if {
-                                                valueNode.opcode - 1_000_000 => whileArrayCapacity!
-                                            }
-                                            valueNode.typeId >= 0 and context.types[valueNode.typeId].kind == 12
-                                                -> if { context.types[valueNode.typeId].length => whileArrayCapacity! }
+                                            valueNode -> arrayLiteralLength(whileArrayOperandCount!, context) => whileArrayLength
+                                            valueNode -> arrayLiteralCapacity(whileArrayLength, context) => whileArrayCapacity
                                             (valueNode -> isFixedArrayType)
                                                 and not (valueNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
                                                 -> if {
                                                     "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = getelementptr i8, ptr %v$(valueNodeIndex -> valueNameId(state))_data, i64 0" -> println
                                                 } else {
-                                                    whileArrayCapacity! * (valueNode -> arrayElementSize(context, state)) => whileArrayByteLength
+                                                    whileArrayCapacity -> arrayStorageByteLength(valueNode -> arrayElementSize(context, state)) => whileArrayByteLength
                                                     whileArrayByteLength == 0 -> if {
                                                         valueNodeIndex -> freshEmptyArrayCallParameter(context, state) => emptyWhileCallParameter
                                                         emptyWhileCallParameter >= 0 or (valueNode -> isFixedArrayType)
@@ -1279,7 +1270,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 (emptyWhileCallParameter >= 0 -> if {
                                                                     context.ir[emptyWhileCallParameter] -> arrayElementSize(context, state)
                                                                 } else { valueNode -> arrayElementSize(context, state) }) => emptyWhileCallStorageBytes
-                                                                ArrayStorageIdentity { resultDomain: 2, resultIndex: valueNodeIndex, labelIndex: whileIndex } -> emitArrayHeapBacking(emptyWhileCallStorageBytes, ownerIndex, context, state)
+                                                                ArrayStorageIdentity { resultDomain: 2, resultIndex: valueNodeIndex, labelIndex: whileIndex } -> emitArrayHeapBacking(Int64(emptyWhileCallStorageBytes), ownerIndex, context, state)
                                                             } else {
                                                                 "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data = inttoptr i64 0 to ptr" -> println
                                                             }
@@ -1289,7 +1280,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 }
                                             valueNode.operand0 => whileArrayElementIndex!
                                             0 => whileArrayElementPosition!
-                                            whileArrayElementIndex! >= 0 and whileArrayElementPosition! < whileArrayLength!
+                                            whileArrayElementIndex! >= 0 and whileArrayElementPosition! < whileArrayLength
                                                 -> while {
                                                     context.ir[whileArrayElementIndex!] => whileArrayElement
                                                     "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_ptr$(whileArrayElementPosition!) = getelementptr " -> print
@@ -1311,11 +1302,11 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                             (valueNode -> isFixedArrayType) or (valueNode -> isSliceArrayType)
                                                 -> if {
                                                     "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data, 0" -> println
-                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = insertvalue %sollang.int_slice %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0, i64 $(whileArrayLength!), 1" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = insertvalue %sollang.int_slice %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0, i64 $(whileArrayLength), 1" -> println
                                                 } else {
                                                     "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0 = insertvalue %sollang.array.i32 poison, ptr %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_data, 0" -> println
-                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0, i64 $(whileArrayLength!), 1" -> println
-                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_1, i64 $(whileArrayCapacity!), 2" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_1 = insertvalue %sollang.array.i32 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_0, i64 $(whileArrayLength), 1" -> println
+                                                    "  %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state)) = insertvalue %sollang.array.i32 %while$(whileIndex -> valueNameId(state))_v$(valueNodeIndex -> valueNameId(state))_1, i64 $(whileArrayCapacity), 2" -> println
                                                 }
                                         }
                                     (valueNode.kind == 6 or valueNode.kind == 9) and valueNode.opcode == -212
