@@ -2092,6 +2092,10 @@ Public library exports use the same byte parameter representation, accepting
 any incoming byte as the single Unit value, and use `void` for Unit results.
 An `await` yielding Unit may flow into a Unit input. Semantic analysis still
 resolves and checks every following target; Unit alone does not end a flow.
+Expression inference precedes expression-statement admission. An invalid read
+of a consumed binding owns its statement's diagnostic; do not also report a
+dependent statement-shape error. A successfully inferred non-Unit expression
+still requires the permitted statement effect or an explicit result binding.
 Stored field reads constrain an omitted signature through the receiver's
 canonical declared field type, including nested fields and readonly receivers.
 An inferred product receiver preserves its ordered field labels and positional

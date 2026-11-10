@@ -2790,6 +2790,33 @@ public struct ExpressionOperandDiagnostic {
     public firstTypeId: Int
 }
 
+# Expression inference owns a consumed-name failure before statement admission.
+# Late ownership facts may arrive after the preliminary operand decision.
+public resolveStatementConsumedRead package: ref analysis.PackageAnalysis, diagnostic: ExpressionOperandDiagnostic, consumedReads: ref [ConsumedBindingReadDiagnostic; ~] -> ExpressionOperandDiagnostic {
+    diagnostic.code != 31 -> if { diagnostic -> return }
+    0 => readIndex!
+    readIndex! < (consumedReads -> len) -> while {
+        consumedReads[readIndex!] => read
+        read.sourceModule == diagnostic.sourceModule
+            and (package -> declarationAncestor(diagnostic.sourceModule, diagnostic.astNode, read.astNode))
+            -> if {
+                ExpressionOperandDiagnostic {
+                    code: 0
+                    sourceModule: -1
+                    astNode: -1
+                    operandAst: -1
+                    operatorKind: -1
+                    locationOffset: 0
+                    operandTypeSymbol: -1
+                    operandTypeId: -1
+                    firstTypeId: -1
+                } -> return
+            }
+        readIndex! + 1 => readIndex!
+    }
+    diagnostic
+}
+
 public struct RedundantNumericConversion {
     public sourceModule: Int
     public conversionAst: Int

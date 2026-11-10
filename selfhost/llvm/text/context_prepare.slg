@@ -293,7 +293,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     ir! -> typedIr.bindGenericBodies(genericInstances!, prepared.interpolations -> len) => genericBodies
     ir! -> typedIr.sealLateResolvedCallNumericArguments(prepared)
     prepared.package -> semanticDiagnostics.firstExpressionOperandDiagnostic(prepared, recursiveTypes!, ir!, unresolvedMutableNames, pointerBitWidth) => sourceOperandDiagnostic
-    prepared -> semanticDiagnostics.firstMutableRebindDiagnostic(recursiveTypes!, sourceOperandDiagnostic, genericCallPlans, ir!) => expressionOperandDiagnostic
+    prepared -> semanticDiagnostics.firstMutableRebindDiagnostic(recursiveTypes!, sourceOperandDiagnostic, genericCallPlans, ir!) => preliminaryExpressionOperandDiagnostic
     # Semantic preparation commits the await source before Typed IR lowering.
     [Bool; ~] => awaitSourceByAst!
     prepared.awaitSourceByAst -> each source { awaitSourceByAst! -> push(source) }
@@ -613,6 +613,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
         }
         not alreadyReported! -> if { consumedBindingReads! -> push(lateRead) }
     }
+    prepared.package -> semanticDiagnostics.resolveStatementConsumedRead(preliminaryExpressionOperandDiagnostic, consumedBindingReads!) => expressionOperandDiagnostic
     ir! -> typedIr.movesFrom(prepared, recursiveTypes!.types) => moves
     [Text; ~] => contextSources!
     0 => contextSourceIndex!

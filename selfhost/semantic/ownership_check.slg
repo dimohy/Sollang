@@ -8337,6 +8337,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                 }
             borrowedTakeIndex! + 1 => borrowedTakeIndex!
         }
+    prepared.package.ranges -> typedIr.sourceValueQueryIndex(typed) => partialMoveSourceIndex
     0 => partialMoveIndex!
     partialMoveIndex! < (moves! -> len) -> while {
         moves![partialMoveIndex!] => partialMove
@@ -8404,8 +8405,11 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         affineMoveSource.kind == 5
                             -> if {
                                 prepared.package.ranges[partialMove.sourceModule] => affineMoveRange
-                                0 => affineReuseIndex!
-                                affineReuseIndex! < (typed -> len) -> while {
+                                (prepared.package.symbols -> len) + partialMove.sourceModule => affineReadBucket!
+                                partialMove.symbol >= 0 and partialMove.symbol < affineMoveRange.symbolCount
+                                    -> if { affineMoveRange.symbolStart + partialMove.symbol => affineReadBucket! }
+                                firstBorrowedReadBySymbol![affineReadBucket!] => affineReuseIndex!
+                                affineReuseIndex! >= 0 -> while {
                                     typed[affineReuseIndex!] => affineReuse
                                     affineReuse.kind == 5 and affineReuse.sourceModule == partialMove.sourceModule
                                         and affineReuse.symbol == partialMove.symbol
@@ -8426,7 +8430,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                 span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].start, length: prepared.package.nodes[affineMoveRange.astStart + affineReuse.astNode].length }
                                             })
                                         }
-                                    affineReuseIndex! + 1 => affineReuseIndex!
+                                    nextBorrowedReadBySymbol![affineReuseIndex!] => affineReuseIndex!
                                 }
                             }
                     }
@@ -8489,8 +8493,11 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: duplicateMoveAst.start, length: duplicateMoveAst.length }
                     })
                 }
-                0 => movedUseIndex!
-                movedUseIndex! < (typed -> len) -> while {
+                (prepared.package.symbols -> len) + partialMove.sourceModule => movedReadBucket!
+                partialMove.symbol >= 0 and partialMove.symbol < sourceRange.symbolCount
+                    -> if { sourceRange.symbolStart + partialMove.symbol => movedReadBucket! }
+                firstBorrowedReadBySymbol![movedReadBucket!] => movedUseIndex!
+                movedUseIndex! >= 0 -> while {
                     typed[movedUseIndex!] => movedUse
                     movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart and not (movedUseIndex! -> nodeBelongsTo(partialMove.siteIr))
                         -> if {
@@ -8553,7 +8560,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                 }
                             }
                         }
-                    movedUseIndex! + 1 => movedUseIndex!
+                    nextBorrowedReadBySymbol![movedUseIndex!] => movedUseIndex!
                 }
             }
         # Owned aggregate insertion participates in initialization state at
@@ -8640,10 +8647,12 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             # source/symbol identity and declaration span inside the region.
             not partialMoveBindingLocalToRegion! and partialMove.symbol >= 0
                 -> if {
-                    0 => partialMoveLocalBindingSearch!
-                    partialMoveLocalBindingSearch! < (typed -> len)
+                    partialMoveSourceIndex.starts[partialMove.sourceModule] => partialMoveLocalBindingPosition!
+                    partialMoveLocalBindingPosition! + partialMoveSourceIndex.counts[partialMove.sourceModule] => partialMoveLocalBindingEnd
+                    partialMoveLocalBindingPosition! < partialMoveLocalBindingEnd
                         -> while {
-                            typed[partialMoveLocalBindingSearch!] => partialMoveLocalBinding
+                            partialMoveSourceIndex.entries[partialMoveLocalBindingPosition!] => partialMoveLocalBindingSearch
+                            typed[partialMoveLocalBindingSearch] => partialMoveLocalBinding
                             (partialMoveLocalBinding.kind == 17 or partialMoveLocalBinding.kind == 29)
                                 and partialMoveLocalBinding.sourceModule == partialMove.sourceModule
                                 and partialMoveLocalBinding.symbol == partialMove.symbol
@@ -8667,19 +8676,17 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                             true => partialMoveBindingLocalToRegion!
                                         }
                                 }
-                            partialMoveLocalBindingSearch! + 1 => partialMoveLocalBindingSearch!
+                            partialMoveLocalBindingPosition! + 1 => partialMoveLocalBindingPosition!
                         }
                 }
             prepared.package.nodes[branchRange.astStart + typed[partialMove.siteIr].astNode].start => branchMoveStart
             false => branchReturns!
-            0 => branchReturnSearch!
-            branchReturnSearch! < (typed -> len) -> while {
-                typed[branchReturnSearch!] => branchReturn
-                branchReturn.kind == 23 and branchReturn.sourceModule == partialMove.sourceModule and (branchReturnSearch! -> moveRegionFor) == partialMove.regionIr and (prepared.package.nodes[branchRange.astStart + branchReturn.astNode].start > branchMoveStart or (partialMove.siteIr -> nodeBelongsTo(branchReturnSearch!)))
+            callFunctionIndex.irIndex.directExits.allExits -> each branchReturnSearch {
+                typed[branchReturnSearch] => branchReturn
+                branchReturn.kind == 23 and branchReturn.sourceModule == partialMove.sourceModule and (branchReturnSearch -> moveRegionFor) == partialMove.regionIr and (prepared.package.nodes[branchRange.astStart + branchReturn.astNode].start > branchMoveStart or (partialMove.siteIr -> nodeBelongsTo(branchReturnSearch)))
                     -> if {
                         true => branchReturns!
                     }
-                branchReturnSearch! + 1 => branchReturnSearch!
             }
             # A match returned as the function value has no subsequent owner
             # use at an outer join. C# normalizes disappearing outer owners on
