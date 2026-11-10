@@ -5379,11 +5379,16 @@ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Uni
     "sollang: semantic error at $(location.line):$(location.column): [module '" -> print
     moduleName -> emitCanonicalDiagnosticModuleName
     "'] " -> print
-    diagnostic.code == 5 or diagnostic.code == 9 -> if {
-        diagnostic.code == 9 -> if { "expected a Deque but received " } else { "expected a boxed value but received " } -> print
-        diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
-        println() -> return
-    }
+    diagnostic.code == 5 or diagnostic.code == 9 or diagnostic.code == 10
+        -> if {
+            diagnostic.code -> when {
+                == 5 => "expected a boxed value but received "
+                == 9 => "expected a Deque but received "
+                else => "expected a bounded array but received "
+            } -> print
+            diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
+            println() -> return
+        }
     diagnostic.code == 2 -> if {
         context.symbols[functionRange.symbolStart + diagnostic.genericParameterSymbol] => genericSymbol
         context.tokens[functionRange.tokenStart + genericSymbol.nameToken] => genericToken

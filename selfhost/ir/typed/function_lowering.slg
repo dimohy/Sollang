@@ -373,6 +373,12 @@ public publishGenericCallTypes nodes: mut [TypedIrNode; ~], instances: ref [Gene
     typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => payloadEdges
     prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds
     typeIds.classifyWithResources(resolved.types, resolved.fields, payloadEdges, resourceSeeds) => flags
+    nodes -> sealGenericCallDependentTypes(prepared, resolved, flags)
+}
+
+# Keep the helper result and its dependent bindings/projections in the same
+# generic environment before any caller body is copied.
+sealGenericCallDependentTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, flags: ref [Int; ~] -> Unit {
     nodes -> sealIntrinsicPayloadsAfterGenericCalls(resolved.types, flags)
     nodes -> sealLateTypes(prepared, resolved, resolved.types, flags)
     nodes -> sealFinalIndexTypes(resolved.types, flags)
@@ -687,6 +693,7 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
         typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => rolePayloadEdges
         prepared -> semanticContext.ownedResourceSeeds(resolved.types) => roleResourceSeeds
         resolved.types -> typeIds.classifyWithResources(resolved.fields, rolePayloadEdges, roleResourceSeeds) => roleFlags
+        nodes -> sealGenericCallDependentTypes(prepared, resolved, roleFlags)
         nodes -> sealEachRoleTypes(prepared, resolved.types, roleFlags)
         [Int; ~] => planSlots!
         [Bool; ~] => selected!
@@ -4506,7 +4513,8 @@ sealFinalIndexTypes nodes: mut [TypedIrNode; ~], frozenRecursiveSemanticTypes: r
                         or containerType!.kind == 4
                         or containerType!.kind == 12
                         -> if { containerType!.first => elementTypeId! }
-                    containerType!.kind == 5 -> if { containerType!.second => elementTypeId! }
+                    containerType!.kind == 5 or containerType!.kind == 13
+                        -> if { containerType!.second => elementTypeId! }
                     elementTypeId! >= 0 -> if {
                         frozenRecursiveSemanticTypes[elementTypeId!] => elementType
                         elementTypeId! => indexNode!.typeId

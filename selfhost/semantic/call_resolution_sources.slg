@@ -326,6 +326,7 @@ public struct TypedMethodDeclarationFacts {
     openFunctionStarts: [Int; ~]
     openFunctionCounts: [Int; ~]
     importReachability: [Bool; ~]
+    sameSourceNamespace: [Bool; ~]
 }
 
 public prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> TypedMethodDeclarationFacts {
@@ -390,6 +391,21 @@ prepareTypedMethodDeclarationFactsIndexed package: ref analysis.PackageAnalysis,
         methodCounts! -> push((methodSymbols! -> len) - methodStart)
         openFunctionCounts! -> push((openFunctionSymbols! -> len) - openFunctionStart)
     }
+    [Bool; ~] => sameSourceNamespace!
+    Int(identities -> len) => namespaceModuleCount
+    namespaceModuleCount == Int(package.sources -> len)
+        -> if {
+            0 => leftNamespaceModule!
+            leftNamespaceModule! < namespaceModuleCount -> while {
+                0 => rightNamespaceModule!
+                rightNamespaceModule! < namespaceModuleCount -> while {
+                    modules.sameLogicalAnalyzedSource(package.sources, identities, identities[leftNamespaceModule!].sourceIndex, identities[rightNamespaceModule!].sourceIndex, package.tokens, package.ranges) => sameNamespace
+                    sameSourceNamespace! -> push(sameNamespace)
+                    rightNamespaceModule! + 1 => rightNamespaceModule!
+                }
+                leftNamespaceModule! + 1 => leftNamespaceModule!
+            }
+        }
     [Bool; ~] => importReachability!
     identities -> len => moduleCount
     0 => reachabilitySlot!
@@ -413,7 +429,7 @@ prepareTypedMethodDeclarationFactsIndexed package: ref analysis.PackageAnalysis,
                 }
             }
     }
-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, openFunctionSymbols: openFunctionSymbols!, openFunctionStarts: openFunctionStarts!, openFunctionCounts: openFunctionCounts!, importReachability: importReachability! }
+    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, openFunctionSymbols: openFunctionSymbols!, openFunctionStarts: openFunctionStarts!, openFunctionCounts: openFunctionCounts!, importReachability: importReachability!, sameSourceNamespace: sameSourceNamespace! }
 }
 
 public emptyTypedMethodDeclarationFacts: -> TypedMethodDeclarationFacts {
@@ -427,7 +443,18 @@ public emptyTypedMethodDeclarationFacts: -> TypedMethodDeclarationFacts {
     [Int; ~] => openFunctionStarts
     [Int; ~] => openFunctionCounts
     [Bool; ~] => importReachability
-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability }
+    [Bool; ~] => sameSourceNamespace
+    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability, sameSourceNamespace: sameSourceNamespace }
+}
+
+# This index belongs to the immutable package and module identities of the
+# prepared method facts. Its fallback retains the full namespace comparison.
+samePreparedMethodNamespace package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], declarations: ref TypedMethodDeclarationFacts, leftModule: Int, rightModule: Int -> Bool {
+    Int(identities -> len) => moduleCount
+    leftModule >= 0 and leftModule < moduleCount and rightModule >= 0 and rightModule < moduleCount
+        and (declarations.sameSourceNamespace -> len) == moduleCount * moduleCount
+        -> if { declarations.sameSourceNamespace[leftModule * moduleCount + rightModule] -> return }
+    modules.sameLogicalAnalyzedSource(package.sources, identities, identities[leftModule].sourceIndex, identities[rightModule].sourceIndex, package.tokens, package.ranges)
 }
 
 typedMethodNameMatches request: TypedMethodRequest, methodSource: Int, nameToken: Int, memberStart: UIntSize, memberLength: UIntSize, package: ref analysis.PackageAnalysis -> Bool {
@@ -492,13 +519,16 @@ public resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: 
                 identities[moduleIndex!] => identity
                 identity.sourceIndex => methodSource
                 methodSource >= 0 and methodSource < (package.ranges -> len)
+                    and not ((declarations.ownerTypes -> len) > 0
+                    and methodSource < (declarations.methodCounts -> len)
+                    and declarations.methodCounts[methodSource] == 0)
                     -> if {
                         false => reachable!
-                        modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
+                        package -> samePreparedMethodNamespace(identities, declarations, moduleIndex!, request.sourceModule)
                             -> if { true => reachable! }
                         receiver.module >= 0 and receiver.module < (identities -> len)
                             -> if {
-                                modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[receiver.module].sourceIndex, package.tokens, package.ranges)
+                                package -> samePreparedMethodNamespace(identities, declarations, moduleIndex!, receiver.module)
                                     -> if { true => reachable! }
                             }
                         (declarations.importReachability -> len) == 0
@@ -506,7 +536,7 @@ public resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: 
                                 resolvedImports -> each imported {
                                     imported.sourceModule == request.sourceModule and imported.status == 0
                                         and imported.targetModule >= 0 and imported.targetModule < (identities -> len)
-                                        and modules.sameLogicalAnalyzedSource(package.sources, identities, identities[imported.targetModule].sourceIndex, identity.sourceIndex, package.tokens, package.ranges)
+                                        and package -> samePreparedMethodNamespace(identities, declarations, imported.targetModule, moduleIndex!)
                                         -> if { true => reachable! }
                                 }
                             } else {
@@ -570,7 +600,7 @@ public resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: 
                                                         false => eligible!
                                                         0 => candidateRank!
                                                         selectionTier! == 1 and traitAst < 0 -> if {
-                                                            modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
+                                                            package -> samePreparedMethodNamespace(identities, declarations, moduleIndex!, request.sourceModule)
                                                                 -> if {
                                                                     true => eligible!
                                                                     1 => candidateRank!
@@ -626,7 +656,7 @@ public resolveTypedMethodWithDeclarations request: TypedMethodRequest, package: 
                                                                     traitIdentity!.targetModule => selected!.traitModule
                                                                     traitIdentity!.targetSymbol => selected!.traitSymbol
                                                                     candidateRank! => selectedRank!
-                                                                    modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, identities[request.sourceModule].sourceIndex, package.tokens, package.ranges)
+                                                                    package -> samePreparedMethodNamespace(identities, declarations, moduleIndex!, request.sourceModule)
                                                                         or method.flags / 4 % 2 == 1
                                                                         -> if { 0 } else { 1 } => selected!.status
                                                                 }

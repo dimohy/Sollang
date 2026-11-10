@@ -908,27 +908,17 @@ boundedDictionaryIndexScratchTypeId nodeIndex: Int, context: ref emitterContext.
 }
 
 emitBoundedDictionaryLiteralOperand nodeIndex: Int, ownerIndex: Int, typeId: Int, prefix: Text, storage: mut Arena, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text uses Console, Process {
-    context.ir[nodeIndex] => operand
     context.types[typeId].kind == 12 -> if {
         prefix -> emitBoundedArrayValue(nodeIndex, ownerIndex, typeId, context, state)
         "%$(prefix)" -> materialize(storage) -> return
     }
-    operand.kind == 3 or operand.kind == 4 -> if {
-        "%$(prefix)" -> materialize(storage) => valueName
-        "  $(valueName) = add " -> print
-        typeId -> writeSemanticTypeId(context, state)
-        " 0, " -> print
-        operand.kind == 3 -> if {
-            operand -> writeIntegerLiteral(context, state)
-        } else {
-            operand -> sourceToken(context, state) => token
-            (context.sources[operand.sourceModule] -> byte(token.span.start)) == 116
-                -> if { "1" -> print } else { "0" -> print }
-        }
-        "" -> println
-        valueName -> return
-    }
-    "%v$(nodeIndex -> valueNameId(state))" -> materialize(storage)
+    "%$(prefix)" -> materialize(storage) => valueName
+    "  $(valueName) = freeze " -> print
+    typeId -> writeAggregateFieldTypeId(context, state)
+    " " -> print
+    nodeIndex -> writeDictionaryLiteralItem(ownerIndex, context, state)
+    "" -> println
+    valueName
 }
 
 emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {

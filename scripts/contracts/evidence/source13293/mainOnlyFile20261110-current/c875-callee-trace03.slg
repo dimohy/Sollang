@@ -1,0 +1,54 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionIds
+import sollang.compiler.semantic.effects as effects
+import sollang.compiler.source_root as sourceRoot
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    arguments[1] -> path.fromText(path.nativeStyle()) -> sourceRoot.discoverDirect => paths
+    [file.SourceText; ~] => owners!
+    paths -> sourceRoot.referenceOrder -> each index {
+        paths[index] -> pathText -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => standard!
+    owners! -> each owner {
+        owner -> slice(0, owner -> len) => source
+        standard! -> push(source)
+    }
+    2..<Int(arguments -> len) -> each argumentIndex {
+        arguments[UIntSize(argumentIndex)] -> file.mapText => fixture
+        [Text; ~] => sources!
+        standard! -> each source { sources! -> push(source) }
+        fixture -> slice(0, fixture -> len) => source
+        sources! -> push(source)
+        sources! -> semanticContext.prepare -> expressionIds.resolveCallContext => context
+        context.prepared => prepared
+        prepared -> effects.indexDeclaredEffects => declared
+        (prepared.package.ranges -> len) - 1 => fixtureModule
+        "fixture:$(arguments[UIntSize(argumentIndex)])" -> println
+        prepared.calls -> each call {
+            call.sourceModule == fixtureModule and call.callAst >= 0
+                -> if {
+                    prepared.package.ranges[call.sourceModule] => range
+                    declared.owners[range.astStart + call.callAst] => owner
+                    prepared -> effects.disallowedMainOnlyCall(declared, call) => rejected
+                    "call:$(call.callAst):$(call.status):$(call.origin):$(call.functionSymbol):$(call.targetSourceModule):$owner:$rejected" -> println
+                    call.targetSourceModule >= 0 and call.targetSourceModule < (prepared.package.ranges -> len)
+                        -> if {
+                            prepared.package.ranges[call.targetSourceModule] => targetRange
+                            call.functionSymbol >= 0 and call.functionSymbol < targetRange.symbolCount
+                                -> if {
+                                    prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
+                                    prepared.package.tokens[targetRange.tokenStart + function.nameToken] => token
+                                    prepared.package.sources[call.targetSourceModule] -> slice(token.span.start, token.span.length) => name
+                                    "callee:$name" -> println
+                                }
+                        }
+                }
+        }
+    }
+}

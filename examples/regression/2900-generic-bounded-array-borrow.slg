@@ -1,0 +1,23 @@
+# Infer bounded elements recursively without changing the borrowed storage.
+struct Item { public value: UInt64 }
+
+first<T> values: ref [T; <=2] -> T { values[0] }
+additional<T> marker: Int, values: ref [T; <=2] -> T { values[0] }
+lookup<T> values: ref {Int: T; <=2} -> T { values[1] }
+
+main {
+    [Item { value: 4294967297 }; <=2] => values
+    values -> first => flowed
+    first(values) => called
+    0 -> additional(values) => extra
+    [[Item { value: 4294967297 }; <=2]; <=2] => nested
+    nested -> first => inner
+    inner -> first => selected
+    {Int: Item; 1: Item { value: 4294967297 }; <=2} => table
+    table -> lookup => found
+    flowed.value -> println
+    called.value -> println
+    extra.value -> println
+    selected.value -> println
+    found.value -> println
+}

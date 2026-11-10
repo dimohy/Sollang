@@ -6,9 +6,10 @@ activity in their explicitly supplied scope, not a cause or an improvement.
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
+
+from verification_json_records import write_json_atomic
 
 
 def _number(value, name, *, positive=False):
@@ -143,9 +144,7 @@ class SlowStepDiagnostics:
             self._dropped += 1
         record = self.snapshot()
         if self.output_path is not None:
-            temporary = self.output_path.with_name(self.output_path.name + ".tmp")
-            temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-            temporary.replace(self.output_path)
+            write_json_atomic(self.output_path, record)
         return record
 
     def _investigation(self, latest):

@@ -12,6 +12,41 @@ admit = runpy.run_path(str(Path(__file__).with_name('build-focused-source-emitte
     'managed_reference_inputs']
 plans = runpy.run_path(str(Path(__file__).with_name('build-focused-source-emitter.py')))[
     'diagnostics_plans']
+validate_link = runpy.run_path(str(Path(__file__).with_name('build-focused-source-emitter.py')))[
+    'validate_link_output']
+
+
+class SourceLinkOutputTests(unittest.TestCase):
+    def observation(self, count, **changes):
+        result = dict(status='passed', mode='link', optimization='-O2',
+                      maximumWorkers=24, resolvedWorkerLimit=20,
+                      compilerAssemblySha256='A' * 64)
+        result.update(changes)
+        lines = [f'[native {index}/{count}] optimized partition'
+                 for index in range(1, count + 1)]
+        return '\n'.join([*lines, json.dumps(result)])
+
+    def test_actual_partition_count_is_independent_of_requested_workers(self):
+        for count in (0, 6, 20, 24, 32):
+            with self.subTest(count=count):
+                self.assertEqual(validate_link(self.observation(count), 'A' * 64, '-O2', 24)['status'], 'passed')
+
+    def test_missing_duplicate_and_inconsistent_partition_lines_fail(self):
+        original = self.observation(20)
+        lines = original.splitlines()
+        for changed in (lines[1:], [lines[0], *lines],
+                        [line.replace('/20]', '/24]') for line in lines],
+                        ['unrecognized link output', *lines]):
+            with self.assertRaisesRegex(ValueError, 'PARTITION_OUTPUT_INVALID'):
+                validate_link('\n'.join(changed), 'A' * 64, '-O2', 24)
+
+    def test_link_result_retains_compiler_options_and_worker_checks(self):
+        for change in (dict(status='failed'), dict(mode='probe'),
+                       dict(optimization='-O1'), dict(maximumWorkers=20),
+                       dict(compilerAssemblySha256='B' * 64),
+                       dict(resolvedWorkerLimit=0), dict(resolvedWorkerLimit=25)):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'RESULT_INVALID'):
+                validate_link(self.observation(20, **change), 'A' * 64, '-O2', 24)
 
 
 class SourceBuildDiagnosticsAdmissionTests(unittest.TestCase):

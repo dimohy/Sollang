@@ -9,9 +9,39 @@ from unittest.mock import patch
 
 from verification_json_records import write_json_atomic
 from verification_execution import VerificationExecution
+from verification_step_diagnostics import SlowStepDiagnostics
 
 
 class AtomicJsonRecordTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows diagnostic reader sharing contract")
+    def test_diagnostic_observation_survives_brief_reader_lock(self):
+        import ctypes
+        from ctypes import wintypes
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                   ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        api.CreateFileW.restype = wintypes.HANDLE
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        with tempfile.TemporaryDirectory(prefix="sollang-diagnostic-sharing-") as directory:
+            target = Path(directory) / "diagnostics.json"
+            diagnostic = SlowStepDiagnostics(dict(stage="original-suite", softLimitSeconds=60,
+                hardTimeoutSeconds=180, sampleIntervalSeconds=2, maxSamples=92), target)
+            diagnostic.observe(0, 100, 0, 0)
+            handle = api.CreateFileW(str(target), 0x80000000, 3, None, 3, 0, None)
+            self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+            release = threading.Timer(0.05, api.CloseHandle, args=(handle,))
+            release.start()
+            try:
+                record = diagnostic.observe(133, 100, 0, 0, cpu_seconds=130,
+                                            cpu_scope="owned-tree", owned_pids=[100, 101])
+            finally:
+                release.join()
+            self.assertEqual(record, json.loads(target.read_text(encoding="utf-8")))
+            self.assertEqual(180, record["declaredHardTimeoutSeconds"])
+            self.assertFalse(record["automaticRetry"])
+            self.assertFalse(record["hardTimeoutChanged"])
+            self.assertEqual([target], list(Path(directory).iterdir()))
+
     @unittest.skipUnless(os.name == "nt", "Windows delete-sharing contract")
     def test_brief_reader_without_delete_sharing_does_not_abort_publication(self):
         import ctypes

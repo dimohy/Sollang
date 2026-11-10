@@ -727,12 +727,13 @@ public preIrResultPropagationDecisionByNode prepared: ref semanticContext.Semant
 # Ownership and emission consume the same completed expression type decision.
 # In particular, a scalar projection of Text does not retain its Text loan.
 public resultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    prepared.package.ranges -> typedIr.sourceValueQueryIndex(ir) => queryIndex
     [Int; ~] => resultTypes!
     0 => nodeIndex!
     nodeIndex! < (prepared.interpolations -> len)
         -> while {
             prepared -> sourceModuleAt(nodeIndex!) => sourceModule
-            prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => resultTypeId
+            prepared -> indexedExpressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!, queryIndex) => resultTypeId
             resultTypes! -> push(resultTypeId)
             nodeIndex! + 1 => nodeIndex!
         }
@@ -2665,6 +2666,7 @@ public preIrDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, bi
 # An unresolved type remains undecided; a known incompatible type is reported
 # before LLVM emits a printer call for it.
 public invalidDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, genericInstances: ref [typedIr.GenericFunctionInstance; ~], preIrDisplayTypes: ref [Int; ~], invalidIndexExpected: ref [Int; ~], propagationDecisions: ref [ResultPropagationDecision; ~], contextualDiagnostics: ref [expressionTypeIds.ContextualStructDiagnostic; ~], localEnumMembers: ref [LocalEnumMemberDecision; ~], invalidConversionArity: ref [Bool; ~], invalidConversionType: ref [Int; ~], invalidCodePointConversion: ref [Bool; ~], invalidConversionLiteral: ref [Int; ~], callNumericDiagnostics: ref [InterpolationCallArgumentDiagnostic; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    prepared.package.ranges -> typedIr.sourceValueQueryIndex(ir) => queryIndex
     [Bool; ~] => rootHasPriorError!
     prepared.interpolations -> each interpolationNode {
         rootHasPriorError! -> push(false)
@@ -2765,7 +2767,7 @@ public invalidDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, 
                 -> if {
                     prepared -> sourceModuleAt(nodeIndex!) => sourceModule
                     sourceModule >= 0 -> if {
-                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => typeId!
+                        prepared -> indexedExpressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!, queryIndex) => typeId!
                         localEnumMembers[nodeIndex!].status == 3
                             -> if { localEnumMembers[nodeIndex!].typeId => typeId! }
                         typeId! >= 0 and typeId! < (types -> len) -> if {
@@ -2879,4 +2881,17 @@ public invalidCollectionIndexExpectedTypeByNode prepared: ref semanticContext.Se
             nodeIndex! + 1 => nodeIndex!
         }
     expectedByNode!
+}
+
+indexedExpressionTypeId prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, nodeIndex: Int, queryIndex: ref typedIr.SourceValueQueryIndex -> Int {
+    nodeIndex < 0 or nodeIndex >= (prepared.interpolations -> len)
+        -> if { -1 -> return }
+    prepared.interpolations[nodeIndex] => node
+    node.kind == 17 -> if {
+        sourceModule -> typedIr.indexedSourceExpressionValueIndex(node.valueAst, 0, Int(ir -> len), prepared.package.ranges, prepared.package.nodes, ir, queryIndex) => selected
+        selected >= 0 and ir[selected].typeId >= 0 and ir[selected].typeId < (types -> len)
+            -> if { ir[selected].typeId -> return }
+        -1 -> return
+    }
+    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex)
 }

@@ -119,7 +119,7 @@ prepareCheckedCachedSnapshot request: ref PrepareRequest, prepared: move semanti
     prepared.package -> libraryImports.callResultTypes(prepared.semantic.types, libraries, libraryCalls) => externalResults
     libraries -> libraryImports.semanticContextBytes => externalContext
     cache.destination -> semanticCache.load => loaded
-    prepared -> semanticCache.resolveWithExternalResults(loaded, paths, cache.identity, externalResults, externalContext) -> when {
+    prepared -> semanticCache.resolveWithExternalResultsWithExecutionMode(loaded, paths, cache.identity, externalResults, externalContext, request.supportsComputePool) -> when {
         Err(code) { code -> Result<CachedCheckedPreparation, Int>.Err -> return }
         Ok(cached) {
             cached.words => words
@@ -163,7 +163,7 @@ prepareSnapshot request: ref PrepareRequest, initialPrepared: move semanticConte
 prepareSnapshotWithSignature request: ref PrepareRequest, initialPrepared: move semanticContext.SemanticSnapshot, libraries: move libraryImports.LibraryCatalog, libraryCalls: move [libraryImports.LibraryFunctionResolution; ~], signatureTypeDiagnostic: semanticDiagnostics.SignatureTypeDiagnostic -> emitterContext.EmitContext {
     initialPrepared.package -> semanticDiagnostics.unresolvedMutableLocalReads => unresolvedMutableNames
     initialPrepared.package -> libraryImports.callResultTypes(initialPrepared.semantic.types, libraries, libraryCalls) => externalResults
-    initialPrepared -> expressionTypeIds.resolveCallContextWithExternalResults(externalResults) => resolvedCallContext
+    initialPrepared -> expressionTypeIds.resolveCallContextWithExternalResultsWithExecutionMode(externalResults, request.supportsComputePool) => resolvedCallContext
     request -> prepareResolvedSnapshot(resolvedCallContext, libraries, libraryCalls, unresolvedMutableNames, signatureTypeDiagnostic)
 }
 

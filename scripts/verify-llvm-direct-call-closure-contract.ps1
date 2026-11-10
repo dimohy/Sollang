@@ -155,9 +155,64 @@ entry:
   ret i32 0
 }
 '@
+    $ssaControls = @(
+        @{
+            name = 'ssa-cross-function'
+            expected = 'main:%v2'
+            llvm = @'
+define i32 @sollang_m0_s0() {
+entry:
+  %v2 = add i32 1, 2
+  ret i32 %v2
+}
+define i32 @main() {
+entry:
+  ret i32 %v2
+}
+'@
+        },
+        @{
+            name = 'ssa-forward-parameter'
+            expected = ''
+            llvm = @'
+define i32 @main(i32 %v10) {
+entry:
+  %v2 = add i32 %v1, %v10
+  %v1 = add i32 1, 2
+  ret i32 %v2
+}
+'@
+        },
+        @{
+            name = 'ssa-quoted-comment-boundary'
+            expected = ''
+            llvm = @'
+define i32 @main() {
+entry:
+  call void asm sideeffect "text ; %v99 and \22%v88\22", ""()
+  %v20_suffix = add i32 1, 2
+  %v3.derived = add i32 %v20_suffix, 1
+  %v1 = add i32 1, 2 ; %v900 is comment data
+  ret i32 %v1
+}
+'@
+        }
+    )
+    foreach ($control in $ssaControls) {
+        $ssaPath = Join-Path $testDirectory ($control.name + '.ll')
+        [System.IO.File]::WriteAllText($ssaPath, $control.llvm)
+        $caught = $null
+        try { & $verifier -LlvmPath $ssaPath } catch { $caught = $_.Exception.Message }
+        if ($control.expected.Length -eq 0) {
+            if ($null -ne $caught) { throw "SSA positive control $($control.name) rejected: $caught" }
+        } elseif ($null -eq $caught -or -not $caught.Contains('V004') -or -not $caught.Contains($control.expected)) {
+            throw "SSA negative control $($control.name) returned the wrong diagnostic: $caught"
+        }
+    }
+
     [System.IO.File]::WriteAllText($goodPath, $good)
     & $verifier -LlvmPath $goodPath
-    Write-Host "[LLVM direct-call closure contract] PASS declared-only internal, unresolved runtime/sentinel/native-global, duplicate declaration, string-literal negative, defined-internal, and external-declaration controls."
+    Write-Host "[LLVM direct-call closure contract] PASS declared-only internal, unresolved runtime/sentinel/native-global, duplicate declaration, string-literal negative, defined-internal, external-declaration, and per-function SSA/forward/parameter/quoted-comment/name-boundary controls."
 } finally {
     if (Test-Path -LiteralPath $testDirectory) {
         Remove-Item -LiteralPath $testDirectory -Recurse -Force

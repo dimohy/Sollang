@@ -2,7 +2,18 @@ namespace sollang.compiler.llvm.codegen_cache_keys
 
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.reference_type_ids as referenceIds
 import sollang.compiler.semantic.type_name_policy as names
+
+appendGenericParameterName identity: Int, display: Bool, bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
+    identity < referenceIds.enumValue("GenericParameter") or identity >= referenceIds.enumValue("FirstUserDefined")
+        -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
+    identity -> referenceIds.enumName => name
+    name == "" -> if { "$identity" -> appendTypeText(bytes) } else {
+        display -> if { name -> names.builtinDisplayName } else { name } -> appendTypeText(bytes)
+    }
+    Result<Unit, TypeUniverseCaptureError>.Ok
+}
 
 appendResolvedBuiltinName symbol: Int, bytes: mut [UInt8; ~] -> Result<Unit, TypeUniverseCaptureError> {
     symbol -> typeIds.canonicalBuiltinSymbol => canonical
@@ -28,11 +39,7 @@ appendResolvedTypeNameCore context: mut TypeFieldContext, package: ref analysis.
     type.kind == 1 and type.origin == 3 -> if {
         (signatureIds -> len) != (semantic.types -> len)
             -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-        signatureIds[typeId] - 512 => role
-        role < 0 or role > 2 -> if { Result<Unit, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-        ["GenericParameter", "SecondaryGenericParameter", "TertiaryGenericParameter"] => roles
-        roles[role] -> names.builtinDisplayName -> appendTypeText(bytes)
-        Result<Unit, TypeUniverseCaptureError>.Ok -> return
+        signatureIds[typeId] -> appendGenericParameterName(true, bytes) -> return
     }
     type.kind == 1 or type.kind == 9 -> if {
         type.origin == 1 -> if { type.symbol -> appendResolvedBuiltinName(bytes) -> return }

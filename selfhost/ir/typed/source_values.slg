@@ -74,3 +74,125 @@ public sourceExpressionValueIndex sourceModule: Int, rootAst: Int, firstIr: Int,
     }
     selected!
 }
+
+# Stable source buckets belong to one immutable IR snapshot. They store global
+# indices in original order, never inferred types or provisional semantic facts.
+public struct SourceValueQueryIndex {
+    public starts: [Int; ~]
+    public counts: [Int; ~]
+    public entries: [Int; ~]
+}
+
+public sourceValueQueryIndex ranges: ref [analysis.SourceAnalysisRange; ~], ir: ref [TypedIrNode; ~] -> SourceValueQueryIndex {
+    [Int; ~] => counts!
+    0 => countSource!
+    countSource! < (ranges -> len) -> while {
+        counts! -> push(0)
+        countSource! + 1 => countSource!
+    }
+    ir -> each node {
+        node.sourceModule >= 0 and node.sourceModule < (ranges -> len)
+            -> if {
+                counts![node.sourceModule] + 1 => counts![node.sourceModule]
+            }
+    }
+    [Int; ~] => starts!
+    [Int; ~] => cursors!
+    0 => total!
+    0 => source!
+    source! < (ranges -> len) -> while {
+        starts! -> push(total!)
+        cursors! -> push(total!)
+        total! + counts![source!] => total!
+        source! + 1 => source!
+    }
+    [Int; ~] => entries!
+    0 => initialize!
+    initialize! < total! -> while {
+        entries! -> push(-1)
+        initialize! + 1 => initialize!
+    }
+    0 => nodeIndex!
+    nodeIndex! < (ir -> len) -> while {
+        ir[nodeIndex!] => node
+        node.sourceModule >= 0 and node.sourceModule < (ranges -> len)
+            -> if {
+                cursors![node.sourceModule] => slot
+                nodeIndex! => entries![slot]
+                slot + 1 => cursors![node.sourceModule]
+            }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    SourceValueQueryIndex { starts: starts!, counts: counts!, entries: entries! }
+}
+
+public indexedSourceExpressionValueIndex sourceModule: Int, rootAst: Int, firstIr: Int, endIr: Int, ranges: ref [analysis.SourceAnalysisRange; ~], nodes: ref [ast.AstNode; ~], ir: ref [TypedIrNode; ~], queryIndex: ref SourceValueQueryIndex -> Int {
+    sourceModule < 0 or sourceModule >= (ranges -> len)
+        or firstIr < 0 or endIr < firstIr or endIr > (ir -> len)
+        -> if { -1 -> return }
+    ranges[sourceModule] => range
+    range.astStart < 0 or range.astCount < 0 or range.astStart > Int(nodes -> len) - range.astCount
+        -> if { -1 -> return }
+    rootAst < 0 or rootAst >= range.astCount -> if { -1 -> return }
+    nodes[range.astStart + rootAst] => root
+    -1 => lastTarget!
+    root.kind == 10 -> if {
+        0 => childIndex!
+        childIndex! < range.astCount -> while {
+            nodes[range.astStart + childIndex!] => child
+            child.parent == rootAst and (child.kind == 16 or child.kind == 42
+                or child.kind == 44 or child.kind == 56 or child.kind == 57 or child.kind == 64)
+                -> if {
+                    lastTarget! < 0 -> if { childIndex! => lastTarget! } else {
+                        child.start > nodes[range.astStart + lastTarget!].start
+                            -> if { childIndex! => lastTarget! }
+                    }
+                }
+            childIndex! + 1 => childIndex!
+        }
+    }
+    rootAst => valueAst!
+    -1 => controlKind!
+    lastTarget! >= 0 -> if {
+        nodes[range.astStart + lastTarget!].kind => targetKind
+        targetKind == 42 or targetKind == 44 or targetKind == 56 or targetKind == 57 or targetKind == 64
+            -> if {
+                lastTarget! => valueAst!
+                targetKind => controlKind!
+            }
+    }
+    -1 => selected!
+    range.astCount + 1 => selectedDepth!
+    queryIndex.starts[sourceModule] => position!
+    position! < queryIndex.starts[sourceModule] + queryIndex.counts[sourceModule]
+        -> while {
+            queryIndex.entries[position!] => index
+            ir[index] => candidate
+            index >= firstIr and index < endIr and candidate.sourceModule == sourceModule and candidate.astNode >= 0
+                and candidate.astNode < range.astCount and candidate.kind != 0
+                and candidate.kind != 1 and candidate.kind != 11
+                -> if {
+                    controlKind! < 0
+                        or (controlKind! == 42 and candidate.kind == 18)
+                        or (controlKind! == 44 and candidate.kind == 20)
+                        or ((controlKind! == 56 or controlKind! == 57)
+                        and (candidate.kind == 27 or candidate.kind == 33 or candidate.kind == 34))
+                        or (controlKind! == 64 and candidate.kind == 32) => matchesKind
+                    candidate.astNode => ancestor!
+                    0 => depth!
+                    ancestor! >= 0 and ancestor! < range.astCount and ancestor! != valueAst!
+                        and depth! < range.astCount -> while {
+                            nodes[range.astStart + ancestor!].parent => ancestor!
+                            depth! + 1 => depth!
+                        }
+                    matchesKind and ancestor! == valueAst! and depth! < selectedDepth!
+                        and (controlKind! < 0 or depth! == 0)
+                        -> if {
+                            index => selected!
+                            depth! => selectedDepth!
+                        }
+                }
+            position! + 1 => position!
+        }
+    selected!
+}

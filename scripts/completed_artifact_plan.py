@@ -200,6 +200,13 @@ def assert_artifact_path(repo: Path, path: Path, *, allow_root: bool = False) ->
     return path
 
 
+def is_exit_contract(value) -> bool:
+    # Verification observations also carry case arrays and copied expectations.
+    # They cannot grant or conflict with authority from a pinned input contract.
+    return isinstance(value, dict) and not any(key in value for key in (
+        'inputHashes', 'inputHashesStart', 'inputHashesEnd', 'processes'))
+
+
 def expected_build_exit(record: dict, row: dict, *, default: int | None = 0) -> int | None:
     for path_text, digest in record.get('inputHashes', {}).items():
         path = Path(path_text)
@@ -212,9 +219,14 @@ def expected_build_exit(record: dict, row: dict, *, default: int | None = 0) -> 
             contract = json.loads(data)
         except ValueError:
             continue
-        if not isinstance(contract, dict):
+        if not is_exit_contract(contract):
             continue
-        for case in [*contract.get('cases', []), *contract.get('probeMatrix', [])]:
+        # Pinned inputs also include summary JSON with numeric case counts.
+        # Only case arrays carry expected-exit evidence; other shapes do not.
+        contract_cases = [case for key in ('cases', 'probeMatrix')
+                          if isinstance(contract.get(key), list)
+                          for case in contract[key]]
+        for case in contract_cases:
             if isinstance(case, dict) and case.get('id') == row.get('id'):
                 for key in ('exit', 'expected_exit', 'expectedBuildExit', 'expectedExit'):
                     if type(case.get(key)) is int:
@@ -224,6 +236,10 @@ def expected_build_exit(record: dict, row: dict, *, default: int | None = 0) -> 
 
 def expected_runtime_exit(record: dict, row: dict, *, emitted: bool = False) -> int | None:
     """Nonzero runtime success requires a unique, unchanged input contract."""
+    if (emitted and not record.get('reusableCheckedProducer')
+            and not any(key in row for key in (
+                'emittedLlvmSha256', 'nativeRunExit', 'expectedEmittedRuntimeExit'))):
+        return 0
     expected = set()
     for name, digest in record.get('inputHashes', {}).items():
         path = Path(name)
@@ -236,7 +252,7 @@ def expected_runtime_exit(record: dict, row: dict, *, emitted: bool = False) -> 
             contract = json.loads(data)
         except ValueError:
             continue
-        if not isinstance(contract, dict) or not isinstance(contract.get('cases'), list):
+        if not is_exit_contract(contract) or not isinstance(contract.get('cases'), list):
             continue
         for case in contract['cases']:
             if isinstance(case, dict) and case.get('id') == row.get('id'):

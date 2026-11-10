@@ -2436,6 +2436,159 @@ public contextualNumericValueAsts package: ref analysis.PackageAnalysis, firstCh
     values!
 }
 
+# Array contexts are captured from one immutable expression snapshot. The first
+# inferred element establishes the type; only later elements consume it. An
+# external array contract supplies context to every element without replacing
+# the literal's independently inferred extent or backing type.
+public struct ArrayNumericValueContext {
+    public sourceModule: Int
+    public valueAst: Int
+    public expectedTypeId: Int
+}
+
+public arrayNumericValueContexts package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: [typeIds.TypeReference], typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], outerExpected: ref [Int; ~] -> [ArrayNumericValueContext; ~] {
+    [ArrayNumericValueContext; ~] => contexts!
+    package -> declaredNumericReturnContextByAst(types, references) => returns
+    package.ranges -> each range {
+        0 => ast!
+        ast! < range.astCount -> while {
+            range.astStart + ast! => global
+            package.nodes[global].kind == 37 -> if {
+                outerExpected[global] => owner!
+                owner! < 0 -> if { returns[global] => owner! }
+                owner! >= 0 and owner! < (types -> len) -> if {
+                    types[owner!] => candidate
+                    candidate.kind != 2 and candidate.kind != 3 and candidate.kind != 4 and candidate.kind != 12
+                        -> if { -1 => owner! }
+                } else { -1 => owner! }
+                # An explicit element annotation is a source contract. An
+                # inferred completed array type is never its own context.
+                owner! < 0 -> if {
+                    firstChild[global] => annotation!
+                    annotation! >= 0 -> while {
+                        package.nodes[annotation!].kind == 16 -> if {
+                            references -> each reference {
+                                reference.status == 0 and reference.sourceModule == range.sourceModule and reference.typeAst == annotation! - range.astStart
+                                    -> if { reference.typeId => owner! }
+                            }
+                        }
+                        nextChild[annotation!] => annotation!
+                    }
+                }
+                -1 => expected!
+                owner! >= 0 and owner! < (types -> len) -> if {
+                    types[owner!] => ownerType
+                    ownerType.kind == 2 or ownerType.kind == 3 or ownerType.kind == 4 or ownerType.kind == 12
+                        -> if { ownerType.first => expected! } else { owner! => expected! }
+                }
+                true => firstValue!
+                firstChild[global] => element!
+                element! >= 0 -> while {
+                    package.nodes[element!].kind != 12 and package.nodes[element!].kind != 16
+                        -> if {
+                            expected! >= 0 and expected! < (types -> len)
+                                -> if {
+                                    types[expected!] => target
+                                    target.kind == 1 and target.origin == 1 -> if {
+                                        contexts! -> push(ArrayNumericValueContext { sourceModule: range.sourceModule, valueAst: element! - range.astStart, expectedTypeId: expected! })
+                                    }
+                                } else {
+                                    firstValue! -> if {
+                                        types -> typeIds.materializedReadTypeId(typeByAst[element!]) => expected!
+                                    }
+                                }
+                            false => firstValue!
+                        }
+                    nextChild[element!] => element!
+                }
+            }
+            ast! + 1 => ast!
+        }
+    }
+    contexts!
+}
+
+captureArrayNumericValueContexts package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: [typeIds.TypeReference], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], index: ref ContextualRecordIndex, outerExpected: ref [Int; ~] -> [ArrayNumericValueContext; ~] {
+    [Int; ~] => typeByAst!
+    expressionIndexByAst -> each expressionIndex {
+        -1 => actual!
+        expressionIndex >= 0 -> if {
+            expressions[expressionIndex] => expression
+            expression.status == 0 -> if { expression.typeId => actual! }
+        }
+        typeByAst! -> push(actual!)
+    }
+    package -> arrayNumericValueContexts(types, references, typeByAst!, index.firstChild, index.nextChild, outerExpected)
+}
+
+public integerValueContextContains package: ref analysis.PackageAnalysis, sourceModule: Int, argumentAst: Int, valueAst: Int -> Bool {
+    package.ranges[sourceModule] => range
+    valueAst => ancestor!
+    ancestor! >= 0 and ancestor! < range.astCount
+        -> while {
+            package.nodes[range.astStart + ancestor!] => node
+            node.kind == 18 or node.kind == 19 -> if { false -> return }
+            ancestor! == argumentAst -> if { true -> return }
+            node.parent => ancestor!
+        }
+    false
+}
+
+resolveContextualNumericValueType package: ref analysis.PackageAnalysis, source: ref Text, expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], index: ref ContextualRecordIndex, sourceModule: Int, numericValue: Int, expected: Int, symbol: Int, expectedContextByAst: mut [Int; ~] -> Bool {
+    package.ranges[sourceModule] => range
+    false => changed!
+    expected => expectedContextByAst[numericValue]
+    package.nodes[numericValue] => contextualValue
+    -1 => number!
+    contextualValue.kind == 14 -> if { numericValue => number! }
+    contextualValue.kind == 22 and contextualValue.operatorKind == grammar.tokenIdMinus()
+        -> if {
+            index.firstChild[numericValue] => operand
+            operand >= 0 and package.nodes[operand].kind == 14
+                -> if { operand => number! }
+        }
+    number! >= 0 -> if {
+        expected => expectedContextByAst[number!]
+        package.nodes[number!] => literal
+        source -> numericLiteralRange.literalUsesFloatingSyntax(literal.start, literal.start + literal.length) => floating
+        not floating or symbol == 20 or symbol == 21 -> if {
+            setContextualRecordExpressionType(expressions, expressionIndexByAst, sourceModule, numericValue - range.astStart, numericValue, expected)
+                -> if { true => changed! }
+            number! != numericValue -> if {
+                setContextualRecordExpressionType(expressions, expressionIndexByAst, sourceModule, number! - range.astStart, number!, expected)
+                    -> if { true => changed! }
+            }
+        }
+    }
+    changed!
+}
+
+resolveArrayNumericValueContexts prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], references: [typeIds.TypeReference], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedContextByAst: mut [Int; ~] -> Bool {
+    prepared.package -> captureArrayNumericValueContexts(types, references, expressions, expressionIndexByAst, index, expectedContextByAst) => contexts
+    false => changed!
+    contexts -> each context {
+        prepared.package.ranges[context.sourceModule] => range
+        types[context.expectedTypeId] => target
+        target.symbol -> typeIds.canonicalBuiltinSymbol => symbol
+        target.kind == 1 and target.origin == 1
+            and ((symbol >= 2 and symbol <= 4) or symbol == 6 or (symbol >= 8 and symbol <= 14) or symbol == 20 or symbol == 21)
+            -> if {
+                prepared.package.sources[context.sourceModule] -> len => sourceLength
+                prepared.package.sources[context.sourceModule] -> slice(UIntSize(0), sourceLength) => source
+                range.astStart + context.valueAst => root
+                prepared.package -> contextualNumericValueAsts(index.firstChild, index.nextChild, root, symbol != 20 and symbol != 21) => values
+                values -> each value {
+                    prepared.package -> integerValueContextContains(context.sourceModule, context.valueAst, value - range.astStart)
+                        -> if {
+                            prepared.package -> resolveContextualNumericValueType(source, expressions, expressionIndexByAst, index, context.sourceModule, value, context.expectedTypeId, symbol, expectedContextByAst)
+                                -> if { true => changed! }
+                        }
+                }
+            }
+    }
+    changed!
+}
+
 resolveContextualRecordFieldValue package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], index: ref ContextualRecordIndex, sourceModule: Int, valueAst: Int, expectedType: Int, expectedContextByAst: mut [Int; ~] -> Bool {
     package.ranges[sourceModule] => range
     package.sources[sourceModule] -> len => sourceLength
@@ -2470,29 +2623,8 @@ resolveContextualRecordFieldValue package: ref analysis.PackageAnalysis, types: 
                     -> if {
                         package -> contextualNumericValueAsts(index.firstChild, index.nextChild, selected, symbol != 20 and symbol != 21) => numericValues
                         numericValues -> each numericValue {
-                            expected => expectedContextByAst[numericValue]
-                            package.nodes[numericValue] => contextualValue
-                            -1 => number!
-                            contextualValue.kind == 14 -> if { numericValue => number! }
-                            contextualValue.kind == 22 and contextualValue.operatorKind == grammar.tokenIdMinus()
-                                -> if {
-                                    index.firstChild[numericValue] => operand
-                                    operand >= 0 and package.nodes[operand].kind == 14
-                                        -> if { operand => number! }
-                                }
-                            number! >= 0 -> if {
-                                expected => expectedContextByAst[number!]
-                                package.nodes[number!] => literal
-                                source -> numericLiteralRange.literalUsesFloatingSyntax(literal.start, literal.start + literal.length) => floating
-                                not floating or symbol == 20 or symbol == 21 -> if {
-                                    setContextualRecordExpressionType(expressions, expressionIndexByAst, sourceModule, numericValue - range.astStart, numericValue, expected)
-                                        -> if { true => changed! }
-                                    number! != numericValue -> if {
-                                        setContextualRecordExpressionType(expressions, expressionIndexByAst, sourceModule, number! - range.astStart, number!, expected)
-                                            -> if { true => changed! }
-                                    }
-                                }
-                            }
+                            package -> resolveContextualNumericValueType(source, expressions, expressionIndexByAst, index, sourceModule, numericValue, expected, symbol, expectedContextByAst)
+                                -> if { true => changed! }
                         }
                     }
             }
@@ -3654,7 +3786,7 @@ resolveFlowCallTypes prepared: ref semanticContext.SemanticSnapshot, types: mut 
                                     binding.sourceModule != call.sourceModule or binding.callAst != call.callAst
                                         -> if { break }
                                     prepared.package -> typeIds.functionParameterTypeId(references, referenceIndexByTypeAst, binding.targetSourceModule, binding.parameterSymbol) => parameterTypeId
-                                    parameterTypeId >= 0 and callNode.kind == 10 and binding.parameterOrdinal > 0
+                                    parameterTypeId >= 0 and binding.parameterOrdinal > 0
                                         -> if {
                                             parameterTypeId => argumentTemplate
                                             types -> typeIds.specializeManyInto(returnTemplates!, returnActuals!, argumentTemplate) => priorSpecialization

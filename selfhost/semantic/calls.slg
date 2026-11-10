@@ -1461,6 +1461,10 @@ public resolveModulesTypedWithPreparedFacts package: analysis.PackageAnalysis, s
 # Facts must come from this package's unchanged semantic references, module
 # identities and resolved imports. This bundle never crosses an analysis.
 public resolveModulesTypedWithDeclarationFacts package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], seededOwners: ref [Bool; ~], seededCalls: ref [ModuleCallResolution; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], facts: ref ModuleCallFacts -> [ModuleCallResolution; ~] {
+    package -> resolveModulesTypedWithDeclarationFactsWithExecutionMode(semantic, receiverTypeByCallAst, resolvedTypes, seededOwners, seededCalls, identities, imports, resolvedImports, qualifiedResults, facts, false)
+}
+
+public resolveModulesTypedWithDeclarationFactsWithExecutionMode package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], seededOwners: ref [Bool; ~], seededCalls: ref [ModuleCallResolution; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], facts: ref ModuleCallFacts, supportsComputePool: Bool -> [ModuleCallResolution; ~] {
     [Bool; ~] => resolvedNameByAst!
     package.nodes -> each node { resolvedNameByAst! -> push(false) }
     [ModuleCallResolution; ~] => results!
@@ -1529,20 +1533,41 @@ public resolveModulesTypedWithDeclarationFacts package: analysis.PackageAnalysis
         }
         bareSourceIndex! + 1 => bareSourceIndex!
     }
-    0 => sourceIndex!
-    sourceIndex! < (package.sources -> len) -> while {
-        sourceIndex! < (seededOwners -> len) and seededOwners[sourceIndex!]
-            -> if {
-                sourceIndex! + 1 => sourceIndex!
-                continue
+    supportsComputePool -> if {
+        [Int; ~] => sourceRequests!
+        0 => sourceRequestIndex!
+        sourceRequestIndex! < (package.sources -> len)
+            -> while {
+                not (sourceRequestIndex! < (seededOwners -> len) and seededOwners[sourceRequestIndex!])
+                    -> if { sourceRequests! -> push(sourceRequestIndex!) }
+                sourceRequestIndex! + 1 => sourceRequestIndex!
             }
-        sourceIndex! -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, facts.intrinsicNames, receiverTypeByCallAst, resolvedTypes, facts.declarations, facts.references) => sourceResults
-        0 => sourceResultIndex!
-        sourceResultIndex! < (sourceResults -> len) -> while {
-            results! -> push(sourceResults[sourceResultIndex!])
-            sourceResultIndex! + 1 => sourceResultIndex!
+        sourceRequests! -> resolveSourceCallTablesParallel(package, semantic, receiverTypeByCallAst, resolvedTypes, identities, imports, resolvedImports, qualifiedResults, facts) => sourceTables!
+        (sourceTables! -> len) > 0 -> while {
+            sourceTables! -> take(0) => sourceTable
+            0 => sourceResultIndex!
+            sourceResultIndex! < (sourceTable.nodes -> len)
+                -> while {
+                    results! -> push(sourceTable.nodes[sourceResultIndex!])
+                    sourceResultIndex! + 1 => sourceResultIndex!
+                }
         }
-        sourceIndex! + 1 => sourceIndex!
+    } else {
+        0 => sourceIndex!
+        sourceIndex! < (package.sources -> len) -> while {
+            sourceIndex! < (seededOwners -> len) and seededOwners[sourceIndex!]
+                -> if {
+                    sourceIndex! + 1 => sourceIndex!
+                    continue
+                }
+            sourceIndex! -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, facts.intrinsicNames, receiverTypeByCallAst, resolvedTypes, facts.declarations, facts.references) => sourceResults
+            0 => sourceResultIndex!
+            sourceResultIndex! < (sourceResults -> len) -> while {
+                results! -> push(sourceResults[sourceResultIndex!])
+                sourceResultIndex! + 1 => sourceResultIndex!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
     }
     [ModuleCallResolution; ~] => filteredResults!
     # Duplicate errors are local to one source AST and function identity.
@@ -1613,4 +1638,19 @@ public resolveModulesTypedPrepared package: analysis.PackageAnalysis, semantic: 
 public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallResolution; ~] {
     package -> typeIds.resolveAnalyzed => semantic
     package -> resolveModulesTyped(semantic)
+}
+
+
+struct SourceCallTable {
+    nodes: [ModuleCallResolution; ~]
+}
+
+resolveSourceCallTable sourceIndex: Int, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], facts: ref ModuleCallFacts -> SourceCallTable {
+    sourceIndex -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, facts.intrinsicNames, receiverTypeByCallAst, resolvedTypes, facts.declarations, facts.references) => nodes
+    SourceCallTable { nodes: nodes }
+}
+
+resolveSourceCallTablesParallel sourceRequests: [Int; ~], package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], facts: ref ModuleCallFacts -> [SourceCallTable; ~] {
+    sourceRequests -> parallel sourceIndex { sourceIndex -> resolveSourceCallTable(package, semantic, receiverTypeByCallAst, resolvedTypes, identities, imports, resolvedImports, qualifiedResults, facts) } => tables
+    tables
 }

@@ -1,5 +1,36 @@
 # Sollang session handoff
 
+## CURRENT USER HANDOFF — 2026-11-06 / Unit 이름 읽기 수정 이후 (checkpoint28886)
+
+사용자가 다른 세션 재개를 위해 기록 후 중지를 요청했다. 목표는 **paused**, 미완료이다.
+**[최신 재시작 안내](SESSION_RESTART_20261106_UNIT_NAME_READ.md)**와
+`artifacts/scratch/resume-20261006-owner-continuation22/session-handoff28886.json`부터 읽는다.
+이 항목이 아래 2026-11-05와 이전 기록보다 우선한다. 이전 Unit `%v2` 실패는 해결됐다.
+로컬·원격 `v0.5` HEAD는 `f2d02a01a4bef0d98ec0341917def56333821dac`로 일치한다.
+Unit 추가 인자 이름 읽기 C858은 `b3255969e`에서 수정했고 C#·Native 14/14,
+Task<Unit> 별도 2/2와 할당·해제 각 2회를 확인했다. 상한 배열·사전 해제 C857도 6/6이다.
+의미 분석 4/4, stdlib 144개 소스 사전 검사, 정적 계약 실패 0을 확인했다.
+안정화 363/854(42.51%), 후보 489·미해결 2; 파일 전체 검토 100/116(86.21%),
+소스 연결 734/734. 원본 0/14·소스 0/7·런타임 0/2708·Stage 0/2,
+동결 stdlib/runtime 6/22(27.27%). 플랫폼·성능 분모는 미확정이다.
+다음은 남은 16개 파일 검토와 전체 목표의 최종 검증이다. 단위 수정 완료로 목표를 끝내지 않는다.
+Slogs 정책·MCP 개선은 운영 반영과 실제 보고 검사까지 4/4이며 새 안내에 근거를 적었다.
+현재 검증 프로세스는 모두 종료됐다. 기존 dirty 변경과 실패·취소 산출물을 보호한다.
+이번 인계 문서는 로컬 미커밋 상태이다. 재개 요청 전 구현·빌드·테스트를 시작하지 않는다.
+
+## CURRENT USER HANDOFF — 2026-11-05 / Unit input ABI (checkpoint28387)
+
+사용자가 다른 세션에서 재개할 수 있도록 인계를 요청했다. 목표는 **paused**이다.
+**[최신 재개 안내](SESSION_RESTART_20261105_UNIT_INPUT.md)**와
+`artifacts/scratch/resume-20261006-owner-continuation22/session-handoff28387.json`부터 읽는다.
+이 항목이 아래 과거 기록보다 우선한다. 현재 경로는 `W:\MyWorks\Sollang`, branch `v0.5`,
+HEAD `8701b76b7957ae7b0a8f110755ba3164a8eed2df`이며 Unit 작업은 미커밋이다.
+C# 일반6/6·라이브러리8/8, 의미 분석4/4, stdlib 사전 검사1/1, SLG CLI 빌드1/1 통과.
+Native primary는 미정의 `%v2` 참조로 실패0/6, Native library는 사용자 중지로 취소2/8.
+초기 중지 보고의1/8보다 최종 실제 취소 기록2/8을 우선한다.
+현재 compiler/LLVM 프로세스는 관측되지 않았다. 재개 요청 전 빌드·테스트를 시작하지 않는다.
+인계 작업에서는 커밋·푸시·태그를 만들지 않았다. 기존 dirty 변경과 실패·취소 산출물을 보호한다.
+
 ## CURRENT USER HANDOFF — 2026-10-21 (checkpoint11488)
 
 User explicitly requested saving work for another session. Work is paused, not complete. Do not start builds/tests until the user resumes. This section supersedes all older checkpoints below. One agent only. Preserve the dirty worktree. No commit or push was requested or performed for this handoff. Do not edit/stage/delete `CODEX_RELOAD_HANDOFF_20261002.json`.

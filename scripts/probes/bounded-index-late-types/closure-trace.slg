@@ -1,0 +1,28 @@
+namespace sollang.compiler.probes.bounded_index_closure
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionIds
+import sollang.compiler.ir.typed as typedIr
+import sys.file as file
+
+main {
+    "W:/MyWorks/Sollang/scripts/probes/bounded-index-late-types/generic-array.slg" -> file.mapText => fixture
+    [Text; ~] => sources!
+    sources! -> push(fixture -> slice(0, fixture -> len))
+    sources! -> semanticContext.prepare -> expressionIds.resolveCallContext => callContext
+    callContext.prepared => prepared
+    callContext.types => resolved!
+    prepared -> typedIr.lowerResolvedContext(resolved!) => ir!
+    ir! -> typedIr.materializeGenericClosure(prepared, resolved!) => instances
+    instances -> each instance {
+        "instance:$(instance.callNode):$(instance.templateNode):$(instance.functionNode):$(instance.status)" -> println
+    }
+    ir! -> typedIr.planResolvedGenericCalls(prepared, resolved!) => plans
+    plans -> each plan {
+        "plan:$(plan.callNode):$(plan.templateNode):$(plan.resultType):$(plan.status)" -> println
+    }
+    0..<(ir! -> len) -> each index {
+        ir![index] => node
+        "node:$index:$(node.kind):$(node.typeId):$(node.typeModule):$(node.typeSymbol):$(node.operand0):$(node.operand1)" -> println
+    }
+}

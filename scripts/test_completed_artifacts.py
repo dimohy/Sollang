@@ -50,6 +50,19 @@ class ArtifactLifecycleTests(unittest.TestCase):
         return subprocess.run(['pwsh', '-NoProfile', '-File', str(Path(__file__).parent / 'Invoke-CompletedArtifactCleanup.ps1'),
                                '-Plan', str(path), '-Execute'], capture_output=True, text=True, encoding='utf-8')
 
+    def test_summary_case_counts_do_not_supply_expected_exits(self):
+        summary = self.repo / 'summary.json'
+        for value in (12, None, {'id': 'sample', 'expectedExit': 7}):
+            with self.subTest(value=value):
+                summary.write_text(json.dumps({'cases': value, 'probeMatrix': value}))
+                record = {'inputHashes': {str(summary): hashlib.sha256(summary.read_bytes()).hexdigest()}}
+                self.assertEqual(policy.expected_build_exit(record, {'id': 'sample'}), 0)
+                self.assertIsNone(policy.expected_build_exit(record, {'id': 'sample'}, default=None))
+        summary.write_text(json.dumps({'cases': 12, 'probeMatrix': [{'id': 'sample', 'expectedExit': 7}]}))
+        record = {'inputHashes': {str(summary): hashlib.sha256(summary.read_bytes()).hexdigest()}}
+        self.assertEqual(policy.expected_build_exit(record, {'id': 'sample'}), 7)
+        self.assertEqual(policy.expected_build_exit(record, {'id': 'different'}), 0)
+
     def test_completed_stable_output(self):
         self.output()
         self.assertEqual(self.plan()['files'], 3)  # Reuse requires explicit ownership.
@@ -384,6 +397,55 @@ class ArtifactLifecycleTests(unittest.TestCase):
         emitted.write_text(json.dumps({'cases': [{'id': 'io', 'emittedLlvm': True,
                                                  'expectedEmittedRuntimeExit': 0}]}))
         self.assertFalse(policy.completed(record))
+
+    def test_observed_results_do_not_supply_exit_contracts(self):
+        contract = self.repo / 'runtime-contract.json'
+        observation = self.repo / 'checked-result.json'
+        contract.write_text(json.dumps({'cases': [{'id': 'io', 'exit': 1,
+                                                  'expectedRuntimeExit': 1}]}))
+        observation.write_text(json.dumps({'status': 'passed', 'completed': 1, 'total': 1,
+            'inputHashes': {}, 'cases': [{'id': 'io', 'passed': True,
+            'expectedBuildExit': 0, 'buildExit': 0, 'runExit': 0,
+            'expectedRuntimeExit': 0, 'nativeRunExit': 1,
+            'expectedEmittedRuntimeExit': 1}]}))
+        record = {'inputHashes': {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                                 for p in (observation, contract)}}
+        row = {'id': 'io'}
+        for name, actual, expected in [
+                ('build', policy.expected_build_exit(record, row), 1),
+                ('runtime', policy.expected_runtime_exit(record, row), 1),
+                ('emitted', policy.expected_runtime_exit(record, row, emitted=True), 0)]:
+            with self.subTest(name=name):
+                self.assertEqual(actual, expected)
+
+    def test_observed_results_cannot_authorize_nonzero_success(self):
+        observation = self.repo / 'observed-result.json'
+        observation.write_text(json.dumps({'status': 'passed', 'completed': 1, 'total': 1,
+            'inputHashes': {}, 'cases': [{'id': 'io', 'passed': True,
+            'expectedBuildExit': 1, 'buildExit': 1, 'expectedRuntimeExit': 1,
+            'runExit': 1, 'emittedLlvm': True, 'expectedEmittedRuntimeExit': 1}]}))
+        record = {'inputHashes': {str(observation): hashlib.sha256(observation.read_bytes()).hexdigest()}}
+        row = {'id': 'io'}
+        for name, actual in [
+                ('build', policy.expected_build_exit(record, row)),
+                ('runtime', policy.expected_runtime_exit(record, row)),
+                ('emitted', policy.expected_runtime_exit(record, row, emitted=True))]:
+            with self.subTest(name=name):
+                self.assertEqual(actual, 0)
+
+    def test_native_exit_does_not_request_emitted_program_exit(self):
+        native = self.repo / 'native-contract.json'
+        checked = self.repo / 'checked-contract.json'
+        native.write_text(json.dumps({'cases': [{'id': 'io', 'exit': 0, 'expectedRuntimeExit': 1}]}))
+        checked.write_text(json.dumps({'cases': [{'id': 'io', 'exit': 0, 'emittedLlvm': True,
+                                                 'expectedEmittedRuntimeExit': 1}]}))
+        record = {'status': 'passed', 'inputsStable': True, 'processesStopped': True,
+                  'completed': 1, 'total': 1,
+                  'inputHashes': {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                                  for p in (native, checked)},
+                  'cases': [{'id': 'io', 'passed': True, 'buildExit': 0, 'runExit': 1}]}
+        self.assertEqual(policy.expected_runtime_exit(record, record['cases'][0]), 1)
+        self.assertTrue(policy.completed(record))
 
     def test_expected_negative_contract_is_completed(self):
         import hashlib

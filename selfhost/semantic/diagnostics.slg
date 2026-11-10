@@ -676,6 +676,32 @@ diagnosticFunctionOrigin package: ref analysis.PackageAnalysis, sourceModule: In
     -1
 }
 
+# An array finishes inference and layout admission for one element before
+# examining the next. Preserve that order before collapsing an initializer
+# into its lexical binding; diagnostics inside the same element keep their
+# existing nested-inference and literal-range decisions.
+arrayDiagnosticOrder package: ref analysis.PackageAnalysis, sourceModule: Int, firstAst: Int, secondAst: Int -> Int {
+    package.ranges[sourceModule] => range
+    firstAst >= 0 and firstAst < range.astCount and secondAst >= 0 and secondAst < range.astCount
+        -> unless { -1 -> return }
+    firstAst => first!
+    first! >= 0 -> while {
+        package.nodes[range.astStart + first!].parent => owner
+        owner >= 0 and package.nodes[range.astStart + owner].kind == 37
+            -> if {
+                secondAst => second!
+                second! >= 0 and package.nodes[range.astStart + second!].parent != owner
+                    -> while { package.nodes[range.astStart + second!].parent => second! }
+                second! >= 0 and second! != first! -> if {
+                    package.nodes[range.astStart + first!].start < package.nodes[range.astStart + second!].start
+                        -> if { 1 -> return } else { 0 -> return }
+                }
+            }
+        owner => first!
+    }
+    -1
+}
+
 # Function bodies precede main. Within a body, initializer errors precede a
 # collision at that same statement; distinct statements retain source order.
 public diagnosticOriginBefore package: ref analysis.PackageAnalysis, sourceModule: Int, astNode: Int, otherSource: Int, otherAst: Int -> Bool {
@@ -688,6 +714,8 @@ public diagnosticOriginBefore package: ref analysis.PackageAnalysis, sourceModul
     package.ranges[sourceModule] => range
     function >= 0 and otherFunction >= 0 and function != otherFunction
         -> if { package.nodes[range.astStart + function].start < package.nodes[range.astStart + otherFunction].start -> return }
+    package -> arrayDiagnosticOrder(sourceModule, astNode, otherAst) => arrayOrder
+    arrayOrder >= 0 -> if { arrayOrder == 1 -> return }
     package -> diagnosticBindingOrigin(sourceModule, astNode) => origin
     package -> diagnosticBindingOrigin(otherSource, otherAst) => otherOrigin
     package.nodes[range.astStart + origin].start < package.nodes[range.astStart + otherOrigin].start
@@ -902,6 +930,20 @@ arrayElementUsesNumericLiteralContext package: ref analysis.PackageAnalysis, typ
         and (((symbol >= 2 and symbol <= 14) and not floating) or symbol == 20 or symbol == 21)
 }
 
+arrayElementDiagnosticToken package: ref analysis.PackageAnalysis, sourceModule: Int, valueAst: Int -> Int {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + valueAst] => value
+    package -> semanticContext.indexExpressionSourceAsts => sourceAsts
+    package -> expressionDiagnosticOffset(sourceAsts, sourceModule, valueAst) => offset
+    value.firstToken => token!
+    token! < value.firstToken + value.tokenCount -> while {
+        package.tokens[range.tokenStart + token!].span.start == offset
+            -> if { token! -> return }
+        token! + 1 => token!
+    }
+    value.firstToken
+}
+
 firstArrayLiteralOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], previous: BindingDeclarationDiagnostic -> BindingDeclarationDiagnostic {
     previous => selected!
     [Int; ~] => firstChild!
@@ -958,7 +1000,8 @@ firstArrayLiteralOperandDiagnostic prepared: ref semanticContext.SemanticSnapsho
                                         and not contextualLiteral and not (resolved.types -> indexedOperandTypesMatch(actual!, expected!))
                                         and (prepared.package -> diagnosticOriginBefore(range.sourceModule, element! - range.astStart, selected!.sourceModule, selected!.valueAst))
                                         -> if {
-                                            BindingDeclarationDiagnostic { code: 15, sourceModule: range.sourceModule, bindingAst: arrayAst!, valueAst: element! - range.astStart, nameToken: value.firstToken, expectedTypeId: expected!, actualTypeId: actual! } => selected!
+                                            prepared.package -> arrayElementDiagnosticToken(range.sourceModule, element! - range.astStart) => locationToken
+                                            BindingDeclarationDiagnostic { code: 15, sourceModule: range.sourceModule, bindingAst: arrayAst!, valueAst: element! - range.astStart, nameToken: locationToken, expectedTypeId: expected!, actualTypeId: actual! } => selected!
                                         }
                                 }
                         }
@@ -3387,6 +3430,18 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
             contextualSource => source!
             contextualAst => location!
         }
+    # The failing element must finish inference before its array type check.
+    # An error from another element retains the source-order comparison above.
+    (contextualCode == 40 or contextualCode == 71 or contextualCode == 77)
+        and contextualSource >= 0 and selected! == 5 and binding.code == 15
+        and binding.sourceModule == contextualSource
+        and (binding.valueAst == contextualAst
+        or (package -> declarationAncestor(contextualSource, binding.valueAst, contextualAst)))
+        -> if {
+            11 => selected!
+            contextualSource => source!
+            contextualAst => location!
+        }
     contextualSource >= 0 and (contextualCode == 47 or contextualCode == 32 or contextualCode == 48)
         -> if {
             -1 => selectedCallAst!
@@ -3604,16 +3659,7 @@ firstTextIntrinsicOperandDiagnostic prepared: ref semanticContext.SemanticSnapsh
 # Only arithmetic/control value edges inherit an integer argument context.
 # The shared value walk stops calls; comparison descendants keep their own types.
 integerArgumentContextContains package: ref analysis.PackageAnalysis, sourceModule: Int, argumentAst: Int, valueAst: Int -> Bool {
-    package.ranges[sourceModule] => range
-    valueAst => ancestor!
-    ancestor! >= 0 and ancestor! < range.astCount
-        -> while {
-            package.nodes[range.astStart + ancestor!] => node
-            node.kind == 18 or node.kind == 19 -> if { false -> return }
-            ancestor! == argumentAst -> if { true -> return }
-            node.parent => ancestor!
-        }
-    false
+    package -> expressionTypeIds.integerValueContextContains(sourceModule, argumentAst, valueAst)
 }
 
 # Check committed binary contexts and every concrete generic instance before
@@ -3645,6 +3691,40 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
             }
             ast! + 1 => ast!
         }
+    }
+    # Type admission and literal bounds consume the same source-owned array
+    # element contracts. A binary element is not itself a numeric literal;
+    # validate its contextual integer leaves before LLVM can truncate them.
+    [Int; ~] => typeByAst!
+    prepared.package.nodes -> each node { typeByAst! -> push(-1) }
+    resolved.expressions -> each expression {
+        expression.status == 0 and expression.sourceModule >= 0
+            and expression.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[expression.sourceModule] => range
+                expression.astNode >= 0 and expression.astNode < range.astCount
+                    -> if { expression.typeId => typeByAst![range.astStart + expression.astNode] }
+            }
+    }
+    prepared.package -> arrayNumericDiagnosticContexts(resolved, typeByAst!, firstChild!, nextChild!) => arrayContexts
+    arrayContexts -> each context {
+        resolved.types[context.expectedTypeId] => expected
+        expected.symbol -> typeIds.canonicalBuiltinSymbol => symbol
+        expected.kind == 1 and expected.origin == 1 and symbol >= 2 and symbol <= 14
+            and (prepared -> declarationBodyIsActive(resolved, context.sourceModule, context.valueAst))
+            -> if {
+                prepared.package.ranges[context.sourceModule] => range
+                prepared.package -> expressionTypeIds.contextualNumericValueAsts(firstChild!, nextChild!, range.astStart + context.valueAst, true) => values
+                values -> each global {
+                    prepared.package -> expressionTypeIds.integerValueContextContains(context.sourceModule, context.valueAst, global - range.astStart)
+                        -> if {
+                            prepared -> numericCallLiteralAt(context.sourceModule, global - range.astStart, symbol, pointerBitWidth) => candidate
+                            candidate.code > 0 and candidate.code != 3
+                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
+                                -> if { candidate => selected! }
+                        }
+                }
+            }
     }
     # A mutable rebind supplies its original owner's context before the value
     # is inferred. Validate the same terminal value edges used by inference;
@@ -4090,7 +4170,8 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
             resolved.types[argument.mismatchActualTypeId] => actual
             expected.kind == 7 and expected.origin == 4 and expected.symbol == 6
                 and not (actual.kind == 7 and actual.origin == 4 and actual.symbol == 6) => dequeMismatch
-            (expected.kind == 6 and actual.kind != 6) or dequeMismatch
+            expected.kind == 12 and actual.kind != 12 => boundedArrayMismatch
+            (expected.kind == 6 and actual.kind != 6) or dequeMismatch or boundedArrayMismatch
                 -> if {
                     argument.argumentAst => diagnosticAst!
                     argument.parameterOrdinal == 0 and argument.callAst >= 0
@@ -4104,7 +4185,9 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
                             }
                         }
                     NumericCallArgumentDiagnostic {
-                        code: dequeMismatch -> if { 9 } else { 5 }
+                        code: boundedArrayMismatch -> if { 10 } else {
+                            dequeMismatch -> if { 9 } else { 5 }
+                        }
                         sourceModule: argument.sourceModule
                         argumentAst: diagnosticAst!
                         callAst: argument.callAst
@@ -4483,10 +4566,20 @@ public redundantNumericConversions package: ref analysis.PackageAnalysis, resolv
             astIndex! + 1 => astIndex!
         }
     }
+    package -> arrayNumericDiagnosticContexts(resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!) => arrayContexts
+    [Int; ~] => arrayExpected!
+    package.nodes -> each node { arrayExpected! -> push(-1) }
+    arrayContexts -> each context {
+        package.ranges[context.sourceModule] => range
+        context.expectedTypeId => arrayExpected![range.astStart + context.valueAst]
+    }
     package.ranges -> each range {
         0 => astIndex!
         astIndex! < range.astCount -> while {
             range.astStart + astIndex! => globalAst
+            arrayExpected![globalAst] >= 0 -> if {
+                package -> appendContextualNumericWarnings(resolved, range.sourceModule, astIndex!, arrayExpected![globalAst], firstChildByAst!, nextChildByAst!, typeIdByAst!, warnings!)
+            }
             package.nodes[globalAst] => binary
             (binary.kind == 18 or binary.kind == 19 or binary.kind == 20 or binary.kind == 21)
                 and resolved.activeDeclarationBodyByAst[globalAst]
@@ -4513,10 +4606,10 @@ public redundantNumericConversions package: ref analysis.PackageAnalysis, resolv
                                                 package -> expressionTypeIds.contextualNumericOperand(range.astStart + rightAst, firstChildByAst!, nextChildByAst!) => rightContextual
                                                 leftLiteral >= 0 and rightLiteral < 0 and not rightContextual
                                                     -> if {
-                                                        warnings! -> push(RedundantNumericConversion { sourceModule: range.sourceModule, conversionAst: leftAst, literalAst: leftLiteral, typeSymbol: operandType.symbol })
+                                                        package -> appendContextualNumericWarning(resolved, range.sourceModule, leftAst, leftTypeId, leftTypeId, firstChildByAst!, nextChildByAst!, typeIdByAst!, warnings!)
                                                     }
                                                 rightLiteral >= 0 and not leftContextual -> if {
-                                                    warnings! -> push(RedundantNumericConversion { sourceModule: range.sourceModule, conversionAst: rightAst, literalAst: rightLiteral, typeSymbol: operandType.symbol })
+                                                    package -> appendContextualNumericWarning(resolved, range.sourceModule, rightAst, rightTypeId, rightTypeId, firstChildByAst!, nextChildByAst!, typeIdByAst!, warnings!)
                                                 }
                                             }
                                     }
@@ -5611,24 +5704,73 @@ firstRepeatBlockDiagnostic prepared: ref semanticContext.SemanticSnapshot, resol
 # The call resolver owns whether an expected input was known before inference.
 # Reuse contextual value traversal, excluding comparison operands, which infer
 # independently even when their enclosing call expects an integer.
+# Reconstruct only externally supplied array contracts. Shared array context
+# selection then distinguishes those contracts from the first inferred element.
+arrayNumericDiagnosticContexts package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~] -> [expressionTypeIds.ArrayNumericValueContext; ~] {
+    [Int; ~] => outer!
+    package.nodes -> each node { outer! -> push(-1) }
+    resolved.callArguments -> each argument {
+        argument.contextualInput and argument.sourceModule >= 0 and argument.argumentAst >= 0
+            -> if {
+                package.ranges[argument.sourceModule] => range
+                argument.expectedTypeId => outer![range.astStart + argument.argumentAst]
+            }
+    }
+    package -> nominalFieldExpectedTypeIds(resolved, typeByAst) => fields
+    0 => global!
+    global! < (package.nodes -> len) -> while {
+        fields[global!] >= 0 and firstChild[global!] >= 0
+            -> if {
+                fields[global!] => outer![firstChild[global!]]
+            }
+        global! + 1 => global!
+    }
+    package -> semanticContext.indexBindingValueAsts => values
+    package.ranges -> each range {
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            range.symbolStart + symbolIndex! => globalSymbol
+            package.symbols[globalSymbol] => symbol
+            symbol.typeNode >= 0 and symbol.typeNode < range.astCount and values[globalSymbol] >= 0
+                -> if {
+                    resolved.referenceIndexByTypeAst[range.astStart + symbol.typeNode] => reference
+                    reference >= 0 and resolved.references[reference].status == 0
+                        -> if {
+                            resolved.references[reference].typeId => outer![values[globalSymbol]]
+                        }
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    }
+    package -> expressionTypeIds.arrayNumericValueContexts(resolved.types, resolved.references, typeByAst, firstChild, nextChild, outer!)
+}
+
 contextualArithmeticArgumentDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], sourceAsts: ref [Int; ~] -> ExpressionOperandDiagnostic {
     ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
-    resolved.callArguments -> each binding {
-        binding.contextualInput and binding.expectedTypeId >= 0 and binding.expectedTypeId < (resolved.types -> len)
+    package -> arrayNumericDiagnosticContexts(resolved, typeByAst, firstChild, nextChild) => arrays
+    [expressionTypeIds.ArrayNumericValueContext; ~] => contexts!
+    resolved.callArguments -> each argument {
+        argument.contextualInput -> if {
+            contexts! -> push(expressionTypeIds.ArrayNumericValueContext { sourceModule: argument.sourceModule, valueAst: argument.argumentAst, expectedTypeId: argument.expectedTypeId })
+        }
+    }
+    arrays -> each context { contexts! -> push(context) }
+    contexts! -> each binding {
+        binding.expectedTypeId >= 0 and binding.expectedTypeId < (resolved.types -> len)
             and binding.sourceModule >= 0 and binding.sourceModule < (package.ranges -> len)
             -> if {
                 resolved.types[binding.expectedTypeId] => expected
                 expected.kind == 1 and expected.origin == 1 and expected.symbol >= 2 and expected.symbol <= 14
                     -> if {
                         package.ranges[binding.sourceModule] => range
-                        binding.argumentAst >= 0 and binding.argumentAst < range.astCount
-                            and (prepared -> declarationBodyIsActive(resolved, binding.sourceModule, binding.argumentAst))
+                        binding.valueAst >= 0 and binding.valueAst < range.astCount
+                            and (prepared -> declarationBodyIsActive(resolved, binding.sourceModule, binding.valueAst))
                             -> if {
-                                package -> expressionTypeIds.contextualNumericValueAsts(firstChild, nextChild, range.astStart + binding.argumentAst, true) => values
+                                package -> expressionTypeIds.contextualNumericValueAsts(firstChild, nextChild, range.astStart + binding.valueAst, true) => values
                                 values -> each global {
                                     package.nodes[global] => binary
                                     binary.kind == 20 or binary.kind == 21 -> if {
-                                        package -> integerArgumentContextContains(binding.sourceModule, binding.argumentAst, global - range.astStart) => contextual
+                                        package -> integerArgumentContextContains(binding.sourceModule, binding.valueAst, global - range.astStart) => contextual
                                         firstChild[global] => left
                                         left >= 0 -> if { nextChild[left] } else { -1 } => right
                                         contextual and left >= 0 and right >= 0 and nextChild[right] < 0
@@ -5992,7 +6134,8 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                                             package -> arrayElementUsesNumericLiteralContext(resolved.types, firstChildByAst!, elementGlobal, arrayType.first, binary.sourceModule) => contextualLiteral
                                             not contextualLiteral and not (resolved.types -> indexedOperandTypesMatch(actual!, arrayType.first))
                                                 -> if {
-                                                    ExpressionOperandDiagnostic { code: 43, sourceModule: binary.sourceModule, astNode: binary.astNode, operandAst: element.astNode, operatorKind: -1, locationOffset: package.nodes[elementGlobal].start, operandTypeSymbol: actual!, operandTypeId: -1, firstTypeId: arrayType.first } => candidate
+                                                    package -> expressionDiagnosticOffset(sourceAstByExpression, binary.sourceModule, element.astNode) => elementOffset
+                                                    ExpressionOperandDiagnostic { code: 43, sourceModule: binary.sourceModule, astNode: binary.astNode, operandAst: element.astNode, operatorKind: -1, locationOffset: elementOffset, operandTypeSymbol: actual!, operandTypeId: -1, firstTypeId: arrayType.first } => candidate
                                                     package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
                                                         -> if { candidate => selected! }
                                                 }

@@ -2373,7 +2373,7 @@ sealContextualNominalDictionaryOperand nodes: mut [TypedIrNode; ~], receiverType
 # Kind-24 indexed assignment stores its value and key as operands, not its
 # dictionary receiver. Recover the writable owner by exact source name,
 # function owner, and lexical visibility before borrowing its declared type.
-contextualDictionaryAssignmentOwner nodes: ref [TypedIrNode; ~], assignmentIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Int {
+contextualDictionaryAssignmentOwner nodes: ref [TypedIrNode; ~], assignmentIndex: Int, prepared: ref semanticContext.SemanticSnapshot, queryIndex: ref SourceValueQueryIndex -> Int {
     nodes[assignmentIndex] => assignment
     assignment.sourceModule < 0 or assignment.sourceModule >= (prepared.package.ranges -> len)
         -> if { -1 -> return }
@@ -2389,60 +2389,81 @@ contextualDictionaryAssignmentOwner nodes: ref [TypedIrNode; ~], assignmentIndex
         -> while { nodes[assignmentScope!].parent => assignmentScope! }
     -1 => ownerIndex!
     UIntSize(0) => ownerStart!
-    0 => candidateIndex!
-    candidateIndex! < assignmentIndex -> while {
-        nodes[candidateIndex!] => candidate
-        ((candidate.kind == 17 and candidate.flags == 1)
-            or (candidate.kind == 10 and candidate.flags / 2 % 2 == 1))
-            and candidate.sourceModule == assignment.sourceModule
-            and candidate.payloadToken >= 0 and candidate.payloadToken < range.tokenCount
-            and candidate.astNode >= 0 and candidate.astNode < range.astCount
-            and assignment.astNode >= 0 and assignment.astNode < range.astCount
-            -> if {
-                prepared.package.nodes[range.astStart + candidate.astNode].start => candidateStart
-                prepared.package.nodes[range.astStart + assignment.astNode].start => assignmentStart
-                candidate.parent => candidateOwner!
-                candidateOwner! >= 0 and nodes[candidateOwner!].kind != 0 and nodes[candidateOwner!].kind != 1 and nodes[candidateOwner!].kind != 11
-                    -> while { nodes[candidateOwner!].parent => candidateOwner! }
-                candidateOwner! == assignmentOwner! => sameOwner!
-                candidate.kind == 10 and assignmentOwner! >= 0 and nodes[assignmentOwner!].kind == 1 and nodes[assignmentOwner!].parent == candidateOwner!
-                    -> if { true => sameOwner! }
-                sameOwner! -> if {
-                    candidate.parent => candidateScope!
-                    candidateScope! >= 0 and nodes[candidateScope!].kind != 0 and nodes[candidateScope!].kind != 1 and nodes[candidateScope!].kind != 11 and nodes[candidateScope!].kind != 19
-                        -> while { nodes[candidateScope!].parent => candidateScope! }
-                    false => visible!
-                    assignmentScope! => visibleScope!
-                    visibleScope! >= 0 and not visible! -> while {
-                        visibleScope! == candidateScope! -> if { true => visible! }
-                        nodes[visibleScope!].parent => visibleScope!
-                        visibleScope! >= 0 and nodes[visibleScope!].kind != 0 and nodes[visibleScope!].kind != 1 and nodes[visibleScope!].kind != 11 and nodes[visibleScope!].kind != 19
-                            -> while { nodes[visibleScope!].parent => visibleScope! }
+    queryIndex.starts[assignment.sourceModule] => position!
+    position! < queryIndex.starts[assignment.sourceModule] + queryIndex.counts[assignment.sourceModule]
+        and queryIndex.entries[position!] < assignmentIndex
+        -> while {
+            queryIndex.entries[position!] => candidateGlobalIndex
+            nodes[candidateGlobalIndex] => candidate
+            ((candidate.kind == 17 and candidate.flags == 1)
+                or (candidate.kind == 10 and candidate.flags / 2 % 2 == 1))
+                and candidate.sourceModule == assignment.sourceModule
+                and candidate.payloadToken >= 0 and candidate.payloadToken < range.tokenCount
+                and candidate.astNode >= 0 and candidate.astNode < range.astCount
+                and assignment.astNode >= 0 and assignment.astNode < range.astCount
+                -> if {
+                    prepared.package.nodes[range.astStart + candidate.astNode].start => candidateStart
+                    prepared.package.nodes[range.astStart + assignment.astNode].start => assignmentStart
+                    candidate.parent => candidateOwner!
+                    candidateOwner! >= 0 and nodes[candidateOwner!].kind != 0 and nodes[candidateOwner!].kind != 1 and nodes[candidateOwner!].kind != 11
+                        -> while { nodes[candidateOwner!].parent => candidateOwner! }
+                    candidateOwner! == assignmentOwner! => sameOwner!
+                    candidate.kind == 10 and assignmentOwner! >= 0 and nodes[assignmentOwner!].kind == 1 and nodes[assignmentOwner!].parent == candidateOwner!
+                        -> if { true => sameOwner! }
+                    sameOwner! -> if {
+                        candidate.parent => candidateScope!
+                        candidateScope! >= 0 and nodes[candidateScope!].kind != 0 and nodes[candidateScope!].kind != 1 and nodes[candidateScope!].kind != 11 and nodes[candidateScope!].kind != 19
+                            -> while { nodes[candidateScope!].parent => candidateScope! }
+                        false => visible!
+                        assignmentScope! => visibleScope!
+                        visibleScope! >= 0 and not visible! -> while {
+                            visibleScope! == candidateScope! -> if { true => visible! }
+                            nodes[visibleScope!].parent => visibleScope!
+                            visibleScope! >= 0 and nodes[visibleScope!].kind != 0 and nodes[visibleScope!].kind != 1 and nodes[visibleScope!].kind != 11 and nodes[visibleScope!].kind != 19
+                                -> while { nodes[visibleScope!].parent => visibleScope! }
+                        }
+                        prepared.package.tokens[range.tokenStart + candidate.payloadToken] => candidateName
+                        assignmentName.span.length == candidateName.span.length => sameName!
+                        UIntSize(0) => nameByte!
+                        sameName! and nameByte! < assignmentName.span.length
+                            -> while {
+                                prepared.package.sources[assignment.sourceModule] -> byte(assignmentName.span.start + nameByte!) => assignmentByte
+                                prepared.package.sources[assignment.sourceModule] -> byte(candidateName.span.start + nameByte!) => candidateByte
+                                assignmentByte != candidateByte -> if { false => sameName! }
+                                nameByte! + 1 => nameByte!
+                            }
+                        sameName! and visible! and candidateStart < assignmentStart
+                            and (ownerIndex! < 0 or candidateStart >= ownerStart!)
+                            -> if {
+                                candidateGlobalIndex => ownerIndex!
+                                candidateStart => ownerStart!
+                            }
                     }
-                    prepared.package.tokens[range.tokenStart + candidate.payloadToken] => candidateName
-                    assignmentName.span.length == candidateName.span.length => sameName!
-                    UIntSize(0) => nameByte!
-                    sameName! and nameByte! < assignmentName.span.length
-                        -> while {
-                            prepared.package.sources[assignment.sourceModule] -> byte(assignmentName.span.start + nameByte!) => assignmentByte
-                            prepared.package.sources[assignment.sourceModule] -> byte(candidateName.span.start + nameByte!) => candidateByte
-                            assignmentByte != candidateByte -> if { false => sameName! }
-                            nameByte! + 1 => nameByte!
-                        }
-                    sameName! and visible! and candidateStart < assignmentStart
-                        and (ownerIndex! < 0 or candidateStart >= ownerStart!)
-                        -> if {
-                            candidateIndex! => ownerIndex!
-                            candidateStart => ownerStart!
-                        }
                 }
-            }
-        candidateIndex! + 1 => candidateIndex!
-    }
+            position! + 1 => position!
+        }
     ownerIndex!
 }
 
+selectContextualDictionaryAssignmentOwners nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
+    prepared.package.ranges -> sourceValueQueryIndex(nodes) => queryIndex
+    [Int; ~] => owners!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => operation
+        -1 => owner!
+        operation.kind == 24 and operation.operand1 >= 0 and operation.operand1 < (nodes -> len)
+            -> if {
+                nodes -> contextualDictionaryAssignmentOwner(index!, prepared, queryIndex) => owner!
+            }
+        owners! -> push(owner!)
+        index! + 1 => index!
+    }
+    owners!
+}
+
 normalizeResolvedContextualTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], frozenRecursiveTypeByAst: ref [Int; ~], recursiveReferences: ref [typeIds.TypeReference; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
+    nodes -> selectContextualDictionaryAssignmentOwners(prepared) => dictionaryAssignmentOwners
     # Dictionary put arguments and index keys share the declared key/value
     # types. Their contextual record syntax otherwise remains a dictionary IR.
     0 => dictionaryOperationIndex!
@@ -2472,7 +2493,7 @@ normalizeResolvedContextualTypes nodes: mut [TypedIrNode; ~], prepared: ref sema
             }
         operation.kind == 24 and operation.operand1 >= 0 and operation.operand1 < (nodes -> len)
             -> if {
-                nodes -> contextualDictionaryAssignmentOwner(dictionaryOperationIndex!, prepared) => assignmentOwner
+                dictionaryAssignmentOwners[dictionaryOperationIndex!] => assignmentOwner
                 assignmentOwner >= 0 -> if {
                     nodes -> sealContextualNominalDictionaryOperand(nodes[assignmentOwner].typeId, operation.operand1, 0, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
                 }

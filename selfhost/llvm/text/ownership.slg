@@ -294,8 +294,16 @@ interpolationPatternTransferEligible bindingIndex: Int, functionIndex: Int, cont
 
 collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [ownershipCheck.EnumPayloadStoragePlace; ~] {
     [ownershipCheck.EnumPayloadStoragePlace; ~] => transfers!
+    context.ranges -> typedIr.sourceValueQueryIndex(context.ir) => queryIndex
     0 => constructorIndex!
     context.interpolationEnumConstructors -> each constructor {
+        constructor.sourceModule >= 0 and constructor.sourceModule < (context.ranges -> len) => indexedSource
+        0 => sourceStart!
+        Int(context.ir -> len) => sourceCount!
+        indexedSource -> if {
+            queryIndex.starts[constructor.sourceModule] => sourceStart!
+            queryIndex.counts[constructor.sourceModule] => sourceCount!
+        }
         constructor.callNode >= 0 and constructor.argumentNode >= 0
             and constructor.enumTypeId >= 0 and constructor.expectedTypeId >= 0
             and constructor.actualTypeId == constructor.expectedTypeId
@@ -311,9 +319,10 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                     }
                 context.interpolations[rootNode!] => root
                 root.kind == 1 and root.symbol >= 0 -> if {
-                    0 => siteIndex!
-                    siteIndex! < (context.ir -> len) -> while {
-                        context.ir[siteIndex!] => site
+                    0 => siteOffset!
+                    siteOffset! < sourceCount! -> while {
+                        indexedSource -> if { queryIndex.entries[sourceStart! + siteOffset!] } else { siteOffset! } => siteIndex
+                        context.ir[siteIndex] => site
                         site.kind == 2 and site.sourceModule == constructor.sourceModule
                             and site.payloadToken >= 0 and site.payloadToken < context.ranges[constructor.sourceModule].tokenCount
                             and site.payloadToken == context.interpolations[constructor.callNode].sourceToken
@@ -327,9 +336,10 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                                     context.ranges[site.sourceModule] => range
                                     context.nodes[range.astStart + site.astNode].start => siteStart
                                     UIntSize(0) => bindingStart!
-                                    0 => candidateIndex!
-                                    candidateIndex! < (context.ir -> len) -> while {
-                                        context.ir[candidateIndex!] => candidate
+                                    0 => candidateOffset!
+                                    candidateOffset! < sourceCount! -> while {
+                                        indexedSource -> if { queryIndex.entries[sourceStart! + candidateOffset!] } else { candidateOffset! } => candidateIndex
+                                        context.ir[candidateIndex] => candidate
                                         (candidate.kind == 17 or candidate.kind == 29)
                                             and candidate.sourceModule == site.sourceModule and candidate.symbol == root.symbol
                                             and candidate.astNode >= 0 -> if {
@@ -340,11 +350,11 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                                                 candidateFunction! == functionIndex! and candidateStart <= siteStart
                                                     and (bindingIndex! < 0 or candidateStart > bindingStart!)
                                                     -> if {
-                                                        candidateIndex! => bindingIndex!
+                                                        candidateIndex => bindingIndex!
                                                         candidateStart => bindingStart!
                                                     }
                                             }
-                                        candidateIndex! + 1 => candidateIndex!
+                                        candidateOffset! + 1 => candidateOffset!
                                     }
                                 }
                                 bindingIndex! >= 0 -> if {
@@ -354,7 +364,7 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                                     transfers! -> push(ownershipCheck.EnumPayloadStoragePlace {
                                         constructorIndex: constructorIndex!
                                         argumentAst: -1
-                                        siteIr: siteIndex!
+                                        siteIr: siteIndex
                                         callNode: constructor.callNode
                                         argumentNode: constructor.argumentNode
                                         bindingIr: bindingIndex!
@@ -364,7 +374,7 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                                     })
                                 }
                             }
-                        siteIndex! + 1 => siteIndex!
+                        siteOffset! + 1 => siteOffset!
                     }
                 }
             }
@@ -372,9 +382,10 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
             and constructor.enumTypeId >= 0 and constructor.expectedTypeId >= 0
             and constructor.actualTypeId == constructor.expectedTypeId
             -> if {
-                0 => siteIndex!
-                siteIndex! < (context.ir -> len) -> while {
-                    context.ir[siteIndex!] => site
+                0 => siteOffset!
+                siteOffset! < sourceCount! -> while {
+                    indexedSource -> if { queryIndex.entries[sourceStart! + siteOffset!] } else { siteOffset! } => siteIndex
+                    context.ir[siteIndex] => site
                     site.kind == 26 and site.sourceModule == constructor.sourceModule
                         and site.astNode == constructor.callAst and site.operand0 >= 0
                         -> if {
@@ -391,7 +402,7 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                                 context.ir -> ownershipCheck.resolvedPlaceProjectionDepth(site.operand0) => fieldDepth
                                 transfers! -> push(ownershipCheck.EnumPayloadStoragePlace {
                                     constructorIndex: constructorIndex!
-                                    siteIr: siteIndex!
+                                    siteIr: siteIndex
                                     callNode: -1
                                     argumentNode: -1
                                     argumentAst: constructor.argumentAst
@@ -402,7 +413,7 @@ collectEnumPayloadStoragePlaces context: ref emitterContext.EmitContext -> [owne
                                 })
                             }
                         }
-                    siteIndex! + 1 => siteIndex!
+                    siteOffset! + 1 => siteOffset!
                 }
             }
         constructorIndex! + 1 => constructorIndex!

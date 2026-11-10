@@ -203,6 +203,10 @@ public resolve initialPrepared: move context.SemanticSnapshot, loaded: ref Loade
 }
 
 public resolveWithExternalResults initialPrepared: move context.SemanticSnapshot, loaded: ref Loaded, paths: ref [Text; ~], identity: generations.CompilationIdentity, externalResults: ref [expressions.ExpressionTypeId; ~], externalContext: ref [UInt8; ~] -> Result<Resolution, Int> {
+    initialPrepared -> resolveWithExternalResultsWithExecutionMode(loaded, paths, identity, externalResults, externalContext, false)
+}
+
+public resolveWithExternalResultsWithExecutionMode initialPrepared: move context.SemanticSnapshot, loaded: ref Loaded, paths: ref [Text; ~], identity: generations.CompilationIdentity, externalResults: ref [expressions.ExpressionTypeId; ~], externalContext: ref [UInt8; ~], supportsComputePool: Bool -> Result<Resolution, Int> {
     initialPrepared -> fingerprints.capture => fingerprint
     fingerprint.status != 0 -> if { 15 -> Result<Resolution, Int>.Err -> return }
     (externalContext -> len) > 0 -> if {
@@ -255,7 +259,7 @@ public resolveWithExternalResults initialPrepared: move context.SemanticSnapshot
             }
         }
     }
-    prepared! -> context.freeze -> expressions.resolveCallContextSeededWithExternalResults(seeds!, externalResults) -> when {
+    prepared! -> context.freeze -> expressions.resolveCallContextSeededWithExternalResultsWithExecutionMode(seeds!, externalResults, supportsComputePool) -> when {
         Err(code) { (90 + code) -> Result<Resolution, Int>.Err -> return }
         Ok(resolved) {
             [UInt64(6002245308512486735), 2, 0, UInt64(resolved.prepared.package.ranges -> len), UInt64(loadStatus!), UInt64(reused!), UInt64(rejected!), 0, 0; ~] => words!

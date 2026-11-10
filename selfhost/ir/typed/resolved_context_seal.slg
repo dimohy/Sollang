@@ -82,6 +82,168 @@ contextualFunction nodes: ref [TypedIrNode; ~], ranges: ref [analysis.SourceAnal
 }
 
 # Seal contextual and control-flow types after normalization.
+struct EnumSubjectSelection {
+    nodeIndex: Int
+    subjectIndex: Int
+}
+
+selectEnumSubjectPatches nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~] -> [EnumSubjectSelection; ~] {
+    prepared.package.ranges -> sourceValueQueryIndex(nodes) => sourceIndex
+    [EnumSubjectSelection; ~] => selections!
+    0 => enumSubjectTerminalRepairIndex!
+    enumSubjectTerminalRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[enumSubjectTerminalRepairIndex!] => enumSubjectTerminalRepair
+            enumSubjectTerminalRepair.kind == 27
+                and enumSubjectTerminalRepair.sourceModule >= 0
+                -> if {
+                    prepared.package.ranges[enumSubjectTerminalRepair.sourceModule] => enumSubjectTerminalRange
+                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalRepair.astNode] => enumSubjectTerminalMatchAst
+                    enumSubjectTerminalMatchAst.parent => enumSubjectTerminalFlowAst
+                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalFlowAst] => enumSubjectTerminalFlowNode
+                    -1 => enumSubjectTerminalPatternToken!
+                    0 => enumSubjectTerminalPatternSearch!
+                    enumSubjectTerminalPatternSearch! < enumSubjectTerminalRange.astCount
+                        -> while {
+                            prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternSearch!] => enumSubjectTerminalPatternCandidate
+                            enumSubjectTerminalPatternCandidate.parent => enumSubjectTerminalPatternOwner!
+                            enumSubjectTerminalPatternOwner! >= 0
+                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].kind == 70
+                                -> if {
+                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].parent => enumSubjectTerminalPatternOwner!
+                                }
+                            enumSubjectTerminalPatternToken! < 0
+                                and enumSubjectTerminalPatternCandidate.kind == 59
+                                and enumSubjectTerminalPatternCandidate.payloadToken >= 0
+                                and enumSubjectTerminalPatternOwner! >= 0
+                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].kind == 58
+                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].parent == enumSubjectTerminalRepair.astNode
+                                -> if {
+                                    enumSubjectTerminalPatternCandidate.payloadToken => enumSubjectTerminalPatternToken!
+                                }
+                            enumSubjectTerminalPatternSearch! + 1 => enumSubjectTerminalPatternSearch!
+                        }
+                    -1 => enumSubjectTerminalLast!
+                    0 => enumSubjectTerminalLastValueRank!
+                    UIntSize(0) => enumSubjectTerminalLastStart!
+                    UIntSize(0) => enumSubjectTerminalLastEnd!
+                    1000000 => enumSubjectTerminalLastDistance!
+                    sourceIndex.starts[enumSubjectTerminalRepair.sourceModule] => candidatePosition!
+                    candidatePosition! + sourceIndex.counts[enumSubjectTerminalRepair.sourceModule] => candidateEnd
+                    candidatePosition! < candidateEnd
+                        -> while {
+                            sourceIndex.entries[candidatePosition!] => enumSubjectTerminalCandidateSearch
+                            nodes[enumSubjectTerminalCandidateSearch] => enumSubjectTerminalCandidate
+                            enumSubjectTerminalCandidate.sourceModule == enumSubjectTerminalRepair.sourceModule
+                                and enumSubjectTerminalCandidate.astNode >= 0
+                                and enumSubjectTerminalCandidate.astNode < enumSubjectTerminalRange.astCount
+                                and enumSubjectTerminalCandidate.typeId >= 0
+                                and enumSubjectTerminalCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
+                                -> if {
+                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalCandidate.astNode] => enumSubjectTerminalCandidateAst
+                                    enumSubjectTerminalCandidateAst.start + enumSubjectTerminalCandidateAst.length => enumSubjectTerminalCandidateEnd
+                                    enumSubjectTerminalCandidateAst.parent => enumSubjectTerminalAncestor!
+                                    1 => enumSubjectTerminalDistance!
+                                    enumSubjectTerminalCandidate.astNode == enumSubjectTerminalFlowAst => enumSubjectTerminalBelongs!
+                                    enumSubjectTerminalBelongs! -> if { 0 => enumSubjectTerminalDistance! }
+                                    enumSubjectTerminalAncestor! >= 0 and not enumSubjectTerminalBelongs!
+                                        -> while {
+                                            enumSubjectTerminalAncestor! == enumSubjectTerminalFlowAst
+                                                -> if {
+                                                    true => enumSubjectTerminalBelongs!
+                                                } else {
+                                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalAncestor!].parent => enumSubjectTerminalAncestor!
+                                                    enumSubjectTerminalDistance! + 1 => enumSubjectTerminalDistance!
+                                                }
+                                        }
+                                    false => enumSubjectTerminalIsEnum!
+                                    0 => enumSubjectTerminalCandidateValueRank!
+                                    enumSubjectTerminalCandidate.kind == 5 -> if { 1 => enumSubjectTerminalCandidateValueRank! }
+                                    (enumSubjectTerminalCandidate.kind == 5 or enumSubjectTerminalCandidate.kind == 6)
+                                        or enumSubjectTerminalCandidate.kind == 8
+                                        or enumSubjectTerminalCandidate.kind == 9
+                                        or enumSubjectTerminalCandidate.kind == 12
+                                        or enumSubjectTerminalCandidate.kind == 13
+                                        or enumSubjectTerminalCandidate.kind == 14
+                                        or enumSubjectTerminalCandidate.kind == 15
+                                        or enumSubjectTerminalCandidate.kind == 16
+                                        or enumSubjectTerminalCandidate.kind == 18
+                                        or enumSubjectTerminalCandidate.kind == 26
+                                        or enumSubjectTerminalCandidate.kind == 27
+                                        or enumSubjectTerminalCandidate.kind == 29
+                                        or (enumSubjectTerminalCandidate.kind >= 31 and enumSubjectTerminalCandidate.kind <= 43)
+                                        -> if { 2 => enumSubjectTerminalCandidateValueRank! }
+                                    frozenRecursiveSemanticTypes[enumSubjectTerminalCandidate.typeId] => enumSubjectTerminalType
+                                    enumSubjectTerminalType.kind == 7 and enumSubjectTerminalType.origin == 4 and (enumSubjectTerminalType.symbol == 0 or enumSubjectTerminalType.symbol == 1)
+                                        -> if { true => enumSubjectTerminalIsEnum! }
+                                    enumSubjectTerminalType.kind == 1 -> if {
+                                        enumSubjectTerminalType.module => enumSubjectTerminalOwnerSource!
+                                        enumSubjectTerminalType.origin == 2 -> if {
+                                            enumSubjectTerminalType.module >= 0 and enumSubjectTerminalType.module < (prepared.modules -> len)
+                                                -> if { prepared.modules[enumSubjectTerminalType.module].sourceIndex => enumSubjectTerminalOwnerSource! }
+                                        }
+                                        enumSubjectTerminalOwnerSource! >= 0 and enumSubjectTerminalOwnerSource! < (prepared.package.ranges -> len)
+                                            -> if {
+                                                prepared.package.ranges[enumSubjectTerminalOwnerSource!] => enumSubjectTerminalOwnerRange
+                                                enumSubjectTerminalType.symbol >= 0 and enumSubjectTerminalType.symbol < enumSubjectTerminalOwnerRange.symbolCount
+                                                    -> if {
+                                                        prepared.package.symbols[enumSubjectTerminalOwnerRange.symbolStart + enumSubjectTerminalType.symbol] => enumSubjectTerminalDeclaration
+                                                        enumSubjectTerminalDeclaration.astNode >= 0 and prepared.package.nodes[enumSubjectTerminalOwnerRange.astStart + enumSubjectTerminalDeclaration.astNode].kind == 4
+                                                            -> if { true => enumSubjectTerminalIsEnum! }
+                                                    }
+                                            }
+                                    }
+                                    true => enumSubjectTerminalPatternCompatible!
+                                    enumSubjectTerminalPatternToken! >= 0 and enumSubjectTerminalIsEnum!
+                                        -> if {
+                                            prepared.package.tokens[enumSubjectTerminalRange.tokenStart + enumSubjectTerminalPatternToken!] => enumSubjectTerminalPattern
+                                            enumSubjectTerminalRepair.sourceModule -> nominalVariantTagForType(enumSubjectTerminalType, enumSubjectTerminalPattern, prepared) => enumSubjectTerminalPatternTag
+                                            enumSubjectTerminalPatternTag < 0 -> if { false => enumSubjectTerminalPatternCompatible! }
+                                        }
+                                    enumSubjectTerminalCandidate.kind == 6
+                                        and enumSubjectTerminalCandidate.parent == enumSubjectTerminalRepair.parent
+                                        and enumSubjectTerminalCandidateAst.start == enumSubjectTerminalFlowNode.start
+                                        and enumSubjectTerminalCandidateEnd <= enumSubjectTerminalMatchAst.start
+                                        and enumSubjectTerminalPatternCompatible!
+                                        -> if {
+                                            true => enumSubjectTerminalBelongs!
+                                            0 => enumSubjectTerminalDistance!
+                                            3 => enumSubjectTerminalCandidateValueRank!
+                                        }
+                                    enumSubjectTerminalCandidateValueRank! > enumSubjectTerminalLastValueRank! => betterTerminalSubjectRank
+                                    (enumSubjectTerminalCandidateValueRank! == enumSubjectTerminalLastValueRank!
+                                        and (enumSubjectTerminalDistance! < enumSubjectTerminalLastDistance!
+                                        or (enumSubjectTerminalDistance! == enumSubjectTerminalLastDistance!
+                                        and (enumSubjectTerminalCandidateEnd > enumSubjectTerminalLastEnd!
+                                        or (enumSubjectTerminalCandidateEnd == enumSubjectTerminalLastEnd!
+                                        and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalLastStart!))))) => betterTerminalSubjectLocation
+                                    enumSubjectTerminalBelongs!
+                                        and enumSubjectTerminalCandidate.astNode != enumSubjectTerminalFlowAst
+                                        and enumSubjectTerminalIsEnum!
+                                        and enumSubjectTerminalPatternCompatible!
+                                        and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalMatchAst.start
+                                        and (enumSubjectTerminalLast! < 0
+                                        or betterTerminalSubjectRank
+                                        or betterTerminalSubjectLocation) -> if {
+                                            enumSubjectTerminalCandidateSearch => enumSubjectTerminalLast!
+                                            enumSubjectTerminalCandidateValueRank! => enumSubjectTerminalLastValueRank!
+                                            enumSubjectTerminalCandidateAst.start => enumSubjectTerminalLastStart!
+                                            enumSubjectTerminalCandidateEnd => enumSubjectTerminalLastEnd!
+                                            enumSubjectTerminalDistance! => enumSubjectTerminalLastDistance!
+                                        }
+                                }
+                            candidatePosition! + 1 => candidatePosition!
+                        }
+                    enumSubjectTerminalLast! >= 0 and enumSubjectTerminalLast! != enumSubjectTerminalRepair.operand0
+                        -> if {
+                            selections! -> push(EnumSubjectSelection { nodeIndex: enumSubjectTerminalRepairIndex!, subjectIndex: enumSubjectTerminalLast! })
+                        }
+                }
+            enumSubjectTerminalRepairIndex! + 1 => enumSubjectTerminalRepairIndex!
+        }
+    selections!
+}
+
 sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], runtimeSymbols: ref LateRuntimeSymbols -> [Int; ~] {
     # A bare numeric literal in binary arithmetic or comparison adopts the
     # exact type of its independently typed peer. Without this final
@@ -196,156 +358,12 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
     # types exist, select the nearest proven enum value in the exact owning flow
     # before the match AST. This is the same structural ownership rule used
     # during initial lowering, but without stale provisional types.
-    0 => enumSubjectTerminalRepairIndex!
-    enumSubjectTerminalRepairIndex! < (nodes -> len)
-        -> while {
-            nodes[enumSubjectTerminalRepairIndex!] => enumSubjectTerminalRepair!
-            enumSubjectTerminalRepair!.kind == 27
-                and enumSubjectTerminalRepair!.sourceModule >= 0
-                -> if {
-                    prepared.package.ranges[enumSubjectTerminalRepair!.sourceModule] => enumSubjectTerminalRange
-                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalRepair!.astNode] => enumSubjectTerminalMatchAst
-                    enumSubjectTerminalMatchAst.parent => enumSubjectTerminalFlowAst
-                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalFlowAst] => enumSubjectTerminalFlowNode
-                    -1 => enumSubjectTerminalPatternToken!
-                    0 => enumSubjectTerminalPatternSearch!
-                    enumSubjectTerminalPatternSearch! < enumSubjectTerminalRange.astCount
-                        -> while {
-                            prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternSearch!] => enumSubjectTerminalPatternCandidate
-                            enumSubjectTerminalPatternCandidate.parent => enumSubjectTerminalPatternOwner!
-                            enumSubjectTerminalPatternOwner! >= 0
-                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].kind == 70
-                                -> if {
-                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].parent => enumSubjectTerminalPatternOwner!
-                                }
-                            enumSubjectTerminalPatternToken! < 0
-                                and enumSubjectTerminalPatternCandidate.kind == 59
-                                and enumSubjectTerminalPatternCandidate.payloadToken >= 0
-                                and enumSubjectTerminalPatternOwner! >= 0
-                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].kind == 58
-                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].parent == enumSubjectTerminalRepair!.astNode
-                                -> if {
-                                    enumSubjectTerminalPatternCandidate.payloadToken => enumSubjectTerminalPatternToken!
-                                }
-                            enumSubjectTerminalPatternSearch! + 1 => enumSubjectTerminalPatternSearch!
-                        }
-                    -1 => enumSubjectTerminalLast!
-                    0 => enumSubjectTerminalLastValueRank!
-                    UIntSize(0) => enumSubjectTerminalLastStart!
-                    UIntSize(0) => enumSubjectTerminalLastEnd!
-                    1000000 => enumSubjectTerminalLastDistance!
-                    0 => enumSubjectTerminalCandidateSearch!
-                    enumSubjectTerminalCandidateSearch! < (nodes -> len)
-                        -> while {
-                            nodes[enumSubjectTerminalCandidateSearch!] => enumSubjectTerminalCandidate
-                            enumSubjectTerminalCandidate.sourceModule == enumSubjectTerminalRepair!.sourceModule
-                                and enumSubjectTerminalCandidate.astNode >= 0
-                                and enumSubjectTerminalCandidate.astNode < enumSubjectTerminalRange.astCount
-                                and enumSubjectTerminalCandidate.typeId >= 0
-                                and enumSubjectTerminalCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
-                                -> if {
-                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalCandidate.astNode] => enumSubjectTerminalCandidateAst
-                                    enumSubjectTerminalCandidateAst.start + enumSubjectTerminalCandidateAst.length => enumSubjectTerminalCandidateEnd
-                                    enumSubjectTerminalCandidateAst.parent => enumSubjectTerminalAncestor!
-                                    1 => enumSubjectTerminalDistance!
-                                    enumSubjectTerminalCandidate.astNode == enumSubjectTerminalFlowAst => enumSubjectTerminalBelongs!
-                                    enumSubjectTerminalBelongs! -> if { 0 => enumSubjectTerminalDistance! }
-                                    enumSubjectTerminalAncestor! >= 0 and not enumSubjectTerminalBelongs!
-                                        -> while {
-                                            enumSubjectTerminalAncestor! == enumSubjectTerminalFlowAst
-                                                -> if {
-                                                    true => enumSubjectTerminalBelongs!
-                                                } else {
-                                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalAncestor!].parent => enumSubjectTerminalAncestor!
-                                                    enumSubjectTerminalDistance! + 1 => enumSubjectTerminalDistance!
-                                                }
-                                        }
-                                    false => enumSubjectTerminalIsEnum!
-                                    0 => enumSubjectTerminalCandidateValueRank!
-                                    enumSubjectTerminalCandidate.kind == 5 -> if { 1 => enumSubjectTerminalCandidateValueRank! }
-                                    (enumSubjectTerminalCandidate.kind == 5 or enumSubjectTerminalCandidate.kind == 6)
-                                        or enumSubjectTerminalCandidate.kind == 8
-                                        or enumSubjectTerminalCandidate.kind == 9
-                                        or enumSubjectTerminalCandidate.kind == 12
-                                        or enumSubjectTerminalCandidate.kind == 13
-                                        or enumSubjectTerminalCandidate.kind == 14
-                                        or enumSubjectTerminalCandidate.kind == 15
-                                        or enumSubjectTerminalCandidate.kind == 16
-                                        or enumSubjectTerminalCandidate.kind == 18
-                                        or enumSubjectTerminalCandidate.kind == 26
-                                        or enumSubjectTerminalCandidate.kind == 27
-                                        or enumSubjectTerminalCandidate.kind == 29
-                                        or (enumSubjectTerminalCandidate.kind >= 31 and enumSubjectTerminalCandidate.kind <= 43)
-                                        -> if { 2 => enumSubjectTerminalCandidateValueRank! }
-                                    frozenRecursiveSemanticTypes[enumSubjectTerminalCandidate.typeId] => enumSubjectTerminalType
-                                    enumSubjectTerminalType.kind == 7 and enumSubjectTerminalType.origin == 4 and (enumSubjectTerminalType.symbol == 0 or enumSubjectTerminalType.symbol == 1)
-                                        -> if { true => enumSubjectTerminalIsEnum! }
-                                    enumSubjectTerminalType.kind == 1 -> if {
-                                        enumSubjectTerminalType.module => enumSubjectTerminalOwnerSource!
-                                        enumSubjectTerminalType.origin == 2 -> if {
-                                            enumSubjectTerminalType.module >= 0 and enumSubjectTerminalType.module < (prepared.modules -> len)
-                                                -> if { prepared.modules[enumSubjectTerminalType.module].sourceIndex => enumSubjectTerminalOwnerSource! }
-                                        }
-                                        enumSubjectTerminalOwnerSource! >= 0 and enumSubjectTerminalOwnerSource! < (prepared.package.ranges -> len)
-                                            -> if {
-                                                prepared.package.ranges[enumSubjectTerminalOwnerSource!] => enumSubjectTerminalOwnerRange
-                                                enumSubjectTerminalType.symbol >= 0 and enumSubjectTerminalType.symbol < enumSubjectTerminalOwnerRange.symbolCount
-                                                    -> if {
-                                                        prepared.package.symbols[enumSubjectTerminalOwnerRange.symbolStart + enumSubjectTerminalType.symbol] => enumSubjectTerminalDeclaration
-                                                        enumSubjectTerminalDeclaration.astNode >= 0 and prepared.package.nodes[enumSubjectTerminalOwnerRange.astStart + enumSubjectTerminalDeclaration.astNode].kind == 4
-                                                            -> if { true => enumSubjectTerminalIsEnum! }
-                                                    }
-                                            }
-                                    }
-                                    true => enumSubjectTerminalPatternCompatible!
-                                    enumSubjectTerminalPatternToken! >= 0 and enumSubjectTerminalIsEnum!
-                                        -> if {
-                                            prepared.package.tokens[enumSubjectTerminalRange.tokenStart + enumSubjectTerminalPatternToken!] => enumSubjectTerminalPattern
-                                            enumSubjectTerminalRepair!.sourceModule -> nominalVariantTagForType(enumSubjectTerminalType, enumSubjectTerminalPattern, prepared) => enumSubjectTerminalPatternTag
-                                            enumSubjectTerminalPatternTag < 0 -> if { false => enumSubjectTerminalPatternCompatible! }
-                                        }
-                                    enumSubjectTerminalCandidate.kind == 6
-                                        and enumSubjectTerminalCandidate.parent == enumSubjectTerminalRepair!.parent
-                                        and enumSubjectTerminalCandidateAst.start == enumSubjectTerminalFlowNode.start
-                                        and enumSubjectTerminalCandidateEnd <= enumSubjectTerminalMatchAst.start
-                                        and enumSubjectTerminalPatternCompatible!
-                                        -> if {
-                                            true => enumSubjectTerminalBelongs!
-                                            0 => enumSubjectTerminalDistance!
-                                            3 => enumSubjectTerminalCandidateValueRank!
-                                        }
-                                    enumSubjectTerminalCandidateValueRank! > enumSubjectTerminalLastValueRank! => betterTerminalSubjectRank
-                                    (enumSubjectTerminalCandidateValueRank! == enumSubjectTerminalLastValueRank!
-                                        and (enumSubjectTerminalDistance! < enumSubjectTerminalLastDistance!
-                                        or (enumSubjectTerminalDistance! == enumSubjectTerminalLastDistance!
-                                        and (enumSubjectTerminalCandidateEnd > enumSubjectTerminalLastEnd!
-                                        or (enumSubjectTerminalCandidateEnd == enumSubjectTerminalLastEnd!
-                                        and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalLastStart!))))) => betterTerminalSubjectLocation
-                                    enumSubjectTerminalBelongs!
-                                        and enumSubjectTerminalCandidate.astNode != enumSubjectTerminalFlowAst
-                                        and enumSubjectTerminalIsEnum!
-                                        and enumSubjectTerminalPatternCompatible!
-                                        and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalMatchAst.start
-                                        and (enumSubjectTerminalLast! < 0
-                                        or betterTerminalSubjectRank
-                                        or betterTerminalSubjectLocation) -> if {
-                                            enumSubjectTerminalCandidateSearch! => enumSubjectTerminalLast!
-                                            enumSubjectTerminalCandidateValueRank! => enumSubjectTerminalLastValueRank!
-                                            enumSubjectTerminalCandidateAst.start => enumSubjectTerminalLastStart!
-                                            enumSubjectTerminalCandidateEnd => enumSubjectTerminalLastEnd!
-                                            enumSubjectTerminalDistance! => enumSubjectTerminalLastDistance!
-                                        }
-                                }
-                            enumSubjectTerminalCandidateSearch! + 1 => enumSubjectTerminalCandidateSearch!
-                        }
-                    enumSubjectTerminalLast! >= 0 and enumSubjectTerminalLast! != enumSubjectTerminalRepair!.operand0
-                        -> if {
-                            enumSubjectTerminalLast! => enumSubjectTerminalRepair!.operand0
-                            enumSubjectTerminalRepair! => nodes[enumSubjectTerminalRepairIndex!]
-                        }
-                }
-            enumSubjectTerminalRepairIndex! + 1 => enumSubjectTerminalRepairIndex!
-        }
+    nodes -> selectEnumSubjectPatches(prepared, frozenRecursiveSemanticTypes) => enumSubjectSelections
+    enumSubjectSelections -> each selection {
+        nodes[selection.nodeIndex] => selectedNode!
+        selection.subjectIndex => selectedNode!.operand0
+        selectedNode! => nodes[selection.nodeIndex]
+    }
     # A chained control is the canonical subject of the control that follows it.
     # The broad AST/rank repair above can otherwise select the terminal value of
     # the producer's last arm. That value is branch-local and makes region

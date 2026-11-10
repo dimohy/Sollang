@@ -1005,11 +1005,19 @@ The compiler also reports style diagnostics where inference proves a narrower
 source form without changing semantics:
 
 - S001: a numeric constructor repeats the type already supplied by context;
-  in a numeric binary expression, an independently typed operand establishes
-  the type for a literal conversion on the other side. Two explicit literal
-  conversions keep the left as the type anchor and report only the redundant
-  right conversion. A bare numeric literal is contextual and does not make the
-  opposite explicit conversion redundant. A declared numeric call parameter
+  for a generic call, only fixed formal types and types inferred from earlier
+  arguments supply that context. This applies to ordinary calls and additional
+  flow arguments. An argument's own inferred type and completed-call revalidation
+  do not make its required type constructor redundant.
+  In a numeric binary expression without an earlier numeric context, an
+  independently typed operand establishes the type for a literal conversion on
+  the other side. Two explicit literal conversions then keep the left as the
+  type anchor and report only the redundant right conversion. A bare numeric
+  literal is contextual and does not make the opposite explicit conversion
+  redundant. An established array element contract supplies context to matching
+  literal conversions in both arithmetic operands. The first element of an
+  inferred array has no earlier array context; an external element contract
+  applies to that element as well. A declared numeric call parameter
   supplies context to a bare numeric literal, including literal-valued `if`
   branches. Branch context follows the final value recursively through nested
   branches; earlier statements and trailing whitespace or comments do not
@@ -1268,6 +1276,15 @@ returns and compatible enum payloads.
 Numeric literals in declared array returns inherit the element type, including
 readonly array views, before their backing storage is registered. The literal's
 extent and independently typed elements retain their own contracts.
+An external array element contract applies to every source element. Without
+one, the first inferred element establishes the element type for later elements.
+Each element completes inference and type admission before the next element is
+examined. A known integer element type supplies context recursively to arithmetic
+literals and value-control results. Every such literal must fit that integer
+type; independently typed values retain their own types. Comparison operands
+infer independently. A floating element context does not turn an integer binary
+operation into a floating operation. Contextual conversion retains the literal's
+original backing extent.
 Uninstantiated template facts do not create concrete definitions; unrelated
 closed entries in a scratch arena do not establish registry membership.
 Invalid selected type coordinates or dependencies fail preparation with S080.
@@ -3308,8 +3325,12 @@ an effectful callback before emitting the unchanged value. `take<T>` and
 Generic parameters may also be inferred from additional arguments, allowing
 `scan<T, S>` to derive `S` directly from its initial accumulator.
 Ordinary generic calls and user-block calls share recursive inference for
-`Option<T>`, `Result<T, E>`, `Deque<T>`, dictionary key/value types, growable arrays,
-and readonly references. A Deque pattern infers its element only from a Deque;
+`Option<T>`, `Result<T, E>`, `Deque<T>`, dictionary key/value types, growable and
+bounded arrays, and readonly references. A bounded-array template infers its
+element recursively while retaining its declared capacity and storage shape.
+A different capacity fails ordinary concrete argument compatibility; a different
+storage kind fails before element inference. Readonly references preserve these
+same rules for primary and additional arguments. A Deque pattern infers its element only from a Deque;
 shared storage with an array does not make the two factories interchangeable.
 Each argument contributes to the same inference environment;
 conflicting occurrences of a parameter are rejected in argument order. A
@@ -3699,12 +3720,15 @@ Numeric rules:
   the left operand's arithmetic domain, then the right operand's type equality.
   An invalid left domain is diagnosed at that operand's expression location.
   For a direct or additional argument with a known declared integer input type,
-  arithmetic operands instead receive that expected type recursively. Numeric
+  or an array element with a known integer element type, arithmetic operands
+  instead receive that expected type recursively. Numeric
   literals adopt it; independently typed operands retain their own type. An
   incompatible operand reports the expected type at that operand. An operand
   inference or literal-range failure precedes validation of its enclosing
   arithmetic operation. A primary flow source is inferred before call argument
   validation. A generic argument uses only context known before its inference.
+  An ordinary scalar function return annotation alone does not supply this
+  recursive arithmetic context.
 - `*`, `/`, and `%` bind tighter than `+` and `-`; operators are
   left-associative.
 - Integer bindings can be interpolated using invariant decimal display.
@@ -3791,6 +3815,10 @@ generic square-bracket spelling is not accepted.
 Generic call inference uses one environment across the primary and additional
 arguments. That complete environment specializes the input, additional-input,
 and return types before the call result is bound or read by a later expression.
+A helper called inside a generic body uses the caller's type environment for
+its result, dependent bindings, and indexed element types before that body is
+specialized. Bounded array elements and bounded dictionary values follow the
+same rule; the helper's own type parameter cannot remain in the caller's body.
 A provisional inferred binding type containing generic parameters commits the
 concrete producer type before it becomes a mutable storage contract. Once that
 contract is concrete, later normalization preserves its type.
@@ -5342,7 +5370,13 @@ separate operation and does not claim to resolve symlinks by itself.
 ## Generic Binary Scalar I/O
 
 `sys.file` provides a generic writer alongside the legacy sorted-Int64 demo
-API:
+API.
+
+The global `openWriter`, `closeWriter`, `openReader`, and `closeReader` wrappers
+are valid only in user `main`; an ordinary function call is rejected before
+LLVM generation. Scalar `write<T>` remains available in ordinary functions with
+the `File` capability. User functions with the same unqualified names and the
+separate owned-file APIs do not acquire this global-wrapper restriction.
 
 ```sollang
 import sys.file as file
@@ -6787,6 +6821,11 @@ Current backend:
   Effects are read from the signature clause and sorted ordinal UTF-16 without
   examining body text. Synthetic input aliases do not become additional
   parameters. Legacy generic slots retain the first three source generic names.
+  Those compatibility slots do not limit declaration or specialization arity;
+  resolved bindings and additional parameter fields retain every parameter.
+  Generic type identities preserve the named enum spellings for the first three
+  parameters and the decimal builtin identity for later unnamed enum values,
+  consistently with the C# type identity and display-name rules.
   FunctionBlockFields and FunctionGenericFields are generated nested part-order
   rules. They contribute their selected fields without a nested domain label;
   changing part order changes the projection in both compilers, while changing

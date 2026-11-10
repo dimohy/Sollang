@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import importlib.util
+import re
 
 from completed_artifact_plan import initialize_output, assert_build_space
 from verification_contract_lease import VerificationContractLease
@@ -33,6 +34,27 @@ def diagnostics_plans(path, separated, budget):
         if SlowStepDiagnostics(configuration['phases'][phase]).hard_timeout_seconds != timeout:
             raise ValueError('SOURCE_BUILD_DIAGNOSTICS_TIMEOUT_MISMATCH: ' + phase)
     return configuration['phases']
+
+
+def validate_link_output(stdout, compiler_sha256, optimization, maximum_workers):
+    """Validate the linker's actual partition sequence, not its worker ceiling."""
+    lines = stdout.strip().splitlines()
+    if not lines:
+        raise ValueError('SOURCE_LINK_RESULT_INVALID')
+    result = json.loads(lines[-1])
+    if (result.get('status') != 'passed' or result.get('mode') != 'link'
+            or result.get('optimization') != optimization
+            or result.get('maximumWorkers') != maximum_workers
+            or result.get('compilerAssemblySha256') != compiler_sha256
+            or type(result.get('resolvedWorkerLimit')) is not int
+            or not 1 <= result['resolvedWorkerLimit'] <= maximum_workers):
+        raise ValueError('SOURCE_LINK_RESULT_INVALID')
+    progress = lines[:-1]
+    for index, line in enumerate(progress, 1):
+        match = re.fullmatch(r'\[native ([1-9][0-9]*)/([1-9][0-9]*)\] optimized partition', line)
+        if not match or tuple(map(int, match.groups())) != (index, len(progress)):
+            raise ValueError('SOURCE_LINK_PARTITION_OUTPUT_INVALID')
+    return result
 
 
 def managed_reference_inputs(record_path, root=ROOT):
@@ -213,12 +235,8 @@ def main():
                     sha(compiler.with_suffix('.dll')), str(llvm), str(llvm_output), str(product), str(work),
                     optimization, '24'], output / 'link', timeout=budget['linkTimeoutSeconds'], diagnostics=diagnostics('link'))
                 assert done.returncode == 0 and not done.stderr, done.stdout[-2000:] + done.stderr
-                lines = done.stdout.strip().splitlines()
-                assert lines[:-1] == [f'[native {i}/24] optimized partition' for i in range(1, 25)], 'SOURCE_LINK_PARTITION_OUTPUT_INVALID'
-                link_result = json.loads(lines[-1])
-                assert (link_result['status'] == 'passed' and link_result['mode'] == 'link'
-                        and link_result['optimization'] == optimization and link_result['maximumWorkers'] == 24
-                        and link_result['compilerAssemblySha256'] == sha(compiler.with_suffix('.dll'))), 'SOURCE_LINK_RESULT_INVALID'
+                link_result = validate_link_output(
+                    done.stdout, sha(compiler.with_suffix('.dll')), optimization, 24)
                 result.update(phaseMode='explicit-separated-emission-and-production-link',
                               emission=emission, link=link_result, originalCombinedBudgetPassed=False)
             else:

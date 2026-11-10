@@ -59,50 +59,85 @@ if ($unresolved.Count -gt 0) {
 # Generated scalar/value SSA names are stable `%vN` identities. Validate them
 # per function so a definition in a different function cannot mask a missing
 # local producer, while still allowing ordinary LLVM forward references.
-$undefinedSsa = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-$functionBodies = [regex]::Matches($llvm, '(?ms)^define\s+[^\r\n]*?@(?<function>[-a-zA-Z$._0-9]+)\((?<parameters>[^\r\n]*)\)\s*[^\r\n]*\{(?<body>.*?)^\}')
-foreach ($functionBody in $functionBodies) {
-    $bodyLines = $functionBody.Groups['body'].Value -split "`r?`n" | ForEach-Object {
-        # Quoted LLVM strings and trailing comments are data, not SSA uses.
-        ([regex]::Replace($_, '"(?:\\.|[^"\\])*"', '""') -replace ';.*$', '')
-    }
-    $body = $bodyLines -join "`n"
-    $ssaDefinitions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    [regex]::Matches($functionBody.Groups['parameters'].Value, '(?<![-a-zA-Z$._0-9])%(?<name>v\d+)(?![-a-zA-Z$._0-9])') |
-        ForEach-Object { [void]$ssaDefinitions.Add($_.Groups['name'].Value) }
-    [regex]::Matches($body, '(?m)^\s*%(?<name>v\d+)\s*=') |
-        ForEach-Object { [void]$ssaDefinitions.Add($_.Groups['name'].Value) }
-    [regex]::Matches($body, '(?<![-a-zA-Z$._0-9])%(?<name>v\d+)(?![-a-zA-Z$._0-9])') |
-        ForEach-Object {
-            $name = $_.Groups['name'].Value
-            if (-not $ssaDefinitions.Contains($name)) {
-                [void]$undefinedSsa.Add("$($functionBody.Groups['function'].Value):%$name")
+if (-not ('Sollang.Verification.LlvmClosureScanner' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.RegularExpressions;
+
+namespace Sollang.Verification
+{
+    // Keep the guard's patterns and per-function ownership rules in one scan.
+    // Tight .NET loops avoid a PowerShell callback for every LLVM line/value.
+    public static class LlvmClosureScanner
+    {
+        private const RegexOptions Options = RegexOptions.Compiled;
+        private static readonly Regex Bodies = new Regex(@"(?ms)^define\s+[^\r\n]*?@(?<function>[-a-zA-Z$._0-9]+)\((?<parameters>[^\r\n]*)\)\s*[^\r\n]*\{(?<body>.*?)^\}", Options);
+        private static readonly Regex Lines = new Regex(@"\r?\n", Options);
+        private static readonly Regex Quoted = new Regex("\"(?:\\\\.|[^\"\\\\])*\"", Options);
+        private static readonly Regex Comments = new Regex(@";.*$", Options);
+        private static readonly Regex Definitions = new Regex(@"(?m)^\s*%(?<name>v\d+)\s*=", Options);
+        private static readonly Regex Values = new Regex(@"(?<![-a-zA-Z$._0-9])%(?<name>v\d+)(?![-a-zA-Z$._0-9])", Options);
+        private const string NativePattern = @"sollang_native_(?:function_m\d+_s\d+|library_m\d+_a\d+)";
+        private static readonly Regex NativeDefinitions = new Regex(@"(?m)^@(?<symbol>" + NativePattern + @")\s*=", Options);
+        private static readonly Regex NativeUses = new Regex(@"@(?<symbol>" + NativePattern + @")", Options);
+
+        public static string[] FindUndefinedSsa(string llvm)
+        {
+            var undefined = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (Match function in Bodies.Matches(llvm))
+            {
+                var lines = Lines.Split(function.Groups["body"].Value);
+                for (int index = 0; index < lines.Length; index++)
+                    lines[index] = Comments.Replace(Quoted.Replace(lines[index], "\"\""), "");
+                string body = string.Join("\n", lines);
+                var defined = new HashSet<string>(StringComparer.Ordinal);
+                foreach (Match value in Values.Matches(function.Groups["parameters"].Value))
+                    defined.Add(value.Groups["name"].Value);
+                foreach (Match value in Definitions.Matches(body))
+                    defined.Add(value.Groups["name"].Value);
+                foreach (Match value in Values.Matches(body))
+                {
+                    string name = value.Groups["name"].Value;
+                    if (!defined.Contains(name))
+                        undefined.Add(function.Groups["function"].Value + ":%" + name);
+                }
             }
+            return new List<string>(undefined).ToArray();
         }
+
+        public static string[] FindUndefinedNativeGlobals(string llvm, string path)
+        {
+            var defined = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match definition in NativeDefinitions.Matches(llvm))
+                defined.Add(definition.Groups["symbol"].Value);
+            var undefined = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (string line in File.ReadLines(path))
+            {
+                if (line.TrimStart().StartsWith(";", StringComparison.Ordinal)
+                    || line.IndexOf(" c\"", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("@sollang_native_", StringComparison.Ordinal) < 0)
+                    continue;
+                foreach (Match use in NativeUses.Matches(line))
+                {
+                    string symbol = use.Groups["symbol"].Value;
+                    if (!defined.Contains(symbol))
+                        undefined.Add(symbol);
+                }
+            }
+            return new List<string>(undefined).ToArray();
+        }
+    }
 }
+'@
+}
+$undefinedSsa = [Sollang.Verification.LlvmClosureScanner]::FindUndefinedSsa($llvm)
 if ($undefinedSsa.Count -gt 0) {
     throw "sollang compiler verification failure V004: emitted LLVM uses generated SSA values without definitions in the same function: $($undefinedSsa -join ', '). Materialize each scheduled value in its owning control or callback path before consuming it; do not let another function's same-numbered SSA mask the missing producer."
 }
 
-$nativeGlobalPattern = 'sollang_native_(?:function_m\d+_s\d+|library_m\d+_a\d+)'
-$definedNativeGlobals = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-[regex]::Matches($llvm, "(?m)^@(?<symbol>$nativeGlobalPattern)\s*=") |
-    ForEach-Object { [void]$definedNativeGlobals.Add($_.Groups['symbol'].Value) }
-$unresolvedNativeGlobals = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-foreach ($line in [System.IO.File]::ReadLines($LlvmPath)) {
-    $trimmed = $line.TrimStart()
-    if ($trimmed.StartsWith(';', [System.StringComparison]::Ordinal) -or
-        $line.Contains(' c"', [System.StringComparison]::Ordinal)) {
-        continue
-    }
-    [regex]::Matches($line, "@(?<symbol>$nativeGlobalPattern)") |
-        ForEach-Object {
-            $symbol = $_.Groups['symbol'].Value
-            if (-not $definedNativeGlobals.Contains($symbol)) {
-                [void]$unresolvedNativeGlobals.Add($symbol)
-            }
-        }
-}
+$unresolvedNativeGlobals = [Sollang.Verification.LlvmClosureScanner]::FindUndefinedNativeGlobals($llvm, $LlvmPath)
 if ($unresolvedNativeGlobals.Count -gt 0) {
     throw "sollang compiler verification failure V007: emitted LLVM uses native-library state globals without definitions: $($unresolvedNativeGlobals -join ', '). Classify call targets by the exact NativeFunctionDeclaration CST identity, not by the shared bodyless intrinsic flag, and emit every reachable native library/function global before use."
 }

@@ -115,6 +115,8 @@ internal sealed partial class SemanticCompiler
     private int _conditionalDepth;
     private readonly List<SemanticWarning> _warnings = [];
     private readonly HashSet<(string Code, string ModuleName, int Line, int Column)> _warningLocations = [];
+    private readonly HashSet<Expression> _inferredGenericCallArguments = new(ReferenceEqualityComparer.Instance);
+    private bool _suppressRepeatedGenericNumericWarnings;
     private List<MutableBindingDeclaration>? _currentMutableDeclarations;
     private Dictionary<string, MutableBindingDeclaration>? _currentMutableDeclarationsByName;
     private Dictionary<string, FixedLengthArrayCandidate>? _currentFixedLengthArrayCandidates;
@@ -7711,6 +7713,17 @@ internal sealed partial class SemanticCompiler
                 function, inferredTypes, line, column);
             return;
         }
+        if (typeTemplate.StartsWith('[') && typeTemplate.EndsWith(']')
+            && FindBoundedTypeSeparator(typeTemplate) is var boundedArraySeparator
+            && boundedArraySeparator > 1)
+        {
+            if (!_types.IsBoundedArray(actualType))
+                throw Error(line, column, $"expected a bounded array but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[1..boundedArraySeparator], _types.GetBoundedArray(actualType).ElementType,
+                function, inferredTypes, line, column);
+            return;
+        }
         if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
             && typeTemplate.EndsWith("; ~]", StringComparison.Ordinal))
         {
@@ -9375,8 +9388,10 @@ internal sealed partial class SemanticCompiler
         string? allowedOwnedOuterResultName = null)
     {
         var parent = _expressionInferenceContext;
+        var parentWarningSuppression = _suppressRepeatedGenericNumericWarnings;
         var context = ResolveExpressionInferenceContext(bindings, yieldInputType, mutableBindings);
         _expressionInferenceContext = context;
+        _suppressRepeatedGenericNumericWarnings |= _inferredGenericCallArguments.Contains(value);
         try
         {
             return InferContextualValueCore(value, expectedType, functions, bindings, allowReadIntCall,
@@ -9385,6 +9400,7 @@ internal sealed partial class SemanticCompiler
         finally
         {
             _expressionInferenceContext = parent;
+            _suppressRepeatedGenericNumericWarnings = parentWarningSuppression;
         }
     }
 
@@ -13585,20 +13601,8 @@ internal sealed partial class SemanticCompiler
         {
             var argument = target.Arguments[index];
             var parameter = parameters[index];
-            var canContextualize = parameter.TypeTemplate is { } typeTemplate
-                ? names.Where(name => TypeSyntaxReferencesParameter(typeTemplate, name))
-                    .All(inferred.ContainsKey)
-                : names.All(inferred.ContainsKey);
-            var argumentType = canContextualize
-                ? InferContextualValue(argument,
-                    parameter.TypeTemplate is { } contextualTemplate
-                        ? ParseSpecializedFunctionType(contextualTemplate, inferred, argument.Line, argument.Column)
-                        : SubstituteGenericType(parameter.Type, template, inferred),
-                    functions, bindings, allowReadIntCall)
-                : InferExpression(argument, functions, bindings,
-                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
-            InferGenericArgument(parameters[index].TypeTemplate, parameters[index].Type,
-                argumentType, template, inferred, argument.Line, argument.Column);
+            InferGenericCallArgument(template, parameter.TypeTemplate, parameter.Type,
+                argument, inferred, functions, bindings, allowReadIntCall);
         }
         var missing = names.FirstOrDefault(name => !inferred.ContainsKey(name));
         if (missing is not null)
@@ -13639,40 +13643,15 @@ internal sealed partial class SemanticCompiler
 
         var inferredTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var parameterNames = GenericParameterNames(template);
-        var actualType = InferExpression(
-            expression.Arguments[0],
-            functions,
-            bindings,
-            allowPrintCall: false,
-            allowReadIntCall,
-            allowFlowBindingTarget: false);
-        InferGenericArgument(
-            template.InputTypeTemplate,
-            template.InputType,
-            actualType,
-            template,
-            inferredTypes,
-            expression.Arguments[0].Line,
-            expression.Arguments[0].Column);
+        InferGenericCallArgument(template, template.InputTypeTemplate, template.InputType,
+            expression.Arguments[0], inferredTypes, functions, bindings, allowReadIntCall);
         var additionalParameters = template.AdditionalParameters ?? [];
         for (var index = 0; index < additionalParameters.Count; index++)
         {
             var argument = expression.Arguments[index + 1];
-            var argumentType = InferExpression(
-                argument,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
-            InferGenericArgument(
-                additionalParameters[index].TypeTemplate,
-                additionalParameters[index].Type,
-                argumentType,
-                template,
-                inferredTypes,
-                argument.Line,
-                argument.Column);
+            var parameter = additionalParameters[index];
+            InferGenericCallArgument(template, parameter.TypeTemplate, parameter.Type,
+                argument, inferredTypes, functions, bindings, allowReadIntCall);
         }
         var missing = parameterNames.FirstOrDefault(parameter => !inferredTypes.ContainsKey(parameter));
         if (missing is not null)
@@ -13694,6 +13673,38 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             mutableBindings: null,
             template.Name);
+    }
+
+    private void InferGenericCallArgument(
+        BoundFunction template,
+        string? typeTemplate,
+        BoundType? parameterType,
+        Expression argument,
+        Dictionary<string, BoundType> inferred,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        var names = GenericParameterNames(template);
+        BoundType? contextualType = null;
+        if (typeTemplate is not null
+            && names.Where(name => TypeSyntaxReferencesParameter(typeTemplate, name)).All(inferred.ContainsKey))
+        {
+            contextualType = ParseSpecializedFunctionType(typeTemplate, inferred, argument.Line, argument.Column);
+        }
+        else if (typeTemplate is null && parameterType is { } declaredType && names.All(inferred.ContainsKey))
+        {
+            contextualType = SubstituteGenericType(declaredType, template, inferred);
+        }
+        var actualType = contextualType is { } expectedType
+            ? InferContextualValue(argument, expectedType, functions, bindings, allowReadIntCall)
+            : InferExpression(argument, functions, bindings, allowPrintCall: false,
+                allowReadIntCall, allowFlowBindingTarget: false);
+        InferGenericArgument(typeTemplate, parameterType, actualType, template, inferred,
+            argument.Line, argument.Column);
+        // Revalidation uses the resulting environment for compatibility, but
+        // cannot make an argument's own type anchor retrospectively redundant.
+        _inferredGenericCallArguments.Add(argument);
     }
 
     private void InferGenericArgument(
@@ -16859,7 +16870,9 @@ internal sealed partial class SemanticCompiler
 
     private void WarnRedundantNumericType(Expression expression, BoundType expectedType)
     {
-        if (!IsNumericType(expectedType)
+        if (_suppressRepeatedGenericNumericWarnings
+            || _inferredGenericCallArguments.Contains(expression)
+            || !IsNumericType(expectedType)
             || !IsExplicitNumericLiteralConversion(expression, expectedType)
             || expression is not CallExpression conversion)
         {

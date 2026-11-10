@@ -69,7 +69,12 @@ At user-block invocation and yield boundaries, evaluate inputs before binding
 roles and executing callback effects. Source offsets from different declarations
 cannot order these phases; preserve their data dependencies and lexical scopes.
 Generic user-block inputs infer parameters recursively through `Option`,
-`Result`, `Deque`, dictionary key/value types, growable arrays, and readonly references.
+`Result`, `Deque`, dictionary key/value types, growable and bounded arrays, and readonly references.
+Bounded-array inference preserves the declared capacity and inline storage;
+borrowing it through `ref [T; <=N]` does not admit a growable owner or another capacity.
+Inside a generic body, propagate a helper's substituted result through bindings
+and indexing before specializing the caller. Reuse the same dependent-type
+sealing path before body copying and after concrete call publication.
 Use ordinary addressable bindings for `ref T` inputs; a literal or temporary
 does not become borrowable merely because the call has a callback.
 
@@ -93,6 +98,10 @@ invalid child literal before checking the enclosing operation. A primary flow
 source is inferred before its callee supplies argument context. Generic calls
 use only the expected types available before that argument is inferred; preserve
 this decision when restoring semantic owner facts from a cache.
+Apply the same earlier-argument context to ordinary and additional flow arguments.
+Completed-call revalidation must not turn a required type anchor into an S001
+warning. Enumerate every declared generic parameter when binding a specialization;
+legacy cache identity fields for the first three parameters are not an arity limit.
 An expected `CodePoint` type does not enable arithmetic; convert operands to
 `UInt32` before performing numeric operations.
 An integer-typed peer supplies context to an `if` or `when` numeric operand.
@@ -245,6 +254,14 @@ For a single element that is a lexical name, write `[value,; ~]`. The comma
 keeps the value distinct from the typed empty-array form `[T; ~]`; the same
 rule applies inside interpolation. Let the declared element type provide
 numeric context instead of adding a redundant scalar conversion.
+Without an external element contract, the first element establishes the type
+for later elements. Write `[UInt64(0), 2 * 3 + 4]` rather than repeating that
+conversion in the second element. A declared element contract applies to every
+element, including the first. Integer context reaches arithmetic literals and
+value-control results; independently typed names, calls, and comparison
+operands retain their own types. Each element finishes inference and type
+admission before the next element is checked. Contextual literals must fit the
+element width before LLVM generation; context does not change the backing extent.
 Ordinary fixed array literals also allow a final comma, as in `[value,]`.
 Use it consistently when formatting a multiline collection; it adds no element.
 
@@ -1265,10 +1282,13 @@ Floating-point comparisons inside interpolation use the operand's width and
 produce `Bool` in those same contexts. Emit a bare integer-shaped operand as
 a floating LLVM constant when semantic inference gives it floating context;
 an integer token in a `float` or `double` LLVM operation is invalid.
-For a valid numeric binary expression, report `S001` only when the other
-operand already supplies the type of an explicit literal conversion. With two
-explicit conversions, keep the left one as the type anchor and report the
-right one. A contextual bare literal is not an independent type anchor.
+For a valid numeric binary expression without an earlier numeric context,
+report `S001` only when the other operand already supplies the type of an
+explicit literal conversion. With two explicit conversions and no earlier
+context, keep the left one as the type anchor and report the right one. A
+contextual bare literal is not an independent type anchor. An established array
+element contract makes matching literal conversions redundant in both arithmetic
+operands. The first element of an inferred array has no earlier array context.
 For a numeric call parameter, write a bare literal when the parameter already
 supplies its type, including in both value branches of an `if`; the matching
 explicit literal conversion receives `S001`. A conversion to a different
@@ -1516,6 +1536,13 @@ ordinary functions when constructing a native Path; it does not require
 `uses File`. Filesystem queries and absolute-path resolution retain their
 explicit `File` capability and target restrictions.
 
+Keep the global `sys.file.openWriter`, `closeWriter`, `openReader`, and
+`closeReader` wrappers in user `main`; `uses File` does not widen that slice.
+Ordinary functions may use scalar `write<T>` with `File`. Classify the resolved
+provider and nearest lexical function rather than matching an unqualified name
+or inheriting a surrounding main statement's authority. Separate owned-file
+APIs keep their own capability contract.
+
 For exact standard-error text, use `sys.runtime.eprint(Text)` under
 `uses Console`; it adds no newline. Use `eprintln` only when the platform line
 ending is part of the intended output. Do not append or remove a line ending
@@ -1646,6 +1673,13 @@ Arms may complete in any order, but result fields retain declaration order.
 The compiler must prove that borrows, moves, mutable access, and effects can
 overlap. Do not use parallelism for tiny work, effect ordering, or as a way to
 duplicate an owner. Measure task setup and callback shape on hot paths.
+
+Compiler preparation must select source-level parallel work explicitly from
+`PrepareRequest.supportsComputePool`. Keep the general semantic and cache APIs
+sequential; forward the capability through their `WithExecutionMode` entries
+only from target-aware preparation. Source workers borrow immutable facts and
+return owned call rows, which the join appends in original source order before
+duplicate-error filtering and global-alias commitment.
 
 An affine `SourceText` may be a direct payload of the top-level `Result` returned
 by `tryParallel` when the callback moves its complete representation into the
@@ -2409,7 +2443,10 @@ ABI controls and are not appended to the full standard-library compilation.
 
 Use explicit `--jobs <positive Int>` when a compiler build needs bounded
 workers. The C# Windows linker retains small LLVM partitions while limiting
-concurrent optimization processes. Record the selected worker count with the
+concurrent optimization processes. The worker limit is not the partition count:
+source size and host processor facts determine the latter. Validate the complete
+reported partition sequence instead of assuming it equals the requested workers.
+Record the selected worker count with the
 build inputs; keep the program, optimization level, and verification timeout
 fixed when comparing behavior. `build-focused-selfhost-compiler.ps1 -Jobs`
 forwards the same explicit setting to both C# and SLG seeds.
@@ -2481,6 +2518,24 @@ Initial files pinned in a result's input hashes remain input fixtures even when
 their extension is `.ll` or `.bc`. The cleanup planner and executor must protect
 them while removing newly produced intermediates.
 
+Expected process exits come from unchanged input contracts. Verification result
+records may copy those expectations alongside observed outcomes, but cannot
+authorize a nonzero exit or conflict with the contract for a different producer.
+
+When historical receipts refer to an unavailable user profile, preserve that
+absence explicitly. A versioned current proof path must retain the original
+case vector, source bytes, diagnostics and runtime oracles, bind both compiler
+identities and the current source closure, and verify rejected inputs produced
+neither executable processes nor LLVM products. It does not certify a replay of
+the missing receipts or close a wider source phase.
+
+`-KeepCompiler` preserves a native output's root `compiler.exe` and its supported
+private cache; it does not preserve a managed `compiler/Sollang.Compiler.*`
+product family. Keep a selected managed reference product outside that cleanup
+call while consumers remain pending. Before executing a plan, reject any target
+inside a retained compiler product family. Declaring a reusable directory alone
+does not establish preservation for every product layout.
+
 For dedicated .NET probes, pin the project file and record the exact `dotnet
 build` command, successful exit, and confirmed process shutdown. MSBuild
 `.cache` files qualify for common cleanup only inside that project's owned
@@ -2521,6 +2576,10 @@ to inspect existing logs, process measurements and stage source first.
 CPU scope identity and observation errors (`cpuIdentity`,
 `cpuObservationFailure`) belong to the enclosing execution JSON process row;
 the standalone diagnostic JSON contains the samples and investigation routes.
+Publish diagnostic snapshots through `verification_json_records.write_json_atomic`,
+as execution records do. Its bounded Windows sharing retries publish the same
+observation; they never repeat compiler work or extend the execution deadline.
+Persistent publication failures still stop and close the owned process tree.
 A proposed wait investigation is plan-only and requires a separate explicit execution
 budget; the record itself authorizes no retry, profiling or timeout extension.
 Timeout and cancellation must terminate the owned process group and preserve
