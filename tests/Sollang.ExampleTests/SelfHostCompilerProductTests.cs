@@ -94,16 +94,102 @@ internal static class SelfHostCompilerProductTests
                 File.WriteAllBytes(executable, before);
             });
             Check("stable-after-controls", () => SelfHostCompilerProduct.Validate(fixtures, product, production).AssertStable());
+
+            var driver = Path.Combine(Path.GetDirectoryName(manifest)!, "selfhost-sollangc-driver.slg");
+            var bridge = Path.Combine(product, "CompilerLinkBridge.dll");
+            var assembly = Path.Combine(product, "Sollang.Compiler.dll");
+            var assembler = Path.Combine(product, "llvm-as.exe");
+            var llvm = Path.Combine(product, "program.ll");
+            var emissionManifest = Path.Combine(product, "emission-inputs.json");
+            foreach (var file in new[] { driver, bridge, assembly, assembler, llvm })
+                File.WriteAllText(file, Path.GetFileName(file));
+            File.WriteAllText(manifest, "compiler.slg\ntests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg\n");
+            var sourcePins = new[] { source, driver, standard }.ToDictionary(path => path, Hash);
+            var emissionInputs = JsonSerializer.SerializeToNode(new
+            {
+                schemaVersion = 1, target = "windows-x64", outputKind = "executable",
+                sourcePaths = new[] { driver, source }, inputHashes = sourcePins
+            })!.AsObject();
+            File.WriteAllText(emissionManifest, emissionInputs.ToJsonString());
+            var separatedPins = new[] { manifest, bridge, assembly, assembler, emissionManifest }
+                .Concat(sourcePins.Keys).ToDictionary(path => path, Hash);
+            var assemblyHash = Hash(assembly);
+            var productHash = Hash(executable);
+            var separated = JsonSerializer.SerializeToNode(new
+            {
+                schemaVersion = 1, status = "passed", completed = 1, total = 1,
+                inputsStable = true, processesStopped = true,
+                phaseMode = "explicit-separated-emission-and-production-link",
+                inputFingerprint = "same", finalInputFingerprint = "same",
+                inputFingerprintKind = "sha256-canonical-input-json-v1",
+                inputHashesStart = separatedPins, inputHashesEnd = separatedPins,
+                compilerSha256 = productHash, compilerProduct = executable, product = executable, productSha256 = productHash,
+                emission = new
+                {
+                    status = "passed", mode = "emit", warnings = Array.Empty<string>(),
+                    sourceCount = 2, declaredInputCount = 3, compilerAssemblySha256 = assemblyHash,
+                    outputSha256 = Hash(llvm), outputBytes = new FileInfo(llvm).Length
+                },
+                link = new
+                {
+                    status = "passed", mode = "link", entryPoint = "sollang_start",
+                    optimization = "-O2", compilerAssemblySha256 = assemblyHash
+                },
+                processes = new[]
+                {
+                    new { exit = 0, shutdownConfirmed = true, command = new[] { "dotnet", bridge, "emit", assembly, assemblyHash, emissionManifest, llvm } },
+                    new { exit = 0, shutdownConfirmed = true, command = new[] { assembler, llvm, "-o", Path.Combine(product, "program.bc") } },
+                    new { exit = 0, shutdownConfirmed = true, command = new[] { "dotnet", bridge, "link", assembly, assemblyHash, product, llvm, executable, product, "-O2", "24" } }
+                }
+            })!.AsObject();
+            Write(separated);
+            void RejectSeparated(string id, Action<JsonObject> mutation)
+            {
+                Check(id, () =>
+                {
+                    var changed = separated.DeepClone().AsObject();
+                    mutation(changed);
+                    Write(changed);
+                    Reject(() => SelfHostCompilerProduct.Validate(fixtures, product, production));
+                    Write(separated);
+                });
+            }
+            Check("separated-product", () => SelfHostCompilerProduct.Validate(fixtures, product, production).AssertStable());
+            RejectSeparated("separated-unconfirmed-process", value => value["processes"]![1]!["shutdownConfirmed"] = false);
+            RejectSeparated("separated-grammar-failure", value => value["processes"]![1]!["exit"] = 1);
+            RejectSeparated("separated-link-input-changed", value => value["processes"]![2]!["command"]![6] = driver);
+            Check("separated-source-order-changed", () =>
+            {
+                var changed = separated.DeepClone().AsObject();
+                var reordered = emissionInputs.DeepClone().AsObject();
+                reordered["sourcePaths"] = new JsonArray(source, driver);
+                File.WriteAllText(emissionManifest, reordered.ToJsonString());
+                changed["inputHashesStart"]![emissionManifest] = Hash(emissionManifest);
+                changed["inputHashesEnd"]![emissionManifest] = Hash(emissionManifest);
+                Write(changed);
+                Reject(() => SelfHostCompilerProduct.Validate(fixtures, product, production));
+                File.WriteAllText(emissionManifest, emissionInputs.ToJsonString());
+                Write(separated);
+            });
+            Check("separated-llvm-changed", () =>
+            {
+                var before = File.ReadAllBytes(llvm);
+                var admitted = SelfHostCompilerProduct.Validate(fixtures, product, production);
+                File.AppendAllText(llvm, "changed\n");
+                Reject(() => SelfHostCompilerProduct.Validate(fixtures, product, production));
+                Reject(admitted.AssertStable);
+                File.WriteAllBytes(llvm, before);
+            });
         }
         catch (Exception error) { failure = error.ToString(); }
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
         File.WriteAllText(resultPath, JsonSerializer.Serialize(new
         {
             status = failure is null ? "passed" : "failed", completed = cases.Count,
-            total = 13, cases, failure, productionRootExplicit = true,
+            total = 19, cases, failure, productionRootExplicit = true,
             fixtureInputsRewritten = false, productExecuted = false
         }, new JsonSerializerOptions { WriteIndented = true }));
-        Console.WriteLine($"[selfhost product source roots] {cases.Count}/13 {(failure is null ? "PASS" : "FAIL")}");
+        Console.WriteLine($"[selfhost product source roots] {cases.Count}/19 {(failure is null ? "PASS" : "FAIL")}");
         return failure is null ? 0 : 1;
     }
 }
