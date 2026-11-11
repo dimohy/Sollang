@@ -2564,6 +2564,13 @@ Expected process exits come from unchanged input contracts. Verification result
 records may copy those expectations alongside observed outcomes, but cannot
 authorize a nonzero exit or conflict with the contract for a different producer.
 
+For ordinary completed-output cleanup, compare every recorded input file hash
+with the current file both when preparing a plan and when validating it before
+deletion. A historical `inputsStable: true` flag only describes that execution;
+it does not authorize cleanup after an input changes or disappears. Missing,
+malformed, or unreadable input proof protects the output. Keep these protected
+outputs in place rather than moving them into a deletion queue.
+
 When historical receipts refer to an unavailable user profile, preserve that
 absence explicitly. A versioned current proof path must retain the original
 case vector, source bytes, diagnostics and runtime oracles, bind both compiler

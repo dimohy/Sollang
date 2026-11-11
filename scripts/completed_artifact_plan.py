@@ -2084,6 +2084,26 @@ def verified_consumer_closure(repo: Path, output: Path, *, allow_missing_product
     return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def current_input_failure(repo: Path, record: dict) -> str | None:
+    """A historical stable flag does not prove that its inputs still match."""
+    snapshots = [record[key] for key in ('inputHashes', 'inputSha256', 'inputHashesStart') if key in record]
+    if not snapshots or any(not isinstance(pins, dict) or not pins for pins in snapshots):
+        return 'ARTIFACT_CURRENT_INPUT_PROOF_MISSING'
+    for pins in snapshots:
+        for name, expected in pins.items():
+            if not isinstance(name, str) or not isinstance(expected, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', expected):
+                return 'ARTIFACT_CURRENT_INPUT_PROOF_INVALID'
+            path = Path(name)
+            if not path.is_absolute():
+                path = repo / path
+            try:
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest().casefold() != expected.casefold():
+                    return 'ARTIFACT_CURRENT_INPUT_CHANGED'
+            except OSError:
+                return 'ARTIFACT_CURRENT_INPUT_UNREADABLE'
+    return None
+
+
 def create_plan(repo: Path, root: Path, minimum_age_hours: float = 1, active: set[str] | None = None, preserve_all_compilers: bool = False, selected_outputs: set[str] | None = None,
                 reusable_directories: list[Path] | None = None, retention_terminal: bool = False, temporary_only: bool = False, linked_evidence_paths: list[Path] | None = None) -> dict:
     policy = load_policy()
@@ -2142,6 +2162,12 @@ def create_plan(repo: Path, root: Path, minimum_age_hours: float = 1, active: se
                 record = dict(record, _consumerClosureEvidence=closure)
             except (ValueError, OSError, KeyError, TypeError):
                 excluded['consumer-closure-invalid'] += 1
+        if completed(record) and not record.get('_consumerClosureEvidence'):
+            input_failure = current_input_failure(repo, record)
+            if input_failure:
+                excluded['current-input-unproven'] += 1
+                inventory.append({'output': str(directory), 'category': 'input-protected', 'failureId': input_failure})
+                continue
         eligible.append((directory, record_path, record))
         inventory.append({'output': str(directory), 'category': 'consumer-retired' if record.get('_consumerClosureEvidence') else ('terminal-retention' if terminal_retention else 'verified-complete'), 'recordStatus': record.get('status')})
     declared = default_reusable_directories(repo) if reusable_directories is None else reusable_directories
@@ -2217,6 +2243,9 @@ def validate_plan(plan: dict) -> None:
         elif receipt['disposition'] == 'verified-complete':
             if not completed(record):
                 raise ValueError('ARTIFACT_NOT_COMPLETED')
+            input_failure = current_input_failure(repo, record)
+            if input_failure:
+                raise ValueError(input_failure)
         elif receipt['disposition'] == 'linked-retention':
             evidence = receipt.get('linkedEvidence')
             if not evidence or linked_retention_evidence(repo, output, [Path(evidence['path'])], True, evidence['compilerSha256']) != evidence:

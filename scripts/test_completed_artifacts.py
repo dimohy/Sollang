@@ -33,7 +33,8 @@ class ArtifactLifecycleTests(unittest.TestCase):
         result = {'schemaVersion': 1, 'status': 'passed', 'inputsStable': True, 'completed': 1, 'total': 1,
                   'compilerSha256': hashlib.sha256((output / 'compiler.exe').read_bytes()).hexdigest(),
                   'processesStopped': True,
-                  'inputHashesStart': {'source': 'same'}, 'inputHashesEnd': {'source': 'same'}}
+                  'inputHashesStart': {str(output / 'source.slg'): hashlib.sha256((output / 'source.slg').read_bytes()).hexdigest()},
+                  'inputHashesEnd': {str(output / 'source.slg'): hashlib.sha256((output / 'source.slg').read_bytes()).hexdigest()}}
         if record is not None:
             result.update(record)
         (output / 'result.json').write_text(json.dumps(result), encoding='utf-8')
@@ -66,6 +67,33 @@ class ArtifactLifecycleTests(unittest.TestCase):
     def test_completed_stable_output(self):
         self.output()
         self.assertEqual(self.plan()['files'], 3)  # Reuse requires explicit ownership.
+
+    def test_historical_success_with_changed_current_input_is_protected(self):
+        output = self.output()
+        (output / 'source.slg').write_text('changed since verification', encoding='utf-8')
+        plan = self.plan()
+        self.assertEqual(plan['files'], 0)
+        self.assertEqual(plan['excluded']['current-input-unproven'], 1)
+        self.assertEqual(plan['outputInventory'][0]['failureId'], 'ARTIFACT_CURRENT_INPUT_CHANGED')
+
+    def test_existing_cleanup_plan_rejects_input_change_before_deletion(self):
+        output = self.output()
+        plan = self.plan()
+        (output / 'source.slg').write_text('changed since plan', encoding='utf-8')
+        result = self.execute(plan)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ARTIFACT_CURRENT_INPUT_CHANGED', result.stderr)
+        self.assertTrue((output / 'compiler.exe').exists())
+        self.assertTrue((output / 'compiler.ll').exists())
+
+    def test_missing_current_input_proof_does_not_authorize_cleanup(self):
+        output = self.output()
+        record_path = output / 'result.json'
+        record = json.loads(record_path.read_text())
+        for key in ('inputHashesStart', 'inputHashesEnd'):
+            del record[key]
+        record_path.write_text(json.dumps(record), encoding='utf-8')
+        self.assertEqual(self.plan()['files'], 0)
 
     def test_declared_llvm_input_preserved_and_intermediate_removed(self):
         output = self.output()
