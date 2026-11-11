@@ -33,11 +33,25 @@ $failure = $null
 try {
     $parameters = [ordered]@{ Compiler='probe';Label='budget';Fixture='normal';RepositoryRoot=$root
         OutputDirectory=$output;TimeoutMilliseconds=4000;BuildDelayMilliseconds=100;RunDelayMilliseconds=100 }
-    $normal = Invoke-NativeExactBudgetedFixture -VerifierPath $probe -Parameters $parameters
+    $powerShell = Microsoft.PowerShell.Core\Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    # Several installations or duplicate PATH entries must still launch one child.
+    function Get-Command {
+        [CmdletBinding()]
+        param([string]$Name, [object]$CommandType)
+        if ($Name -ceq 'pwsh') { $powerShell; $powerShell; $powerShell }
+        else { Microsoft.PowerShell.Core\Get-Command @PSBoundParameters }
+    }
+    try { $normal = Invoke-NativeExactBudgetedFixture -VerifierPath $probe -Parameters $parameters }
+    finally { Remove-Item -LiteralPath Function:Get-Command }
     if ($normal.Trim() -cne 'probe-complete' -or -not (Test-Path -LiteralPath (Join-Path $output 'normal.done'))) {
         throw 'CASE_BUDGET_NORMAL_FAILED'
     }
-    $cases.Add(@{id='normal-two-stage-case';status='passed';passed=$true})
+    $normalRecords = @(Get-ChildItem -LiteralPath $output -Filter 'budget-normal.case-*.execution.json')
+    if ($normalRecords.Count -ne 1 -or
+        (Get-Content -LiteralPath $normalRecords[0].FullName -Raw | ConvertFrom-Json).command[0] -cne $powerShell.Source) {
+        throw 'CASE_BUDGET_SINGLE_POWERSHELL_CHILD_REQUIRED'
+    }
+    $cases.Add(@{id='normal-two-stage-case';status='passed';passed=$true;powerShellCandidates=3;supervisedChildren=1})
 
     $parameters.Fixture='aggregate-timeout'
     $parameters.BuildDelayMilliseconds=2500

@@ -18,7 +18,7 @@ function Invoke-NativeExactBudgetedFixture {
         $arguments.Add('-' + [string]$name)
         $arguments.Add([string]$Parameters[$name])
     }
-    $capture = Invoke-VerificationProcessCapture -FilePath (Get-Command pwsh -CommandType Application).Source `
+    $capture = Invoke-VerificationProcessCapture -FilePath (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source `
         -ArgumentList $arguments.ToArray() -WorkingDirectory ([string]$Parameters.RepositoryRoot) `
         -Description ("{0} exact {1} whole case" -f $Parameters.Label, $Parameters.Fixture) `
         -TimeoutMilliseconds $budget -ExecutionRecordPath $record
