@@ -923,8 +923,12 @@ Notes:
   without embedded NUL). Unsupported paths fail before frontend or link work.
   It exclusively claims two short sibling staging paths
   for LLVM and the linked executable. A later build skips an occupied pair
-  left by a crashed process rather than deleting paths it does not own; after
-  256 occupied pairs it fails explicitly. A known frontend diagnostic removes
+  left by a crashed process rather than deleting paths it does not own. It
+  continues through nonnegative signed 32-bit ordinals without a fixed count
+  limit, and reports representable-ordinal exhaustion before incrementing past
+  the maximum. A non-collision I/O error fails immediately; an executable-stage
+  claim failure releases only the LLVM stage claimed by that attempt.
+  A known frontend diagnostic removes
   its claimed stages before returning. Unexpected frontend or link failures
   retain their diagnostic stages and do not publish a new final product.
   Object stages belong to the claimed LLVM stage; an occupied object-stage

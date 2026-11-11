@@ -1074,8 +1074,13 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
     Arena(0) => definitionStageNameStorage!
     Arena(0) => importStageNameStorage!
     Arena(0) => linkStageNameStorage!
-    0 => ordinal!
-    ordinal! < 256 -> while {
+    -1 => ordinal!
+    true -> while {
+        ordinal! == 2147483647 -> if {
+            "sollang: native build staging slots exhausted in $stageDirectory" -> runtime.eprintln
+            -1 -> return
+        }
+        ordinal! + 1 => ordinal!
         ".l$(ordinal!).ll.semantic" -> materialize(cacheStageNameStorage!) => cacheStageName
         ".l$(ordinal!).ll.cgu" -> materialize(codegenStageNameStorage!) => codegenStageName
         ".l$(ordinal!).ll.o" -> materialize(objectStageNameStorage!) => objectStageName
@@ -1090,7 +1095,6 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
                 -> if { true => existingCacheStage! }
         }
         existingCacheStage! -> if {
-            ordinal! + 1 => ordinal!
             continue
         }
         stageDirectory -> nativeLlStagePath(ordinal!, llvmStageStorage!) => llvmStage
@@ -1109,9 +1113,7 @@ claimNativeBuildStages stageDirectory: Text -> Int uses Console, File {
                 -1 -> return
             }
         }
-        ordinal! + 1 => ordinal!
     }
-    "sollang: native build staging slots exhausted in $stageDirectory" -> runtime.eprintln
     -1
 }
 

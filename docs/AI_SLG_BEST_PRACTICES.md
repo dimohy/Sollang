@@ -680,6 +680,9 @@ length limit explicit; a passing basename case does not cover a Unicode parent
 directory. The self-host native CLI must reject an ambiguous output path before
 claiming staging files. It must claim both final output resource locks before
 staging and release its own locks after publication or failure.
+Skip retained staging names without a fixed attempt cap. Advance a signed
+32-bit ordinal at one checked loop head, retry only collisions, and propagate
+other claim errors after releasing any stage owned by the failed attempt.
 Validate final file paths and derived semantic-cache destinations against the
 file publication contract before starting frontend or link work. An output path
 that fits does not establish that its longer derived cache path also fits.

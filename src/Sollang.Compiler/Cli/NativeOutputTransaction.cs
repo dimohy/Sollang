@@ -197,8 +197,14 @@ internal sealed class NativeOutputTransaction : IDisposable
 
     private void ClaimStages(string directory)
     {
-        for (var ordinal = 0; ordinal < 256; ordinal++)
+        var ordinal = -1;
+        while (true)
         {
+            if (ordinal == int.MaxValue)
+            {
+                throw new SollangException($"native build staging slots exhausted in {directory}");
+            }
+            ordinal++;
             var llvmStage = Path.Combine(directory, $".l{ordinal}.ll");
             var executableStage = Path.Combine(directory, $".e{ordinal}.exe");
             var workDirectory = Path.Combine(directory, $".w{ordinal}");
@@ -213,7 +219,7 @@ internal sealed class NativeOutputTransaction : IDisposable
                 {
                 }
             }
-            catch (IOException)
+            catch (IOException) when (File.Exists(llvmStage))
             {
                 continue;
             }
@@ -224,10 +230,15 @@ internal sealed class NativeOutputTransaction : IDisposable
                 {
                 }
             }
-            catch (IOException)
+            catch (IOException) when (File.Exists(executableStage))
             {
                 File.Delete(llvmStage);
                 continue;
+            }
+            catch
+            {
+                File.Delete(llvmStage);
+                throw;
             }
 
             try
@@ -252,8 +263,6 @@ internal sealed class NativeOutputTransaction : IDisposable
             WorkDirectory = workDirectory;
             return;
         }
-
-        throw new SollangException($"native build staging slots exhausted in {directory}");
     }
 
     private static void DeleteOwnedFile(string path)
