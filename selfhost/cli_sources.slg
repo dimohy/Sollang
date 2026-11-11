@@ -175,13 +175,14 @@ readSource location: ref path.Path, owner: Int, expectedModule: Text, dependency
     }
     locationText -> file.mapText => mapped
     mapped -> slice(0, mapped -> len) => source
-    mapped -> parser.parseSourceEvents => events
+    source -> lexer.lex => tokens
+    grammar.startRule() => startRule
+    parser.ParseRequest { source: source, startRule: startRule } -> parser.parsePreparedRuleEvents(tokens) => events
     (events -> len) == 0 or events[(events -> len) - 1].value != 1
         -> if {
             SourceUnit { location: path.fromText(locationText, style), owner: owner, module: path.fromText("", style), imports: [path.Path; ~], hasEntry: false, status: 5, libraryNode: -1, libraryIssue: Option<interfaces.LibraryInterface>.None } -> return
         }
-    mapped -> lexer.lexSource => tokens
-    mapped -> ast.lowerSource => nodes
+    source -> ast.lowerPreparedRule(startRule, tokens, events) => nodes
     [path.Path; ~] => imports!
     false => hasEntry!
     -1 => moduleNode!
