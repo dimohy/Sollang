@@ -64,7 +64,11 @@ internal static class SelfHostCompilerProductTests
         }
         try
         {
-            Check("default-production-root", () => SelfHostCompilerProduct.Validate(production, product));
+            Check("default-production-root", () =>
+            {
+                if (SelfHostCompilerProduct.Validate(production, product).WindowsLinkArguments is not null)
+                    throw new InvalidOperationException("Legacy product unexpectedly supplied a production linker.");
+            });
             Check("snapshot-requires-explicit-production-root",
                 () => Reject(() => SelfHostCompilerProduct.Validate(fixtures, product)));
             Check("explicit-production-root", () => SelfHostCompilerProduct.Validate(fixtures, product, production));
@@ -98,10 +102,15 @@ internal static class SelfHostCompilerProductTests
             var driver = Path.Combine(Path.GetDirectoryName(manifest)!, "selfhost-sollangc-driver.slg");
             var bridge = Path.Combine(product, "CompilerLinkBridge.dll");
             var assembly = Path.Combine(product, "Sollang.Compiler.dll");
-            var assembler = Path.Combine(product, "llvm-as.exe");
+            var toolchain = Path.Combine(product, "llvm");
+            var bin = Path.Combine(toolchain, "bin");
+            Directory.CreateDirectory(bin);
+            var assembler = Path.Combine(bin, "llvm-as.exe");
+            var linkTools = new[] { "clang.exe", "lld-link.exe", "llvm-lib.exe" }
+                .Select(name => Path.Combine(bin, name)).ToArray();
             var llvm = Path.Combine(product, "program.ll");
             var emissionManifest = Path.Combine(product, "emission-inputs.json");
-            foreach (var file in new[] { driver, bridge, assembly, assembler, llvm })
+            foreach (var file in new[] { driver, bridge, assembly, assembler, llvm }.Concat(linkTools))
                 File.WriteAllText(file, Path.GetFileName(file));
             File.WriteAllText(manifest, "compiler.slg\ntests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg\n");
             var sourcePins = new[] { source, driver, standard }.ToDictionary(path => path, Hash);
@@ -112,7 +121,7 @@ internal static class SelfHostCompilerProductTests
             })!.AsObject();
             File.WriteAllText(emissionManifest, emissionInputs.ToJsonString());
             var separatedPins = new[] { manifest, bridge, assembly, assembler, emissionManifest }
-                .Concat(sourcePins.Keys).ToDictionary(path => path, Hash);
+                .Concat(sourcePins.Keys).Concat(linkTools).ToDictionary(path => path, Hash);
             var assemblyHash = Hash(assembly);
             var productHash = Hash(executable);
             var separated = JsonSerializer.SerializeToNode(new
@@ -139,7 +148,7 @@ internal static class SelfHostCompilerProductTests
                 {
                     new { exit = 0, shutdownConfirmed = true, command = new[] { "dotnet", bridge, "emit", assembly, assemblyHash, emissionManifest, llvm } },
                     new { exit = 0, shutdownConfirmed = true, command = new[] { assembler, llvm, "-o", Path.Combine(product, "program.bc") } },
-                    new { exit = 0, shutdownConfirmed = true, command = new[] { "dotnet", bridge, "link", assembly, assemblyHash, product, llvm, executable, product, "-O2", "24" } }
+                    new { exit = 0, shutdownConfirmed = true, command = new[] { "dotnet", bridge, "link", assembly, assemblyHash, toolchain, llvm, executable, product, "-O2", "24" } }
                 }
             })!.AsObject();
             Write(separated);
@@ -154,10 +163,18 @@ internal static class SelfHostCompilerProductTests
                     Write(separated);
                 });
             }
-            Check("separated-product", () => SelfHostCompilerProduct.Validate(fixtures, product, production).AssertStable());
+            Check("separated-product", () =>
+            {
+                var admitted = SelfHostCompilerProduct.Validate(fixtures, product, production);
+                admitted.AssertStable();
+                if (admitted.WindowsLinkArguments is null
+                    || !admitted.WindowsLinkArguments.SequenceEqual([bridge, "link", assembly, assemblyHash, toolchain]))
+                    throw new InvalidOperationException("Verified linker arguments did not match the build record.");
+            });
             RejectSeparated("separated-unconfirmed-process", value => value["processes"]![1]!["shutdownConfirmed"] = false);
             RejectSeparated("separated-grammar-failure", value => value["processes"]![1]!["exit"] = 1);
             RejectSeparated("separated-link-input-changed", value => value["processes"]![2]!["command"]![6] = driver);
+            RejectSeparated("separated-link-tools-unpinned", value => value["processes"]![2]!["command"]![5] = product);
             Check("separated-source-order-changed", () =>
             {
                 var changed = separated.DeepClone().AsObject();
@@ -186,10 +203,10 @@ internal static class SelfHostCompilerProductTests
         File.WriteAllText(resultPath, JsonSerializer.Serialize(new
         {
             status = failure is null ? "passed" : "failed", completed = cases.Count,
-            total = 19, cases, failure, productionRootExplicit = true,
+            total = 20, cases, failure, productionRootExplicit = true,
             fixtureInputsRewritten = false, productExecuted = false
         }, new JsonSerializerOptions { WriteIndented = true }));
-        Console.WriteLine($"[selfhost product source roots] {cases.Count}/19 {(failure is null ? "PASS" : "FAIL")}");
+        Console.WriteLine($"[selfhost product source roots] {cases.Count}/20 {(failure is null ? "PASS" : "FAIL")}");
         return failure is null ? 0 : 1;
     }
 }

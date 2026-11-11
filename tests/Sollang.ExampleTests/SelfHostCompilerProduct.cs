@@ -3,7 +3,8 @@ using System.Text.Json;
 
 // Reuse the canonical product only with its immutable build/source proof.
 // This proves product identity and current inputs, not compiler equivalence.
-internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<string, string> InputHashes)
+internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<string, string> InputHashes,
+    IReadOnlyList<string>? WindowsLinkArguments)
 {
     internal static SelfHostCompilerProduct Validate(string repoRoot, string directory,
         string? productionRoot = null)
@@ -51,14 +52,15 @@ internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<s
         var productHash = record.GetProperty("compilerSha256").GetString();
         if (productHash is null || Hash(compilerPath) != productHash)
             throw new InvalidOperationException("SELFHOST_PRODUCT_BINARY_CHANGED");
-        if (separated)
-            ValidateSeparated(record, directory, productionRoot, compilerPath, productHash, sources, stdlib, start);
+        var windowsLinkArguments = separated
+            ? ValidateSeparated(record, directory, productionRoot, compilerPath, productHash, sources, stdlib, start)
+            : null;
         start.Add(recordPath, Convert.ToHexString(SHA256.HashData(recordBytes)));
         start.Add(compilerPath, productHash);
-        return new SelfHostCompilerProduct(compilerPath, start);
+        return new SelfHostCompilerProduct(compilerPath, start, windowsLinkArguments);
     }
 
-    private static void ValidateSeparated(JsonElement record, string directory, string productionRoot,
+    private static string[] ValidateSeparated(JsonElement record, string directory, string productionRoot,
         string compilerPath, string productHash, string[] sources, string[] stdlib,
         Dictionary<string, string> inputs)
     {
@@ -105,6 +107,12 @@ internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<s
             || nativeLink[7] != compilerPath || nativeLink[9] != link.GetProperty("optimization").GetString())
             throw new InvalidOperationException("SELFHOST_PRODUCT_SEPARATED_COMMAND_MISMATCH");
 
+        var bin = Path.Combine(nativeLink[5], "bin");
+        if (!Path.IsPathFullyQualified(nativeLink[5]) || assemble[0] != Path.Combine(bin, "llvm-as.exe")
+            || new[] { "clang.exe", "lld-link.exe", "llvm-lib.exe" }
+                .Any(tool => !inputs.ContainsKey(Path.Combine(bin, tool))))
+            throw new InvalidOperationException("SELFHOST_PRODUCT_SEPARATED_LINK_TOOLS_UNPINNED");
+
         using var document = JsonDocument.Parse(File.ReadAllBytes(manifest));
         var emissionInputs = document.RootElement;
         var driver = Path.Combine(productionRoot, "tests", "Sollang.ExampleTests", "Fixtures", "selfhost-sollangc-driver.slg");
@@ -124,6 +132,7 @@ internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<s
             || new FileInfo(llvm).Length != emission.GetProperty("outputBytes").GetInt64())
             throw new InvalidOperationException("SELFHOST_PRODUCT_SEPARATED_LLVM_CHANGED");
         inputs.Add(llvm, llvmHash);
+        return nativeLink[1..6];
     }
 
     // Recheck after the runner acquires read-only leases for all these paths.

@@ -1190,19 +1190,29 @@ Parallel.ForEach(
                     .Select(static line => line.Trim())
                     .ToArray()
                 : [];
-            if (linkedTarget == TestTarget.WindowsX64 && reusableSelfHostTest)
+            var productionLink = reusableSelfHostTest && linkedTarget == TestTarget.WindowsX64
+                && linkArguments.Length == 0
+                && Regex.IsMatch(actual, @"^\s*define\b[^@\r\n]*@sollang_start\s*\(", RegexOptions.Multiline)
+                ? reusedSelfHostCompiler?.WindowsLinkArguments
+                : null;
+            ProcessResult link;
+            if (productionLink is not null)
             {
-                // Canonical stdlib emission carries the Windows runtime imports
-                // also supplied by the normal compiler's Windows linker.
-                linkArguments = ["-lws2_32", "-lshell32", "-lbcrypt", .. linkArguments];
+                var linkWork = linkedPath + ".link";
+                Directory.CreateDirectory(linkWork);
+                link = RunCompiler(
+                    [.. productionLink, stdoutLlvmPath, linkedPath, linkWork, "-O0", "1"],
+                    input: null, repoRoot, role: "link");
             }
-            var link = linkedTarget == TestTarget.LinuxX64
-                ? LinkLinuxLlvm(clangPath, stdoutLlvmPath, linkedPath, repoRoot, wslDistribution)
-                : Run(
-                    clangPath,
-                    ["-Wno-override-module", stdoutLlvmPath, "-o", linkedPath, .. linkArguments],
-                    input: null,
-                    repoRoot);
+            else if (linkedTarget == TestTarget.LinuxX64)
+                link = LinkLinuxLlvm(clangPath, stdoutLlvmPath, linkedPath, repoRoot, wslDistribution);
+            else
+            {
+                if (linkedTarget == TestTarget.WindowsX64 && reusableSelfHostTest)
+                    linkArguments = ["-lws2_32", "-lshell32", "-lbcrypt", .. linkArguments];
+                link = Run(clangPath, ["-Wno-override-module", stdoutLlvmPath, "-o", linkedPath, .. linkArguments],
+                    input: null, repoRoot);
+            }
             if (link.ExitCode != 0)
             {
                 Console.Error.WriteLine($"FAIL {name}: stdout LLVM could not be linked");
