@@ -485,6 +485,21 @@ public materializedReadTypeId types: ref [SemanticType; ~], typeId: Int -> Int {
         -> if { types[typeId].first } else { typeId }
 }
 
+# A stream stage consumes one item from its primary producer. Additional
+# arguments and ordinary functions retain their declared value contracts.
+public primaryStreamInputTypeId types: ref [SemanticType; ~], typeId: Int, streamFunction: Bool, ordinal: Int -> Int {
+    not streamFunction or ordinal != 0 -> if { typeId -> return }
+    types -> materializedReadTypeId(typeId) => valueTypeId
+    valueTypeId >= 0 and valueTypeId < (types -> len)
+        -> if {
+            types[valueTypeId] => value
+            value.kind == 7 and value.origin == 4
+                and (value.symbol == 3 or value.symbol == 4)
+                -> if { value.first -> return }
+        }
+    typeId
+}
+
 # An already-typed array cannot change its stored element identity at a call.
 # Check the same identity before reference addressability and IR validation.
 public typedArrayArgumentElementMismatch types: ref [SemanticType; ~], actualTypeId: Int, expectedTypeId: Int -> Bool {
@@ -2541,6 +2556,211 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
     types -> specializeManyInto(inputTemplates, actualInputs, resultTemplate)
 }
 
+# Expression products own canonical fields in NominalField, independently of
+# declaration type-term chains. Substitute those fields into a new immutable
+# product; never attach later graph edges to an already interned type.
+productFieldAt fields: ref [NominalField; ~], owner: Int, ordinal: Int -> Int {
+    -1 => result!
+    0 => index!
+    index! < (fields -> len) -> while {
+        fields[index!] => field
+        field.ownerType == owner and field.ordinal == ordinal
+            -> if {
+                result! >= 0 or field.status != 0 -> if { -1 -> return }
+                index! => result!
+            }
+        index! + 1 => index!
+    }
+    result!
+}
+
+# Declared products use a type-term chain; resolved expression products use
+# the field registry. Select by representation, never by a failed lookup.
+productFieldTypeAt types: ref [SemanticType; ~], fields: ref [NominalField; ~], owner: Int, ordinal: Int -> Int {
+    owner < 0 or owner >= (types -> len) -> if { -1 -> return }
+    types[owner] => product
+    product.kind != 10 or ordinal < 0 or ordinal >= product.length
+        -> if { -1 -> return }
+    product.first < 0 -> if {
+        fields -> productFieldAt(owner, ordinal) => field
+        field < 0 -> if { -1 -> return }
+        fields[field].fieldType -> return
+    }
+    product.first => current!
+    0 => index!
+    index! <= ordinal -> while {
+        current! < 0 or current! >= (types -> len) -> if { -1 -> return }
+        types[current!] => field
+        field.kind != 11 or field.status != 0 -> if { -1 -> return }
+        index! == ordinal -> if {
+            ordinal + 1 == product.length and field.second >= 0
+                -> if { -1 -> return }
+            field.first -> return
+        }
+        field.second => current!
+        index! + 1 => index!
+    }
+    -1
+}
+
+productLabelsEqual first: NominalField, second: NominalField, package: ref analysis.PackageAnalysis -> Bool {
+    first.labelToken < 0 or second.labelToken < 0
+        -> if { first.labelToken < 0 and second.labelToken < 0 -> return }
+    first.sourceModule < 0 or first.sourceModule >= (package.ranges -> len)
+        or second.sourceModule < 0 or second.sourceModule >= (package.ranges -> len)
+        -> if { false -> return }
+    package.ranges[first.sourceModule] => firstRange
+    package.ranges[second.sourceModule] => secondRange
+    first.labelToken >= firstRange.tokenCount or second.labelToken >= secondRange.tokenCount
+        -> if { false -> return }
+    package.tokens[firstRange.tokenStart + first.labelToken] => firstToken
+    package.tokens[secondRange.tokenStart + second.labelToken] => secondToken
+    firstToken.span.length != secondToken.span.length
+        -> if { false -> return }
+    UIntSize(0) => offset!
+    offset! < firstToken.span.length -> while {
+        (package.sources[first.sourceModule] -> byte(firstToken.span.start + offset!)) != (package.sources[second.sourceModule] -> byte(secondToken.span.start + offset!))
+            -> if { false -> return }
+        offset! + 1 => offset!
+    }
+    true
+}
+
+public specializeFieldsInto types: mut [SemanticType; ~], fields: mut [NominalField; ~], package: ref analysis.PackageAnalysis, inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int, valueParameterHash: UInt64, valueArgument: Int -> SpecializationRoot {
+    types -> len => depthLimit
+    types -> specializeFieldsAt(fields, package, inputTemplates, actualInputs, resultTemplate, valueParameterHash, valueArgument, depthLimit)
+}
+
+specializeFieldsAt types: mut [SemanticType; ~], fields: mut [NominalField; ~], package: ref analysis.PackageAnalysis, inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int, valueParameterHash: UInt64, valueArgument: Int, remainingDepth: Int -> SpecializationRoot {
+    resultTemplate >= 0 and resultTemplate < (types -> len)
+        -> if {
+            types[resultTemplate] => source
+            source.first >= (types -> len) or source.second >= (types -> len)
+                or remainingDepth <= 0 -> if {
+                    types -> specializeManyWithFieldsInto(fields, true, inputTemplates, actualInputs, -1, valueParameterHash, valueArgument) -> return
+                }
+        }
+    types -> specializeManyWithFieldsInto(fields, true, inputTemplates, actualInputs, resultTemplate, valueParameterHash, valueArgument) => result!
+    result!.status != 0 -> if { result! -> return }
+    remainingDepth <= 0 -> if {
+        -1 => result!.root
+        2 => result!.status
+        result! -> return
+    }
+    types[resultTemplate] => original
+    not original.containsParameter -> if { result! -> return }
+    original.kind == 10 -> if {
+        [NominalField; ~] => concreteFields!
+        false => changed!
+        false => parameter!
+        0 => ordinal!
+        ordinal! < original.length -> while {
+            fields -> productFieldAt(resultTemplate, ordinal!) => fieldIndex
+            fieldIndex < 0 -> if {
+                -1 => result!.root
+                2 => result!.status
+                result! -> return
+            }
+            fields[fieldIndex] => field!
+            types -> specializeFieldsAt(fields, package, inputTemplates, actualInputs, field!.fieldType, valueParameterHash, valueArgument, remainingDepth - 1) => child
+            child.status != 0 -> if { child -> return }
+            child.root != field!.fieldType -> if { true => changed! }
+            child.root => field!.fieldType
+            types[child.root].containsParameter -> if { true => parameter! }
+            concreteFields! -> push(field!)
+            ordinal! + 1 => ordinal!
+        }
+        not changed! -> if { result! -> return }
+        -1 => existing!
+        0 => candidate!
+        candidate! < (types -> len) and existing! < 0
+            -> while {
+                types[candidate!] => known
+                known.kind == 10 and known.length == original.length and known.status == 0
+                    and ((known.containsParameter and parameter!) or (not known.containsParameter and not parameter!))
+                    -> if {
+                        true => equal!
+                        0 => fieldOrdinal!
+                        fieldOrdinal! < original.length and equal! -> while {
+                            fields -> productFieldAt(candidate!, fieldOrdinal!) => knownField
+                            knownField < 0 -> if { false => equal! } else {
+                                fields[knownField].fieldType != concreteFields![fieldOrdinal!].fieldType
+                                    -> if { false => equal! }
+                                not (fields[knownField] -> productLabelsEqual(concreteFields![fieldOrdinal!], package))
+                                    -> if { false => equal! }
+                            }
+                            fieldOrdinal! + 1 => fieldOrdinal!
+                        }
+                        equal! -> if { candidate! => existing! }
+                    }
+                candidate! + 1 => candidate!
+            }
+        existing! < 0 -> if {
+            types -> allocateSemanticTypeSlot => existing!
+            original => concrete!
+            -1 => concrete!.first
+            -1 => concrete!.second
+            parameter! => concrete!.containsParameter
+            concrete! => types[existing!]
+            concreteFields! -> each field {
+                field => copied!
+                existing! => copied!.ownerType
+                fields -> push(copied!)
+            }
+        }
+        existing! => result!.root
+        result! -> return
+    }
+    # The ordinary unifier supplies all scalar and value-parameter decisions.
+    # Revisit original children only when they can contain registry products.
+    original.containsParameter and original.kind != 1
+        -> if {
+            types[result!.root] => specialized!
+            false => changed!
+            original.first >= 0 -> if {
+                types -> specializeFieldsAt(fields, package, inputTemplates, actualInputs, original.first, valueParameterHash, valueArgument, remainingDepth - 1) => first
+                first.status != 0 -> if { first -> return }
+                first.root != specialized!.first -> if { true => changed! }
+                first.root => specialized!.first
+            }
+            original.second >= 0 -> if {
+                types -> specializeFieldsAt(fields, package, inputTemplates, actualInputs, original.second, valueParameterHash, valueArgument, remainingDepth - 1) => second
+                second.status != 0 -> if { second -> return }
+                second.root != specialized!.second -> if { true => changed! }
+                second.root => specialized!.second
+            }
+            changed! -> if {
+                specialized!.origin == 3 => parameter!
+                specialized!.kind == 4 and specialized!.length < 0 and specialized!.lengthHash != 0
+                    -> if { true => parameter! }
+                specialized!.first >= 0 and types[specialized!.first].containsParameter
+                    -> if { true => parameter! }
+                specialized!.second >= 0 and types[specialized!.second].containsParameter
+                    -> if { true => parameter! }
+                parameter! => specialized!.containsParameter
+                -1 => existing!
+                0 => candidate!
+                candidate! < (types -> len) and existing! < 0
+                    -> while {
+                        types[candidate!] => known
+                        known.kind == specialized!.kind and known.origin == specialized!.origin
+                            and known.module == specialized!.module and known.symbol == specialized!.symbol
+                            and known.first == specialized!.first and known.second == specialized!.second
+                            and known.length == specialized!.length and known.lengthHash == specialized!.lengthHash
+                            and known.status == specialized!.status
+                            -> if { candidate! => existing! }
+                        candidate! + 1 => candidate!
+                    }
+                existing! < 0 -> if {
+                    types -> allocateSemanticTypeSlot => existing!
+                    specialized! => types[existing!]
+                }
+                existing! => result!.root
+            }
+        }
+    result!
+}
+
 # All arguments contribute to one binding environment. Repeated occurrences of
 # a parameter must agree across argument boundaries, not just within one input.
 public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int -> SpecializationRoot {
@@ -2550,6 +2770,11 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
 # A value argument belongs to the same binding environment as inferred types.
 # Seed its extent before unification so input contracts and body types agree.
 public specializeManyWithIntegerValueInto types: mut [SemanticType; ~], inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int, valueParameterHash: UInt64, valueArgument: Int -> SpecializationRoot {
+    [NominalField; ~] => fields
+    types -> specializeManyWithFieldsInto(fields, false, inputTemplates, actualInputs, resultTemplate, valueParameterHash, valueArgument)
+}
+
+specializeManyWithFieldsInto types: mut [SemanticType; ~], fields: ref [NominalField; ~], fieldAware: Bool, inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int, valueParameterHash: UInt64, valueArgument: Int -> SpecializationRoot {
     [Int; ~] => templateStack!
     [Int; ~] => actualStack!
     [Int; ~] => parameterModules!
@@ -2669,21 +2894,38 @@ public specializeManyWithIntegerValueInto types: mut [SemanticType; ~], inputTem
                                 }
                             }
                         }
-                    status! == 0 -> if {
-                        template!.first < 0 and actual.first >= 0 -> if { 2 => status! }
-                        template!.first >= 0 and actual.first < 0 -> if { 2 => status! }
-                        template!.second < 0 and actual.second >= 0 -> if { 2 => status! }
-                        template!.second >= 0 and actual.second < 0 -> if { 2 => status! }
-                    }
-                    # Recursively infer the first child before the second,
-                    # matching C# Result success/error diagnostic priority.
-                    status! == 0 and template!.second >= 0 -> if {
-                        templateStack! -> push(template!.second)
-                        actualStack! -> push(actual.second)
-                    }
-                    status! == 0 and template!.first >= 0 -> if {
-                        templateStack! -> push(template!.first)
-                        actualStack! -> push(actual.first)
+                    fieldAware and template!.kind == 10 -> if {
+                        template!.length < 0 or template!.length != actual.length
+                            -> if { 2 => status! }
+                        template!.length - 1 => ordinal!
+                        status! == 0 and ordinal! >= 0 -> while {
+                            types -> productFieldTypeAt(fields, matchedTemplateId!, ordinal!) => templateType
+                            types -> productFieldTypeAt(fields, actualId, ordinal!) => actualType
+                            templateType < 0 or templateType >= (types -> len)
+                                or actualType < 0 or actualType >= (types -> len)
+                                -> if { 2 => status! } else {
+                                    templateStack! -> push(templateType)
+                                    actualStack! -> push(actualType)
+                                }
+                            ordinal! - 1 => ordinal!
+                        }
+                    } else {
+                        status! == 0 -> if {
+                            template!.first < 0 and actual.first >= 0 -> if { 2 => status! }
+                            template!.first >= 0 and actual.first < 0 -> if { 2 => status! }
+                            template!.second < 0 and actual.second >= 0 -> if { 2 => status! }
+                            template!.second >= 0 and actual.second < 0 -> if { 2 => status! }
+                        }
+                        # Recursively infer the first child before the second,
+                        # matching C# Result success/error diagnostic priority.
+                        status! == 0 and template!.second >= 0 -> if {
+                            templateStack! -> push(template!.second)
+                            actualStack! -> push(actual.second)
+                        }
+                        status! == 0 and template!.first >= 0 -> if {
+                            templateStack! -> push(template!.first)
+                            actualStack! -> push(actual.first)
+                        }
                     }
                 }
             status! == 2 and conflictParameterSymbol! < 0 and mismatchExpectedTypeId! < 0

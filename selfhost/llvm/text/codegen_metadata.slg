@@ -9,6 +9,7 @@ import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.expression_type_ids as expressionIds
 import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.module_artifact_types as artifactTypes
 import sollang.compiler.llvm.codegen_units as units
 import sollang.compiler.llvm.codegen_store as codegenStore
 import sys.process as process
@@ -25,7 +26,31 @@ capturePreparedCodegenTypeHash prepared: ref semanticContext.SemanticSnapshot, t
             signatures -> when {
                 Err(_) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return }
                 Ok(ids) {
-                    types -> copyPreparedCodegenSemantic(references, fields) => semantic
+                    types -> copyPreparedCodegenSemantic(references, fields) => semantic!
+                    # Full cache identities include intermediate product instances,
+                    # not only products reached by emitted function signatures.
+                    prepared.package -> artifactTypes.captureTypeDetails(semantic!) => details
+                    [typeIds.SemanticType; ~] => materializationTypes!
+                    [Int; ~] => materializationIds!
+                    0..<(semantic!.types -> len) -> each index {
+                        materializationTypes! -> push(semantic!.types[index])
+                        materializationIds! -> push(index)
+                    }
+                    artifactTypes.ReboundTypeTable { types: materializationTypes!, typeIds: materializationIds!, status: details.status, details: details } => table
+                    [typeIds.NominalField; ~] => retainedFields!
+                    semantic!.fields -> each field {
+                        field.ownerType >= 0 and field.ownerType < (semantic!.types -> len)
+                            and semantic!.types[field.ownerType].kind == 10
+                            and (field.ownerType >= (prepared.semantic.types -> len)
+                            or (prepared.semantic.types[field.ownerType] -> typeIds.vacantSemanticTypeSlot)) => newProduct
+                        not newProduct -> if { retainedFields! -> push(field) }
+                    }
+                    table -> artifactTypes.materializeProductFields(prepared.package, retainedFields!, prepared.semantic.types) => materialized
+                    materialized.status != 0 -> if {
+                        Result<UInt64, keys.TypeUniverseCaptureError>.Err(keys.TypeUniverseCaptureError.InvalidType) -> return
+                    }
+                    materialized.fields => restoredFields
+                    restoredFields => semantic!.fields
                     [Int; ~] => copiedSizes!
                     sizes -> each size { copiedSizes! -> push(size) }
                     [Int; ~] => copiedAligns!
@@ -34,7 +59,7 @@ capturePreparedCodegenTypeHash prepared: ref semanticContext.SemanticSnapshot, t
                     statuses -> each status { copiedStatuses! -> push(status) }
                     TypeLayouts { sizes: copiedSizes!, aligns: copiedAligns!, statuses: copiedStatuses! } => layouts
                     prepared -> preparedCodegenNames => context!
-                    context! -> captureCompilationTypeUniverseWithSignatures(prepared.package, semantic, layouts, seeds, ids) -> when {
+                    context! -> captureCompilationTypeUniverseWithSignatures(prepared.package, semantic!, layouts, seeds, ids) -> when {
                         Err(error) { Result<UInt64, keys.TypeUniverseCaptureError>.Err(error) -> return }
                         Ok(records) {
                             records -> keys.typeUniverseHash -> when {
@@ -76,7 +101,7 @@ capturePreparedFunctionEmissions prepared: ref semanticContext.SemanticSnapshot,
                 Err(_) { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
                 Ok(value) { value }
             } => declarations
-            prepared -> functionTypes.collect(resolved, ir, semantic!.types, plans, declarations.ids) => uses
+            prepared -> functionTypes.collect(resolved, ir, semantic!.types, semantic!.fields, plans, declarations.ids) => uses
             uses.unresolvedCalls != 0 -> if { Result<keys.CodegenFunctionMetadata, keys.FunctionEmissionError>.Err(keys.FunctionEmissionError.TypeRegistration) -> return }
             [Int; ~] => roots!
             uses.uses -> each use { roots! -> push(use.typeId) }

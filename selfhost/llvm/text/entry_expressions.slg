@@ -1248,6 +1248,19 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                         }
                 }
         }
+        entryExpressionIndex -> typedIr.isRuntimeStreamIteration(context.ir)
+            -> if {
+                functionIndex + 1 => runtimeItemIndex!
+                runtimeItemIndex! < entryEnd -> while {
+                    (runtimeItemIndex! -> typedIr.runtimeStreamItemOwner(context.ir)) == entryExpressionIndex
+                        -> if {
+                            "  %v$(runtimeItemIndex! -> valueNameId(state)) = freeze " -> print
+                            context.ir[runtimeItemIndex!] -> writeIrType(context, state)
+                            " %stream$(entryExpressionIndex -> valueNameId(state))_item" -> println
+                        }
+                    runtimeItemIndex! + 1 => runtimeItemIndex!
+                }
+            }
         # flatMap owns both role aliases at its phase entry; the generic first-stage
         # initializer must not emit either alias a second time.
         entryOpeningPipeline.stageCount > 0 and context.streamPlan.stages[entryOpeningPipeline.stageStart].flags != 3
@@ -1293,6 +1306,7 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
             entryOpeningTerminalUseSearch! < entryEnd -> while {
                 context.ir[entryOpeningTerminalUseSearch!] => entryOpeningTerminalUse
                 entryOpeningTerminalUse.kind == 5 and entryOpeningTerminalUse.symbol == entryOpeningTerminalRoleSymbol!
+                    and not (entryExpressionIndex -> typedIr.isRuntimeStreamIteration(context.ir))
                     -> if {
                         "  %v$(entryOpeningTerminalUseSearch! -> valueNameId(state)) = freeze " -> print
                         entryOpeningTerminalUse -> writeIrType(context, state)
@@ -3320,6 +3334,10 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
 
 emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd: Int, entryOrder: ref [Int; ~], entryActiveStreams: mut [Int; ~], entryStreamCurrentValues: mut [Int; ~], entryStreamStops: mut [Int; ~], activeStreamSize: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
     context.ir[entryExpressionIndex] => entryExpression
+    entryExpressionIndex -> typedIr.isRuntimeStreamCallback(context.ir)
+        -> if {
+            entryExpressionIndex -> emitRegion(entryOrder, context, state)
+        }
     entryExpression.kind == 18 -> if {
         entryExpressionIndex -> emitConditionalValue(functionIndex, entryOrder, context, state)
     }
@@ -3769,7 +3787,14 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                 "stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_continue:" -> println
                                 entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
                                     -> if {
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_header" -> println
+                                        entryCloseStreamPipeline.terminalIr -> typedIr.isRuntimeStreamIteration(context.ir)
+                                            -> if {
+                                                entryCloseStreamPipeline.terminalIr -> streamPipelineOwner(context) => owner
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_cancelled = load i1, ptr %stream_scope$(owner -> valueNameId(state))_cancelled, align 1" -> println
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_cancelled, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_exit, label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_header" -> println
+                                            } else {
+                                                "  br label %stream$(entryCloseStreamPipeline.terminalIr -> valueNameId(state))_header" -> println
+                                            }
                                     } else {
                                         entryCloseFlatMapStage! >= 0 -> if {
                                             entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true, state)

@@ -1032,7 +1032,7 @@ $productionRecursiveTypeResolutions = ([regex]::Matches($textContext, 'expressio
 if ($productionRecursiveTypeResolutions -ne 1) {
     Register-StaticAssertionFailure "native LLVM preparation must resolve recursive expression types exactly once; actual=$productionRecursiveTypeResolutions"
 }
-$recursiveTypeResolutionOffset = $textContext.IndexOf("initialPrepared -> expressionTypeIds.resolveCallContextWithExternalResults(externalResults) => resolvedCallContext", [StringComparison]::Ordinal)
+$recursiveTypeResolutionOffset = $textContext.IndexOf("initialPrepared -> expressionTypeIds.resolveCallContextWithExternalResultsWithExecutionMode(externalResults, request.supportsComputePool) => resolvedCallContext", [StringComparison]::Ordinal)
 Assert-Contains $textContext 'resolvedCallContext.prepared => prepared' "preparation consumes the completed call table"
 Assert-Contains $textContext 'resolvedCallContext.types => recursiveTypes!' "preparation consumes the matching completed type table"
 Assert-NotContains $textContext 'prepared -> expressionTypeIds.resolveContext' "preparation avoids a second disconnected type pass"

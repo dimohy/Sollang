@@ -22,7 +22,9 @@ main {
     prepared -> typedIr.lowerResolvedContext(resolved) => nodes!
     [typeIds.SemanticType; ~] => types!
     resolved.types -> each type { types! -> push(type) }
-    nodes! -> typedIr.planGenericCalls(prepared, types!) => plans
+    [typeIds.NominalField; ~] => fields!
+    resolved.fields -> each field { fields! -> push(field) }
+    nodes! -> typedIr.planGenericCalls(prepared, types!, fields!) => plans
     "plans=$(plans -> len),nodes=$(nodes! -> len)" -> println
     plans -> each plan {
         "call=$(plan.callNode),template=$(plan.templateNode),status=$(plan.status),result=$(plan.resultType),inputs=$(plan.inputTemplates -> len)/$(plan.actualInputs -> len)" -> println
@@ -35,7 +37,7 @@ main {
                 inputIndex! + 1 => inputIndex!
             }
     }
-    nodes! -> typedIr.materializeGenericBodies(types!, resolved.fields, plans) => instances
+    nodes! -> typedIr.materializeGenericBodies(prepared, types!, fields!, plans) => instances
     instances -> each instance {
         "instance-call=$(instance.callNode),status=$(instance.status),function=$(instance.functionNode),nodes=$(instance.nodeCount)" -> println
     }

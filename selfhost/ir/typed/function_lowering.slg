@@ -449,62 +449,6 @@ sealIntrinsicPayloadsAfterGenericCalls nodes: mut [TypedIrNode; ~], types: ref [
     }
 }
 
-# Register instances before visiting their bodies so recursive calls reuse them.
-# Preserve structural field labels under the generic result substitution.
-materializeGenericProductFields nodes: ref [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plans: ref [GenericCallPlan; ~], selected: ref [Bool; ~] -> Unit {
-    0 => planIndex!
-    plans -> each plan {
-        selected[planIndex!] and plan.status == 0 and plan.templateNode >= 0
-            -> if {
-                [nodes[plan.templateNode].typeId,; ~] => pending!
-                [Int; ~] => visited!
-                (pending! -> len) > 0 -> while {
-                    pending! -> take(Int(pending! -> len) - 1) => template
-                    false => seen!
-                    visited! -> each known { known == template -> if { true => seen! } }
-                    not seen! and template >= 0 and template < (types -> len)
-                        -> if {
-                            visited! -> push(template)
-                            types[template] => sourceType
-                            sourceType.kind == 10 and sourceType.containsParameter
-                                -> if {
-                                    types -> typeIds.specializeManyInto(plan.inputTemplates, plan.actualInputs, template) => owner
-                                    owner.status == 0 and owner.root != template
-                                        -> if {
-                                            fields -> len => fieldCount
-                                            0 => fieldIndex!
-                                            fieldIndex! < fieldCount -> while {
-                                                fields[fieldIndex!] => field
-                                                field.ownerType == template -> if {
-                                                    false => exists!
-                                                    fields -> each existing {
-                                                        existing.ownerType == owner.root and existing.ordinal == field.ordinal
-                                                            -> if { true => exists! }
-                                                    }
-                                                    not exists! -> if {
-                                                        types -> typeIds.specializeManyInto(plan.inputTemplates, plan.actualInputs, field.fieldType) => value
-                                                        value.status == 0 -> if {
-                                                            field => concrete!
-                                                            owner.root => concrete!.ownerType
-                                                            value.root => concrete!.fieldType
-                                                            types[value.root].status => concrete!.status
-                                                            fields -> push(concrete!)
-                                                        }
-                                                    }
-                                                }
-                                                fieldIndex! + 1 => fieldIndex!
-                                            }
-                                        }
-                                }
-                            sourceType.first >= 0 -> if { pending! -> push(sourceType.first) }
-                            sourceType.second >= 0 -> if { pending! -> push(sourceType.second) }
-                        }
-                }
-            }
-        planIndex! + 1 => planIndex!
-    }
-}
-
 # Explicit Number arguments are semantic value identity, independently of the
 # runtime input type. Type syntax and runtime arguments own their own numbers.
 # -1 means no explicit value; -2 retains an invalid Number identity for the
@@ -773,10 +717,9 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
             planSlots! -> push(slot!)
             selected! -> push(materialize!)
         }
-        nodes -> materializeGenericProductFields(resolved.types, resolved.fields, plans, selected!)
         typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => payloadEdges
         prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds
-        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans, selected!, planValueArguments!, planValueHashes!) => batch!
+        nodes -> materializeSelectedGenericBodies(prepared, resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans, selected!, planValueArguments!, planValueHashes!) => batch!
         0 => instanceIndex!
         instanceIndex! < (batch! -> len) -> while {
             batch![instanceIndex!] => instance!
@@ -827,7 +770,7 @@ relocateFunctionEdge edge: Int, start: Int, end: Int, destination: Int -> Int {
 # Failed substitutions never append a partial function. Classification runs
 # once after all substitutions, rather than copying/classifying the arena for
 # every node or instance.
-public materializeGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], plans: ref [GenericCallPlan; ~] -> [GenericFunctionInstance; ~] {
+public materializeGenericBodies nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plans: ref [GenericCallPlan; ~] -> [GenericFunctionInstance; ~] {
     [typeIds.PayloadEdge; ~] => payloadEdges
     [Bool; ~] => resourceSeeds
     [Bool; ~] => selected!
@@ -840,10 +783,10 @@ public materializeGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeIds
         valueParameterHashes! -> push(0)
         index! + 1 => index!
     }
-    nodes -> materializeSelectedGenericBodies(types, fields, payloadEdges, resourceSeeds, plans, selected!, valueArguments!, valueParameterHashes!)
+    nodes -> materializeSelectedGenericBodies(prepared, types, fields, payloadEdges, resourceSeeds, plans, selected!, valueArguments!, valueParameterHashes!)
 }
 
-materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], resourceSeeds: ref [Bool; ~], plans: ref [GenericCallPlan; ~], selected: ref [Bool; ~], valueArguments: ref [Int; ~], valueParameterHashes: ref [UInt64; ~] -> [GenericFunctionInstance; ~] {
+materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], payloadEdges: ref [typeIds.PayloadEdge; ~], resourceSeeds: ref [Bool; ~], plans: ref [GenericCallPlan; ~], selected: ref [Bool; ~], valueArguments: ref [Int; ~], valueParameterHashes: ref [UInt64; ~] -> [GenericFunctionInstance; ~] {
     nodes -> len => originalCount
     [GenericFunctionInstance; ~] => instances!
     0 => selectionIndex!
@@ -882,7 +825,7 @@ materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeId
                 node!.typeId >= 0 and node!.typeId < (types -> len)
                     -> if {
                         types[node!.typeId].containsParameter -> if {
-                            types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, node!.typeId, valueParameterHash, valueArgument) => specialized
+                            types -> typeIds.specializeFieldsInto(fields, prepared.package, plan.inputTemplates, plan.actualInputs, node!.typeId, valueParameterHash, valueArgument) => specialized
                             specialized.status == 0 and specialized.root >= 0
                                 -> if {
                                     types[specialized.root] => canonical
@@ -1128,19 +1071,19 @@ public sealMaterializedTaskProducts nodes: mut [TypedIrNode; ~], prepared: ref s
     (shapes! -> len) > 0
 }
 
-public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~] -> [GenericCallPlan; ~] {
+public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~] -> [GenericCallPlan; ~] {
     nodes -> functionTemplatesBySymbol(prepared) => functions
-    nodes -> planGenericCallsWithTemplates(prepared, types, prepared.semantic.references, functions)
+    nodes -> planGenericCallsWithTemplates(prepared, types, fields, prepared.semantic.references, functions)
 }
 
 public planResolvedGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericCallPlan; ~] {
     nodes -> functionTemplatesBySymbol(prepared) => functions
-    nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functions) => plans!
+    nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.fields, resolved.references, functions) => plans!
     nodes -> appendInterpolationGenericCalls(prepared, resolved, plans!, functions)
     plans!
 }
 
-planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
+planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], references: ref [typeIds.TypeReference; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
     [GenericCallPlan; ~] => plans!
     0 => callIndex!
     callIndex! < (nodes -> len) -> while {
@@ -1230,16 +1173,19 @@ planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanti
                             } else { parameter.nextOperand => templateIndex! }
                             templateOrdinal! + 1 => templateOrdinal!
                         }
-                    false => taskArgumentIdentityChanged!
+                    prepared.package.ranges[function.sourceModule] => argumentFunctionRange
+                    prepared.package.symbols[argumentFunctionRange.symbolStart + function.symbol] => argumentFunction
+                    false => argumentIdentityChanged!
                     call.operand0 => argumentIndex!
                     0 => argumentOrdinal!
                     argumentIndex! >= 0 and argumentIndex! < (nodes -> len)
                         and argumentOrdinal! < (templates! -> len) -> while {
                             nodes[argumentIndex!] => argument
                             argument.typeId => actualTypeId!
+                            types -> typeIds.primaryStreamInputTypeId(actualTypeId!, argumentFunction.flags / 64 % 2 == 1, argumentOrdinal!) => actualTypeId!
                             (call -> resolvedDeclaredRuntimeOpcode(prepared)) == -325
                                 -> if { argument -> canonicalTaskArgumentType(nodes, types) => actualTypeId! }
-                            actualTypeId! != argument.typeId -> if { true => taskArgumentIdentityChanged! }
+                            actualTypeId! != argument.typeId -> if { true => argumentIdentityChanged! }
                             actuals! -> push(actualTypeId!)
                             argumentOrdinal! == 0 -> if {
                                 call.operand1 => argumentIndex!
@@ -1249,7 +1195,7 @@ planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanti
                     # Callback result inference commits the call's canonical result
                     # before body materialization. Reuse it as a type constraint so
                     # a result-only parameter is specialized in the whole body.
-                    not taskArgumentIdentityChanged!
+                    not argumentIdentityChanged!
                         and function.typeId >= 0 and function.typeId < (types -> len)
                         and types[function.typeId].containsParameter
                         and call.typeId >= 0 and call.typeId < (types -> len)
@@ -1258,7 +1204,7 @@ planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanti
                             templates! -> push(function.typeId)
                             actuals! -> push(call.typeId)
                         }
-                    types -> typeIds.specializeManyInto(templates!, actuals!, function.typeId) => specialized
+                    types -> typeIds.specializeFieldsInto(fields, prepared.package, templates!, actuals!, function.typeId, 0, -1) => specialized
                     plans! -> push(GenericCallPlan {
                         callNode: callIndex!
                         interpolationNode: -1
@@ -1330,7 +1276,7 @@ appendContextualInterpolationGenericPlans nodes: ref [TypedIrNode; ~], prepared:
                 concrete! -> if {
                     [Int; ~] => specializedActuals!
                     actuals -> each actual {
-                        resolved.types -> typeIds.specializeManyInto(ownerTemplates!, ownerActuals!, actual) => specialized
+                        resolved.types -> typeIds.specializeFieldsInto(resolved.fields, prepared.package, ownerTemplates!, ownerActuals!, actual, 0, -1) => specialized
                         specialized.status != 0 or specialized.root < 0
                             -> if { false => concrete! }
                         specializedActuals! -> push(specialized.root)
@@ -1341,7 +1287,7 @@ appendContextualInterpolationGenericPlans nodes: ref [TypedIrNode; ~], prepared:
                     }
                     [Int; ~] => inputTemplates!
                     templates -> each template { inputTemplates! -> push(template) }
-                    resolved.types -> typeIds.specializeManyInto(inputTemplates!, specializedActuals!, nodes[target].typeId) => result
+                    resolved.types -> typeIds.specializeFieldsInto(resolved.fields, prepared.package, inputTemplates!, specializedActuals!, nodes[target].typeId, 0, -1) => result
                     plans -> push(GenericCallPlan {
                         callNode: -1
                         interpolationNode: interpolationNode
@@ -1432,7 +1378,7 @@ appendInterpolationGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref seman
                                         argumentIndex! + 1 => argumentIndex!
                                     }
                                 nodes -> appendContextualInterpolationGenericPlans(prepared, resolved, plans, sourceRange.sourceModule, callIndex, target!, templates!, actuals!)
-                                resolved.types -> typeIds.specializeManyInto(templates!, actuals!, function.typeId) => specialized
+                                resolved.types -> typeIds.specializeFieldsInto(resolved.fields, prepared.package, templates!, actuals!, function.typeId, 0, -1) => specialized
                                 plans -> push(GenericCallPlan {
                                     callNode: -1
                                     interpolationNode: callIndex
@@ -4307,7 +4253,14 @@ sealLateNominalMemberTypes results: mut [TypedIrNode; ~], prepared: ref semantic
 # Late call/control repairs can change exact producer types after the ordinary
 # reference pass. Keep this final fixed point outside the main lowering
 # declaration so the ordering contract does not grow that already-large stage.
-canCommitProducedBindingType binding: TypedIrNode, producedType: Int, types: ref [typeIds.SemanticType; ~] -> Bool {
+canCommitProducedBindingType binding: TypedIrNode, producedType: Int, types: ref [typeIds.SemanticType; ~], prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    # A copied stage's primary input is an item alias, while operand0 retains
+    # the producer handle for continuation planning. Its concrete signature
+    # must not acquire that handle's Stream/EventStream wrapper in late sealing.
+    binding.typeId >= 0 and binding.typeId < (types -> len)
+        and not types[binding.typeId].containsParameter
+        and (binding -> isPrimaryStreamInputBinding(prepared.package.ranges, prepared.package.symbols))
+        -> if { false -> return }
     binding.flags != 1 or binding.typeId < 0 -> if { true -> return }
     binding.typeId >= (types -> len) or producedType < 0 or producedType >= (types -> len)
         -> if { false -> return }
@@ -4360,7 +4313,7 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
             and binding!.operand0 >= 0
             and binding!.operand0 < (results -> len)
             and results[binding!.operand0].typeId >= 0
-            and (binding! -> canCommitProducedBindingType(results[binding!.operand0].typeId, frozenRecursiveSemanticTypes))
+            and (binding! -> canCommitProducedBindingType(results[binding!.operand0].typeId, frozenRecursiveSemanticTypes, prepared))
             -> if {
                 results[binding!.operand0] => value
                 binding!.typeId != value.typeId
@@ -4458,7 +4411,7 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
             and binding!.operand0 >= 0
             and binding!.operand0 < (results -> len)
             and results[binding!.operand0].typeId >= 0
-            and (binding! -> canCommitProducedBindingType(results[binding!.operand0].typeId, frozenRecursiveSemanticTypes))
+            and (binding! -> canCommitProducedBindingType(results[binding!.operand0].typeId, frozenRecursiveSemanticTypes, prepared))
             -> if {
                 results[binding!.operand0] => value
                 value.typeId => binding!.typeId
@@ -5948,7 +5901,7 @@ public materializeUserCallbacks nodes: mut [TypedIrNode; ~], prepared: ref seman
                                             [Int; ~] => emptyActuals
                                             [GenericCallPlan; ~] => plans!
                                             plans! -> push(GenericCallPlan { callNode: callIndex!, interpolationNode: -1, ownerFunction: -1, templateNode: templateIndex!, inputTemplates: emptyTemplates, actualInputs: emptyActuals, resultType: nodes[templateIndex!].typeId, status: 0 })
-                                            nodes -> materializeGenericBodies(resolved.types, resolved.fields, plans!) => copied
+                                            nodes -> materializeGenericBodies(prepared, resolved.types, resolved.fields, plans!) => copied
                                             copied[0] => instance!
                                             instance!.status == 0 -> if {
                                                 instance!.functionNode => destination
@@ -6167,7 +6120,7 @@ copyUserStreamSharedBinding nodes: mut [TypedIrNode; ~], binding: Int, parent: I
 
 # Stage construction runs from sink to source. Nested initialization scopes
 # retain state and owned arguments until the whole source invocation finishes.
-initializeUserStreamFrames nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], plan: ref UserStreamContinuationPlan, consumer: Int, sourceCount: Int, genericInstances: mut [GenericFunctionInstance; ~] -> UserStreamFrameInitialization {
+initializeUserStreamFrames nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], plan: ref UserStreamContinuationPlan, consumer: Int, sourceCount: Int, includeSource: Bool, genericInstances: mut [GenericFunctionInstance; ~] -> UserStreamFrameInitialization {
     [Int; ~] => sharedCopies!
     0 => index!
     index! < sourceCount -> while {
@@ -6176,39 +6129,40 @@ initializeUserStreamFrames nodes: mut [TypedIrNode; ~], prepared: ref semanticCo
     }
     consumer => parent!
     0 => ordinal!
-    ordinal! + 1 < Int(plan.stages -> len) -> while {
-        plan.stages[ordinal!] => stage
-        nodes[stage] -> userStreamUnitScope(-6, types) => scope!
-        parent! => scope!.parent
-        nodes -> len => parent!
-        nodes -> push(scope!)
-        # Additional parameters are bound before this frame's state values.
-        0 => parameterIndex!
-        parameterIndex! < sourceCount -> while {
-            nodes[parameterIndex!] => parameter
-            parameter.parent == stage and parameter.kind == 17 and parameter.opcode == -227
-                and parameterIndex! != plan.primaryBindings[ordinal!]
-                -> if { nodes -> copyUserStreamSharedBinding(parameterIndex!, parent!, sourceCount, sharedCopies!, genericInstances) }
-            parameterIndex! + 1 => parameterIndex!
+    ordinal! < Int(plan.stages -> len) - 1 or (includeSource and ordinal! < Int(plan.stages -> len))
+        -> while {
+            plan.stages[ordinal!] => stage
+            nodes[stage] -> userStreamUnitScope(-6, types) => scope!
+            parent! => scope!.parent
+            nodes -> len => parent!
+            nodes -> push(scope!)
+            # Additional parameters are bound before this frame's state values.
+            0 => parameterIndex!
+            parameterIndex! < sourceCount -> while {
+                nodes[parameterIndex!] => parameter
+                parameter.parent == stage and parameter.kind == 17 and parameter.opcode == -227
+                    and parameterIndex! != plan.primaryBindings[ordinal!]
+                    -> if { nodes -> copyUserStreamSharedBinding(parameterIndex!, parent!, sourceCount, sharedCopies!, genericInstances) }
+                parameterIndex! + 1 => parameterIndex!
+            }
+            0 => stateIndex!
+            stateIndex! < sourceCount -> while {
+                nodes[stateIndex!] => binding
+                binding.kind == 17 and binding.astNode >= 0
+                    and (stateIndex! -> belongsToUserStreamFrame(stage, plan, nodes))
+                    -> if {
+                        prepared.package.ranges[binding.sourceModule] => range
+                        prepared.package.nodes[range.astStart + binding.astNode].kind == 61
+                            -> if {
+                                nodes[binding.parent] => owner
+                                binding.parent == stage or (owner.kind == 19 and owner.opcode == -227 and owner.symbol == -3 and owner.parent == stage)
+                                    -> if { nodes -> copyUserStreamSharedBinding(stateIndex!, parent!, sourceCount, sharedCopies!, genericInstances) }
+                            }
+                    }
+                stateIndex! + 1 => stateIndex!
+            }
+            ordinal! + 1 => ordinal!
         }
-        0 => stateIndex!
-        stateIndex! < sourceCount -> while {
-            nodes[stateIndex!] => binding
-            binding.kind == 17 and binding.astNode >= 0
-                and (stateIndex! -> belongsToUserStreamFrame(stage, plan, nodes))
-                -> if {
-                    prepared.package.ranges[binding.sourceModule] => range
-                    prepared.package.nodes[range.astStart + binding.astNode].kind == 61
-                        -> if {
-                            nodes[binding.parent] => owner
-                            binding.parent == stage or (owner.kind == 19 and owner.opcode == -227 and owner.symbol == -3 and owner.parent == stage)
-                                -> if { nodes -> copyUserStreamSharedBinding(stateIndex!, parent!, sourceCount, sharedCopies!, genericInstances) }
-                        }
-                }
-            stateIndex! + 1 => stateIndex!
-        }
-        ordinal! + 1 => ordinal!
-    }
     UserStreamFrameInitialization { copiesBySource: sharedCopies!, sourceParent: parent! }
 }
 
@@ -6288,6 +6242,48 @@ instantiateUserStreamContinuation nodes: mut [TypedIrNode; ~], prepared: ref sem
 
 # Each consumption instantiates its own continuation, including stored plans.
 # Cleanup and callback transfers are still attached by the ordinary copier.
+struct RuntimeStreamContinuationInput {
+    parent: Int
+    item: Int
+}
+
+materializeRuntimeStreamInput nodes: mut [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], consumer: Int, primary: Int, input: Int, parent: Int, sourceCount: Int, sharedCopies: mut [Int; ~], genericInstances: mut [GenericFunctionInstance; ~] -> RuntimeStreamContinuationInput {
+    nodes -> copyUserStreamSharedBinding(primary, parent, sourceCount, sharedCopies, genericInstances)
+    sharedCopies[input] => producer
+    nodes[producer] => producerRoot!
+    parent => producerRoot!.parent
+    producerRoot! => nodes[producer]
+    nodes[sharedCopies[primary]] -> userStreamUnitScope(-2, types) => nodes[sharedCopies[primary]]
+    -1 => sharedCopies[primary]
+    nodes[consumer] => iteration!
+    parent => iteration!.parent
+    -1 => iteration!.symbol
+    -1 => iteration!.targetModule
+    producer => iteration!.operand0
+    -1 => iteration!.nextOperand
+    nodes -> len => iterationIndex
+    nodes -> push(iteration!)
+    nodes[consumer] -> userStreamUnitScope(-7, types) => callbackScope!
+    iterationIndex => callbackScope!.parent
+    nodes -> len => callbackIndex
+    nodes -> push(callbackScope!)
+    callbackIndex => iteration!.operand1
+    iteration! => nodes[iterationIndex]
+    nodes[primary] => item!
+    5 => item!.kind
+    runtimeStreamItemOpcode() => item!.opcode
+    -1 => item!.symbol
+    -1 => item!.targetModule
+    -1 => item!.operand0
+    iterationIndex => item!.operand1
+    -1 => item!.nextOperand
+    0 => item!.flags
+    callbackIndex => item!.parent
+    nodes -> len => itemIndex
+    nodes -> push(item!)
+    RuntimeStreamContinuationInput { parent: callbackIndex, item: itemIndex }
+}
+
 public materializeUserStreamConsumers nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], genericInstances: mut [GenericFunctionInstance; ~] -> Unit {
     nodes -> len => originalCount
     0 => consumerIndex!
@@ -6314,9 +6310,28 @@ public materializeUserStreamConsumers nodes: mut [TypedIrNode; ~], prepared: ref
                         prepared.package.tokens[range.tokenStart + bodyToken].span.start => bodyStart!
                     }
                     nodes -> collectBlockCallback(prepared, consumerIndex!, sourceCount, bodyStart!) => callback
-                    nodes -> initializeUserStreamFrames(prepared, types, plan, consumerIndex!, sourceCount, genericInstances) => initialization
+                    plan.primaryBindings[Int(plan.stages -> len) - 1] => firstPrimary
+                    -1 => runtimeInput!
+                    firstPrimary >= 0 -> if {
+                        nodes[firstPrimary].operand0 => input
+                        input >= 0 and nodes[input].typeId >= 0 -> if {
+                            types[nodes[input].typeId] => inputType
+                            inputType.kind == 7 and inputType.origin == 4
+                                and (inputType.symbol == 3 or inputType.symbol == 4)
+                                -> if { input => runtimeInput! }
+                        }
+                    }
+                    nodes -> initializeUserStreamFrames(prepared, types, plan, consumerIndex!, sourceCount, runtimeInput! >= 0, genericInstances) => initialization!
+                    -1 => itemInput!
+                    runtimeInput! >= 0 -> if {
+                        # Preserve the producer's argument subtree once, outside
+                        # every stage's per-item frame and state initialization.
+                        nodes -> materializeRuntimeStreamInput(types, consumerIndex!, firstPrimary, runtimeInput!, initialization!.sourceParent, sourceCount, initialization!.copiesBySource, genericInstances) => runtimeInput
+                        runtimeInput.item => itemInput!
+                        runtimeInput.parent => initialization!.sourceParent
+                    }
                     [Int; ~] => finalEmissions!
-                    nodes -> instantiateUserStreamContinuation(prepared, types, plan, Int(plan.stages -> len) - 1, -1, initialization.sourceParent, sourceCount, initialization.copiesBySource, finalEmissions!, genericInstances) => producer
+                    nodes -> instantiateUserStreamContinuation(prepared, types, plan, Int(plan.stages -> len) - 1, itemInput!, initialization!.sourceParent, sourceCount, initialization!.copiesBySource, finalEmissions!, genericInstances) => producer
                     finalEmissions! -> each emission {
                         nodes[emission].operand0 => item
                         nodes[emission].parent => producerLoop!

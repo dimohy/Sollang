@@ -7736,6 +7736,28 @@ internal sealed partial class SemanticCompiler
                 typeTemplate[1..^4], elementType, function, inferredTypes, line, column);
             return;
         }
+        var streamPrefix = Shared.TypeNamePolicy.StableStreamPrefix();
+        if (typeTemplate.StartsWith(streamPrefix, StringComparison.Ordinal)
+            && typeTemplate.EndsWith('>'))
+        {
+            if (!_types.TryGetStreamValue(actualType, out var streamElement))
+                throw Error(line, column, $"expected a Stream but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[streamPrefix.Length..^1], streamElement,
+                function, inferredTypes, line, column);
+            return;
+        }
+        var eventStreamPrefix = Shared.TypeNamePolicy.StableEventStreamPrefix();
+        if (typeTemplate.StartsWith(eventStreamPrefix, StringComparison.Ordinal)
+            && typeTemplate.EndsWith('>'))
+        {
+            if (!_types.TryGetEventStreamValue(actualType, out var eventElement))
+                throw Error(line, column, $"expected an EventStream but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[eventStreamPrefix.Length..^1], eventElement,
+                function, inferredTypes, line, column);
+            return;
+        }
         var dequePrefix = Shared.TypeNamePolicy.StableDequePrefix();
         if (typeTemplate.StartsWith(dequePrefix, StringComparison.Ordinal)
             && typeTemplate.EndsWith('>'))

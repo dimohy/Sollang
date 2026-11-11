@@ -1504,6 +1504,11 @@ regionStartingStreamPipeline nodeIndex: Int, regionIndex: Int, context: ref emit
 
 streamCallbackHasNestedRegion nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext -> Bool {
     context.streamPlan.pipelines[pipelineIndex] => pipeline
+    pipeline.terminalIr -> typedIr.isRuntimeStreamIteration(context.ir)
+        -> if {
+            context.ir[pipeline.terminalIr].operand1 == nodeIndex
+                -> if { false -> return }
+        }
     nodeIndex => ancestor!
     ancestor! >= 0 -> while {
         ancestor! == pipeline.terminalIr -> if { false -> return }
@@ -1750,6 +1755,8 @@ irDescendsFrom request: NodeAncestorRequest, context: ref emitterContext.EmitCon
 # exact role declaration. Typed IR intentionally leaves a role read without
 # operand0 because the loop produces its value on each iteration.
 eachRoleOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    nodeIndex -> typedIr.runtimeStreamItemOwner(context.ir) => runtimeOwner
+    runtimeOwner >= 0 -> if { runtimeOwner -> return }
     -1 => owner!
     context.ir[nodeIndex] => roleUse
     roleUse.kind == 5 and roleUse.operand0 < 0 and roleUse.symbol >= 0 and roleUse.sourceModule >= 0

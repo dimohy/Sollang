@@ -665,6 +665,45 @@ public repeatOpcode: -> Int => -330
 
 public isDirectIterationOpcode opcode: Int -> Bool => opcode == -208 or opcode == repeatOpcode()
 
+# A materialized runtime source supplies one item to a continuation callback.
+# Its explicit IR edge is independent of the caller's optional lexical role.
+public runtimeStreamItemOpcode: -> Int => -351
+
+public isRuntimeStreamIteration index: Int, nodes: ref [TypedIrNode; ~] -> Bool {
+    index < 0 or index >= (nodes -> len) -> if { false -> return }
+    nodes[index] => iteration
+    iteration.kind != 6 or iteration.opcode != -208
+        or iteration.operand1 < 0 or iteration.operand1 >= (nodes -> len)
+        -> if { false -> return }
+    nodes[iteration.operand1] => callback
+    callback.kind == 19 and callback.opcode == -227 and callback.symbol == -7
+        and callback.parent == index
+}
+
+public runtimeStreamItemOwner index: Int, nodes: ref [TypedIrNode; ~] -> Int {
+    index < 0 or index >= (nodes -> len) -> if { -1 -> return }
+    nodes[index] => item
+    item.kind != 5 or item.opcode != runtimeStreamItemOpcode() or item.operand0 >= 0
+        or not (item.operand1 -> isRuntimeStreamIteration(nodes))
+        -> if { -1 -> return }
+    nodes[item.operand1].operand1 => callback
+    item.parent => ancestor!
+    0 => depth!
+    ancestor! >= 0 and ancestor! < (nodes -> len) and depth! < (nodes -> len)
+        -> while {
+            ancestor! == callback -> if { item.operand1 -> return }
+            nodes[ancestor!].parent => ancestor!
+            depth! + 1 => depth!
+        }
+    -1
+}
+
+public isRuntimeStreamCallback index: Int, nodes: ref [TypedIrNode; ~] -> Bool {
+    index >= 0 and index < (nodes -> len)
+        and (nodes[index].parent -> isRuntimeStreamIteration(nodes))
+        and nodes[nodes[index].parent].operand1 == index
+}
+
 public rawArenaOperation opcode: Int -> Int {
     opcode <= -341 and opcode >= -345 -> if { -340 - opcode -> return }
     0
@@ -1807,6 +1846,22 @@ public moveBindingDeclaration event: MoveEvent, ir: [TypedIrNode] -> Int {
             ordinal! + 1 => ordinal!
         }
     -1
+}
+
+# Copied stream frames may have synthetic parents. The original primary-input
+# declaration, not that frame's current symbol, owns the item type contract.
+public isPrimaryStreamInputBinding binding: TypedIrNode, sourceRanges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~] -> Bool {
+    binding.kind != 17 or binding.opcode != -227 or binding.symbol < 0
+        or binding.sourceModule < 0 or binding.sourceModule >= (sourceRanges -> len)
+        -> if { false -> return }
+    sourceRanges[binding.sourceModule] => range
+    binding.symbol >= range.symbolCount -> if { false -> return }
+    declarations[range.symbolStart + binding.symbol] => parameter
+    parameter.parent < 0 or parameter.parent >= range.symbolCount
+        -> if { false -> return }
+    declarations[range.symbolStart + parameter.parent] => declaration
+    (declaration -> symbols.isUserStreamFunction)
+        and binding.astNode == declaration.astNode and parameter.astNode == declaration.astNode
 }
 
 public isBorrowedBlockInputBinding valueIr: Int, typed: ref [TypedIrNode; ~], sourceRanges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~] -> Bool {

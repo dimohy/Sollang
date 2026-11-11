@@ -862,9 +862,20 @@ internal sealed partial class LlvmEmitter
             elementType,
             elementAddress,
             RuntimeAlignment(source.ElementType));
-        EmitStreamValue(
-            DematerializeAggregateValue(source.ElementType, materializedElement),
-            sink);
+        _loopContexts.Push(new LoopContext(
+            ContinueLabel: continueLabel, BreakLabel: doneLabel,
+            OuterScope: CaptureLocals(), ContinueEdges: null, BreakEdges: null,
+            StreamSourceCallerDepth: _streamProducerCallers.Count));
+        try
+        {
+            EmitStreamValue(
+                DematerializeAggregateValue(source.ElementType, materializedElement),
+                sink);
+        }
+        finally
+        {
+            _loopContexts.Pop();
+        }
         if (!_currentBlockTerminated)
         {
             EmitBranch(continueLabel);

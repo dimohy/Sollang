@@ -32,17 +32,15 @@ public unboundFunction: -> FunctionBinding {
     FunctionBinding { active: false, valueArgument: -1, sourceModule: -1, ownerSymbol: -1, arguments: [Int; ~], argumentIdentities: [Int; ~], inputType: -1, returnType: -1, additionalTypes: [Int; ~] }
 }
 
-specializeIdentityType types: mut [typeIds.SemanticType; ~], plan: ref FunctionSpecializationRequest, template: Int -> Result<Int, TypeUniverseCaptureError> {
+specializeIdentityType types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], prepared: ref semanticContext.SemanticSnapshot, plan: ref FunctionSpecializationRequest, template: Int -> Result<Int, TypeUniverseCaptureError> {
     template < 0 -> if { Result<Int, TypeUniverseCaptureError>.Ok(-1) -> return }
-    plan.valueArgument >= 0 -> if {
-        types -> typeIds.specializeManyWithIntegerValueInto(plan.inputTemplates, plan.actualInputs, template, plan.valueParameterHash, plan.valueArgument)
-    } else { types -> typeIds.specializeManyInto(plan.inputTemplates, plan.actualInputs, template) } => resolved
+    types -> typeIds.specializeFieldsInto(fields, prepared.package, plan.inputTemplates, plan.actualInputs, template, plan.valueParameterHash, plan.valueArgument) => resolved
     resolved.status != 0 or resolved.root < 0 or types[resolved.root].containsParameter
         -> if { Result<Int, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     Result<Int, TypeUniverseCaptureError>.Ok(resolved.root)
 }
 
-public bindFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], plan: ref FunctionSpecializationRequest -> Result<FunctionBinding, TypeUniverseCaptureError> {
+public bindFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plan: ref FunctionSpecializationRequest -> Result<FunctionBinding, TypeUniverseCaptureError> {
     (plan.status != 0 and plan.valueArgument < 0) or plan.sourceModule < 0 or plan.sourceModule >= (prepared.package.ranges -> len) or plan.ownerSymbol < 0
         -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     prepared.package.ranges[plan.sourceModule] => range
@@ -89,7 +87,7 @@ public bindFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot
                             -> if { typeId => parameter! }
                     }
                     parameter! < 0 -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
-                    types -> specializeIdentityType(plan, parameter!) -> when {
+                    types -> specializeIdentityType(fields, prepared, plan, parameter!) -> when {
                         Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
                         Ok(actual) {
                             arguments! -> push(actual)
@@ -100,18 +98,18 @@ public bindFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot
         (arguments! -> len) == 0
             -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     }
-    types -> specializeIdentityType(plan, plan.inputTemplate) -> when {
+    types -> specializeIdentityType(fields, prepared, plan, plan.inputTemplate) -> when {
         Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
         Ok(value) { value }
     } => input
     [Int; ~] => additional!
     plan.additionalTemplates -> each parameter {
-        types -> specializeIdentityType(plan, parameter) -> when {
+        types -> specializeIdentityType(fields, prepared, plan, parameter) -> when {
             Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
             Ok(actual) { additional! -> push(actual) }
         }
     }
-    types -> specializeIdentityType(plan, plan.resultType) -> when {
+    types -> specializeIdentityType(fields, prepared, plan, plan.resultType) -> when {
         Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) -> return }
         Ok(value) { value }
     } => result
@@ -133,8 +131,8 @@ public attachFunctionBindingIdentities binding: move FunctionBinding, registered
     Result<FunctionBinding, TypeUniverseCaptureError>.Ok(resolved!)
 }
 
-public captureFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], plan: ref FunctionSpecializationRequest, declaredIds: ref [Int; ~] -> Result<FunctionBinding, TypeUniverseCaptureError> {
-    prepared -> bindFunctionSpecialization(types, plan) -> when {
+public captureFunctionSpecialization prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plan: ref FunctionSpecializationRequest, declaredIds: ref [Int; ~] -> Result<FunctionBinding, TypeUniverseCaptureError> {
+    prepared -> bindFunctionSpecialization(types, fields, plan) -> when {
         Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) }
         Ok(binding) { binding -> attachFunctionBindingIdentities(declaredIds) }
     }

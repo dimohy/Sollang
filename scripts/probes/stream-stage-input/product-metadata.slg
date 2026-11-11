@@ -1,0 +1,26 @@
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.source_root as sourceRoot
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+main {
+    "stdlib" -> path.fromText(path.nativeStyle()) => root
+    root -> sourceRoot.discoverDirect => paths
+    paths -> len => standardCount
+    standardCount != 144 -> if { process.exit(1) }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> pathText -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    "examples/regression/1748-generic-nested-product-substitution.slg" -> file.mapText => program
+    owners! -> push(program)
+    [Text; ~] => sources!
+    owners! -> each owner {
+        owner -> slice(0, owner -> len) => source
+        sources! -> push(source)
+    }
+    sources! -> llvm.inspectProductMetadata(standardCount) => code
+    code != 0 -> if { process.exit(code) }
+}

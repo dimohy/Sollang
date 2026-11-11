@@ -69,7 +69,18 @@ At user-block invocation and yield boundaries, evaluate inputs before binding
 roles and executing callback effects. Source offsets from different declarations
 cannot order these phases; preserve their data dependencies and lexical scopes.
 Generic user-block inputs infer parameters recursively through `Option`,
-`Result`, `Deque`, dictionary key/value types, growable and bounded arrays, and readonly references.
+`Result`, `Deque`, `Stream`, `EventStream`, dictionary key/value types, growable
+and bounded arrays, and readonly references. Ordinary generic functions also
+infer stream element parameters recursively; validate the wrapper family before
+inferring its element and retain conflicts between repeated type parameters.
+Specialize structural products used inside a generic body as well as its
+signature. Read declaration products through their validated type-term field chains and
+expression products through their canonical field registry. Preserve ordered
+field types and labels under inference and substitution. Intern a new product
+for changed registry fields before copying concrete bodies; never attach later
+field-chain nodes to an existing type identity. Full cache type metadata also
+needs fields for intermediate instances; restore those fields from normalized
+module type details in the private metadata view without changing the type arena.
 Bounded-array inference preserves the declared capacity and inline storage;
 borrowing it through `ref [T; <=N]` does not admit a growable owner or another capacity.
 Inside a generic body, propagate a helper's substituted result through bindings
@@ -1720,6 +1731,21 @@ This pipeline must not allocate a billion-element range, mapped array, or
 filtered array. `take(5)` propagates `stop` upstream as soon as the fifth value
 is consumed. `break` and `continue` in the terminal consumer control the fused
 source loop.
+
+A generic stream stage receives the producer's element type as its primary
+input for both `Stream<T>` and `EventStream<T>`. Specialize that input before
+copying the stage body and typing its downstream callback. Additional arguments
+keep their ordinary value types; an array-valued item remains an array.
+When a copied stage retains its producer handle for continuation planning, late
+binding inference must preserve the primary alias's concrete item type.
+Stream stage declarations are continuation templates. Exclude both concrete
+and generic stream declarations from standalone value-function emission;
+instantiate their bodies in the consuming pipeline.
+For a runtime producer, pass each yielded item into the first user stage and
+initialize every stage's state and additional inputs once before iteration.
+Keep the producer handle separate from the item value and its callback role;
+an omitted role name must not change that boundary. Loop transfers target the
+planned source iteration and retain its cleanup and cancellation authority.
 
 A first-class stream may cross a function boundary and remains affine:
 

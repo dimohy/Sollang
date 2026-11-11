@@ -42,6 +42,8 @@ internal sealed partial class LlvmEmitter
         foreach (var function in EnumerateEmittableFunctions(_program.Functions.Values))
         {
             if (function.Kind != BoundFunctionKind.User
+                || function.StreamElementType is not null
+                || function.StreamElementTypeTemplate is not null
                 || !_reachableFunctions.Contains(function)
                 || (function.IsStandardLibrary && !_standaloneStandardLibraryFunctions.Contains(function))
                 || (function.GenericParameterName is not null

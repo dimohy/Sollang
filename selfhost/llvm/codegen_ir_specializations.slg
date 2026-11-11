@@ -4,7 +4,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.ir.typed as typedIr
 
-public bindIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan -> Result<FunctionBinding, TypeUniverseCaptureError> {
+public bindIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plan: ref typedIr.GenericCallPlan -> Result<FunctionBinding, TypeUniverseCaptureError> {
     plan.templateNode < 0 or plan.templateNode >= (ir -> len)
         or (plan.callNode < 0 and plan.interpolationNode < 0) or plan.callNode >= (ir -> len)
         -> if { Result<FunctionBinding, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
@@ -35,11 +35,11 @@ public bindIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: 
     function.operand1 >= 0 -> if { ir[function.operand1].typeId } else { -1 } => input
     value >= 0 -> if { function.typeId } else { plan.resultType } => result
     FunctionSpecializationRequest { sourceModule: function.sourceModule, ownerSymbol: function.symbol, inputTemplate: input, additionalTemplates: additional!, inputTemplates: templates!, actualInputs: actuals!, resultType: result, status: plan.status, valueParameterHash: valueHash, valueArgument: value } => request
-    prepared -> bindFunctionSpecialization(types, request)
+    prepared -> bindFunctionSpecialization(types, fields, request)
 }
 
-public captureIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<FunctionBinding, TypeUniverseCaptureError> {
-    prepared -> bindIrSpecialization(ir, types, plan) -> when {
+public captureIrSpecialization prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plan: ref typedIr.GenericCallPlan, declaredIds: ref [Int; ~] -> Result<FunctionBinding, TypeUniverseCaptureError> {
+    prepared -> bindIrSpecialization(ir, types, fields, plan) -> when {
         Err(error) { Result<FunctionBinding, TypeUniverseCaptureError>.Err(error) }
         Ok(binding) { binding -> attachFunctionBindingIdentities(declaredIds) }
     }

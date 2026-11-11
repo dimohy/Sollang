@@ -695,6 +695,26 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         }
     context.ir -> len => irCount
     0 => code!
+    node.opcode == typedIr.runtimeStreamItemOpcode()
+        -> if {
+            irIndex -> typedIr.runtimeStreamItemOwner(context.ir) => iteration
+            false => valid!
+            iteration >= 0 -> if {
+                context.ir[iteration].operand0 => producer
+                producer >= 0 and producer < irCount -> if {
+                    context.ir[producer].typeId => producerType
+                    producerType >= 0 and producerType < (context.types -> len)
+                        -> if {
+                            context.types[producerType] => shape
+                            shape.kind == 7 and shape.origin == 4
+                                and (shape.symbol == 3 or shape.symbol == 4)
+                                and shape.first == node.typeId
+                                -> if { true => valid! }
+                        }
+                }
+            }
+            not valid! -> if { 37 => code! }
+        }
     node.kind == 7 -> if {
         node.operand0 < 0 or node.operand0 >= irCount
             -> if {
@@ -1427,8 +1447,9 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
                 -> if { 32 => code! }
         }
     # A binding and every direct read of it share one canonical value type.
-    # A Result binding followed by `?` is the sole intentional initializer
-    # mismatch: the binding stores the success payload rather than the Result.
+    # A Result binding followed by `?` stores its success payload. A copied
+    # stream primary input stores the exact producer element. Both projections
+    # require their own canonical contract rather than a general type exemption.
     # Any other stale type would make LLVM print one type for an SSA producer
     # and another type for the value that consumes it.
     code! == 0
@@ -1472,6 +1493,11 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
                 and context.types[bindingInitializerTypeId].first == node.typeId
                 -> if {
                     true => bindingPayloadUnwrap!
+                }
+            node -> typedIr.isPrimaryStreamInputBinding(context.ranges, context.symbols)
+                -> if {
+                    (context.types -> typeIds.primaryStreamInputTypeId(bindingInitializerTypeId, true, 0)) == node.typeId
+                        -> if { true => bindingPayloadUnwrap! }
                 }
             not bindingPayloadUnwrap! -> if { 37 => code! }
         }
@@ -1527,6 +1553,13 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
                 }
             context -> canonicalTaskAwaitRead(irIndex, bindingReadInitializerTypeId)
                 -> if { true => bindingReadCompatible! }
+            context.ir[node.operand0] => bindingReadOwner
+            bindingReadOwner.typeId == node.typeId
+                and (bindingReadOwner -> typedIr.isPrimaryStreamInputBinding(context.ranges, context.symbols))
+                -> if {
+                    (context.types -> typeIds.primaryStreamInputTypeId(bindingReadInitializerTypeId, true, 0)) == node.typeId
+                        -> if { true => bindingReadCompatible! }
+                }
             not bindingReadCompatible! -> if { 37 => code! }
         }
     # A partition result is a structural product whose route fields preserve

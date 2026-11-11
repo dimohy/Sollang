@@ -1,0 +1,125 @@
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.analysis as analysis
+import sys.process as process
+
+leaf origin: Int, symbol: Int -> typeIds.SemanticType {
+    typeIds.SemanticType { kind: 1, origin: origin, module: 0, symbol: symbol, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: origin == 3, status: 0 }
+}
+
+wrapper symbol: Int, element: Int, parameter: Bool -> typeIds.SemanticType {
+    typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: symbol, first: element, second: -1, length: -1, lengthHash: 0, containsParameter: parameter, status: 0 }
+}
+
+product first: Int, length: Int -> typeIds.SemanticType {
+    typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: first, second: -1, length: length, lengthHash: 0, containsParameter: true, status: 0 }
+}
+
+main {
+    [leaf(3, 0), leaf(1, 2), leaf(1, 1), wrapper(3, 0, true), wrapper(3, 1, false), wrapper(4, 0, true), wrapper(4, 1, false), wrapper(3, 2, false), wrapper(0, 0, true), wrapper(0, 1, false), wrapper(3, 8, true), wrapper(3, 9, false); ~] => types!
+    [3; ~] => streamTemplate
+    [4; ~] => streamActual
+    types! -> typeIds.specializeManyInto(streamTemplate, streamActual, 5) => eventResult
+    eventResult.status != 0 or eventResult.root != 6
+        -> if { process.exit(1) }
+    [5; ~] => eventTemplate
+    [6; ~] => eventActual
+    types! -> typeIds.specializeManyInto(eventTemplate, eventActual, 3) => streamResult
+    streamResult.status != 0 or streamResult.root != 4
+        -> if { process.exit(2) }
+    [10; ~] => nestedTemplate
+    [11; ~] => nestedActual
+    types! -> typeIds.specializeManyInto(nestedTemplate, nestedActual, 0) => nestedResult
+    nestedResult.status != 0 or nestedResult.root != 1
+        -> if { process.exit(3) }
+    [3, 3; ~] => repeatedTemplate
+    [4, 4; ~] => repeatedActual
+    types! -> typeIds.specializeManyInto(repeatedTemplate, repeatedActual, 5) => repeatedResult
+    repeatedResult.status != 0 or repeatedResult.root != 6
+        -> if { process.exit(4) }
+    [4, 7; ~] => conflictingActual
+    types! -> typeIds.specializeManyInto(repeatedTemplate, conflictingActual, 5) => conflict
+    conflict.status != 2 or conflict.conflictFirstActualTypeId != 1 or conflict.conflictActualTypeId != 2
+        -> if { process.exit(5) }
+    types! -> typeIds.specializeManyInto(streamTemplate, eventActual, 0) => wrongWrapper
+    wrongWrapper.status != 2 or wrongWrapper.mismatchExpectedTypeId != 3 or wrongWrapper.mismatchActualTypeId != 6
+        -> if { process.exit(6) }
+    [1; ~] => scalarActual
+    types! -> typeIds.specializeManyInto(eventTemplate, scalarActual, 0) => wrongScalar
+    wrongScalar.status != 2 or wrongScalar.mismatchExpectedTypeId != 5 or wrongScalar.mismatchActualTypeId != 1
+        -> if { process.exit(7) }
+    [Text; ~] => emptySources
+    emptySources -> analysis.analyze => package
+    types! -> len => productId
+    types! -> push(product(-1, 2))
+    [typeIds.NominalField { ownerType: productId, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 0, fieldType: 3, status: 0 }, typeIds.NominalField { ownerType: productId, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 1, fieldType: 5, status: 0 }; ~] => fields!
+    types! -> typeIds.specializeFieldsInto(fields!, package, streamTemplate, streamActual, productId, 0, -1) => productResult
+    productResult.status != 0 or productResult.root == productId
+        or types![productResult.root].containsParameter or types![productResult.root].first != -1
+        or types![productId].first != -1 or not types![productId].containsParameter
+        -> if { process.exit(8) }
+    false => streamField!
+    false => eventField!
+    fields! -> each field {
+        field.ownerType == productResult.root and field.ordinal == 0 and field.fieldType == 4
+            -> if { true => streamField! }
+        field.ownerType == productResult.root and field.ordinal == 1 and field.fieldType == 6
+            -> if { true => eventField! }
+    }
+    not streamField! or not eventField! -> if { process.exit(8) }
+    types! -> len => tailId
+    types! -> push(typeIds.SemanticType { kind: 11, origin: -1, module: -1, symbol: -1, first: 5, second: -1, length: -1, lengthHash: 0, containsParameter: true, status: 0 })
+    types! -> len => headId
+    types! -> push(typeIds.SemanticType { kind: 11, origin: -1, module: -1, symbol: -1, first: 3, second: tailId, length: -1, lengthHash: 0, containsParameter: true, status: 0 })
+    types! -> len => declaredId
+    types! -> push(product(headId, 2))
+    fields! -> push(typeIds.NominalField { ownerType: declaredId, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 0, fieldType: 3, status: 0 })
+    fields! -> push(typeIds.NominalField { ownerType: declaredId, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 1, fieldType: 5, status: 0 })
+    types! -> typeIds.specializeFieldsInto(fields!, package, streamTemplate, streamActual, declaredId, 0, -1) => declared
+    declared.status != 0 or declared.root != productResult.root or types![declaredId].first != headId
+        -> if { process.exit(8) }
+    types! -> typeIds.specializeManyInto(streamTemplate, streamActual, declaredId) => declaredGraph
+    declaredGraph.status != 0 or types![declaredGraph.root].containsParameter
+        or types![types![declaredGraph.root].first].first != 4
+        or types![types![types![declaredGraph.root].first].second].first != 6
+        -> if { process.exit(8) }
+    [declaredId,; ~] => productTemplates
+    [productResult.root,; ~] => productActuals
+    types! -> typeIds.specializeFieldsInto(fields!, package, productTemplates, productActuals, 0, 0, -1) => inferredProduct
+    inferredProduct.status != 0 or inferredProduct.root != 1
+        -> if { process.exit(8) }
+    [declaredGraph.root,; ~] => declaredActuals
+    types! -> typeIds.specializeFieldsInto(fields!, package, productTemplates, declaredActuals, 0, 0, -1) => inferredDeclared
+    inferredDeclared.status != 0 or inferredDeclared.root != 1
+        -> if { process.exit(8) }
+    types! -> len => textEventId
+    types! -> push(wrapper(4, 2, false))
+    types! -> len => textProductId
+    product(-1, 2) => textProduct!
+    false => textProduct!.containsParameter
+    types! -> push(textProduct!)
+    fields! -> push(typeIds.NominalField { ownerType: textProductId, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 0, fieldType: 7, status: 0 })
+    fields! -> push(typeIds.NominalField { ownerType: textProductId, sourceModule: -1, ownerSymbol: -1, fieldSymbol: -1, labelToken: -1, ordinal: 1, fieldType: textEventId, status: 0 })
+    [declaredId, declaredId; ~] => repeatedProducts
+    [productResult.root, textProductId; ~] => conflictingProducts
+    types! -> typeIds.specializeFieldsInto(fields!, package, repeatedProducts, conflictingProducts, 0, 0, -1) => productConflict
+    productConflict.status != 2 or productConflict.conflictFirstActualTypeId != 1 or productConflict.conflictActualTypeId != 2
+        -> if { process.exit(8) }
+    types! -> len => nestedId
+    types! -> push(wrapper(0, productId, true))
+    types! -> typeIds.specializeFieldsInto(fields!, package, streamTemplate, streamActual, nestedId, 0, -1) => nestedProduct
+    nestedProduct.status != 0 or types![nestedProduct.root].first != productResult.root
+        or types![nestedProduct.root].containsParameter or types![nestedId].first != productId
+        -> if { process.exit(8) }
+    types! -> len => missingId
+    types! -> push(product(-1, 1))
+    types! -> typeIds.specializeFieldsInto(fields!, package, streamTemplate, streamActual, missingId, 0, -1) => missing
+    missing.status == 0 or types![missingId].first >= 0
+        -> if { process.exit(9) }
+    types! -> typeIds.specializeFieldsInto(fields!, package, streamTemplate, streamActual, -1, 0, -1) => invalidRoot
+    invalidRoot.status == 0 -> if { process.exit(10) }
+    types! -> len => danglingId
+    types! -> push(product(999999, 1))
+    types! -> typeIds.specializeFieldsInto(fields!, package, streamTemplate, streamActual, danglingId, 0, -1) => dangling
+    dangling.status == 0 -> if { process.exit(11) }
+    "stream-specialization=11/11" -> println
+}

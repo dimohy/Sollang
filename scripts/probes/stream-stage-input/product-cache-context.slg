@@ -1,0 +1,33 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+
+public inspectProductTypeUniverse sources: move [Text; ~], standardCount: Int -> Int uses Console, Process {
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    false => ready!
+    context.codegenTypeUniverseHash -> when {
+        Ok(_) { true => ready! }
+        Err(error) { error -> when {
+                InvalidType { "cache-type-universe=invalid-type" -> println }
+                InvalidPart { "cache-type-universe=invalid-part" -> println }
+                Record(_) { "cache-type-universe=invalid-record" -> println }
+        } }
+    }
+    context.typeRegistration -> when {
+        Ok(_) {}
+        Err(_) { "type-registration=failed" -> println
+            false => ready! }
+    }
+    context.metadataSignatureIds -> when {
+        Ok(_) {}
+        Err(_) { "signature-registration=failed" -> println
+            false => ready! }
+    }
+    ready! and context.functionNames.status == 0 and context.genericNames.status == 0
+        -> if { "product-type-universe-ready" -> println
+            0 -> return }
+    "function-names=$(context.functionNames.status) generic-names=$(context.genericNames.status)" -> println
+    1
+}

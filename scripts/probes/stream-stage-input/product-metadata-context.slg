@@ -1,0 +1,105 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionIds
+import sollang.compiler.semantic.reference_prepared_type_ids as signatureIds
+import sollang.compiler.llvm.codegen_type_registration as functionTypes
+import sollang.compiler.semantic.type_ids as typeIds
+
+public inspectProductMetadata sources: move [Text; ~], standardCount: Int -> Int uses Console, Process {
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    false => metadataReady!
+    context.codegenFunctionEmissions -> when {
+        Ok(_) { true => metadataReady! }
+        Err(error) { error -> when {
+                TypeRegistration { "metadata=type-registration" -> println }
+                SignatureRegistration { "metadata=signature-registration" -> println }
+                SourceModule { "metadata=source-module" -> println }
+                FunctionCapture(failure) { "metadata=function-capture source=$(failure.sourceModule) symbol=$(failure.ownerSymbol) stage=$(failure.stage)" -> println }
+        } }
+    }
+    context.genericCallPlans -> each plan {
+        plan.templateNode >= 0 and context.ir[plan.templateNode].sourceModule == standardCount
+            and plan.status != 0 -> if { false => metadataReady! }
+    }
+    metadataReady! and context.functionNames.status == 0 and context.genericNames.status == 0
+        -> if { "product-metadata-ready" -> println
+            0 -> return }
+    [Text; ~] => diagnosticSources!
+    context.sources -> each source { diagnosticSources! -> push(source) }
+    diagnosticSources! -> semanticContext.prepareWithStandardLibrarySources(standardCount) => prepared
+    prepared -> signatureIds.registerDeclarations -> when {
+        Err(_) { "stage=declarations" -> println
+            1 -> return }
+        Ok(value) { value }
+    } => declarations
+    context.types -> copyPreparedCodegenSemantic(context.typeReferences, context.fields) => semantic!
+    prepared -> expressionIds.resolveContext => resolved
+    prepared -> functionTypes.collect(resolved, context.ir, semantic!.types, semantic!.fields, context.genericCallPlans, declarations.ids) => uses
+    "unresolved=$(uses.unresolvedCalls) uses=$(uses.uses -> len)" -> println
+    uses.unresolvedNodes -> each unresolved {
+        context.ir[unresolved] => call
+        "unresolved-call source=$(call.sourceModule) target=$(call.targetModule)/$(call.symbol)" -> println
+        context.genericCallPlans -> each plan {
+            plan.callNode == unresolved -> if {
+                context.ir[plan.templateNode] => function
+                "inputs=$(plan.inputTemplates -> len)/$(plan.actualInputs -> len) plan-status=$(plan.status)" -> println
+                plan.inputTemplates -> each templateType {
+                    semantic!.types[templateType] => type
+                    "template=$templateType kind=$(type.kind) origin=$(type.origin) module=$(type.module) symbol=$(type.symbol) first=$(type.first) second=$(type.second)" -> println
+                }
+                plan.actualInputs -> each actualType {
+                    semantic!.types[actualType] => type
+                    "actual=$actualType kind=$(type.kind) origin=$(type.origin) module=$(type.module) symbol=$(type.symbol) first=$(type.first) second=$(type.second)" -> println
+                }
+                [plan.resultType,; ~] => targets!
+                function.operand1 >= 0 -> if { targets! -> push(context.ir[function.operand1].typeId) }
+                function.nextOperand => next!
+                next! >= 0 -> while {
+                    targets! -> push(context.ir[next!].typeId)
+                    context.ir[next!].nextOperand => next!
+                }
+                prepared.package.ranges[function.sourceModule] => range
+                0..<range.symbolCount -> each symbol {
+                    prepared.package.symbols[range.symbolStart + symbol] => member
+                    member.kind == 32 and member.parent == function.symbol
+                        -> if {
+                            -1 => parameter!
+                            0..<(semantic!.types -> len) -> each typeIndex {
+                                semantic!.types[typeIndex] => type
+                                type.kind == 1 and type.origin == 3 and type.module == function.sourceModule and type.symbol == symbol
+                                    -> if { typeIndex => parameter! }
+                            }
+                            "parameter symbol=$symbol type=$(parameter!)" -> println
+                            targets! -> push(parameter!)
+                        }
+                }
+                targets! -> each targetType {
+                    semantic!.types -> typeIds.specializeFieldsInto(semantic!.fields, prepared.package, plan.inputTemplates, plan.actualInputs, targetType, 0, -1) => specialized
+                    specialized.root >= 0 -> if { semantic!.types[specialized.root].containsParameter } else { true } => parameter
+                    "target=$targetType status=$(specialized.status) root=$(specialized.root) parameter=$parameter mismatch=$(specialized.mismatchExpectedTypeId)/$(specialized.mismatchActualTypeId) conflict=$(specialized.conflictFirstActualTypeId)/$(specialized.conflictActualTypeId)" -> println
+                }
+            }
+        }
+    }
+    [Int; ~] => roots!
+    uses.uses -> each use { roots! -> push(use.typeId) }
+    prepared -> signatureIds.registerResolvedTypeUses(semantic!, roots!) -> when {
+        Ok(_) { "stage=registered" -> println }
+        Err(error) { error -> when {
+                InvalidSource { "stage=resolved-invalid-source" -> println }
+                Nominal(_) { "stage=resolved-nominal" -> println }
+                Synthetic(failure) { failure -> when {
+                        InvalidType { "stage=resolved-invalid-type" -> println }
+                        InvalidShape { "stage=resolved-invalid-shape" -> println }
+                        Cycle { "stage=resolved-cycle" -> println }
+                        TypeIdOverflow { "stage=resolved-overflow" -> println }
+                } }
+        } }
+    }
+    "function-names=$(context.functionNames.status) generic-names=$(context.genericNames.status)" -> println
+    1
+}

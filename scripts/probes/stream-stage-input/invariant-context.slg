@@ -1,0 +1,97 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.type_ids as typeIds
+
+replaceInvariantNode nodes: mut [typedIr.TypedIrNode; ~], index: Int, node: typedIr.TypedIrNode -> Unit {
+    node => nodes[index]
+}
+
+public verifyStreamInputInvariant sources: move [Text; ~], standardCount: Int -> Int uses Console, Process {
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context!
+    context! -> concreteFunctionsBySymbol => functions
+    context! -> irInvariantDiagnosticCount => existingErrors
+    existingErrors != 0 -> if { 2 -> return }
+    -1 => selected!
+    0 => index!
+    index! < (context!.ir -> len) and selected! < 0
+        -> while {
+            context!.ir[index!] => node
+            node -> typedIr.isPrimaryStreamInputBinding(context!.ranges, context!.symbols)
+                -> if { index! => selected! }
+            index! + 1 => index!
+        }
+    selected! < 0 -> if { 3 -> return }
+    context! -> irInvariantCode(selected!, functions) => validCode
+    validCode != 0 -> if { 4 -> return }
+    context!.ir[selected!] => good
+    context!.types -> typeIds.builtinTypeId(23) => wrongTypeId
+    context!.types[wrongTypeId] => wrongType
+    good => wrong!
+    wrongTypeId => wrong!.typeId
+    wrongType.kind => wrong!.typeKind
+    wrongType.origin => wrong!.typeOrigin
+    wrongType.module => wrong!.typeModule
+    wrongType.symbol => wrong!.typeSymbol
+    context!.ir -> replaceInvariantNode(selected!, wrong!)
+    context! -> irInvariantCode(selected!, functions) => wrongCode
+    wrongCode != 37 -> if { 5 -> return }
+    context!.ir -> replaceInvariantNode(selected!, good)
+    good => unmarked!
+    -1 => unmarked!.opcode
+    context!.ir -> replaceInvariantNode(selected!, unmarked!)
+    context! -> irInvariantCode(selected!, functions) => unmarkedCode
+    unmarkedCode != 37 -> if { 6 -> return }
+    context!.ir -> replaceInvariantNode(selected!, good)
+    -1 => readIndex!
+    0 => search!
+    search! < (context!.ir -> len) and readIndex! < 0
+        -> while {
+            context!.ir[search!] => node
+            node.kind == 5 and node.operand0 == selected!
+                -> if { search! => readIndex! }
+            search! + 1 => search!
+        }
+    readIndex! < 0 -> if { 7 -> return }
+    context!.ir[readIndex!] => goodRead
+    context!.ir[readIndex!] => wrongRead!
+    wrongTypeId => wrongRead!.typeId
+    wrongType.kind => wrongRead!.typeKind
+    wrongType.origin => wrongRead!.typeOrigin
+    wrongType.module => wrongRead!.typeModule
+    wrongType.symbol => wrongRead!.typeSymbol
+    context!.ir -> replaceInvariantNode(readIndex!, wrongRead!)
+    context! -> irInvariantCode(readIndex!, functions) => wrongReadCode
+    wrongReadCode != 37 -> if { 8 -> return }
+    context!.ir -> replaceInvariantNode(readIndex!, goodRead)
+    -1 => runtimeItem!
+    0 => runtimeSearch!
+    runtimeSearch! < (context!.ir -> len) and runtimeItem! < 0
+        -> while {
+            (runtimeSearch! -> typedIr.runtimeStreamItemOwner(context!.ir)) >= 0
+                -> if { runtimeSearch! => runtimeItem! }
+            runtimeSearch! + 1 => runtimeSearch!
+        }
+    runtimeItem! < 0 -> if { 9 -> return }
+    context!.ir[runtimeItem!] => goodItem
+    context! -> irInvariantCode(runtimeItem!, functions) => validItemCode
+    validItemCode != 0 -> if { 10 -> return }
+    goodItem => invalidOwner!
+    -1 => invalidOwner!.operand1
+    context!.ir -> replaceInvariantNode(runtimeItem!, invalidOwner!)
+    context! -> irInvariantCode(runtimeItem!, functions) => invalidOwnerCode
+    invalidOwnerCode != 37 -> if { 11 -> return }
+    goodItem => invalidType!
+    wrongTypeId => invalidType!.typeId
+    wrongType.kind => invalidType!.typeKind
+    wrongType.origin => invalidType!.typeOrigin
+    wrongType.module => invalidType!.typeModule
+    wrongType.symbol => invalidType!.typeSymbol
+    context!.ir -> replaceInvariantNode(runtimeItem!, invalidType!)
+    context! -> irInvariantCode(runtimeItem!, functions) => invalidTypeCode
+    invalidTypeCode != 37 -> if { 12 -> return }
+    0
+}

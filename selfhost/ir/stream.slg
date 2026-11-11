@@ -200,6 +200,17 @@ isRuntimeProducer node: typed.TypedIrNode, resolved: ref expressionTypeIds.Expre
 
 stageParts prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode; ~], callIndex: Int -> StageParts {
     ir[callIndex] => call
+    callIndex -> typed.isRuntimeStreamIteration(ir)
+        -> if {
+            call.operand1 => callback
+            callback => callbackEnd!
+            0 => index!
+            index! < (ir -> len) -> while {
+                index! -> belongsToCall(callback, ir) -> if { index! => callbackEnd! }
+                index! + 1 => index!
+            }
+            StageParts { source0: call.operand0, source1: -1, argument0: -1, argument1: -1, callbackStart: callback, callbackEnd: callbackEnd!, callbackRoot: callback, roleToken: -1 } -> return
+        }
     prepared.package.ranges[call.sourceModule] => sourceRange
     prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
     prepared.package.tokens[sourceRange.tokenStart + callAst.payloadToken] => targetToken
@@ -475,6 +486,7 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                 prepared.package.nodes[terminalRange.astStart + terminal.astNode] => terminalAst
                 terminalAst.firstToken => sliceTokenIndex!
                 sliceTokenIndex! < terminalAst.firstToken + terminalAst.tokenCount
+                    and not (terminalIndex! -> typed.isRuntimeStreamIteration(ir))
                     -> while {
                         prepared.package.tokens[terminalRange.tokenStart + sliceTokenIndex!] => sliceToken
                         0 => recoveredSliceKind!

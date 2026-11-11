@@ -103,7 +103,7 @@ appendCompilationFunction context: mut TypeFieldContext, prepared: ref semanticC
 lexicalSignatureType context: ref TypeFieldContext, prepared: ref semanticContext.SemanticSnapshot, semantic: mut typeIds.SemanticTypeSet, annotation: Int, parent: ref CompilationFunction -> Result<Int, TypeUniverseCaptureError> {
     context -> functionAnnotationType(prepared, annotation) => source
     source < 0 -> if { Result<Int, TypeUniverseCaptureError>.Ok(-2) -> return }
-    semantic.types -> typeIds.specializeManyInto(parent.typeParameters, parent.typeArguments, source) => specialized
+    semantic.types -> typeIds.specializeFieldsInto(semantic.fields, prepared.package, parent.typeParameters, parent.typeArguments, source, 0, -1) => specialized
     specialized.status != 0 or specialized.root < 0
         -> if { Result<Int, TypeUniverseCaptureError>.Err(TypeUniverseCaptureError.InvalidType) -> return }
     semantic.types[specialized.root].containsParameter
@@ -242,7 +242,7 @@ public collectCompilationFunctions context: mut TypeFieldContext, prepared: ref 
                                     member.kind == 32 and member.parent == function.symbol
                                         -> if { true => ownGeneric! }
                                 }
-                                ownGeneric! -> if { prepared -> captureIrSpecialization(ir, semantic.types, plan, registeredIds) } else {
+                                ownGeneric! -> if { prepared -> captureIrSpecialization(ir, semantic.types, semantic.fields, plan, registeredIds) } else {
                                     ir -> captureIrFunctionBinding(semantic.types, concreteNode)
                                 } -> when {
                                     Err(_) { failures! -> push(FunctionCaptureFailure { sourceModule: function.sourceModule, ownerSymbol: function.symbol, stage: 3 }) }

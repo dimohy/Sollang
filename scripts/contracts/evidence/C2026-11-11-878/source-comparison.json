@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "status": "compared-before-slg-edit",
+  "observedAtUtc": "2026-11-11T03:48:05.832646+00:00",
+  "csharpFirst": "artifacts/scratch/resume-20261111/event840-boundary-managed04/result.json",
+  "relatedControls": "artifacts/scratch/resume-20261111/c877-managed02/result.json",
+  "inputHashes": {
+    "W:\\MyWorks\\Sollang\\src\\Sollang.Compiler\\CodeGen\\LlvmEmitter.FunctionDeclarations.cs": "B0F957646AAA2F02E130C7B4E66353CC2E1A6A6CE7C87BB8C383D02DCC33AB81",
+    "W:\\MyWorks\\Sollang\\selfhost\\llvm\\text\\core_calls.slg": "385CEBFA0A29BDE76BE6D95FBCDDD9FE4EFC0CCC665CAFFB3672A38D0ADF8273",
+    "W:\\MyWorks\\Sollang\\selfhost\\llvm\\text\\core_prepare.slg": "A56B9507427F4EC213D9C40A516D2A74ED1BAB0FDE9D2F935AD83719EEB919FC",
+    "W:\\MyWorks\\Sollang\\selfhost\\llvm\\text\\entrypoints.slg": "5922FCA6AF27A3EE38F2270EBB20ECCC0F21E698218D156CAF820DD2CE47224C",
+    "W:\\MyWorks\\Sollang\\selfhost\\ir\\typed\\function_lowering.slg": "C2E99E69490E6F27A51A36F065967972FA2E939C361EA5216C1FEBA8D5D02A81",
+    "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261111\\event840-boundary-managed04\\result.json": "CE13D921E7B0DE45B9D552E37D1239975D7542BA7E402886DC5EF9847824C4E5",
+    "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261111\\c877-managed02\\result.json": "BA3D575B03CD53638079638EACCB9DF67DCD0AB7A5732AB33FA289D9588B2972"
+  },
+  "decisions": [
+    {
+      "subject": "standalone function selection",
+      "csharp": "GetEmittableUserFunctions now excludes StreamElementType and StreamElementTypeTemplate declarations; continuation-only emit body is instantiated at the consuming pipeline.",
+      "slg": "isStreamFunctionIr recognizes declaration flag64; entrypoints schedule loop and core_prepare emitted-body checks already exclude stream declarations. No SLG standalone-filter edit is needed."
+    },
+    {
+      "subject": "runtime producer continuation",
+      "csharp": "BuildRuntimeStreamSink creates UserStreamStage for blockless stream functions or stateful bodies. The producer loop passes one item to the sink, keeping arguments and state outside the iteration and cancellation active through the final emit.",
+      "slg": "materializeUserStreamConsumers plans user stages back to their first invocation, initializes only downstream stages, then instantiates the first frame with input=-1. It handles self-producing Range stages, but a Stream/EventStream primary input needs a separate runtime item iteration boundary. Current LLVM freezes a producer handle as an item."
+    }
+  ],
+  "csharpVerification": {
+    "completed": 4,
+    "total": 4,
+    "coldExpected": "seen=3 received=2",
+    "hotExpected": "seen=3 received=2",
+    "covers": [
+      "original840",
+      "generic1555",
+      "custom Int-to-Bool stream stage",
+      "tap effects before stage",
+      "skip/take state initialized once",
+      "upstream stop after 3 items"
+    ]
+  },
+  "slgStandaloneFilterChangeRequired": false,
+  "slgRuntimeBridgeStatus": "design-pending",
+  "runtimeBridgeConstraints": [
+    "Preserve runtime producer evaluation once, including direct expression inputs.",
+    "Initialize all user stage additional arguments and state before the runtime source loop.",
+    "Represent the runtime item and its owning iteration explicitly in Typed IR; never forge a lexical each role or reuse a final callback role with another type.",
+    "Feed the first copied stage the item, not the retained producer handle. Keep the existing continuation expansion for downstream stages.",
+    "Retain the outer consumer scope as cancellation and cleanup authority; stop takes effect after the current final emission.",
+    "Teach stream planning and emission to consume the explicit callback boundary rather than comparing cross-module source offsets.",
+    "Verify actual prepared IR and emitted LLVM using existing managed source harness before one batched native build."
+  ],
+  "knownFailure": "artifacts/scratch/resume-20261111/event840-stage-paired04/result.json",
+  "claimsGoalComplete": false
+}

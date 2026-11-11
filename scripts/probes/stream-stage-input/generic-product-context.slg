@@ -1,0 +1,71 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+public inspectGenericStreamProducts sources: move [Text; ~], standardCount: Int -> Int uses Console, Process {
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    false => concreteFunction!
+    false => concreteCall!
+    false => concreteProduct!
+    0 => candidateIndex!
+    context.ir -> each candidate {
+        candidate.sourceModule == standardCount -> if {
+            candidate.kind == 0 and (context -> emitterContext.isGenericInstance(candidateIndex!))
+                -> if { true => concreteFunction! }
+            candidate.kind == 6 and candidate.targetModule == standardCount
+                and (context -> emitterContext.genericFunctionForCall(candidateIndex!)) >= 0
+                -> if { true => concreteCall! }
+            candidate.typeId >= 0 -> if {
+                context.types[candidate.typeId] => shape
+                shape.kind == 10 and shape.first == -1 and not shape.containsParameter
+                    -> if {
+                        0 => concreteFields!
+                        context.fields -> each field {
+                            field.ownerType == candidate.typeId and field.status == 0
+                                and not context.types[field.fieldType].containsParameter
+                                -> if { concreteFields! + 1 => concreteFields! }
+                        }
+                        concreteFields! == 2 -> if { true => concreteProduct! }
+                    }
+            }
+        }
+        candidateIndex! + 1 => candidateIndex!
+    }
+    concreteFunction! and concreteCall! and concreteProduct! and context.genericNames.status == 0
+        -> if {
+            "generic-product-reification=ok" -> println
+            0 -> return
+        }
+    "generic-names-status=$(context.genericNames.status)" -> println
+    0 => index!
+    context.ir -> each node {
+        node.sourceModule == standardCount and node.typeId >= 0
+            -> if {
+                context.types[node.typeId] => shape
+                node.kind == 0 -> if {
+                    context -> emitterContext.isGenericInstance(index!) => instance
+                    "function ir=$(index!) symbol=$(node.symbol) type=$(node.typeId) parameter=$(shape.containsParameter) instance=$instance first=$(node.operand1) next=$(node.nextOperand)" -> println
+                }
+                node.kind == 6 and node.targetModule == standardCount
+                    -> if {
+                        context -> emitterContext.genericFunctionForCall(index!) => targetFunction
+                        "call ir=$(index!) symbol=$(node.symbol) type=$(node.typeId) generic=$targetFunction input=$(node.operand0)" -> println
+                    }
+                shape.kind == 10 -> if {
+                    "product ir=$(index!) kind=$(node.kind) type=$(node.typeId) first=$(shape.first) second=$(shape.second) parameter=$(shape.containsParameter) status=$(shape.status) parent=$(node.parent)" -> println
+                    context.fields -> each field {
+                        field.ownerType == node.typeId -> if {
+                            context.types[field.fieldType] => element
+                            "field owner=$(field.ownerType) ordinal=$(field.ordinal) type=$(field.fieldType) kind=$(element.kind) origin=$(element.origin) symbol=$(element.symbol) first=$(element.first) second=$(element.second) parameter=$(element.containsParameter) status=$(field.status)" -> println
+                        }
+                    }
+                }
+            }
+        index! + 1 => index!
+    }
+    "generic-product-reification=failed" -> println
+    1
+}
