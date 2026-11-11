@@ -3464,8 +3464,10 @@ that has registered a pull but has not yet entered the callback.
 A local `partition` registers one consumer for every route before dispatching
 its source. Dispatch begins at the final consumer registration, regardless of
 registration order. Root initializers and effects between registrations run
-before dispatch; predicates and callbacks retain their order inside the shared
-loop. Producer and predicate function calls retain their resolved module identity.
+before dispatch. Registration depends on the source, not execution of its deferred
+predicates. Inside the shared loop, predicates and callbacks follow route declaration
+order, with each callback preserving its own statement order. Producer and predicate
+function calls retain their resolved module identity.
 
 Stream joins accept a product of `Stream<T>` and `EventStream<T>` inputs.
 `merge` and `latest` always produce `EventStream`; `concat` and `zip` produce

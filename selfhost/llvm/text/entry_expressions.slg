@@ -113,10 +113,23 @@ entrySchedulingSourceStart nodeIndex: Int, context: ref emitterContext.EmitConte
     position!
 }
 
-# Preserve predicate and callback order within the common dispatch boundary.
+# At the common dispatch boundary, route effects follow declaration order,
+# even when consumers were registered in another order. Keep lexical order
+# within a route, and preserve the source positions of outside effects.
 entrySchedulingPrecedes leftIndex: Int, rightIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     leftIndex -> entrySchedulingSourceStart(context, state) => leftPosition
     rightIndex -> entrySchedulingSourceStart(context, state) => rightPosition
+    leftIndex -> plannedPartitionRoute(context, state) => leftRoute!
+    leftRoute! < 0 -> if { leftIndex -> plannedPartitionCallbackRoute(context, state) => leftRoute! }
+    rightIndex -> plannedPartitionRoute(context, state) => rightRoute!
+    rightRoute! < 0 -> if { rightIndex -> plannedPartitionCallbackRoute(context, state) => rightRoute! }
+    leftPosition == rightPosition and leftRoute! >= 0 and rightRoute! >= 0 and leftRoute! != rightRoute!
+        -> if {
+            leftRoute! -> plannedPartitionJunction(context, state) => leftJunction
+            rightRoute! -> plannedPartitionJunction(context, state) => rightJunction
+            leftJunction >= 0 and leftJunction == rightJunction
+                -> if { leftRoute! < rightRoute! -> return }
+        }
     leftPosition < rightPosition or (leftPosition == rightPosition and (context.ir[leftIndex] -> sourceStart(context, state)) < (context.ir[rightIndex] -> sourceStart(context, state)))
 }
 
@@ -519,7 +532,10 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                                         entryScheduleAssignmentChildSearch! + 1 => entryScheduleAssignmentChildSearch!
                                     }
                             }
-                        entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.kind != 27 and entryScheduleNode.kind != 33 and entryScheduleNode.kind != 34 and entryScheduleNode.operand1 > functionIndex and entryScheduleNode.operand1 < entryEnd and not entryScheduled![entryScheduleNode.operand1 - functionIndex - 1]
+                        # Partition operand1 is the deferred route declaration chain.
+                        # Registration commits after its source; predicates execute
+                        # only after the first terminal opens the shared dispatch.
+                        entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.kind != 27 and entryScheduleNode.kind != 33 and entryScheduleNode.kind != 34 and entryScheduleNode.kind != 40 and entryScheduleNode.operand1 > functionIndex and entryScheduleNode.operand1 < entryEnd and not entryScheduled![entryScheduleNode.operand1 - functionIndex - 1]
                             -> if { false => entryScheduleReady! }
                         entryScheduleReady! and (entryScheduleCandidate! -> plannedStreamStage(context, state)) < 0 and entryScheduleNode.kind == 6 and entryScheduleNode.opcode != -207 and not (entryScheduleNode.opcode -> typedIr.isDirectIterationOpcode) and entryScheduleNode.opcode != -209 and entryScheduleNode.operand1 > functionIndex and entryScheduleNode.operand1 < entryEnd
                             -> if {

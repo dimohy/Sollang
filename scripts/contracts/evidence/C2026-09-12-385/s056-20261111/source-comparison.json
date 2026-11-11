@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "status": "compared-before-slg-edit",
+  "observedAtUtc": "2026-11-11T06:15:19.823561+00:00",
+  "comparisonScope": "CSharp reference passed 3/3; production SLG scheduler observed before source edits; qualify source repair before any native compiler rebuild.",
+  "csharpSource": "src/Sollang.Compiler/CodeGen/LlvmEmitter.Statements.cs:957",
+  "slgSource": "selfhost/llvm/text/entry_expressions.slg:163",
+  "csharpDecision": "BuildRuntimeStreamSink binds route consumers; EmitPartitionPipeline pulls one source and emits each item to the first matching route, including mutable callback effects. Registration-time outer statements remain in source order.",
+  "slgDecision": "planEntryExpressionOrder builds a flat dependency/effect schedule and validates every terminal and owned callback exactly once. Earlier S056 reports a missing terminal; preserve the integrity rejection while diagnosing the dependency/effect cycle.",
+  "priorFailure": "artifacts/scratch/resume-20261111/partition-controls01/selfhost-llvm-partition-reordered-mutable-effects/emit.stdout",
+  "next": "Apply the two scheduler dependency decisions, then run production source scheduler observer and paired emission controls.",
+  "claimsGoalComplete": false,
+  "observerEvidence": "artifacts\\scratch\\resume-20261111\\s056-observer02\\result.json",
+  "observerOutput": "artifacts\\scratch\\resume-20261111\\s056-observer02\\observe.stdout",
+  "rootCauses": [
+    {
+      "id": "registration-predicate-cycle",
+      "facts": "junction 118385 kind40 waits operand1 118386 route predicate; predicates wait first terminal 118415. routed binding118376 and outer mutable initializers118377/379/381 remain pending when recovery opens first terminal.",
+      "decision": "Partition registration depends on the producer source, not execution of its deferred route predicate chain; retain predicate readiness at dispatch."
+    },
+    {
+      "id": "reordered-route-effect-cycle",
+      "facts": "all route effects share execution source608, but source-order tie break puts other route2 mutation before even route0 mutation while explicit route completeness requires route0 before route2.",
+      "decision": "Within one junction, order terminal/callback effects by route declaration; preserve lexical order within a route and outer registration statement order."
+    }
+  ]
+}
