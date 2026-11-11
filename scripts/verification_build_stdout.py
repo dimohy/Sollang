@@ -43,7 +43,8 @@ def validate_build_stdout(raw, binary_path, side):
     }
     for index, line in enumerate(lines):
         match = re.fullmatch(r"\[native ([1-9][0-9]*)/([1-9][0-9]*)\] optimized partition", line)
-        if match and side == "managed" and not seen:
+        # Both Windows linkers publish this ordered completion protocol.
+        if match and not seen:
             partitions.append(tuple(map(int, match.groups())))
             continue
         match = re.fullmatch(r"Wrote (.+) \(([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+) bytes\)", line) if side == "managed" else re.fullmatch(r"Wrote (.+)", line)

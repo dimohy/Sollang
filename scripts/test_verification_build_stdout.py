@@ -36,6 +36,29 @@ class BuildStdoutTests(unittest.TestCase):
         self.validate([f"[semantic-cache] load-status 50; reused 0/145 sources; rejected 0; uncached 23; {self.prefix}.semantic",
             f"Kept {self.binary}.ll", f"Wrote {self.binary}"], "selfhost")
 
+    def test_partition_progress_for_both_linkers(self):
+        for side in ("managed", "selfhost"):
+            suffix = self.lines[1:] if side == "managed" else [
+                f"[semantic-cache] load-status 50; reused 0/155 sources; rejected 0; uncached 24; {self.prefix}.semantic",
+                f"[codegen-cache] reused 0/12 units; {self.prefix}.cgu",
+                f"Kept {self.binary}.ll", f"Wrote {self.binary}"]
+            for count in (1, 3):
+                with self.subTest(side=side, count=count):
+                    self.validate([f"[native {i}/{count}] optimized partition"
+                        for i in range(1, count + 1)] + suffix, side)
+
+    def test_partition_progress_rejects_incomplete_reordered_and_late_lines(self):
+        for side in ("managed", "selfhost"):
+            suffix = self.lines[1:] if side == "managed" else [
+                f"[semantic-cache] load-status 50; reused 0/155 sources; rejected 0; uncached 24; {self.prefix}.semantic",
+                f"Wrote {self.binary}"]
+            for progress in (["1/2"], ["1/2", "1/2"], ["2/2", "1/2"],
+                             ["1/2", "2/3"], ["0/1"], ["2/1"]):
+                with self.subTest(side=side, progress=progress), self.assertRaises(ValueError):
+                    self.validate([f"[native {part}] optimized partition" for part in progress] + suffix, side)
+            with self.subTest(side=side, late=True), self.assertRaises(ValueError):
+                self.validate(suffix[:1] + ["[native 1/1] optimized partition"] + suffix[1:], side)
+
     def test_native_codegen_cache_counts(self):
         for reused, total in ((0, 12), (7, 12), (12, 12), (0, 0)):
             with self.subTest(reused=reused, total=total):

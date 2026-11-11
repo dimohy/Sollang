@@ -2416,6 +2416,13 @@ partial source graph. Preserve both the raw LLVM and linked execution assertions
 Before refreshing a raw LLVM expectation, compare its functions and inspect
 changed bodies against the compiler sources; identifier changes alone do not
 explain a runtime implementation change.
+Internal function references in both compilers use the prepared canonical
+`sollang_fn_` name, separately from nominal declaration-key type names. Preserve
+the ordered `stdin`, `stdout`, `written`, `read`, `ok_state` pointer prefix in
+source-function definitions and calls. Structural assertions must still prove
+the original receiver, argument conversion and result flow when a naming or
+runtime-context contract changes; retain exact program output and rejection
+checks for incorrect transport.
 
 For a focused comparison of user-program behavior, invoke the verified current
 C# and SLG compiler binaries on the same program inputs. Reuse the existing

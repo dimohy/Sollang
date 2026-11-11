@@ -6458,19 +6458,23 @@ must retain its matching declaration or definition in the LLVM module.
 
 Internal function symbols must preserve canonical function identity, including
 the distinction between namespace separators and identifier underscores.
-Replacing both with the same character is not a valid encoding. The managed
-emitter retains simple ASCII qualified names and uses a disjoint, complete
+Replacing both with the same character is not a valid encoding. Both
+emitters retain simple ASCII qualified names and use a disjoint, complete
 UTF-8 hex encoding for other canonical names. Native-library symbol names
 remain governed by their explicit foreign-function declarations.
 
-The self-host emitter encodes complete declaration keys for internal function
-symbols. Keys retain logical namespace bytes and declaration scope/signature;
-physical source, symbol, AST and token positions are lookup coordinates only.
-Encoding each unsigned key word as canonical unsigned base-128 bytes and then
-hexadecimal preserves word boundaries and avoids hash-only identity. Function
-definitions, calls, runtime wrappers and specialization base names must use the
-same prepared key. This does not replace the independent naming rules for SSA
-values, type layouts, private globals or specialization arguments.
+Function references use the canonical qualified function name, separately from
+the declaration keys used by nominal type layouts. Both emitters prepare the
+same `sollang_fn_` identity before LLVM quoting; local functions also retain
+their lexical declaration suffix. Definitions, calls, runtime wrappers and
+specialization base names consume that prepared identity. Physical source,
+symbol, AST and token positions remain lookup coordinates rather than names
+for non-local functions. SSA values, type layouts, private globals and
+specialization arguments retain their independent naming rules.
+Internal source-function definitions and calls pass the shared runtime context
+as five opaque pointer arguments, in this order: `stdin`, `stdout`, `written`,
+`read`, `ok_state`. Declared inputs follow that prefix. A call forwards its
+caller's actual context; foreign ABI entry points retain their explicit ABI.
 The emission inventory contains each canonical non-local function or generic
 specialization once, even when distinct call-site type views resolve to the
 same concrete identity. Lexical local functions retain their own instances.
