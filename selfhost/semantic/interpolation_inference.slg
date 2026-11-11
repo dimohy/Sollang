@@ -1362,16 +1362,15 @@ public collectionMembershipDiagnosticByNode prepared: ref semanticContext.Semant
                             types -> typeIds.collectionMembershipExpectedTypeId(receiver) => expectedType
                             expectedType >= 0 -> if {
                                 expectedType => diagnostic!.expectedTypeId
-                                call.argumentCount != 1 -> if {
-                                    receiver.kind == 14 -> if { 1 } else { 2 } => diagnostic!.code
-                                } else {
+                                -1 => actualType!
+                                call.argumentCount == 1 -> if {
                                     prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, call.operand1) => argumentTypeId
-                                    types -> typeIds.materializedReadTypeId(argumentTypeId) => actualType
-                                    actualType >= 0 and actualType < (types -> len) and actualType != expectedType
-                                        -> if {
-                                            actualType => diagnostic!.actualTypeId
-                                            receiver.kind == 14 -> if { 3 } else { 4 } => diagnostic!.code
-                                        }
+                                    types -> typeIds.materializedReadTypeId(argumentTypeId) => actualType!
+                                }
+                                types -> typeIds.collectionMembershipArgumentCode(receiver, call.argumentCount, actualType!) => code
+                                code => diagnostic!.code
+                                code == 3 or code == 4 -> if {
+                                    actualType! => diagnostic!.actualTypeId
                                 }
                             }
                         }

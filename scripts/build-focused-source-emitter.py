@@ -141,7 +141,7 @@ def main():
         preflight = json.loads(preflight_path.read_text(encoding='utf-8'))
         assert preflight['status'] == 'passed' and preflight['completed'] == preflight['total'] > 0, 'SOURCE_EMITTER_NATIVE_PREFLIGHT_FAILED'
         assert preflight['inputsStable'] and preflight['processesStopped'], 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INCOMPLETE'
-        assert all(sha(path) == value for path, value in preflight['inputHashes'].items()), 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INPUT_CHANGED'
+        assert all(sha(path).casefold() == value.casefold() for path, value in preflight['inputHashes'].items()), 'SOURCE_EMITTER_NATIVE_PREFLIGHT_INPUT_CHANGED'
         preflight_inputs.extend(map(Path, preflight['inputHashes']))
     assert semantic['status'] == 'passed' and semantic['completed'] == semantic['total']
     assert semantic['inputsStable'] and semantic['processesStopped']

@@ -2785,6 +2785,13 @@ public struct ExpressionOperandDiagnostic {
     # Codes 74/75 carry expected/actual canonical IDs in operandTypeId/firstTypeId.
     # Code 74 uses operatorKind for the target module and operandTypeSymbol for
     # the function. Code 75 locates the producer's actual yielded value.
+    # Code 81 selects an ordinary Result propagation decision. operatorKind
+    # is its decision kind and operandTypeSymbol is the exact propagation IR.
+    # Code 82 selects the first flat interpolation error by its source String AST;
+    # operandTypeSymbol is the interpolation node and negative operatorKind
+    # reports missing or ambiguous source provenance.
+    # Codes 83/84 report ordinary membership arity/argument type before Result.
+    # operatorKind retains the operation; operandTypeSymbol is its shared code.
     public operandTypeSymbol: Int
     public operandTypeId: Int
     public firstTypeId: Int
@@ -3587,7 +3594,7 @@ textIntrinsicOpcode call: typedIr.TypedIrNode, types: ref [typeIds.SemanticType;
         -> if { call.opcode } else { 0 }
 }
 
-textIntrinsicSourceAst call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~] -> Int {
+intrinsicFlowSourceAst call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~] -> Int {
     call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
         -> unless { -1 -> return }
     prepared.package.ranges[call.sourceModule] => range
@@ -3607,9 +3614,9 @@ textIntrinsicSourceAst call: typedIr.TypedIrNode, prepared: ref semanticContext.
         -> if { ownerAst! } else { -1 }
 }
 
-textIntrinsicArgumentAsts call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> [Int; ~] {
+intrinsicFlowArgumentAsts call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> [Int; ~] {
     [Int; ~] => explicitArguments!
-    call -> textIntrinsicSourceAst(prepared, flowSources) => ownerAst
+    call -> intrinsicFlowSourceAst(prepared, flowSources) => ownerAst
     ownerAst < 0 -> if { explicitArguments! -> return }
     prepared.package.ranges[call.sourceModule] => range
     prepared.package.nodes[range.astStart + ownerAst].kind => ownerKind
@@ -3624,32 +3631,90 @@ textIntrinsicArgumentAsts call: typedIr.TypedIrNode, prepared: ref semanticConte
     explicitArguments!
 }
 
-firstTextIntrinsicOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> ExpressionOperandDiagnostic {
+intrinsicFlowTargetPathAst call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~] -> Int {
+    prepared.package.ranges[call.sourceModule] => range
+    prepared.directFlowTargetPathByAst[range.astStart + call.astNode] => pathAst!
+    # A target call and its enclosing flow can name the same invocation.
+    pathAst! < 0 -> if {
+        call -> intrinsicFlowSourceAst(prepared, flowSources) => ownerAst
+        ownerAst >= 0 -> if {
+            prepared.directFlowTargetPathByAst[range.astStart + ownerAst] => pathAst!
+        }
+    }
+    pathAst!
+}
+
+firstCollectionMembershipOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> ExpressionOperandDiagnostic {
     ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     ir -> each call {
-        call -> textIntrinsicOpcode(resolved.types, ir) => opcode
+        (call.kind == 6 or call.kind == 9) and call.targetModule < 0
+            and ((call.opcode <= -241 and call.opcode >= -243)
+            or (call.opcode <= -255 and call.opcode >= -257))
+            and call.operand0 >= 0 and call.operand0 < (ir -> len)
+            and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[call.sourceModule] => range
+                call.astNode >= 0 and call.astNode < range.astCount
+                    and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.astNode))
+                    -> if {
+                        resolved.types -> typeIds.materializedReadTypeId(ir[call.operand0].typeId) => receiverType
+                        receiverType >= 0 and receiverType < (resolved.types -> len)
+                            -> if {
+                                resolved.types[receiverType] => receiver
+                                resolved.types -> typeIds.collectionMembershipExpectedTypeId(receiver) => expectedType
+                                call -> intrinsicFlowTargetPathAst(prepared, flowSources) => pathAst
+                                expectedType >= 0 and pathAst >= 0 -> if {
+                                    call -> intrinsicFlowArgumentAsts(prepared, flowSources, firstChildByAst, nextSiblingByAst) => arguments
+                                    -1 => actualType!
+                                    (arguments -> len) == 1 and call.operand1 >= 0 and call.operand1 < (ir -> len)
+                                        -> if {
+                                            resolved.types -> typeIds.materializedReadTypeId(ir[call.operand1].typeId) => actualType!
+                                        }
+                                    resolved.types -> typeIds.collectionMembershipArgumentCode(receiver, Int(arguments -> len), actualType!) => code
+                                    code > 0 -> if {
+                                        code == 1 or code == 2 -> if { pathAst } else { arguments[0] - range.astStart } => locationAst
+                                        ExpressionOperandDiagnostic {
+                                            code: code == 1 or code == 2 -> if { 83 } else { 84 }
+                                            sourceModule: call.sourceModule, astNode: locationAst, operandAst: locationAst
+                                            operatorKind: call.opcode, locationOffset: prepared.package.nodes[range.astStart + locationAst].start
+                                            operandTypeSymbol: code, operandTypeId: actualType!, firstTypeId: expectedType
+                                        } => candidate
+                                        prepared.package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                            -> if { candidate => selected! }
+                                    }
+                                }
+                            }
+                    }
+            }
+    }
+    selected!
+}
+
+firstIntrinsicFlowOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> ExpressionOperandDiagnostic {
+    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    ir -> each call {
+        call -> textIntrinsicOpcode(resolved.types, ir) => opcode!
+        (call.kind == 6 or call.kind == 9) and call.targetModule < 0
+            and (call.opcode == -101 or call.opcode == -201 or call.opcode == -245
+            or call.opcode == -236 or call.opcode == -244)
+            and call.operand0 >= 0 and call.operand0 < (ir -> len)
+            -> if { call.opcode => opcode! }
+        opcode! => opcode
         opcode < 0 and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
             -> if {
                 prepared.package.ranges[call.sourceModule] => range
                 call.astNode >= 0 and call.astNode < range.astCount
                     and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.astNode))
                     -> if {
-                        prepared.directFlowTargetPathByAst[range.astStart + call.astNode] => pathAst!
-                        # A target call and its enclosing flow can name the same
-                        # source invocation. Follow those exact parent identities.
-                        pathAst! < 0 -> if {
-                            call -> textIntrinsicSourceAst(prepared, flowSources) => ownerAst
-                            ownerAst >= 0 -> if {
-                                prepared.directFlowTargetPathByAst[range.astStart + ownerAst] => pathAst!
-                            }
-                        }
-                        pathAst! >= 0 -> if {
-                            call -> textIntrinsicArgumentAsts(prepared, flowSources, firstChildByAst, nextSiblingByAst) => arguments
+                        call -> intrinsicFlowTargetPathAst(prepared, flowSources) => pathAst
+                        pathAst >= 0 -> if {
+                            call -> intrinsicFlowArgumentAsts(prepared, flowSources, firstChildByAst, nextSiblingByAst) => arguments
                             arguments -> len => argumentCount
-                            opcode == -202 -> if { 1 } else { 2 } => expectedCount
+                            opcode == -202 -> if { 1 } else { opcode == -203 -> if { 2 } else { 0 } } => expectedCount
                             argumentCount != expectedCount -> if {
-                                ExpressionOperandDiagnostic { code: 68, sourceModule: call.sourceModule, astNode: pathAst!, operandAst: pathAst!, operatorKind: opcode, locationOffset: prepared.package.nodes[range.astStart + pathAst!].start, operandTypeSymbol: argumentCount, operandTypeId: -1, firstTypeId: -1 } => candidate
+                                ExpressionOperandDiagnostic { code: 68, sourceModule: call.sourceModule, astNode: pathAst, operandAst: pathAst, operatorKind: opcode, locationOffset: prepared.package.nodes[range.astStart + pathAst].start, operandTypeSymbol: argumentCount, operandTypeId: -1, firstTypeId: -1 } => candidate
                                 prepared.package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
                                     -> if { candidate => selected! }
                             } else {
@@ -3851,7 +3916,7 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
         # never to an IR producer that can point back to a named binding.
         call -> textIntrinsicOpcode(resolved.types, ir) => textOpcode
         textOpcode < 0 -> if {
-            call -> textIntrinsicArgumentAsts(prepared, flowSources, firstChild!, nextChild!) => arguments
+            call -> intrinsicFlowArgumentAsts(prepared, flowSources, firstChild!, nextChild!) => arguments
             textOpcode == -202 -> if { 1 } else { 2 } => expectedTotal
             (arguments -> len) == expectedTotal -> if {
                 prepared.package.ranges[call.sourceModule] => range
@@ -4924,6 +4989,11 @@ expressionDiagnosticPrecedes package: ref analysis.PackageAnalysis, fields: ref 
     package.nodes[range.astStart + candidate.astNode].start => candidateStart
     package.nodes[range.astStart + selected.astNode].start => selectedStart
     candidateStart < selectedStart or (candidateStart == selectedStart and candidate.astNode < selected.astNode)
+}
+
+public chooseExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, fields: ref [typeIds.NominalField; ~], candidate: ExpressionOperandDiagnostic, selected: ExpressionOperandDiagnostic -> ExpressionOperandDiagnostic {
+    package -> expressionDiagnosticPrecedes(fields, candidate, selected)
+        -> if { candidate } else { selected }
 }
 
 public firstMutableRebindDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, prior: ExpressionOperandDiagnostic, genericPlans: ref [typedIr.GenericCallPlan; ~], ir: ref [typedIr.TypedIrNode; ~] -> ExpressionOperandDiagnostic {
@@ -6129,9 +6199,12 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
     prepared -> firstRepeatBlockDiagnostic(resolved, ir) => repeatDiagnostic
     repeatDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, repeatDiagnostic, selected!))
         -> if { repeatDiagnostic => selected! }
-    prepared -> firstTextIntrinsicOperandDiagnostic(resolved, ir, firstChildByAst!, nextChildByAst!) => textDiagnostic
+    prepared -> firstIntrinsicFlowOperandDiagnostic(resolved, ir, firstChildByAst!, nextChildByAst!) => textDiagnostic
     textDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, textDiagnostic, selected!))
         -> if { textDiagnostic => selected! }
+    prepared -> firstCollectionMembershipOperandDiagnostic(resolved, ir, firstChildByAst!, nextChildByAst!) => membershipDiagnostic
+    membershipDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, membershipDiagnostic, selected!))
+        -> if { membershipDiagnostic => selected! }
     ir -> each binary {
         # Templates defer to their concrete array instances. Keep independently
         # typed operands intact and share literal context with pre-IR admission.

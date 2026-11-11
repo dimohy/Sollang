@@ -478,6 +478,20 @@ public collectionMembershipExpectedTypeId types: ref [SemanticType; ~], receiver
     -1
 }
 
+# Shared by ordinary flow and flat interpolation admission: 0 valid/unresolved,
+# 1 BitSet arity, 2 Set arity, 3 BitSet index type, 4 Set element type.
+public collectionMembershipArgumentCode types: ref [SemanticType; ~], receiver: SemanticType, argumentCount: Int, actualTypeId: Int -> Int {
+    types -> collectionMembershipExpectedTypeId(receiver) => expectedType
+    expectedType < 0 -> if { 0 -> return }
+    argumentCount != 1 -> if {
+        receiver.kind == 14 -> if { 1 -> return } else { 2 -> return }
+    }
+    types -> materializedReadTypeId(actualTypeId) => actual
+    actual >= 0 and actual < (types -> len) and actual != expectedType
+        -> if { receiver.kind == 14 -> if { 3 -> return } else { 4 -> return } }
+    0
+}
+
 # A name read copies the referenced value; its source still retains the
 # reference identity needed for borrowing and ABI loads.
 public materializedReadTypeId types: ref [SemanticType; ~], typeId: Int -> Int {
