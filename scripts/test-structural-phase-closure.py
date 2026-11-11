@@ -848,6 +848,24 @@ class PhaseClosureTests(unittest.TestCase):
         self.change_record("records/generation.json", producerHashes={})
         self.rejects("producer stamp differs")
 
+    def test_generation_preflight_uses_the_same_complete_authority(self):
+        self.assertEqual(MODULE.validate_parsing_generation(self.root, "records/generation.json"),
+                         self.shared_hashes)
+
+    def test_generation_preflight_rejects_the_three_of_six_producer_view(self):
+        self.change_record("records/generation.json", producerHashes={
+            path: self.shared_hashes[path] for path in MODULE.PARSING_PRODUCERS[:3]})
+        with self.assertRaisesRegex(MODULE.PhaseClosureError, "producer stamp differs"):
+            MODULE.validate_parsing_generation(self.root, "records/generation.json")
+
+    def test_generation_preflight_cannot_use_a_canonical_file_as_reproduction(self):
+        value = json.loads((self.root / "records/generation.json").read_text())
+        output = value["outputs"][0]
+        output["reproducedFile"] = {"path": output["path"], "sha256": output["sha256"]}
+        self.write_record("records/generation.json", value)
+        with self.assertRaisesRegex(MODULE.PhaseClosureError, "lacks current producer reproduction"):
+            MODULE.validate_parsing_generation(self.root, "records/generation.json")
+
     def test_reproduction_must_match_actual_generated_file(self):
         self.write("reproduced/0.generated", "different reproduced parser")
         self.rejects("lacks current producer reproduction")

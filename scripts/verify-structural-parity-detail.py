@@ -267,6 +267,71 @@ def validate_fixture_binary(root, reference, cleanup_evidence=None):
             "fixture cleanup execution left planned files")
 
 
+def phase_local_file(root, relative):
+    path = phase_path(root, relative)
+    require(path.is_file(), f"missing file: {relative}")
+    return path
+
+
+def phase_terminal_success(value):
+    require(type(value.get("exitCode")) is int and value["exitCode"] == 0,
+            "nonzero or absent execution exit code")
+    require(value.get("failureIds") == [] and value.get("orphanProcessIds") == []
+            and value.get("canceled") is False, "failed, canceled, or orphaned execution")
+
+
+def validate_parsing_generation(root, generation_path):
+    """Use the final promotion checks before starting any parsing execution."""
+    def local_file(relative):
+        return phase_local_file(root, relative)
+
+    require(isinstance(generation_path, str) and bool(generation_path), "missing proof record")
+    generation = normalize_phase_digest_fields(json.loads(local_file(generation_path).read_text(encoding="utf-8-sig")))
+    require(generation.get("status") == "passed" and generation.get("phase") == "parsing",
+            f"record status/phase mismatch: {generation_path}")
+    shared_hashes = {path: file_hash(local_file(path)) for path in PARSING_SHARED_DEPENDENCIES}
+    phase_terminal_success(generation)
+    require(generation.get("method") == "current-producer-reproduction"
+            and type(generation.get("completed")) is int and generation["completed"] == 3
+            and type(generation.get("total")) is int and generation["total"] == 3,
+            "incomplete current producer reproduction")
+    generation_inputs = {path: shared_hashes[path] for path in
+                         ["syntax/sollang.lexer", "syntax/sollang.grammar", *PARSING_PRODUCERS]}
+    require(generation.get("inputStable") is True
+            and generation.get("inputHashesStart") == generation_inputs == generation.get("inputHashesEnd"),
+            "generation does not cover current producer and grammar inputs")
+    require(generation.get("producerHashes") == {path: shared_hashes[path] for path in PARSING_PRODUCERS},
+            "generation producer stamp differs")
+    outputs = generation.get("outputs")
+    require(isinstance(outputs, list) and [output.get("path") for output in outputs] == list(PARSING_DERIVED),
+            "derived parser/lexer output inventory differs")
+    for output in outputs:
+        require(output.get("sha256") == shared_hashes[output["path"]]
+                and output.get("producerPath") == PARSING_DERIVED[output["path"]],
+                "derived output or producer is stale")
+        reproduced = output.get("reproducedFile")
+        require(isinstance(reproduced, dict) and reproduced.get("path") not in PARSING_SHARED_DEPENDENCIES
+                and not local_file(reproduced["path"]).samefile(local_file(output["path"]))
+                and file_hash(local_file(reproduced["path"])) == reproduced.get("sha256") == output["sha256"],
+                "derived output lacks current producer reproduction")
+        execution = output.get("execution")
+        require(isinstance(execution, dict), "missing producer generation execution")
+        phase_terminal_success(execution)
+        require(execution.get("status") == "passed" and execution.get("inputStable") is True
+                and execution.get("inputHashesStart") == generation_inputs == execution.get("inputHashesEnd")
+                and execution.get("producerPath") == output["producerPath"]
+                and execution.get("producerSha256") == shared_hashes[output["producerPath"]]
+                and execution.get("producedFile") == reproduced,
+                "producer execution does not establish derived file linkage")
+    lexer = local_file("syntax/sollang.lexer").read_text(encoding="utf-8-sig")
+    grammar = local_file("syntax/sollang.grammar").read_text(encoding="utf-8-sig")
+    stamp = hashlib.sha256((lexer + "\n---grammar---\n" + grammar).encode("utf-8")).hexdigest()
+    generated = local_file("syntax/generated/sollang_grammar.slg").read_text(encoding="utf-8-sig")
+    require(f"# Source SHA-256: {stamp}" in generated, "generated grammar input stamp is stale")
+
+    return shared_hashes
+
+
 def validate_phase_closure(detail, phases, root):
     """Validate promotion without executing compilers or trusting recorded hashes."""
     require(detail["schemaVersion"] == 2, "phase closure requires schema version 2")
@@ -283,9 +348,7 @@ def validate_phase_closure(detail, phases, root):
             "phase mapping and progress differ")
 
     def local_file(relative):
-        path = phase_path(root, relative)
-        require(path.is_file(), f"missing file: {relative}")
-        return path
+        return phase_local_file(root, relative)
 
     def record(relative, phase, status="passed"):
         require(isinstance(relative, str) and bool(relative), "missing proof record")
@@ -298,11 +361,7 @@ def validate_phase_closure(detail, phases, root):
         require(value.get(field) == {"path": relative, "sha256": file_hash(local_file(relative))},
                 f"record linkage mismatch: {field}")
 
-    def terminal_success(value):
-        require(type(value.get("exitCode")) is int and value["exitCode"] == 0,
-                "nonzero or absent execution exit code")
-        require(value.get("failureIds") == [] and value.get("orphanProcessIds") == []
-                and value.get("canceled") is False, "failed, canceled, or orphaned execution")
+    terminal_success = phase_terminal_success
 
     complete = 0
     for row, mapping in zip(rows, phases):
@@ -361,47 +420,8 @@ def validate_phase_closure(detail, phases, root):
 
         shared_hashes = {}
         if phase == "parsing":
-            shared_hashes = {path: file_hash(local_file(path)) for path in PARSING_SHARED_DEPENDENCIES}
             generation_path = inventory.get("generationRecord")
-            generation = record(generation_path, phase)
-            terminal_success(generation)
-            require(generation.get("method") == "current-producer-reproduction"
-                    and type(generation.get("completed")) is int and generation["completed"] == 3
-                    and type(generation.get("total")) is int and generation["total"] == 3,
-                    "incomplete current producer reproduction")
-            generation_inputs = {path: shared_hashes[path] for path in
-                                 ["syntax/sollang.lexer", "syntax/sollang.grammar", *PARSING_PRODUCERS]}
-            require(generation.get("inputStable") is True
-                    and generation.get("inputHashesStart") == generation_inputs == generation.get("inputHashesEnd"),
-                    "generation does not cover current producer and grammar inputs")
-            require(generation.get("producerHashes") == {path: shared_hashes[path] for path in PARSING_PRODUCERS},
-                    "generation producer stamp differs")
-            outputs = generation.get("outputs")
-            require(isinstance(outputs, list) and [output.get("path") for output in outputs] == list(PARSING_DERIVED),
-                    "derived parser/lexer output inventory differs")
-            for output in outputs:
-                require(output.get("sha256") == shared_hashes[output["path"]]
-                        and output.get("producerPath") == PARSING_DERIVED[output["path"]],
-                        "derived output or producer is stale")
-                reproduced = output.get("reproducedFile")
-                require(isinstance(reproduced, dict) and reproduced.get("path") not in PARSING_SHARED_DEPENDENCIES
-                        and not local_file(reproduced["path"]).samefile(local_file(output["path"]))
-                        and file_hash(local_file(reproduced["path"])) == reproduced.get("sha256") == output["sha256"],
-                        "derived output lacks current producer reproduction")
-                execution = output.get("execution")
-                require(isinstance(execution, dict), "missing producer generation execution")
-                terminal_success(execution)
-                require(execution.get("status") == "passed" and execution.get("inputStable") is True
-                        and execution.get("inputHashesStart") == generation_inputs == execution.get("inputHashesEnd")
-                        and execution.get("producerPath") == output["producerPath"]
-                        and execution.get("producerSha256") == shared_hashes[output["producerPath"]]
-                        and execution.get("producedFile") == reproduced,
-                        "producer execution does not establish derived file linkage")
-            lexer = local_file("syntax/sollang.lexer").read_text(encoding="utf-8-sig")
-            grammar = local_file("syntax/sollang.grammar").read_text(encoding="utf-8-sig")
-            stamp = hashlib.sha256((lexer + "\n---grammar---\n" + grammar).encode("utf-8")).hexdigest()
-            generated = local_file("syntax/generated/sollang_grammar.slg").read_text(encoding="utf-8-sig")
-            require(f"# Source SHA-256: {stamp}" in generated, "generated grammar input stamp is stale")
+            shared_hashes = validate_parsing_generation(root, generation_path)
 
         comparison = record(inventory["sourceComparisonRecord"], phase, "compared")
         if phase == "parsing":
@@ -811,7 +831,10 @@ if __name__ == "__main__":
         detail = read("scripts/contracts/structural-parity-detail.json")
         completed = validate_phase_closure(detail, read(detail["phaseSource"])["phaseMapping"], ROOT)
         print(f"[phase closure contract] PASS declared closure {completed}/{detail['phaseClosure']['total']}")
+    elif len(sys.argv) == 3 and sys.argv[1] == "--parsing-generation-record":
+        validate_parsing_generation(ROOT, sys.argv[2])
+        print("[parsing generation preflight] PASS 3 outputs and all 6 producer authorities; no phase execution credit")
     elif sys.argv[1:]:
-        raise SystemExit("usage: verify-structural-parity-detail.py [--phase-closure-only]")
+        raise SystemExit("usage: verify-structural-parity-detail.py [--phase-closure-only | --parsing-generation-record PATH]")
     else:
         verify_detail()

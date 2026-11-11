@@ -568,11 +568,21 @@ function Get-NativeExactPhaseContext {
         }
     }
     $expectedShared = @()
+    $generationValidationInputs = @()
     if ($contract.phase -ceq 'parsing') {
         $expectedShared = @($phase[0].decisionInventory.sharedDependencies)
         if ((@($inventory.sharedDependencies) -join "`0") -cne ($expectedShared -join "`0")) { throw 'PHASE_EXECUTION_SHARED_SCOPE_NARROWED' }
         foreach ($entry in (Get-NativeExactPhaseHashes $root $expectedShared).GetEnumerator()) { $sourceHashes[$entry.Key] = $entry.Value }
         [void](Read-NativeExactPhaseReference $root $contract.generationRecord)
+        $generationValidationInputs = @(
+            (Join-Path $PSScriptRoot 'verify-structural-parity-detail.py'),
+            (Join-Path $PSScriptRoot 'context_suite_evidence.py'),
+            (Join-Path $PSScriptRoot 'verification_build_stdout.py'),
+            (Join-Path $PSScriptRoot 'verification_source_proof.py'),
+            (Join-Path $PSScriptRoot 'completed_artifact_plan.py'))
+        $generationPython = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $generationValidation = @(& $generationPython $generationValidationInputs[0] --parsing-generation-record $contract.generationRecord.path)
+        if ($LASTEXITCODE -ne 0) { throw "PHASE_EXECUTION_GENERATION_INVALID: $($generationValidation -join "`n")" }
     }
     $parseTokens = $null; $parseErrors = $null
     $defaultAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'verify-native-exact-fixture-batch.ps1'), [ref]$parseTokens, [ref]$parseErrors)
@@ -711,7 +721,7 @@ function Get-NativeExactPhaseContext {
     $inputs = Get-NativeExactPhaseHashes $root (@($sourceHashes.Keys) + @($contractRef.path, $contract.reviewedInventory.path,
         $binary.buildRecord, $RunnerPath, $canonicalRunner, (Join-Path $PSScriptRoot 'verification-process.ps1'),
         (Join-Path $PSScriptRoot 'native-exact-fixture-receipt.ps1'),
-        (Join-Path $PSScriptRoot 'contracts/artifact-lifecycle.json'), $schemaPath) + @($cases.fixture.path) + $comparisonInputs + @($wholeInputs) + $buildStdoutInputs)
+        (Join-Path $PSScriptRoot 'contracts/artifact-lifecycle.json'), $schemaPath) + @($cases.fixture.path) + $comparisonInputs + @($wholeInputs) + $buildStdoutInputs + $generationValidationInputs)
 
     return [pscustomobject]@{ Root=$root; Contract=$contract; ContractReference=$contractRef; CompilerSide=$CompilerSide;
         CompilerBinary=[ordered]@{path=$binary.path;sha256=$binary.sha256}; RunnerReference=(Get-NativeExactPhaseReference $root $canonicalRunner);
