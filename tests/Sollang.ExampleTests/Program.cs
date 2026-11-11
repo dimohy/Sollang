@@ -1191,12 +1191,38 @@ Parallel.ForEach(
                     .ToArray()
                 : [];
             var productionLink = reusableSelfHostTest && linkedTarget == TestTarget.WindowsX64
-                && linkArguments.Length == 0
                 && Regex.IsMatch(actual, @"^\s*define\b[^@\r\n]*@sollang_start\s*\(", RegexOptions.Multiline)
                 ? reusedSelfHostCompiler?.WindowsLinkArguments
                 : null;
             ProcessResult link;
-            if (productionLink is not null)
+            var explicitWindowsLink = productionLink is not null && linkArguments.Length != 0
+                ? WindowsFixtureLink.Create(productionLink, actual, linkArguments)
+                : null;
+            if (explicitWindowsLink is not null)
+            {
+                var linkWork = linkedPath + ".link";
+                Directory.CreateDirectory(linkWork);
+                var generatedLibraries = new List<string>();
+                foreach (var (library, definition) in explicitWindowsLink.Libraries)
+                {
+                    var definitionPath = Path.Combine(linkWork, library + ".def");
+                    var importPath = Path.Combine(linkWork, library + ".lib");
+                    File.WriteAllText(definitionPath, definition, new UTF8Encoding(false));
+                    var generated = Run(explicitWindowsLink.Librarian,
+                        ["/nologo", "/machine:x64", "/def:" + definitionPath, "/out:" + importPath],
+                        input: null, repoRoot, role: "import-library");
+                    if (generated.ExitCode != 0)
+                        throw new InvalidOperationException($"WINDOWS_FIXTURE_IMPORT_LIBRARY_FAILED: {library}\n{generated.Stderr}");
+                    if (!linkArguments.Contains("-l" + library, StringComparer.Ordinal))
+                        generatedLibraries.Add(importPath);
+                }
+                link = Run(explicitWindowsLink.Clang,
+                    [.. explicitWindowsLink.CompilerArguments, "-nostdlib", "-fuse-ld=lld",
+                        stdoutLlvmPath, "-o", linkedPath, "-L", linkWork, .. generatedLibraries,
+                        .. linkArguments, .. explicitWindowsLink.LinkerArguments],
+                    input: null, repoRoot, role: "link");
+            }
+            else if (productionLink is not null && linkArguments.Length == 0)
             {
                 var linkWork = linkedPath + ".link";
                 Directory.CreateDirectory(linkWork);
