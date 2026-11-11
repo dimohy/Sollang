@@ -2485,6 +2485,9 @@ workers. The C# Windows linker retains small LLVM partitions while limiting
 concurrent optimization processes. The worker limit is not the partition count:
 source size and host processor facts determine the latter. Validate the complete
 reported partition sequence instead of assuming it equals the requested workers.
+For internal cached emitters, locate worker options after the command's complete
+fixed prefix. Library modes include a library file and interface stage before
+the source root. Apply the worker limit before source discovery or generation.
 Record the selected worker count with the
 build inputs; keep the program, optimization level, and verification timeout
 fixed when comparing behavior. `build-focused-selfhost-compiler.ps1 -Jobs`
