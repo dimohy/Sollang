@@ -5757,7 +5757,11 @@ materializeBlockCallback nodes: mut [TypedIrNode; ~], prepared: ref semanticCont
                     -1 => inputBinding!.operand1
                     -1 => inputBinding!.nextOperand
                     0 => inputBinding!.flags
-                    ownsInputs -> if { 1 => inputBinding!.flags }
+                    # Ownership transfer needs storage for affine inputs.
+                    # Copyable values retain their evaluated identity, including
+                    # deferred Text components passed through a fused stream.
+                    ownsInputs and inputBinding!.typeFlags % 2 == 1
+                        -> if { 1 => inputBinding!.flags }
                     (nodes -> len) => roleBindings![callerRoleIndex!]
                     nodes -> push(inputBinding!)
                 }

@@ -1408,9 +1408,28 @@ emitSetIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.Em
     keyType.symbol -> integerSigned(context, state) => hashSigned
     call.operand0 -> mutableStorageRoot(context, state) => setRoot
     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => setBorrow
-    "  %set$(callIndex -> valueNameId(state))_source = load %sollang.int_dictionary, ptr " -> print
-    setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
-    ", align 8" -> println
+    setRoot < 0 and setBorrow < 0 and (call -> typedIr.isSetMutationCall)
+        -> if {
+            "; sollang internal error: Set mutation has no mutable storage" -> println
+            1 -> process.exit
+        }
+    "  %set$(callIndex -> valueNameId(state))_source = " -> print
+    setBorrow >= 0 or setRoot >= 0 -> if {
+        "load %sollang.int_dictionary, ptr " -> print
+        setBorrow >= 0 -> if { setBorrow -> writeMutableStructParameterPointer } else { "%slot$(setRoot -> valueNameId(state))" -> print }
+        ", align 8" -> println
+    } else {
+        base.typeId >= 0 and context.types[base.typeId].kind == 8
+            -> if {
+                "load %sollang.int_dictionary, ptr " -> print
+                call.operand0 -> writeValue(ownerIndex, context, state)
+                ", align 8" -> println
+            } else {
+                "freeze %sollang.int_dictionary " -> print
+                call.operand0 -> writeValue(ownerIndex, context, state)
+                "" -> println
+            }
+    }
     "  %set$(callIndex -> valueNameId(state))_storage = extractvalue %sollang.int_dictionary %set$(callIndex -> valueNameId(state))_source, 0" -> println
     "  %set$(callIndex -> valueNameId(state))_length = extractvalue %sollang.int_dictionary %set$(callIndex -> valueNameId(state))_source, 1" -> println
     "  %set$(callIndex -> valueNameId(state))_capacity = extractvalue %sollang.int_dictionary %set$(callIndex -> valueNameId(state))_source, 2" -> println

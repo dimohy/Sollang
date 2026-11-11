@@ -245,27 +245,46 @@ public prepareFunctionSymbols context: mut TypeFieldContext, prepared: ref seman
     metadata -> when {
         Err(_) { 2 => status! }
         Ok(captured) {
+            [Int; ~] => capturedStarts!
+            [Int; ~] => capturedLengths!
             captured.functions.functions -> each function {
+                function.sourceModule => context.sourceModule
+                function.ownerSymbol => context.ownerSymbol
+                prepared.package.ranges[function.sourceModule] => range
+                prepared.package.sources[function.sourceModule] -> slice(0, prepared.package.sources[function.sourceModule] -> len) => source
+                source -> logicalIdentityField(context.identities[function.sourceModule], range, prepared.package.tokens) => module
+                module.bytes -> file.borrowBytes => moduleSource
+                moduleSource -> slice(0, moduleSource -> len) => moduleName
+                function.name.bytes -> file.borrowBytes => nameSource
+                nameSource -> slice(0, nameSource -> len) => name
+                prepared.package.symbols[range.symbolStart + function.ownerSymbol] => declaration
+                source -> functionLocations.sourceLocation(prepared.package.nodes[range.astStart + declaration.astNode].start) => location
+                instanceBytes! -> len => start
+                moduleName -> appendFunctionSymbol(name, (context -> functionParentSymbol(prepared.package)) >= 0, location.line, location.column, instanceBytes!)
+                (instanceBytes! -> len) - start => length
+                capturedStarts! -> push(start)
+                capturedLengths! -> push(length)
                 function.functionNode >= 0 and function.functionNode < irCount
                     -> if {
-                        function.sourceModule => context.sourceModule
-                        function.ownerSymbol => context.ownerSymbol
-                        prepared.package.ranges[function.sourceModule] => range
-                        prepared.package.sources[function.sourceModule] -> slice(0, prepared.package.sources[function.sourceModule] -> len) => source
-                        source -> logicalIdentityField(context.identities[function.sourceModule], range, prepared.package.tokens) => module
-                        module.bytes -> file.borrowBytes => moduleSource
-                        moduleSource -> slice(0, moduleSource -> len) => moduleName
-                        function.name.bytes -> file.borrowBytes => nameSource
-                        nameSource -> slice(0, nameSource -> len) => name
-                        prepared.package.symbols[range.symbolStart + function.ownerSymbol] => declaration
-                        source -> functionLocations.sourceLocation(prepared.package.nodes[range.astStart + declaration.astNode].start) => location
-                        instanceBytes! -> len => start
                         instanceStarts![function.functionNode] >= 0 -> if { 3 => status! }
                         start => instanceStarts![function.functionNode]
-                        moduleName -> appendFunctionSymbol(name, (context -> functionParentSymbol(prepared.package)) >= 0, location.line, location.column, instanceBytes!)
-                        (instanceBytes! -> len) - start => instanceLengths![function.functionNode]
+                        length => instanceLengths![function.functionNode]
                     }
             }
+            # Deduplicated functions retain every concrete IR alias in byNode.
+            # Publish the same canonical name for all those references.
+            (captured.functions.byNode -> len) == irCount
+                -> if {
+                    0..<irCount -> each node {
+                        captured.functions.byNode[node] => function
+                        function >= 0 -> if {
+                            function < (capturedStarts! -> len) -> if {
+                                capturedStarts![function] => instanceStarts![node]
+                                capturedLengths![function] => instanceLengths![node]
+                            } else { 4 => status! }
+                        }
+                    }
+                } else { 4 => status! }
         }
     }
     FunctionSymbols {
