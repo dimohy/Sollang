@@ -1982,6 +1982,31 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                     true => pathChanged!
                                                 }
                                         }
+                                    # A terminal partition is the value of the full flow.
+                                    # Local binding inference reads that initializer's type.
+                                    branchNode.kind == 78 and branchNode.parent >= 0
+                                        -> if {
+                                            branchRange.astStart + branchNode.parent => partitionFlowGlobalAst
+                                            prepared.package.nodes[partitionFlowGlobalAst] => partitionFlow
+                                            partitionFlow.kind == 10
+                                                and partitionFlow.start + partitionFlow.length == branchNode.start + branchNode.length
+                                                -> if {
+                                                    ExpressionTypeId { sourceModule: branchSourceIndex!, astNode: branchNode.parent, typeId: branchProductType!, status: 0 } => partitionFlowType
+                                                    expressionIndexByAst[partitionFlowGlobalAst] => partitionFlowExpression
+                                                    partitionFlowExpression < 0 -> if {
+                                                        expressions -> len => partitionNewFlowExpression
+                                                        expressions -> push(partitionFlowType)
+                                                        partitionNewFlowExpression => expressionIndexByAst[partitionFlowGlobalAst]
+                                                        true => pathChanged!
+                                                    } else {
+                                                        expressions[partitionFlowExpression].typeId != branchProductType!
+                                                            -> if {
+                                                                partitionFlowType => expressions[partitionFlowExpression]
+                                                                true => pathChanged!
+                                                            }
+                                                    }
+                                                }
+                                        }
                                 }
                         }
                     branchAstIndex! + 1 => branchAstIndex!
