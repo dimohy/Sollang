@@ -6419,10 +6419,13 @@ Requirements:
 
 Windows COM registered activation uses `CoCreateInstance` with class context
 `23`; an explicit server selects its direct class-factory path instead.
-Native linking includes `ole32` when the emitted declaration prefix requires
-COM initialization. Inspect at most the first 1 MiB for that declaration,
-preserving matches across read boundaries. A failed inspection is a build
-error rather than evidence that COM imports are unnecessary.
+Native linking includes optional Windows import libraries when the emitted LLVM
+declarations require them, including `ole32` for COM initialization. Inspect the
+complete LLVM file with bounded read storage, preserving matches across read
+boundaries; declarations may follow emitted functions. A failed inspection is
+a build error rather than evidence that optional imports are unnecessary.
+Native Windows linking treats linker warnings as build errors. Merge unwind
+metadata through `.rdata` into `.text` without a second `.xdata` merge.
 
 `QueryInterface` returns `Ok` only when its `HRESULT` is nonnegative and its
 output pointer is nonnull. Otherwise it returns `Err` with the original

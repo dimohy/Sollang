@@ -164,19 +164,17 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
 
     private static bool ContainsPrefixMarker(string path, ReadOnlySpan<byte> marker)
     {
-        const int PrefixLimit = 1024 * 1024;
         using var stream = File.OpenRead(path);
         Span<byte> buffer = stackalloc byte[4096];
-        var remaining = Math.Min(stream.Length, PrefixLimit);
         var matched = 0;
-        while (remaining > 0)
+        // Declarations may follow emitted functions. Bound storage, not input extent.
+        while (true)
         {
-            var read = stream.Read(buffer[..(int)Math.Min(buffer.Length, remaining)]);
+            var read = stream.Read(buffer);
             if (read == 0)
             {
                 break;
             }
-            remaining -= read;
             foreach (var value in buffer[..read])
             {
                 matched = value == marker[matched]

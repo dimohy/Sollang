@@ -12,7 +12,9 @@ internal static class WindowsLinkPolicy
 
     public static string ObjectArguments() => "-target;x86_64-pc-windows-msvc;:optimization:;-fno-addrsig;-mno-stack-arg-probe;-Werror;-Wno-override-module";
     public static string BitcodeArguments() => "-target;x86_64-pc-windows-msvc;:optimization:;-flto=full;-emit-llvm;-Werror;-Wno-override-module";
-    public static string LinkArguments() => "/nologo;/machine:x64;/nodefaultlib;/opt:ref;/opt:icf;/fixed;/stack:8388608,65536;/merge:.rdata=.text;/merge:.pdata=.text;/merge:.xdata=.text";
+    // lld already folds .xdata into .rdata; the latter is merged into .text.
+    // A second explicit .xdata merge warns, and warnings must fail the build.
+    public static string LinkArguments() => "/nologo;/WX;/machine:x64;/nodefaultlib;/opt:ref;/opt:icf;/fixed;/stack:8388608,65536;/merge:.rdata=.text;/merge:.pdata=.text";
     public static string ExecutableArguments() => "/subsystem:console;/entry:" + EntryPointName;
     public static string LibraryArguments() => "/dll;/noentry";
 

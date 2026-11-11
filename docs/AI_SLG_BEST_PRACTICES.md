@@ -2103,9 +2103,12 @@ Parameterless ASCII text constants use the same compiled-policy path. Windows
 import definitions share one table of library names, DLL names, optional LLVM
 declaration prefixes and ordered exports. Keep the table in C# and regenerate
 its SLG module; never copy export lists into a second handwritten compiler
-path. Both adapters preserve library order, the bounded prefix scan and exact
-UTF-8 definition bytes. Generated import paths own their storage until linking
-finishes; the caller owns their private work directory and cleanup boundary.
+path. Both adapters preserve library order, scan the complete LLVM file using
+bounded read storage, and preserve exact UTF-8 definition bytes. Keep partial
+declaration matches across read boundaries and propagate read errors. Generated
+import paths own their storage until linking finishes; the caller owns their
+private work directory and cleanup boundary. Treat native linker warnings as
+build failures; avoid redundant section merges instead of suppressing warnings.
 Runtime LLVM templates opt into bounded multiline constants explicitly. Keep
 the Windows entry constant in `WindowsLinkPolicy` and the shared legacy integer
 reader in `NativeRuntimePolicy`. Its generated region in `llvm/runtime.slg`

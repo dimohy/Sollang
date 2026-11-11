@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "scope": "Complete-file conditional Windows import selection with bounded read storage; original declaration markers and exact import definitions",
+  "maximumSyntheticBytes": 2097152,
+  "caseBudgetSeconds": 30,
+  "defaultImports": ["kernel32.def", "shell32.def", "ucrtbase.def"],
+  "definitions": "scripts/probes/windows-linker/expected-import-definitions.json",
+  "markers": {
+    "ole32.def": "declare dllimport i32 @CoInitializeEx",
+    "ws2_32.def": "declare dllimport i32 @WSAStartup",
+    "bcrypt.def": "declare dllimport i32 @BCryptGenRandom"
+  },
+  "cases": [
+    {"id":"absent", "offset":0, "markers":[], "expectedOptional":[]},
+    {"id":"early-winsock", "offset":0, "markers":["ws2_32.def"], "expectedOptional":["ws2_32.def"]},
+    {"id":"buffer-boundary", "offset":4088, "markers":["bcrypt.def"], "expectedOptional":["bcrypt.def"]},
+    {"id":"old-limit-crossing", "offset":1048564, "markers":["ole32.def"], "expectedOptional":["ole32.def"]},
+    {"id":"old-limit-start", "offset":1048576, "markers":["ws2_32.def"], "expectedOptional":["ws2_32.def"]},
+    {"id":"late-all", "offset":1052673, "markers":["ole32.def","ws2_32.def","bcrypt.def"], "expectedOptional":["ole32.def","ws2_32.def","bcrypt.def"]},
+    {"id":"late-partial", "offset":1048587, "markers":[], "suffix":"declare dllimport i32 @WSAStartuX", "expectedOptional":[]},
+    {"id":"late-eof", "offset":1056768, "markers":["bcrypt.def"], "noFinalNewline":true, "expectedOptional":["bcrypt.def"]},
+    {"id":"missing-input", "missing":true, "expectedReadFailure":true}
+  ],
+  "actualCases": [
+    {"id":"1206-quic-bidirectional-multi-stream-routing", "expectedOptional":["ws2_32.def","bcrypt.def"]},
+    {"id":"1209-quic-connection-options-queue-limits", "expectedOptional":["ws2_32.def","bcrypt.def"]},
+    {"id":"1211-quic-directional-owner-transitions", "expectedOptional":["ws2_32.def","bcrypt.def"]}
+  ]
+}
