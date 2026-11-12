@@ -2555,6 +2555,10 @@ and `linkTimeoutSeconds: 240`. Select the canonical CLI with `--cli`, or a
 validated reusable checked package with `--checked-package-contract`. The latter
 keeps its declared `-O1`/24-worker harness configuration; the CLI uses `-O2`/24.
 The original combined build mode and its budget remain separate.
+Before a full source-phase build, compare the driver manifest with the declared
+compiler SDK source scope. Include its modules even when the driver does not
+call their exports, and verify the import closure before compilation. Adding
+file hashes after a build does not establish that those sources were compiled.
 For bounded observations of these build phases, pass `--diagnostics-plan` with
 `schemaVersion: 1` and a `phases` object containing `emit`, `grammar`, and `link`
 plans. Each plan uses the common `SlowStepDiagnostics` fields and must declare
