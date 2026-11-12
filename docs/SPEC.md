@@ -3514,7 +3514,10 @@ owned Text buffer. This is a general stream-value rule rather than a special
 case for `flatMap` or `println`.
 
 Importing a module exposes each direct public symbol both through the module
-alias and as an unqualified name. Therefore `import std.sequence` permits both
+alias and as an unqualified name.
+Async, stream, and native declarations retain their declared visibility; those
+declaration forms do not export a private symbol, including symbols in another
+source fragment of the imported logical module. Therefore `import std.sequence` permits both
 `sequence.flatMap` and `flatMap`. An import path may also end at one public
 symbol when a source wants to import only that name or assign an explicit
 alias:

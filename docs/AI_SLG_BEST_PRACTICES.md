@@ -346,6 +346,8 @@ short domain name improves the flow. `public` is an API commitment; leave
 helpers private unless another module should depend on them. Several files may
 share one namespace and form one logical module, but each file owns its imports.
 Do not encode module identity through source order or manifest position.
+Async, stream, and native declarations follow the same visibility rule: only
+`public` declarations are accessible from another logical module.
 Within that module, use `Type.Variant` and `Type.Variant(payload)` even when the
 enum is declared in another file. A same-named local value keeps its ordinary
 field projection; an explicit `alias.Type.Variant` keeps the import's owner.

@@ -5961,11 +5961,18 @@ firstQualifiedBlockReceiverDiagnostic prepared: ref semanticContext.SemanticSnap
     ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 }
 }
 
-# Type-application capacities use C# NumberExpression.Text/Long.TryParse,
-# rather than ordinary contextual integer inference. Separators, character
-# literals, unary expressions and runtime values are not constructor literals.
+# Type-application capacities use the lexer-normalized NumberExpression value.
+# Digit separators and character scalars retain that literal identity; unary
+# expressions and runtime values do not become constructor literals.
 positiveCollectionCapacityLiteral source: ref Text, argument: ast.AstNode, pointerBitWidth: Int -> Bool {
     argument.kind != 14 or argument.length == 0 -> if { false -> return }
+    (source -> byte(argument.start)) == 39 -> if {
+        syntax.SourceSpan { fileId: 0, start: argument.start, length: argument.length } => span
+        source -> syntax.decodeCharacterLiteral(span) -> when {
+            Some(value) { value > 0 -> return }
+            None { false -> return }
+        }
+    }
     false => nonzero!
     argument.start => cursor!
     cursor! < argument.start + argument.length -> while {
