@@ -40,6 +40,29 @@ def fixture(*, facts=(1, 0, 2, 1), source=SOURCE, call_schema=2,
 
 
 class NativeNumericCacheTests(unittest.TestCase):
+    def test_old_clang_only_failure_fixture_is_rejected_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / 'bin').mkdir()
+            (home / 'bin/clang.exe').write_bytes(b'fixture')
+            with self.assertRaisesRegex(ValueError, 'CONTROL_TOOL_MISSING.*lld-link.exe'):
+                VERIFIER.link_failure_tool_inputs(home)
+
+    def test_failure_fixture_requires_each_windows_tool(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / 'bin').mkdir()
+            names = ('clang.exe', 'lld-link.exe', 'llvm-lib.exe', 'llvm-split.exe')
+            for name in names:
+                (home / 'bin' / name).write_bytes(b'fixture')
+            self.assertEqual([p.name for p in VERIFIER.link_failure_tool_inputs(home)], list(names))
+            for name in names:
+                path = home / 'bin' / name
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, 'CONTROL_TOOL_MISSING'):
+                    VERIFIER.link_failure_tool_inputs(home)
+                path.write_bytes(b'fixture')
+
     def inspect(self, words, source=SOURCE):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

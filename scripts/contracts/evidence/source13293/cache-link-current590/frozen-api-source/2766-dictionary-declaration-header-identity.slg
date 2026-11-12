@@ -1,0 +1,74 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+import sollang.compiler.semantic.module_interfaces as interfaces
+
+different left: [UInt8], right: [UInt8] -> Bool {
+    false => changed!
+    0..<32 -> each index {
+        left[index] != right[index] -> if { true => changed! }
+    }
+    changed!
+}
+
+fingerprintsDiffer leftSource: Text, rightSource: Text -> Bool {
+    [leftSource,; ~] -> context.prepare => left
+    [rightSource,; ~] -> context.prepare => right
+    left -> fingerprints.capture => a
+    right -> fingerprints.capture => b
+    a.status == 0 and b.status == 0 and different(a.bytes, b.bytes)
+}
+
+interfacesDiffer leftSource: Text, rightSource: Text -> Bool {
+    [leftSource,; ~] -> context.prepare => left
+    [rightSource,; ~] -> context.prepare => right
+    left.package -> interfaces.interfacesAnalyzed => a
+    right.package -> interfaces.interfacesAnalyzed => b
+    not interfaces.sameInterface(a, 0, b, 0)
+}
+
+callableKeyMatches leftSource: Text, rightSource: Text -> Bool {
+    [leftSource,; ~] -> context.prepare => left
+    [rightSource,; ~] -> context.prepare => right
+    left.package.ranges[0] => range
+    -1 => callable!
+    0..<range.symbolCount -> each index {
+        left.package.symbols[range.symbolStart + index] => symbol
+        symbol.kind == 7 and callable! < 0 -> if { index => callable! }
+    }
+    callable! < 0 -> if { false -> return }
+    left.package -> interfaces.declarationIdentityAnalyzed(left.modules, 0, callable!) => key
+    right.package -> interfaces.declarationIdentitiesAnalyzed(right.modules) => index
+    key.status != 0 or index.status != 0 -> if { false -> return }
+    index -> interfaces.findDeclarationIdentity(key.words) => found
+    found.status == 0
+}
+
+main {
+    "namespace stored.header\npublic accepts values: {Int: Int} -> Int => values -> len\nmain {}\n" => leftSource
+    "namespace stored.header\npublic accepts values: {Int: Bool} -> Int => values -> len\nmain {}\n" => rightSource
+    "namespace stored.header\npublic accepts values: {Int: Int} -> Int { values -> len }\nmain {}\n" => bodyChanged
+    "namespace stored.header\npublic accepts values: {Int: Int} -> Int => values -> len\nprivateValue: -> Int => 2\nmain {}\n" => privateChanged
+    "namespace stored.header\npublic make: -> {Int: Int} => {1: 2}\nmain {}\n" => leftReturn
+    "namespace stored.header\npublic make: -> {Int: Bool} => {1: true}\nmain {}\n" => rightReturn
+    "namespace stored.header\npublic identity<T> values: {Int: T} -> {Int: T} => values\nmain {}\n" => leftGeneric
+    "namespace stored.header\npublic identity<T> values: {Text: T} -> {Text: T} => values\nmain {}\n" => rightGeneric
+    "namespace stored.header\npublic struct Item { values: {Int: Int} }\nmain {}\n" => leftField
+    "namespace stored.header\npublic struct Item { values: {Int: Bool} }\nmain {}\n" => rightField
+    [leftSource,; ~] -> context.prepare => left
+    [rightSource,; ~] -> context.prepare => right
+    left -> fingerprints.capture => leftFingerprint
+    right -> fingerprints.capture => rightFingerprint
+    leftFingerprint.status == 0 -> println
+    rightFingerprint.status == 0 -> println
+    different(leftFingerprint.bytes, rightFingerprint.bytes) -> println
+    fingerprintsDiffer(leftReturn, rightReturn) -> println
+    fingerprintsDiffer(leftGeneric, rightGeneric) -> println
+    fingerprintsDiffer(leftField, rightField) -> println
+    not fingerprintsDiffer(leftSource, bodyChanged) -> println
+    not fingerprintsDiffer(leftSource, privateChanged) -> println
+    interfacesDiffer(leftSource, rightSource) -> println
+    interfacesDiffer(leftReturn, rightReturn) -> println
+    not interfacesDiffer(leftSource, bodyChanged) -> println
+    not callableKeyMatches(leftSource, rightSource) -> println
+    callableKeyMatches(leftSource, bodyChanged) -> println
+}

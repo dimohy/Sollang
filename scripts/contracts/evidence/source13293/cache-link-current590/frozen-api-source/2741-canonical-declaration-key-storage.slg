@@ -1,0 +1,73 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+sameWords left: ref [UInt64; ~], right: ref [UInt64; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+main {
+    ["namespace cache.keys\npublic struct Entry { public value: Int }\npublic struct Other { public marker: Int }\n"; ~] -> analysis.analyze => before
+    before -> modules.identitiesAnalyzed => beforeModules
+    before -> interfaces.declarationIdentitiesAnalyzed(beforeModules) => original
+    original -> interfaces.encodeDeclarationKeys => encoded
+    ["namespace cache.keys\npublic struct Other { public marker: Int }\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => after
+    after -> modules.identitiesAnalyzed => afterModules
+    after -> interfaces.declarationIdentitiesAnalyzed(afterModules) => current
+    current -> interfaces.encodeDeclarationKeys => reordered
+    encoded.status == 0 and reordered.status == 0 => encodedOk
+    encodedOk -> println
+    encoded.words -> sameWords(reordered.words) -> println
+
+    encoded.words -> interfaces.decodeDeclarationKeys => decoded
+    before -> interfaces.declarationIdentityAnalyzed(beforeModules, 0, 0) => entryKey
+    decoded -> interfaces.findDeclarationIdentity(entryKey.words) => stored
+    decoded.status == 0 and stored.status == 0 and stored.sourceModule == 0
+        and stored.symbol == encoded.keyIds[0] => canonicalId
+    canonicalId -> println
+    [typeIds.SemanticType { kind: 1, origin: 0, module: 0, symbol: stored.symbol, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 }; ~] => recipes
+    after -> typeIds.resolveAnalyzed => fresh
+    recipes -> artifacts.rebind(decoded, current, fresh.types) => restored
+    current -> interfaces.findDeclarationIdentity(entryKey.words) => target
+    restored.status == 0 and target.status == 0
+        and restored.types[restored.typeIds[0]].symbol == target.symbol
+        and target.symbol == 2 => rebound
+    rebound -> println
+
+    [UInt64; ~] => truncated!
+    0 => copyIndex!
+    copyIndex! < (encoded.words -> len) - 1 -> while {
+        truncated! -> push(encoded.words[copyIndex!])
+        copyIndex! + 1 => copyIndex!
+    }
+    UInt64(truncated! -> len) => truncated![4]
+    truncated! -> interfaces.decodeDeclarationKeys => invalid
+    invalid.status == 1 and (invalid.words -> len) == 0 => invalidRejected
+    invalidRejected -> println
+
+    [UInt64(6002245308444529747), 1, 0, 0, 7, 2, 7; ~] => duplicate!
+    0..<2 -> each {
+        7 => wordIndex!
+        wordIndex! < 8 + Int(encoded.words[7]) -> while {
+            duplicate! -> push(encoded.words[wordIndex!])
+            wordIndex! + 1 => wordIndex!
+        }
+    }
+    UInt64(duplicate! -> len) => duplicate![4]
+    duplicate! -> interfaces.decodeDeclarationKeys => ambiguous
+    ambiguous.status == 2 and (ambiguous.words -> len) == 0 => duplicateRejected
+    duplicateRejected -> println
+
+    [UInt64(6002245308444529747), 1, 0, 0, 7, 0, 7; ~] => empty
+    empty -> interfaces.decodeDeclarationKeys => emptyIndex
+    emptyIndex.status == 0 and (emptyIndex.words -> len) == 0 => emptyValid
+    emptyValid -> println
+}

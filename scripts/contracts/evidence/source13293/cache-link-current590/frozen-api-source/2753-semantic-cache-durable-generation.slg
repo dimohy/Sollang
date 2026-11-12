@@ -1,0 +1,111 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sys.process as process
+import sys.path as path
+import sys.directory as directory
+import sys.file as file
+
+executableDirectory executable: Text -> Text {
+    UIntSize(0) => end!
+    UIntSize(0) => index!
+    index! < (executable -> len) -> while {
+        executable -> byte(index!) => byte
+        byte == '/' or byte == '\\' -> if { index! => end! }
+        index! + 1 => index!
+    }
+    executable -> slice(0, end!)
+}
+
+writeIdentity destination: Text -> Bool uses File {
+    destination -> file.openWrite -> when {
+        Err(_) { false -> return }
+        Ok(writer) {
+            [UInt8(97), 98, 99; ~] => bytes
+            writer -> writeRangeAt(bytes, 0, 3, 0) -> when {
+                Err(_) { false -> return }
+                Ok(count) { count != 3 -> if { false -> return } }
+            }
+            writer -> file.sync -> return
+        }
+    }
+}
+
+runChecks: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    arguments[0] -> executableDirectory => output
+    Arena(0) => folderStorage!
+    "$output/.sollang-cache" -> materialize(folderStorage!) => folder
+    folder -> path.fromText(path.nativeStyle()) => cacheDirectory
+    directory.create(cacheDirectory) -> println
+    Arena(0) => destinationStorage!
+    "$folder/generation.semantic" -> materialize(destinationStorage!) => destination
+    Arena(0) => stageStorage!
+    "$folder/staged.semantic" -> materialize(stageStorage!) => staged
+    destination -> cache.load => cold
+    (cold.status == 50 and (cold.words -> len) == 0) -> println
+    "import stored.provider as provider\nmain { provider.plus(UInt8(3)) => value\nvalue -> println\n}\n" => mainSource
+    "namespace stored.provider\npublic plus<T> value: T -> T => value\n" => provider
+    "namespace unrelated\npublic value: -> Int => 1\n" => other
+    ["main.slg", "provider.slg", "other.slg"; ~] => paths
+    generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
+    [mainSource, provider, other; ~] -> context.prepare => initial
+    initial -> cache.resolve(cold, paths, identity) -> when {
+        Ok(value) { value }
+        Err(_) { false -> println
+            return }
+    } => first
+    (first.loadStatus == 50 and first.reused == 0 and first.skipped == 0 and (first.words -> cache.validate) == 0) -> println
+    (staged -> file.createExclusive) == 1 -> println
+    (first.words -> cache.stage(staged)) == 0 -> println
+    destination -> cache.load => beforePublish
+    beforePublish.status == 50 -> println
+    staged -> cache.publish(destination) -> when {
+        Ok(value) { (value.total == 3 and value.reused == 0 and value.skipped == 0) -> println }
+        Err(_) { false -> println }
+    }
+    destination -> cache.load => loaded
+    staged -> cache.load => removedStage
+    (loaded.status == 0 and removedStage.status == 50) -> println
+    "namespace unrelated\npublic value: -> Int => 2\n" => changedOther
+    [changedOther, provider, mainSource; ~] -> context.prepare => changed
+    ["other.slg", "provider.slg", "main.slg"; ~] => changedPaths
+    changed -> cache.resolve(loaded, changedPaths, identity) -> when {
+        Ok(value) { value }
+        Err(_) { false -> println
+            return }
+    } => warm
+    (warm.loadStatus == 0 and warm.reused == 2 and warm.rejected == 1 and warm.skipped == 0) -> println
+    ((staged -> file.createExclusive) == 1 and (warm.words -> cache.stage(staged)) == 0) -> println
+    destination -> cache.load => unchanged
+    (unchanged.status == 0 and unchanged.words[5] == 0 and warm.words[5] == 2) -> println
+    staged -> cache.publish(destination) -> when { Ok(value) { value.reused == 2 -> println } Err(_) { false -> println } }
+    destination -> cache.load => nextGeneration
+    [changedOther, provider, mainSource; ~] -> context.prepare => next
+    next -> cache.resolve(nextGeneration, changedPaths, identity) -> when {
+        Ok(value) { (value.reused == 3 and value.rejected == 0 and value.skipped == 0) -> println }
+        Err(_) { false -> println }
+    }
+    [UInt64; ~] => corrupt!
+    loaded.words -> each word { corrupt! -> push(word) }
+    corrupt![10] + 1 => corrupt![10]
+    (corrupt! -> cache.validate) == 23 -> println
+    cache.Loaded { words: corrupt!, status: 0 } => invalid
+    [mainSource, provider, other; ~] -> context.prepare => fresh
+    fresh -> cache.resolve(invalid, paths, identity) -> when {
+        Ok(value) { (value.loadStatus == 23 and value.reused == 0) -> println }
+        Err(_) { false -> println }
+    }
+    destination -> cache.publish(destination) -> when { Ok(_) { false -> println } Err(code) { code == 35 -> println } }
+    Arena(0) => identityStorage!
+    "$folder/identity.bin" -> materialize(identityStorage!) => identityPath
+    identityPath -> writeIdentity -> println
+    identityPath -> cache.compilerIdentity -> when { Ok(value) { value == 16919744041952114874 -> println } Err(_) { false -> println } }
+    identityPath -> cache.load => shortFile
+    shortFile.status == 21 -> println
+    [UInt64; ~] => truncated!
+    0..<Int(loaded.words -> len) - 1 -> each index { truncated! -> push(loaded.words[index]) }
+    (truncated! -> cache.validate) == 21 -> println
+}
+
+main { runChecks() }

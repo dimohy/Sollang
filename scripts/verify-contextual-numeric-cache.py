@@ -260,37 +260,58 @@ def native_semantic_facts(output, source):
     return matches[0]
 
 
+def link_failure_tool_inputs(llvm_home=None):
+    home = llvm_home if llvm_home is not None else ROOT / ".tools/llvm-22.1.8"
+    tools = [home / "bin" / name for name in ("clang.exe", "lld-link.exe", "llvm-lib.exe", "llvm-split.exe")]
+    for tool in tools:
+        if not tool.is_file():
+            raise ValueError(f"NATIVE_CACHE_FAILURE_CONTROL_TOOL_MISSING: {tool}")
+    return tools
+
+
 def verify_link_failure(compiler, output, inputs, parent_result, main_source, provider, expected,
                         reusable_directories=None):
     """Exercise the real native publication boundary with an existing cache.
 
-    Reuse the C476 injected-clang failure technique; do not manufacture a bad
-    cache or report an emitter error as a successful linker-failure control.
+    Inject exit 42 at lld-link after real object compilation. Current C#/SLG
+    Windows CLIs report the tool code in stderr and return public build exit 1.
     """
+    tools = link_failure_tool_inputs()
     control = output / "link-failure"
     cache = next((output / ".sollang-cache").glob("*.semantic"))
     executable = output / "probe.exe"
     originals = {path: (sha(path), path.stat().st_size, path.stat().st_mtime_ns)
                  for path in (cache, executable)}
-    clang = ROOT / ".tools/llvm-22.1.8/bin/clang.exe"
+    clang = tools[0]
     result = {"schemaVersion": 1, "scope": "Native link failure preserves published cache and executable",
               "total": 1, "cases": [], "claimsGoalComplete": False}
     contract = output / "link-failure-contract.json"
     contract.write_text(json.dumps({"schemaVersion": 1, "cases": [
-        {"id": "existing-cache-link-failure", "exit": 42, "expectedRuntimeExit": 0}]
+        {"id": "existing-cache-link-failure", "exit": 1, "expectedToolExit": 42,
+         "expectedTool": "lld-link.exe", "expectedRuntimeExit": 0}]
     }, indent=2) + "\n", encoding="utf-8")
     parent_result["linkFailureControl"] = {"status": "running", "result": str(control / "result.json")}
     try:
-        with VerificationOutput(ROOT, control, [*inputs, clang, main_source, provider, cache, executable, contract], result,
+        with VerificationOutput(ROOT, control, [*inputs, *tools, main_source, provider, cache, executable, contract], result,
                                 reusable_directories=reusable_directories) as execution:
-            row = {"id": "existing-cache-link-failure", "status": "running", "expectedBuildExit": 42}
+            row = {"id": "existing-cache-link-failure", "status": "running", "expectedBuildExit": 1,
+                   "expectedToolExit": 42, "expectedTool": "lld-link.exe"}
             budget = CacheCaseBudget(row)
             result["cases"].append(row)
-            source, fake_llvm = control / "fail-clang.c", control / "fake-llvm"
+            source, fake_llvm = control / "fail-lld.c", control / "fake-llvm"
             (fake_llvm / "bin").mkdir(parents=True)
-            fake_clang = fake_llvm / "bin/clang.exe"
+            fake_linker = fake_llvm / "bin/lld-link.exe"
+            row["realToolCopies"] = {}
+            for tool in tools:
+                if tool.name == "lld-link.exe":
+                    continue
+                copied = fake_llvm / "bin" / tool.name
+                shutil.copyfile(tool, copied)
+                if sha(copied) != sha(tool):
+                    raise ValueError("NATIVE_CACHE_FAILURE_CONTROL_TOOL_COPY_CHANGED")
+                row["realToolCopies"][tool.name] = sha(copied)
             source.write_text('#include <stdio.h>\nint main(void) { fputs("C476 injected linker failure\\n", stderr); return 42; }\n', encoding="utf-8")
-            code = budget.run(execution, [str(clang), "-x", "c", str(source), "-o", str(fake_clang)],
+            code = budget.run(execution, [str(clang), "-x", "c", str(source), "-o", str(fake_linker)],
                                  control / "prepare.stdout", control / "prepare.stderr")
             if code or (control / "prepare.stderr").read_bytes():
                 raise ValueError("NATIVE_CACHE_FAILURE_CONTROL_PREPARATION")
@@ -299,12 +320,13 @@ def verify_link_failure(compiler, output, inputs, parent_result, main_source, pr
                                  control / "build.stdout", control / "build.stderr")
             stdout = (control / "build.stdout").read_text(encoding="utf-8-sig")
             stderr = (control / "build.stderr").read_text(encoding="utf-8-sig")
+            tool_failure_observed = "sollang: lld-link.exe failed with exit code 42" in stderr
             after = {path: (sha(path), path.stat().st_size, path.stat().st_mtime_ns) for path in originals}
-            row.update(buildExit=code, preserved=originals == after,
+            row.update(buildExit=code, toolFailureObserved=tool_failure_observed, preserved=originals == after,
                        cacheSha256Before=originals[cache][0], cacheSha256After=after[cache][0],
                        executableSha256Before=originals[executable][0], executableSha256After=after[executable][0])
-            if (code != 42 or "C476 injected linker failure" not in stderr
-                    or "sollang: native linker failed with exit code 42" not in stdout
+            if (code != 1 or "C476 injected linker failure" not in stderr or not tool_failure_observed
+                    or "sollang: native linker failed with exit code 1" not in stdout
                     or "[semantic-cache]" in stdout or originals != after):
                 raise ValueError("NATIVE_CACHE_FAILED_LINK_PUBLISHED_OR_NOT_REACHED")
             code = budget.run(execution, [str(executable)], control / "run.stdout", control / "run.stderr")
@@ -345,7 +367,8 @@ def main():
     if not all(path.is_file() for path in generic_closure_inputs()):
         parser.error("generic closure control inputs are missing")
     compiler_inputs = managed_runtime_inputs(compiler) if args.compiler_kind == "managed" else [compiler]
-    inputs = [*compiler_inputs, *versions, *generic_closure_inputs(), Path(__file__),
+    failure_tools = link_failure_tool_inputs() if args.verify_link_failure else []
+    inputs = [*compiler_inputs, *versions, *generic_closure_inputs(), *failure_tools, Path(__file__),
               *sorted((ROOT / "stdlib").rglob("*.slg")), *lifecycle_inputs(ROOT)]
     result = {"schemaVersion": 1, "scope": "C543 cold/warm semantic numeric type restoration",
               "compilerKind": args.compiler_kind, "total": 2, "cases": [], "claimsGoalComplete": False}
