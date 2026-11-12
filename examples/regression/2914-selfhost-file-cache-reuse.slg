@@ -1,0 +1,21 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.module_cache as cache
+import sollang.compiler.semantic.module_cache_files as cacheFiles
+
+main {
+    [
+    "examples/regression/52-multi-file-modules.slg",
+    "examples/regression/sample/math.slg"; ~
+    ] => paths
+    UInt64(1) => target
+    paths -> context.prepareFiles => snapshot
+    snapshot.package -> cache.encodeAnalyzed(target) => words
+
+    words -> cacheFiles.reuse(paths, target) => warm
+    words -> cacheFiles.reuse(paths, 2) => wrongTarget
+    [1; ~] -> cacheFiles.reuse(paths, target) => truncated
+
+    "warm = $(warm.status)/$(warm.hits)/$(warm.misses)" -> println
+    "target = $(wrongTarget.status)/$(wrongTarget.hits)/$(wrongTarget.misses)" -> println
+    "truncated = $(truncated.status)/$(truncated.hits)/$(truncated.misses)" -> println
+}
