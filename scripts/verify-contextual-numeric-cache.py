@@ -148,14 +148,30 @@ def native_cache_words(output):
     if sys.byteorder != "little" or len(data) % 8:
         raise ValueError("NATIVE_NUMERIC_CACHE_WORD_FORMAT")
     words = memoryview(data).cast("Q")
-    verify_native_envelope(words, 6002245308512486735, 41)
-    if words[8] or words[3] > (len(words) - 41) // 2:
+    verify_native_envelope(words, 6002245308512486735, 41, schemas=(1, 2))
+    prefix = words[8]
+    if (len(words) > 16000000 or words[4] > 255 or words[5] > words[3]
+            or words[6] > 16000000 or words[7] > words[3]
+            or (words[1] == 1 and prefix != 0)
+            or (words[1] == 2 and prefix < 39)
+            or prefix > len(words) - 41
+            or words[3] > (len(words) - 41 - prefix) // 2):
         raise ValueError("NATIVE_NUMERIC_CACHE_HEADER")
+    if prefix:
+        # Schema2 reserves this exact prefix for the static-array plan. Numeric
+        # owner facts remain in the generation rows following it. The outer
+        # digest covers both; this reader does not restore the array plan.
+        plan = words[9:9 + prefix]
+        if (tuple(plan[:2]) != (5931875489630604371, 1)
+                or plan[5] > 1000000 or plan[6] > plan[5]
+                or any(value > 255 for value in plan[7:39])):
+            raise ValueError("NATIVE_NUMERIC_STATIC_ARRAYS_HEADER")
     return words
 
 
-def verify_native_envelope(words, magic, minimum):
-    if len(words) < minimum or tuple(words[:3]) != (magic, 1, len(words)):
+def verify_native_envelope(words, magic, minimum, *, schemas=(1,)):
+    if (len(words) < minimum or words[0] != magic
+            or words[1] not in schemas or words[2] != len(words)):
         raise ValueError("NATIVE_NUMERIC_CACHE_HEADER")
     if any(word > 255 for word in words[-32:]):
         raise ValueError("NATIVE_NUMERIC_CACHE_DIGEST_BYTES")
@@ -178,7 +194,7 @@ def native_semantic_facts(output, source):
     C# numeric annotation strings are not their persistence format.
     """
     words = native_cache_words(output)
-    cursor, matches = 9, []
+    cursor, matches = 9 + words[8], []
     for _ in range(words[3]):
         if cursor + 2 > len(words) - 32:
             raise ValueError("NATIVE_NUMERIC_CACHE_ROW_BOUNDS")

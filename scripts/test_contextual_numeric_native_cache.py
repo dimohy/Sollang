@@ -19,7 +19,8 @@ def envelope(words):
     return words + list(digest)
 
 
-def fixture(*, facts=(1, 0, 2, 1), source=SOURCE, call_schema=2):
+def fixture(*, facts=(1, 0, 2, 1), source=SOURCE, call_schema=2,
+            frame_schema=1, array_plan=None):
     # Public recipe rows: unsigned builtin symbols 8 and 9, signedWord encoded.
     recipes = [6002245308444529748, 1, 0, 0, 27, 2, 0,
                1, 2, 0, 16, 0, 0, 0, 0, 0, 0,
@@ -30,7 +31,11 @@ def fixture(*, facts=(1, 0, 2, 1), source=SOURCE, call_schema=2):
     calls = [6002245308495514451, call_schema, 6 + len(owner), len(owner), 0, 0, *owner]
     generation = envelope([6002245308512486734, 1, 0, 123, 1, 0, len(calls), 0,
                            *([0] * 32), *calls])
-    return envelope([6002245308512486735, 1, 0, 1, 0, 1, 1, 0, 0,
+    if array_plan is None:
+        array_plan = ([5931875489630604371, 1, 0, 0, 0, 0, 0] + [0] * 32
+                      if frame_schema == 2 else [])
+    return envelope([6002245308512486735, frame_schema, 0, 1, 0, 1, 1, 0, len(array_plan),
+                     *array_plan,
                      0, len(generation), *generation])
 
 
@@ -48,6 +53,41 @@ class NativeNumericCacheTests(unittest.TestCase):
         self.assertEqual({value[3] for value in expressions.values()}, {16, 18})
         self.assertEqual(owner, "exact-source-main")
         self.assertEqual(bindings, {})
+
+    def test_schema2_reads_widths_after_array_plan(self):
+        self.assertEqual(self.inspect(fixture(frame_schema=2)), self.inspect(fixture()))
+
+    def test_unknown_frame_schema_rejected(self):
+        with self.assertRaisesRegex(ValueError, "CACHE_HEADER"):
+            self.inspect(fixture(frame_schema=3))
+
+    def test_legacy_frame_with_array_prefix_rejected(self):
+        with self.assertRaisesRegex(ValueError, "CACHE_HEADER"):
+            self.inspect(fixture(array_plan=[0] * 39))
+
+    def test_schema2_short_array_prefix_rejected(self):
+        with self.assertRaisesRegex(ValueError, "CACHE_HEADER"):
+            self.inspect(fixture(frame_schema=2, array_plan=[0] * 38))
+
+    def test_schema2_array_prefix_overflow_rejected(self):
+        words = fixture(frame_schema=2)[:-32]
+        words[8] = len(words)
+        with self.assertRaisesRegex(ValueError, "CACHE_HEADER"):
+            self.inspect(envelope(words))
+
+    def test_schema2_array_header_rejected(self):
+        for field, value in [(0, 0), (1, 2), (5, 1000001), (6, 1), (7, 256)]:
+            with self.subTest(field=field):
+                words = fixture(frame_schema=2)[:-32]
+                words[9 + field] = value
+                with self.assertRaisesRegex(ValueError, "STATIC_ARRAYS_HEADER"):
+                    self.inspect(envelope(words))
+
+    def test_schema2_row_count_overflow_rejected(self):
+        words = fixture(frame_schema=2)[:-32]
+        words[3] = len(words)
+        with self.assertRaisesRegex(ValueError, "CACHE_HEADER"):
+            self.inspect(envelope(words))
 
     def test_legacy_call_schema_rejected(self):
         with self.assertRaisesRegex(ValueError, "OWNER_CALLS_HEADER"):
