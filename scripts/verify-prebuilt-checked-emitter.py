@@ -123,21 +123,25 @@ def main():
                     timeout = budget.remaining(command, 180)
                     return execution.run(command, prefix, timeout=timeout,
                         diagnostics=n.diagnostics_for_timeout(configuration, prefix, timeout)).returncode
-                if run([str(producer), *case['runArguments']], folder / 'emit') != 0 or n.read(folder / 'emit.stderr').strip():
+                row['runExit'] = run([str(producer), *case['runArguments']], folder / 'emit')
+                if row['runExit'] != 0 or n.read(folder / 'emit.stderr').strip():
                     raise ValueError('PREBUILT_CHECKED_EMISSION_FAILED: ' + case['id'])
                 emitted = folder / 'emitted.ll'
                 emitted.write_bytes((folder / 'emit.stdout').read_bytes())
                 validator.validate_emitted_entrypoint(n.read(emitted), 'windows', windows_entry_point=entry)
-                if run([str(llvm / 'llvm-as.exe'), str(emitted), '-o', str(folder / 'emitted.bc')], folder / 'grammar') != 0 or n.read(folder / 'grammar.stderr').strip():
+                row['assemblyExit'] = run([str(llvm / 'llvm-as.exe'), str(emitted), '-o', str(folder / 'emitted.bc')], folder / 'grammar')
+                if row['assemblyExit'] != 0 or n.read(folder / 'grammar.stderr').strip():
                     raise ValueError('PREBUILT_CHECKED_LLVM_INVALID: ' + case['id'])
                 native = folder / 'emitted.exe'
-                if run(['dotnet', str(bridge), 'link', str(managed_dll), n.sha(managed_dll), str(llvm.parent),
-                        str(emitted), str(native), str(folder), '-O1', '1'], folder / 'link') != 0 or n.read(folder / 'link.stderr').strip():
+                row['nativeLinkExit'] = run(['dotnet', str(bridge), 'link', str(managed_dll), n.sha(managed_dll), str(llvm.parent),
+                                            str(emitted), str(native), str(folder), '-O1', '1'], folder / 'link')
+                if row['nativeLinkExit'] != 0 or n.read(folder / 'link.stderr').strip():
                     raise ValueError('PREBUILT_CHECKED_LINK_FAILED: ' + case['id'])
                 link = json.loads(n.read(folder / 'link.stdout'))
                 if link.get('status') != 'passed' or link.get('entryPoint') != entry:
                     raise ValueError('PREBUILT_CHECKED_LINK_RESULT_INVALID')
-                if (run([str(native)], folder / 'run') != case.get('expectedEmittedRuntimeExit', 0)
+                row['nativeRunExit'] = run([str(native)], folder / 'run')
+                if (row['nativeRunExit'] != case.get('expectedEmittedRuntimeExit', 0)
                         or n.read(folder / 'run.stdout').strip() != case['stdout'] or n.read(folder / 'run.stderr').strip()):
                     raise ValueError('PREBUILT_CHECKED_RUNTIME_MISMATCH: ' + case['id'])
                 if 'expectedAllocations' in case:

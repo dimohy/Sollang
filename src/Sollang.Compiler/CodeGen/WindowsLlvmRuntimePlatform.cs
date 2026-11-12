@@ -24,6 +24,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine(NativeRuntimePolicy.EnvironmentWindowsGlobals());
         globals.AppendLine("@sollang_stdout_buffer = internal global [1048576 x i8] zeroinitializer, align 16");
         globals.AppendLine("@sollang_stdout_buffer_count = internal global i64 0");
+        globals.AppendLine("@sollang_stdout_flush_lock = internal global i32 0");
         globals.AppendLine("@sollang_stdout_line_buffered = internal global i1 false");
         if (UsesNetwork)
         {
@@ -2274,19 +2275,39 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("""
             define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
             entry:
+              br label %acquire
+
+            acquire:
+              %claim = cmpxchg ptr @sollang_stdout_flush_lock, i32 0, i32 1 acquire monotonic, align 4
+              %acquired = extractvalue { i32, i1 } %claim, 1
+              br i1 %acquired, label %inspect, label %acquire
+
+            inspect:
               %count64 = load i64, ptr @sollang_stdout_buffer_count, align 8
               %has_data = icmp ne i64 %count64, 0
               br i1 %has_data, label %write, label %empty
 
             write:
+              %stdout_value = ptrtoint ptr %stdout to i64
+              %sink_tag = and i64 %stdout_value, 1
+              %capturing = icmp ne i64 %sink_tag, 0
+              br i1 %capturing, label %process_output, label %write_buffer
+
+            process_output:
+              %process_stdout = call ptr @GetStdHandle(i32 -11)
+              br label %write_buffer
+
+            write_buffer:
+              %output = phi ptr [ %stdout, %write ], [ %process_stdout, %process_output ]
               %count = trunc i64 %count64 to i32
               %buffer = getelementptr inbounds [1048576 x i8], ptr @sollang_stdout_buffer, i64 0, i64 0
-              %ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %buffer, i32 %count, ptr %written)
+              %ok = call i32 @sollang_write_stdout_bytes(ptr %output, ptr %buffer, i32 %count, ptr %written)
               %succeeded = icmp ne i32 %ok, 0
               br i1 %succeeded, label %clear, label %failure
 
             clear:
               store i64 0, ptr @sollang_stdout_buffer_count, align 8
+              store atomic i32 0, ptr @sollang_stdout_flush_lock release, align 4
               ret i32 %ok
 
             failure:
@@ -2295,6 +2316,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             empty:
               store i32 0, ptr %written, align 4
+              store atomic i32 0, ptr @sollang_stdout_flush_lock release, align 4
               ret i32 1
             }
 

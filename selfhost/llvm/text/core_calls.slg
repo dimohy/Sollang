@@ -1757,34 +1757,11 @@ irDescendsFrom request: NodeAncestorRequest, context: ref emitterContext.EmitCon
 eachRoleOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
     nodeIndex -> typedIr.runtimeStreamItemOwner(context.ir) => runtimeOwner
     runtimeOwner >= 0 -> if { runtimeOwner -> return }
-    -1 => owner!
     context.ir[nodeIndex] => roleUse
-    roleUse.kind == 5 and roleUse.operand0 < 0 and roleUse.symbol >= 0 and roleUse.sourceModule >= 0
+    roleUse.kind == 5 and roleUse.operand0 < 0 and roleUse.symbol >= 0
         -> if {
-            context.ranges[roleUse.sourceModule] => roleRange
-            roleUse.symbol < roleRange.symbolCount -> if {
-                context.symbols[roleRange.symbolStart + roleUse.symbol] => roleSymbol
-                roleSymbol.kind == 35 and roleSymbol.astNode >= 0
-                    -> if {
-                        roleUse.parent => roleFunctionOwner!
-                        roleFunctionOwner! >= 0 and context.ir[roleFunctionOwner!].kind != 0 and context.ir[roleFunctionOwner!].kind != 11
-                            -> while { context.ir[roleFunctionOwner!].parent => roleFunctionOwner! }
-                        roleFunctionOwner! >= 0 -> if {
-                            roleFunctionOwner! + 1 => roleOwnerSearch!
-                            roleOwnerSearch! < (context.ir -> len)
-                                and context.ir[roleOwnerSearch!].kind != 0
-                                and context.ir[roleOwnerSearch!].kind != 11
-                                -> while {
-                                    context.ir[roleOwnerSearch!] => roleOwnerCandidate
-                                    roleOwnerCandidate.kind == 6 and (roleOwnerCandidate.opcode -> typedIr.isDirectIterationOpcode) and roleOwnerCandidate.sourceModule == roleUse.sourceModule and roleOwnerCandidate.astNode == roleSymbol.astNode
-                                        -> if { roleOwnerSearch! => owner! }
-                                    roleOwnerSearch! + 1 => roleOwnerSearch!
-                                }
-                        }
-                    }
-            }
-        }
-    owner!
+            roleUse.sourceModule -> emitterContext.directEachRoleOwner(roleUse.symbol, nodeIndex, context)
+        } else { -1 }
 }
 functionCaptures functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
     [Int; ~] => captures!

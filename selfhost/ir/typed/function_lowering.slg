@@ -5663,10 +5663,12 @@ collectBlockCallback nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.
     nodes[callIndex] => call
     prepared.package.ranges[call.sourceModule] => sourceRange
     [Int; ~] => callbackNodes!
+    [Int; ~] => callbackMembership!
     -1 => callbackTail!
     UIntSize(0) => callbackTailStart!
     0 => callbackIndex!
     callbackIndex! < sourceCount -> while {
+        callbackMembership! -> push(-1)
         nodes[callbackIndex!] => candidate
         candidate.sourceModule == call.sourceModule and candidate.astNode >= 0
             -> if {
@@ -5678,7 +5680,7 @@ collectBlockCallback nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.
                         ancestor! == callIndex -> if { true => belongs! } else { nodes[ancestor!].parent => ancestor! }
                     }
                     belongs! -> if {
-                        callbackNodes! -> push(callbackIndex!)
+                        1 => callbackMembership![callbackIndex!]
                         candidate.parent == callIndex and candidate.kind != 17
                             and (callbackTail! < 0 or candidateAst.start >= callbackTailStart!)
                             -> if {
@@ -5688,6 +5690,27 @@ collectBlockCallback nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.
                     }
                 }
             }
+        callbackIndex! + 1 => callbackIndex!
+    }
+    # Lexical callback roots own their complete lowered subtrees, including
+    # frames inlined from another module. The call's input stays outside.
+    0 => callbackMembership![callIndex]
+    0 => callbackIndex!
+    callbackIndex! < sourceCount -> while {
+        callbackIndex! => ancestor!
+        ancestor! >= 0 and callbackMembership![ancestor!] < 0
+            -> while {
+                nodes[ancestor!].parent => ancestor!
+            }
+        0 => membership!
+        ancestor! >= 0 -> if { callbackMembership![ancestor!] => membership! }
+        callbackIndex! => pending!
+        pending! >= 0 and callbackMembership![pending!] < 0
+            -> while {
+                membership! => callbackMembership![pending!]
+                nodes[pending!].parent => pending!
+            }
+        membership! == 1 -> if { callbackNodes! -> push(callbackIndex!) }
         callbackIndex! + 1 => callbackIndex!
     }
     BlockCallbackBody { nodes: callbackNodes!, tail: callbackTail! }
@@ -5792,7 +5815,7 @@ materializeBlockCallback nodes: mut [TypedIrNode; ~], prepared: ref semanticCont
             -> if { callbackMap![callback!.operand1] => callback!.operand1 }
         callback!.nextOperand >= 0 and callbackMap![callback!.nextOperand] >= 0
             -> if { callbackMap![callback!.nextOperand] => callback!.nextOperand }
-        callback!.kind == 5 and callback!.symbol >= 0
+        callback!.kind == 5 and callback!.sourceModule == call.sourceModule and callback!.symbol >= 0
             -> if {
                 callback!.symbol < (roleBindings! -> len)
                     and roleBindings![callback!.symbol] >= 0

@@ -1230,19 +1230,22 @@ isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref emitter
 }
 
 writeDirectEachRoleValue node: interpolation.InterpolationNode, sourceModule: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
-    node -> directEachRoleTypeId(sourceModule, context, state) => typeId
-    typeId >= 0 => matched
+    node -> interpolationLexicalUseIndex(sourceModule, beforeIndex, context, state) => lexicalUseIndex
+    sourceModule -> emitterContext.directEachRoleOwner(node.symbol, lexicalUseIndex, context) => roleOwner
+    node -> directEachRoleTypeId(sourceModule, beforeIndex, context, state) => typeId
+    typeId >= 0 and roleOwner >= 0 => matched
     matched -> if {
         beforeIndex -> asyncIntIteratorForRole(sourceModule, node.symbol, context, state) => iterator
         iterator >= 0 -> if {
             "%each_role_m$(sourceModule)_s$(node.symbol)_at$(beforeIndex)" -> print
-        } else { "%each_role_m$(sourceModule)_s$(node.symbol)" -> print }
+        } else { "%each_role_m$(sourceModule)_s$(node.symbol)_loop$(roleOwner -> valueNameId(state))" -> print }
     }
     matched
 }
 
-directEachRoleTypeId node: interpolation.InterpolationNode, sourceModule: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    sourceModule -> emitterContext.directEachRoleSourceIr(node.symbol, context) => sourceIr
+directEachRoleTypeId node: interpolation.InterpolationNode, sourceModule: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    node -> interpolationLexicalUseIndex(sourceModule, beforeIndex, context, state) => lexicalUseIndex
+    sourceModule -> emitterContext.directEachRoleSourceIr(node.symbol, lexicalUseIndex, context) => sourceIr
     sourceIr >= 0 -> if {
         context.ir[sourceIr] -> directEachElementTypeId(context, state)
     } else { -1 }
@@ -1379,7 +1382,7 @@ emitDirectEachRoleAliases eachIndex: Int, eachSource: typedIr.TypedIrNode, conte
                 and (eachNode.sourceModule -> isDirectEachRoleSymbol(eachRoleSymbolIndex!, context))
                 and (eachNode.sourceModule -> symbolUsedInInterpolation(eachRoleSymbolIndex!, context))
                 -> if {
-                    "  %each_role_m$(eachNode.sourceModule)_s$(eachRoleSymbolIndex!) = freeze " -> print
+                    "  %each_role_m$(eachNode.sourceModule)_s$(eachRoleSymbolIndex!)_loop$(eachIndex -> valueNameId(state)) = freeze " -> print
                     eachSource -> writeDirectEachElementType(context, state)
                     " %each$(eachIndex -> valueNameId(state))_item" -> println
                 }
@@ -2234,7 +2237,7 @@ interpolationNodeTypeId nodeIndex: Int, nodes: ref [interpolation.InterpolationN
         bindingIndex >= 0 -> if {
             context.ir[bindingIndex].typeId => typeId!
         } else {
-            node -> directEachRoleTypeId(sourceModule, context, state) => typeId!
+            node -> directEachRoleTypeId(sourceModule, beforeIndex, context, state) => typeId!
             typeId! < 0 -> if {
                 beforeIndex -> regionOwnedStreamPipeline(context, state) => streamPipeline
                 streamPipeline >= 0 -> if {
@@ -4879,23 +4882,12 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
     ownerStart => eachRoleUseIndex!
     eachRoleUseIndex! < ownerEnd -> while {
         context.ir[eachRoleUseIndex!] => eachRoleUse
-        NodeAncestorRequest { nodeIndex: eachRoleUseIndex!, ownerIndex: eachIndex } => eachRoleAncestorRequest
-        eachRoleAncestorRequest -> nodeDescendsFrom(context, state) => eachRoleInside
-        eachRoleUse.kind == 5 and eachRoleUse.operand0 < 0 and eachRoleUse.symbol >= 0 and eachRoleInside
+        eachRoleUse.kind == 5 and eachRoleUse.operand0 < 0 and eachRoleUse.symbol >= 0
+            and (eachRoleUseIndex! -> eachRoleOwner(context)) == eachIndex
             -> if {
-                context.ranges[eachRoleUse.sourceModule] => eachRoleRange
-                false => eachRoleIsItem!
-                eachRoleUse.symbol < eachRoleRange.symbolCount
-                    -> if {
-                        context.symbols[eachRoleRange.symbolStart + eachRoleUse.symbol] => eachRoleSymbol
-                        eachRoleSymbol.kind == 35 and eachRoleSymbol.astNode == eachNode.astNode
-                            -> if { true => eachRoleIsItem! }
-                    }
-                eachRoleIsItem! -> if {
-                    "  %v$(eachRoleUseIndex! -> valueNameId(state)) = freeze " -> print
-                    eachSource -> writeDirectEachElementType(context, state)
-                    " %each$(eachIndex -> valueNameId(state))_item" -> println
-                }
+                "  %v$(eachRoleUseIndex! -> valueNameId(state)) = freeze " -> print
+                eachSource -> writeDirectEachElementType(context, state)
+                " %each$(eachIndex -> valueNameId(state))_item" -> println
             }
         eachRoleUseIndex! + 1 => eachRoleUseIndex!
     }

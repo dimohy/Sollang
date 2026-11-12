@@ -129,17 +129,22 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     "  %v$(expressionIndex -> valueNameId(state)) = load i32, ptr %fold$(expressionIndex -> valueNameId(state))_acc_slot, align 4" -> println
 }
 
-emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
-    context.ir[requestedFunctionIndex] => function
+isInlineBlockFunctionTemplate functionIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    context.ir[functionIndex] => function
     function.sourceModule >= 0 and function.symbol >= 0
-        and not (context -> emitterContext.isGenericInstance(requestedFunctionIndex))
+        and not (context -> emitterContext.isGenericInstance(functionIndex))
         -> if {
             context.ranges[function.sourceModule] => range
             context.symbols[range.symbolStart + function.symbol].blockTypeNode >= 0
-                -> if {
-                    requestedFunctionIndex -> functionEnd(context, state) -> return
-                }
+                -> if { true -> return }
         }
+    false
+}
+
+emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
+    requestedFunctionIndex -> isInlineBlockFunctionTemplate(context)
+        -> if { requestedFunctionIndex -> functionEnd(context, state) -> return }
+    context.ir[requestedFunctionIndex] => function
     function.flags / 8 % 2 == 1
         -> if {
             requestedFunctionIndex -> emitAsyncFunction(context, state)
@@ -431,7 +436,6 @@ asyncIntIteratorForRole useIndex: Int, sourceModule: Int, symbol: Int, context: 
         or sourceModule < 0 or sourceModule >= (context.ranges -> len) or symbol < 0
         or symbol >= context.ranges[sourceModule].symbolCount
         -> if { -1 -> return }
-    context.symbols[context.ranges[sourceModule].symbolStart + symbol] => role
     sourceModule -> isDirectEachRoleSymbol(symbol, context)
         -> unless { -1 -> return }
     useIndex => owner!
@@ -439,18 +443,9 @@ asyncIntIteratorForRole useIndex: Int, sourceModule: Int, symbol: Int, context: 
         -> while { context.ir[owner!].parent => owner! }
     owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
         -> if { -1 -> return }
-    owner! + 1 => index!
-    owner! -> functionEnd(context, state) => end
-    index! < end -> while {
-        context.ir[index!] => loop
-        loop.sourceModule == sourceModule and loop.astNode == role.astNode
-            and (index! -> asyncIntIteratorIsPersistent(context, state))
-            -> if {
-                NodeAncestorRequest { nodeIndex: useIndex, ownerIndex: index! }
-                    -> irDescendsFrom(context, state) -> if { index! -> return }
-            }
-        index! + 1 => index!
-    }
+    sourceModule -> emitterContext.directEachRoleOwner(symbol, useIndex, context) => iterator
+    iterator >= 0 and (iterator -> asyncIntIteratorIsPersistent(context, state))
+        -> if { iterator -> return }
     -1
 }
 

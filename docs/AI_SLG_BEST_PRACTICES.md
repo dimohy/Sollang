@@ -68,6 +68,13 @@ before storing deferred interpolation; an immediate sink can consume it directly
 At user-block invocation and yield boundaries, evaluate inputs before binding
 roles and executing callback effects. Source offsets from different declarations
 cannot order these phases; preserve their data dependencies and lexical scopes.
+A copied callback retains its complete lowered body across module boundaries.
+Keep external input producers outside that owned subtree, and identify caller
+roles by source module as well as symbol identity.
+Resolve loop item bindings through their concrete IR owner; a shared source
+location does not identify an inlined loop instance.
+Plan emitted functions with the same eligibility decision used by function
+emission. Inline block templates need no standalone function cache identity.
 Generic user-block inputs infer parameters recursively through `Option`,
 `Result`, `Deque`, `Stream`, `EventStream`, dictionary key/value types, growable
 and bounded arrays, and readonly references. Ordinary generic functions also

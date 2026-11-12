@@ -2216,6 +2216,16 @@ main {
 callback's roles in the caller scope and executing its body in source order.
 Source positions in the producer and caller files cannot reorder these phases.
 
+Nested function and stream invocations in a callback retain their lexical
+inputs and execute under the enclosing control path. Inlining across modules
+must preserve their bodies and must not omit or duplicate their effects.
+Each concrete loop invocation owns its item bindings. Cloned invocations of
+the same declaration retain separate bindings; nested bodies may capture the
+enclosing loop's item without rebinding it to the inner loop.
+An unmaterialized block declaration expands at its call sites without a
+standalone function body. Cached and uncached compilation select the same
+set of emitted function bodies.
+
 The producer retains its lexical local-owner scope across inlining and `yield`.
 Returning a producer-local owned value follows the declared result contract;
 lowering must preserve its distinction from an outer borrowed owner.

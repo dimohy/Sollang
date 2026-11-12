@@ -432,32 +432,38 @@ public isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref 
 }
 
 
-public directEachRoleSourceIr sourceModule: Int, symbolIndex: Int, context: ref EmitContext -> Int {
-    -1 => sourceIr!
-    sourceModule -> isDirectEachRoleSymbol(symbolIndex, context)
-        -> if {
-            context.ranges[sourceModule] => roleRange
-            context.symbols[roleRange.symbolStart + symbolIndex] => roleSymbol
-            0 => eachSearch!
-            eachSearch! < (context.ir -> len) and sourceIr! < 0
-                -> while {
-                    context.ir[eachSearch!] => eachCandidate
-                    eachCandidate.kind == 6 and (eachCandidate.opcode -> typedIr.isDirectIterationOpcode)
-                        and eachCandidate.sourceModule == sourceModule
-                        and eachCandidate.astNode == roleSymbol.astNode
-                        and eachCandidate.operand0 >= 0 -> if {
-                            false => plannedPipeline!
-                            0 => pipelineIndex!
-                            pipelineIndex! < (context.streamPlan.pipelines -> len) and not plannedPipeline!
-                                -> while {
-                                    context.streamPlan.pipelines[pipelineIndex!].terminalIr == eachSearch!
-                                        -> if { true => plannedPipeline! }
-                                    pipelineIndex! + 1 => pipelineIndex!
-                                }
-                            not plannedPipeline! -> if { eachCandidate.operand0 => sourceIr! }
-                        }
-                    eachSearch! + 1 => eachSearch!
-                }
+public directEachRoleOwner sourceModule: Int, symbolIndex: Int, useIndex: Int, context: ref EmitContext -> Int {
+    sourceModule < 0 or sourceModule >= (context.ranges -> len)
+        or useIndex < 0 or useIndex >= (context.ir -> len)
+        -> if { -1 -> return }
+    context.ranges[sourceModule] => roleRange
+    symbolIndex < 0 or symbolIndex >= roleRange.symbolCount
+        -> if { -1 -> return }
+    context.symbols[roleRange.symbolStart + symbolIndex] => role
+    role.kind != 35 or role.astNode < 0 -> if { -1 -> return }
+    context.ir[useIndex].parent => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while {
+            context.ir[owner!] => candidate
+            candidate.kind == 6 and (candidate.opcode -> typedIr.isDirectIterationOpcode)
+                and candidate.sourceModule == sourceModule and candidate.astNode == role.astNode
+                -> if { owner! -> return }
+            candidate.parent => owner!
         }
-    sourceIr!
+    -1
+}
+
+public directEachRoleSourceIr sourceModule: Int, symbolIndex: Int, useIndex: Int, context: ref EmitContext -> Int {
+    sourceModule -> isDirectEachRoleSymbol(symbolIndex, context)
+        -> unless { -1 -> return }
+    sourceModule -> directEachRoleOwner(symbolIndex, useIndex, context) => owner
+    owner < 0 or context.ir[owner].operand0 < 0 -> if { -1 -> return }
+    0 => pipelineIndex!
+    pipelineIndex! < (context.streamPlan.pipelines -> len)
+        -> while {
+            context.streamPlan.pipelines[pipelineIndex!].terminalIr == owner
+                -> if { -1 -> return }
+            pipelineIndex! + 1 => pipelineIndex!
+        }
+    context.ir[owner].operand0
 }
