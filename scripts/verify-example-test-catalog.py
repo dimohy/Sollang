@@ -227,6 +227,7 @@ def main() -> None:
                     command.extend(['--selfhost-production-root',
                                     str(args.selfhost_production_root.resolve())])
             case_result = dict(status='running', verificationScope=scope, completed=0, total=1,
+                               inputHashes=dict(pins),
                                cases=[dict(id=row['id'], status='running', expectedBuildExit=0)])
             execution = VerificationExecution(repo, case_root, case_result, stable, sha)
             error = None
