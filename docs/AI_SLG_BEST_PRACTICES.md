@@ -88,6 +88,9 @@ and indexing before specializing the caller. Reuse the same dependent-type
 sealing path before body copying and after concrete call publication.
 Use ordinary addressable bindings for `ref T` inputs; a literal or temporary
 does not become borrowable merely because the call has a callback.
+Within a branch or tap arm, the original named source supplies place eligibility
+for its primary flow chain. Preserve each stage's actual type and lifetime;
+a call or nested flow used as the original junction source remains unaddressable.
 
 If natural, ownership-correct SLG is rejected or reaches malformed LLVM, do not
 add explicit-type noise, temporary heap owners, cloning, fallback branches, or
@@ -2375,6 +2378,8 @@ compute callback path; a broad kind-39 workaround must not emit them as
 sequential values. The kind-38 runtime materialization itself must likewise
 use one shared helper in entry, ordinary-function, and nested-control paths;
 do not copy the capture environment and compute-group sequence per context.
+Bounded-array arms keep their runtime views until product insertion. Reuse the
+aggregate storage converter there; never insert a view into an inline field.
 Apply the same rule to range values: kind-31 inclusive/exclusive normalization
 and product construction belong to one shared materializer used by all three
 emission contexts.

@@ -1332,6 +1332,10 @@ substitute the wrapper index for its final value. Parallel branch arms remain
 owned by the compute callback path and are not materialized by this sequential
 authority.
 
+A bounded-array arm retains its runtime array view while computing its value.
+Before insertion into the product, it materializes the declared inline bounded
+storage, including its length and backing elements, as any aggregate field does.
+
 A following flow target consumes the completed branch product. A transparent
 flow wrapper preserves that product's canonical type and value identity; it
 does not substitute the branch's original source value.
@@ -1354,6 +1358,15 @@ flow. Validate every stage's arguments before checking that the arm produces a
 value and before admitting its targets' parallel effects. Report an earlier
 arm's failure before a later arm's failure. Junction stages use the same
 canonical input and explicit-argument list as ordinary calls.
+
+For readonly primary-input place admission, every stage in a branch or tap arm
+uses the arm's original source expression, as in an ordinary flow chain. A named
+place, including a field or index rooted in a name, permits borrowing a transient
+current stage result within that chain. Each stage still keeps its actual
+immediate input type, value and reference origin; this place fact does not allow
+an escaping reference to a temporary. A call, literal or nested flow used as the
+original junction source does not become a named place.
+
 Outstanding `Task` values are not shareable inputs or captures. A completed
 `await` yields its ordinary payload contract. `Arguments` is a non-owning source
 value and may be read by joined branch workers, but it is not a supported local

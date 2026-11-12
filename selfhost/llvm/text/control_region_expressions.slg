@@ -52,6 +52,12 @@ emitSequentialBranchAggregate branchIndex: Int, ownerIndex: Int, context: ref em
     0 => armPosition!
     armIndex! >= 0 -> while {
         context.ir[armIndex!] => arm
+        # Runtime array handles become inline storage at the product boundary,
+        # matching MaterializeAggregateValue in the C# branch emitter.
+        arm -> boundedArrayValueTypeId(context, state) => boundedArmType
+        boundedArmType >= 0 -> if {
+            "v$(branchIndex -> valueNameId(state))_f$(armPosition!)_bounded" -> emitBoundedArrayValue(armIndex!, ownerIndex, boundedArmType, context, state)
+        }
         "  " -> print
         arm.nextOperand < 0 -> if { "%v$(branchIndex -> valueNameId(state))" -> print } else { "%v$(branchIndex -> valueNameId(state))_f$(armPosition!)" -> print }
         " = insertvalue " -> print
@@ -62,9 +68,11 @@ emitSequentialBranchAggregate branchIndex: Int, ownerIndex: Int, context: ref em
             armPosition! - 1 -> writeDecimal
         }
         ", " -> print
-        arm -> writeIrType(context, state)
+        arm -> writeFunctionValueAbiType(context, state)
         " " -> print
-        armIndex! -> writeValue(ownerIndex, context, state)
+        boundedArmType >= 0 -> if {
+            "%v$(branchIndex -> valueNameId(state))_f$(armPosition!)_bounded" -> print
+        } else { armIndex! -> writeValue(ownerIndex, context, state) }
         ", $(armPosition!)" -> println
         arm.nextOperand => armIndex!
         armPosition! + 1 => armPosition!
