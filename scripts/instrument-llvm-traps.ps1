@@ -11,13 +11,21 @@ Set-StrictMode -Version Latest
 
 $resolvedInput = (Resolve-Path -LiteralPath $InputPath).Path
 $output = [System.IO.Path]::GetFullPath($OutputPath)
-if ($resolvedInput -ceq $output) {
+if ([string]::Equals($resolvedInput, $output, [StringComparison]::OrdinalIgnoreCase)) {
     throw "instrumented LLVM output must differ from the input"
 }
 
 $lines = [System.IO.File]::ReadAllLines($resolvedInput)
 $instrumented = [System.Collections.Generic.List[string]]::new($lines.Length + 1)
-$declaredExitProcess = $false
+$exitDeclarations = @($lines | Where-Object { $_ -cmatch '^\s*(declare|define)\b.*@ExitProcess\s*\(' })
+if ($exitDeclarations.Count -gt 1) {
+    throw 'LLVM input contains multiple ExitProcess declarations'
+}
+$declaredExitProcess = $exitDeclarations.Count -eq 1
+if ($declaredExitProcess -and $exitDeclarations[0].Trim() -cnotin @(
+        'declare dllimport void @ExitProcess(i32)', 'declare void @ExitProcess(i32)')) {
+    throw 'LLVM ExitProcess declaration is incompatible with trap instrumentation'
+}
 $trapOrdinal = 0
 foreach ($line in $lines) {
     if (-not $declaredExitProcess -and $line.StartsWith("define ", [StringComparison]::Ordinal)) {
