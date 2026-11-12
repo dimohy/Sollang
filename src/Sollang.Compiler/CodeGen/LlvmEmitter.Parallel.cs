@@ -296,8 +296,8 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine("  %sink_value = ptrtoint ptr %sink to i64");
         EmitFunctionLine("  %sink_tagged_value = or i64 %sink_value, 1");
         EmitFunctionLine("  %sink_stdout = inttoptr i64 %sink_tagged_value to ptr");
-        EmitFunctionLine("  %written_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 8");
-        EmitFunctionLine("  %written = load ptr, ptr %written_slot, align 8");
+        EmitFunctionLine("  %written = alloca i32, align 4");
+        EmitFunctionLine("  store i32 0, ptr %written, align 4");
         EmitFunctionLine("  %read_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 9");
         EmitFunctionLine("  %read = load ptr, ptr %read_slot, align 8");
         EmitFunctionLine("  %ok_state_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 10");
