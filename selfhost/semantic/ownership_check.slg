@@ -30,6 +30,7 @@ struct OwnershipIrIndex {
     nextChild: [Int; ~]
     firstDeclarationBySymbol: {Int: Int}
     nextDeclaration: [Int; ~]
+    scalarStorageRoots: [Int; ~]
 }
 
 indexDirectExits nodes: ref [typedIr.TypedIrNode; ~] -> DirectExitIndex {
@@ -64,7 +65,7 @@ indexDirectExits nodes: ref [typedIr.TypedIrNode; ~] -> DirectExitIndex {
 # These facts describe only immutable IR links, not reachability decisions.
 # Keep original ascending node order and leave region/source/offset filters
 # with their existing query so exits under unusual parents are not discarded.
-indexOwnershipIr nodes: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> OwnershipIrIndex {
+indexOwnershipIr nodes: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> OwnershipIrIndex {
     [Int; ~] => first!
     [Int; ~] => next!
     {Int: Int} => firstDeclarationBySymbol!
@@ -96,7 +97,8 @@ indexOwnershipIr nodes: ref [typedIr.TypedIrNode; ~], prepared: ref semanticCont
         cursor! - 1 => cursor!
     }
     nodes -> indexDirectExits => exits
-    OwnershipIrIndex { directExits: exits, firstChild: first!, nextChild: next!, firstDeclarationBySymbol: firstDeclarationBySymbol!, nextDeclaration: nextDeclaration! }
+    nodes -> indexBorrowedTextStorage(prepared, types) => scalarStorageRoots
+    OwnershipIrIndex { directExits: exits, firstChild: first!, nextChild: next!, firstDeclarationBySymbol: firstDeclarationBySymbol!, nextDeclaration: nextDeclaration!, scalarStorageRoots: scalarStorageRoots }
 }
 
 indexedDirectExitAfter nodes: ref [typedIr.TypedIrNode; ~], package: ref analysis.PackageAnalysis, index: ref DirectExitIndex, siteIndex: Int -> Int {
@@ -1476,7 +1478,92 @@ borrowedTextStoreVisible prepared: ref semanticContext.SemanticSnapshot, typed: 
     false
 }
 
-# Mutable scalar versions share a canonical slot symbol. Their initializer is
+# Semantic rebind symbols remain distinct. Borrowing groups only the storage
+# selected by an earlier visible mutable local. The local ! suffix remains
+# distinct from immutable and parameter names. Buckets do not replace scope/name checks.
+indexBorrowedTextStorage typed: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [Int; ~] {
+    [Int; ~] => roots!
+    [Int; ~] => previous!
+    {UInt64: Int; 16~} => heads!
+    typed -> each node {
+        roots! -> push(-1)
+        previous! -> push(-1)
+    }
+    0 => bindingIr!
+    bindingIr! < (typed -> len) -> while {
+        typed[bindingIr!] => binding
+        typed -> borrowedTextScalarSlot(types, bindingIr!) => scalar
+        scalar -> if { bindingIr! => roots![bindingIr!] }
+        binding.kind == 17
+            and binding.payloadToken >= 0 and binding.sourceModule >= 0
+            and binding.sourceModule < (prepared.package.ranges -> len)
+            and binding.astNode >= 0
+            -> if {
+                prepared.package.ranges[binding.sourceModule] => range
+                typed -> borrowedTextFunctionIr(bindingIr!) => functionIr
+                binding.astNode < range.astCount and binding.payloadToken < range.tokenCount and functionIr >= -1
+                    -> if {
+                        borrowedTextFunctionIdentity(binding.sourceModule, functionIr) => executable
+                        prepared -> mutableBindingNameBucket(typed, bindingIr!, executable) => bucket
+                        heads! -> putIfAbsent(bucket, -1) => inserted
+                        heads![bucket] => candidateIr!
+                        false => selected!
+                        scalar -> if {
+                            candidateIr! >= 0 and not selected! -> while {
+                                typed[candidateIr!] => candidate
+                                candidate.kind == 17 and candidate.flags % 2 == 1
+                                    and candidate.sourceModule == binding.sourceModule
+                                    and (typed -> borrowedTextFunctionIr(candidateIr!)) == functionIr
+                                    and (prepared -> ownershipBindingSameName(typed, candidateIr!, bindingIr!))
+                                    and prepared.package.nodes[range.astStart + candidate.astNode].start < prepared.package.nodes[range.astStart + binding.astNode].start
+                                    -> if {
+                                        prepared.package -> semanticContext.declarationScope(binding.sourceModule, candidate.astNode) => scope
+                                        prepared.package -> semanticContext.declarationAncestor(binding.sourceModule, scope, binding.astNode)
+                                            -> if {
+                                                true => selected!
+                                                roots![candidateIr!] >= 0 and candidate.typeId == binding.typeId
+                                                    -> if { roots![candidateIr!] => roots![bindingIr!] }
+                                            }
+                                    }
+                                previous![candidateIr!] => candidateIr!
+                            }
+                        }
+                        heads![bucket] => previous![bindingIr!]
+                        bindingIr! => heads![bucket]
+                    }
+            }
+        bindingIr! + 1 => bindingIr!
+    }
+    roots!
+}
+
+ownershipBindingSameName prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], leftIr: Int, rightIr: Int -> Bool {
+    typed[leftIr] => left
+    typed[rightIr] => right
+    left.sourceModule == right.sourceModule and left.payloadToken >= 0 and right.payloadToken >= 0
+        -> unless { false -> return }
+    prepared.package.ranges[left.sourceModule] => range
+    prepared.package.tokens[range.tokenStart + left.payloadToken] => leftName
+    prepared.package.tokens[range.tokenStart + right.payloadToken] => rightName
+    leftName.span.length == rightName.span.length => same!
+    UIntSize(0) => ordinal!
+    same! and ordinal! < leftName.span.length -> while {
+        (prepared.package.sources[left.sourceModule] -> byte(leftName.span.start + ordinal!)) != (prepared.package.sources[right.sourceModule] -> byte(rightName.span.start + ordinal!))
+            -> if { false => same! }
+        ordinal! + 1 => ordinal!
+    }
+    same!
+}
+
+borrowedTextStorageBinding index: ref OwnershipIrIndex, bindingIr: Int -> Int {
+    bindingIr >= 0 and bindingIr < (index.scalarStorageRoots -> len)
+        -> if {
+            index.scalarStorageRoots[bindingIr] >= 0 -> if { index.scalarStorageRoots[bindingIr] -> return }
+        }
+    bindingIr
+}
+
+# Mutable scalar versions share a canonical storage root, not a semantic symbol.
 # not a phi: query the reaching versions using the completed control regions.
 borrowedTextScalarSlot typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], valueIr: Int -> Bool {
     valueIr >= 0 and valueIr < (typed -> len) -> unless { false -> return }
@@ -1489,15 +1576,13 @@ borrowedTextScalarSlot typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.
         and slotType.origin == 1 and slotType.symbol == 1
 }
 
-borrowedTextSameScalarSlot typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], slotIr: Int, candidateIr: Int -> Bool {
+borrowedTextSameScalarSlot typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], index: ref OwnershipIrIndex, slotIr: Int, candidateIr: Int -> Bool {
     typed -> borrowedTextScalarSlot(types, slotIr)
         -> unless { false -> return }
     typed -> borrowedTextScalarSlot(types, candidateIr)
         -> unless { false -> return }
-    typed[slotIr].sourceModule == typed[candidateIr].sourceModule
-        and typed[slotIr].symbol == typed[candidateIr].symbol
-        and (typed -> borrowedTextFunctionIr(slotIr)) >= -1
-        and (typed -> borrowedTextFunctionIr(slotIr)) == (typed -> borrowedTextFunctionIr(candidateIr))
+    index.scalarStorageRoots[slotIr] >= 0
+        and index.scalarStorageRoots[slotIr] == index.scalarStorageRoots[candidateIr]
 }
 
 # Recover the declaration AST of the resolved canonical slot. A later SSA
@@ -1505,7 +1590,10 @@ borrowedTextSameScalarSlot typed: ref [typedIr.TypedIrNode; ~], types: ref [type
 borrowedTextScalarDeclaration prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], callFunctionIndex: ref BorrowedTextCallFunctionIndex, versionIr: Int -> Int {
     typed -> borrowedTextScalarSlot(types, versionIr)
         -> unless { -2 -> return }
-    typed[versionIr] => version
+    callFunctionIndex.irIndex.scalarStorageRoots[versionIr] => declarationIr
+    declarationIr >= 0 and declarationIr < (typed -> len)
+        -> unless { -2 -> return }
+    typed[declarationIr] => version
     version.sourceModule >= 0 and version.sourceModule < (prepared.package.ranges -> len)
         -> unless { -2 -> return }
     prepared.package.ranges[version.sourceModule] => range
@@ -1514,19 +1602,9 @@ borrowedTextScalarDeclaration prepared: ref semanticContext.SemanticSnapshot, ty
     prepared.package.symbols[range.symbolStart + version.symbol] => declaration
     (declaration.kind == 9 or declaration.kind == 61) and declaration.flags % 2 == 1
         and declaration.astNode >= 0 and declaration.astNode < range.astCount
+        and version.astNode == declaration.astNode
         -> unless { -2 -> return }
-    -1 => declarationIr!
-    callFunctionIndex.scalarVersionHeads[version.symbol] => candidateIr!
-    candidateIr! >= 0 -> while {
-        typed[candidateIr!].astNode == declaration.astNode
-            and (typed -> borrowedTextSameScalarSlot(types, versionIr, candidateIr!))
-            -> if {
-                declarationIr! >= 0 -> if { -2 -> return }
-                candidateIr! => declarationIr!
-            }
-        callFunctionIndex.scalarVersionNext[candidateIr!] => candidateIr!
-    }
-    declarationIr!
+    declarationIr
 }
 
 borrowedTextScalarVersionVisible prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], callFunctionIndex: ref BorrowedTextCallFunctionIndex, returnControls: ref [Bool; ~], definitionIr: Int, queryIr: Int -> Bool {
@@ -1610,7 +1688,7 @@ borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSna
                 candidate.kind == 5 -> if {
                     candidate.operand0 => readBinding!
                     readBinding! < 0 -> if { typed -> resolvedFormalReadBinding(captureIr!) => readBinding! }
-                    typed -> borrowedTextSameScalarSlot(types, replacementIr, readBinding!)
+                    typed -> borrowedTextSameScalarSlot(types, irIndex, replacementIr, readBinding!)
                         -> if { false -> return }
                 }
                 candidate.kind == 2 -> if {
@@ -1624,7 +1702,7 @@ borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSna
                                         interpolated.kind == 1 and interpolated.sourceToken == candidate.payloadToken
                                             -> if {
                                                 typed -> interpolationBindingIr(prepared, captureIr!, interpolationIndex!, irIndex) => readBinding
-                                                typed -> borrowedTextSameScalarSlot(types, replacementIr, readBinding)
+                                                typed -> borrowedTextSameScalarSlot(types, irIndex, replacementIr, readBinding)
                                                     -> if { false -> return }
                                             }
                                         interpolationIndex! + 1 => interpolationIndex!
@@ -1704,7 +1782,7 @@ borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapsh
             statementStart >= queryStart and not queryInside
                 -> if { replaced! -> return }
             statementStart > definitionStart -> if {
-                typed -> borrowedTextSameScalarSlot(types, slotIr, statementIr!)
+                typed -> borrowedTextSameScalarSlot(types, irIndex, slotIr, statementIr!)
                     -> if {
                         prepared -> borrowedTextScalarReplacementSupported(typed, types, statementIr!, irIndex)
                             -> if { true => replaced! }
@@ -2359,9 +2437,9 @@ borrowedTextValueOriginCore typed: ref [typedIr.TypedIrNode; ~], prepared: ref s
             -> if {
                 BorrowedTextOriginFact { status: 1, usesOrigin: false, placeIr: -1 } => versions!
                 false => queriedVersion!
-                callFunctionIndex.scalarVersionHeads[value.symbol] => scalarVersionIr!
+                callFunctionIndex.scalarVersionHeads[callFunctionIndex.irIndex.scalarStorageRoots[valueIr]] => scalarVersionIr!
                 scalarVersionIr! >= 0 -> while {
-                    typed -> borrowedTextSameScalarSlot(types, valueIr, scalarVersionIr!)
+                    typed -> borrowedTextSameScalarSlot(types, callFunctionIndex.irIndex, valueIr, scalarVersionIr!)
                         -> if {
                             typed[scalarVersionIr!] => scalarVersion
                             prepared -> borrowedTextScalarDeclaration(typed, types, callFunctionIndex, scalarVersionIr!) => slotDeclarationIr
@@ -3900,6 +3978,7 @@ public analyzeResolvedLoweredContextWithInterpolationFactsAndPaths prepared: ref
     typed -> typedIr.functionDeclarationIrs => functionCandidates
     typed -> borrowedTextFunctionsByIdentity(functionCandidates) => functionsByIdentity
     [Int; ~] => borrowedReturnSites!
+    typed -> indexOwnershipIr(prepared, types) => irIndex
     {Int: Int} => scalarVersionHeads!
     [Int; ~] => scalarVersionNext!
     0 => borrowedReturnSiteSearch!
@@ -3910,20 +3989,19 @@ public analyzeResolvedLoweredContextWithInterpolationFactsAndPaths prepared: ref
         borrowedReturnSiteSearch! + 1 => borrowedReturnSiteSearch!
     }
     # This typed/type pair is immutable throughout borrowed origin queries.
-    # Symbol buckets retain every module/function candidate and original order;
-    # borrowedTextSameScalarSlot remains the exact identity authority.
+    # Storage buckets retain original version order without changing semantic
+    # symbols. borrowedTextSameScalarSlot uses the same lexical storage index.
     (typed -> len) - 1 => scalarVersionIndex!
     scalarVersionIndex! >= 0 -> while {
         typed -> borrowedTextScalarSlot(types, scalarVersionIndex!)
             -> if {
-                typed[scalarVersionIndex!].symbol => scalarSymbol
+                irIndex.scalarStorageRoots[scalarVersionIndex!] => scalarSymbol
                 scalarVersionHeads! -> putIfAbsent(scalarSymbol, -1) => scalarHeadInserted
                 scalarVersionHeads![scalarSymbol] => scalarVersionNext![scalarVersionIndex!]
                 scalarVersionIndex! => scalarVersionHeads![scalarSymbol]
             }
         scalarVersionIndex! - 1 => scalarVersionIndex!
     }
-    typed -> indexOwnershipIr(prepared) => irIndex
     BorrowedTextCallFunctionIndex {
         genericSelectionByCall: genericSelectionByCall!
         functionCandidates: functionCandidates
@@ -4589,25 +4667,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
         not (binding.typeOrigin == 1 and (binding.typeSymbol == 15 or binding.typeSymbol == 17 or binding.typeSymbol == 18))
     }
     sameBindingName leftIndex: Int, rightIndex: Int -> Bool {
-        typed[leftIndex] => left
-        typed[rightIndex] => right
-        false => same!
-        left.sourceModule == right.sourceModule and left.payloadToken >= 0 and right.payloadToken >= 0
-            -> if {
-                prepared.package.ranges[left.sourceModule] => nameRange
-                prepared.package.tokens[nameRange.tokenStart + left.payloadToken] => leftName
-                prepared.package.tokens[nameRange.tokenStart + right.payloadToken] => rightName
-                leftName.span.length == rightName.span.length => same!
-                UIntSize(0) => nameByte!
-                same! and nameByte! < leftName.span.length -> while {
-                    (prepared.package.sources[left.sourceModule] -> byte(leftName.span.start + nameByte!)) != (prepared.package.sources[right.sourceModule] -> byte(rightName.span.start + nameByte!))
-                        -> if {
-                            false => same!
-                        }
-                    nameByte! + 1 => nameByte!
-                }
-            }
-        same!
+        prepared -> ownershipBindingSameName(typed, leftIndex, rightIndex)
     }
     executableRoot nodeIndex: Int -> Int {
         nodeIndex => root!
@@ -5048,7 +5108,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                 false => matchesCarrierUse!
                 siteStart >= 0 and use.kind == 5 and use.sourceModule == borrowedTyped[siteIr].sourceModule and use.astNode >= 0
                     -> if {
-                        use.operand0 == bindingIr or (borrowedTyped -> borrowedTextSameScalarSlot(types, bindingIr, use.operand0))
+                        use.operand0 == bindingIr or (borrowedTyped -> borrowedTextSameScalarSlot(types, callFunctionIndex.irIndex, bindingIr, use.operand0))
                             or (use.operand0 < 0 and bindingIr >= 0 and bindingIr < (borrowedTyped -> len)
                             and borrowedTyped[bindingIr].kind == 10
                             and use.sourceModule == borrowedTyped[bindingIr].sourceModule
@@ -5742,8 +5802,9 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             }
         borrowedRead.kind == 5 and borrowedRead.operand0 >= 0 and borrowedRead.operand0 < (typed -> len)
             -> if {
-                firstBorrowedReadByBinding![borrowedRead.operand0] => nextBorrowedReadByBinding![borrowedReadIndex!]
-                borrowedReadIndex! => firstBorrowedReadByBinding![borrowedRead.operand0]
+                callFunctionIndex.irIndex -> borrowedTextStorageBinding(borrowedRead.operand0) => readStorage
+                firstBorrowedReadByBinding![readStorage] => nextBorrowedReadByBinding![borrowedReadIndex!]
+                borrowedReadIndex! => firstBorrowedReadByBinding![readStorage]
                 typed[borrowedRead.operand0].kind == 29 and borrowedRead.sourceModule >= 0
                     and borrowedRead.sourceModule < (prepared.package.ranges -> len)
                     -> if {
@@ -8136,7 +8197,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                         typed[activeBorrowBindingIr].symbol => borrowedSymbol
                                         borrowedSymbol >= 0 and borrowedSymbol < borrowedMoveRange.symbolCount
                                             -> if { borrowedMoveRange.symbolStart + borrowedSymbol => borrowedSymbolBucket! }
-                                        firstBorrowedReadByBinding![activeBorrowBindingIr] => borrowedDirectRead!
+                                        callFunctionIndex.irIndex -> borrowedTextStorageBinding(activeBorrowBindingIr) => borrowedStorage
+                                        firstBorrowedReadByBinding![borrowedStorage] => borrowedDirectRead!
                                         firstBorrowedReadBySymbol![borrowedSymbolBucket!] => borrowedSymbolRead!
                                         borrowedDirectRead! => borrowedUseSearch!
                                         borrowedSymbolRead! >= 0 and (borrowedUseSearch! < 0 or borrowedSymbolRead! < borrowedUseSearch!)
@@ -8148,7 +8210,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                     and borrowedUse.sourceModule == borrowedMove.sourceModule
                                                     and borrowedUse.astNode >= 0
                                                     and (borrowedUse.operand0 == activeBorrowBindingIr
-                                                    or borrowedUse.symbol == typed[activeBorrowBindingIr].symbol)
+                                                    or borrowedUse.symbol == typed[activeBorrowBindingIr].symbol
+                                                    or (typed -> borrowedTextSameScalarSlot(types, callFunctionIndex.irIndex, activeBorrowBindingIr, borrowedUse.operand0)))
                                                     and (prepared -> borrowedTextCarrierUseTouchesLoan(types, typed, borrowedUseSearch!))
                                                     and (prepared.package.nodes[borrowedMoveRange.astStart + borrowedUse.astNode].start > borrowedMoveStart
                                                     or (typed -> borrowedTextReachableBackedge(terminatingControls, borrowedMove.siteIr, borrowedUseSearch!, activeBorrowBindingIr)))
@@ -8166,13 +8229,19 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                                 # when branch lowering creates a distinct
                                                                 # definition for the same source binding.
                                                                 false => borrowedDefinitionReachesUse!
-                                                                borrowedUse.operand0 == activeBorrowBindingIr
+                                                                typed -> borrowedTextScalarSlot(types, activeBorrowBindingIr)
                                                                     -> if {
-                                                                        true => borrowedDefinitionReachesUse!
+                                                                        (prepared -> borrowedTextScalarVersionVisible(typed, types, callFunctionIndex, terminatingControls, activeBorrowBindingIr, borrowedUseSearch!))
+                                                                            and (prepared -> borrowedTextScalarVersionReaches(typed, types, terminatingControls, activeBorrowBindingIr, borrowedUseSearch!, callFunctionIndex.irIndex)) => borrowedDefinitionReachesUse!
                                                                     } else {
-                                                                        activeBorrowBindingIr -> sameBindingName(borrowedUseSearch!)
+                                                                        borrowedUse.operand0 == activeBorrowBindingIr
                                                                             -> if {
-                                                                                activeBorrowBindingIr -> useReachableAfterMove(borrowedUseSearch!) => borrowedDefinitionReachesUse!
+                                                                                true => borrowedDefinitionReachesUse!
+                                                                            } else {
+                                                                                activeBorrowBindingIr -> sameBindingName(borrowedUseSearch!)
+                                                                                    -> if {
+                                                                                        activeBorrowBindingIr -> useReachableAfterMove(borrowedUseSearch!) => borrowedDefinitionReachesUse!
+                                                                                    }
                                                                             }
                                                                     }
                                                                 borrowedDefinitionReachesUse! -> if {
@@ -8181,7 +8250,9 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                                                     prepared.package.nodes[borrowedDefinitionRange.astStart + borrowedDefinition.astNode].start => borrowedDefinitionStart
                                                                     prepared.package.nodes[borrowedDefinitionRange.astStart + borrowedUse.astNode].start => borrowedUseStart
                                                                     0 => borrowedRebindSearch!
-                                                                    borrowedDefinition.flags % 2 == 1 and borrowedRebindSearch! < (typed -> len)
+                                                                    borrowedDefinition.flags % 2 == 1
+                                                                        and not (typed -> borrowedTextScalarSlot(types, activeBorrowBindingIr))
+                                                                        and borrowedRebindSearch! < (typed -> len)
                                                                         -> while {
                                                                             typed[borrowedRebindSearch!] => borrowedRebind
                                                                             borrowedRebindSearch! != activeBorrowBindingIr and borrowedRebind.kind == 17 and borrowedRebind.sourceModule == borrowedDefinition.sourceModule and borrowedRebind.astNode >= 0 and (activeBorrowBindingIr -> sameBindingName(borrowedRebindSearch!))

@@ -856,6 +856,14 @@ Treat owners as affine:
 - use `take` only when extracting a value and leaving the container in its
   defined replacement state is the intended operation.
 
+Keep semantic declaration identity separate from mutable storage identity.
+A rebind may retain its own semantic symbol for references and captures while
+borrowing follows the earlier visible mutable owner's storage. Use one scoped
+storage identity for reaching versions and later reads; preserve distinct
+modules, functions, sibling scopes, and the local `!` suffix. A continuing loop
+retains each possible borrowed origin without treating a new symbol as fresh
+storage.
+
 An ownership diagnostic should lead to one of four explicit designs: transfer,
 borrow, mutate in place, or copy by deliberate policy. Hidden copies are not a
 compatibility solution.

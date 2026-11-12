@@ -4656,6 +4656,10 @@ Container rules:
   compile-time error. A call checks the exact consumed argument place for each
   `move` parameter, including additional parameters; moving an unrelated
   argument does not invalidate a readonly receiver's borrowed origin.
+  Reassigning an outer mutable `Text` binding inside a continuing loop updates
+  that binding's storage. Its possible incoming and loop-assigned origins are
+  retained at the loop join until their last reachable use. Separate lexical
+  bindings do not share loans merely because their names have equal spelling.
   CFG last-use analysis ends the borrow after the final
   reachable aggregate or projection use, so the origin may be moved later.
   Reading an independent non-Text field of an ordinary struct does not keep a

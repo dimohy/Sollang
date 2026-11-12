@@ -1,0 +1,50 @@
+import sollang.compiler.semantic.ownership_check as ownership
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.source_root as sourceRoot
+import sys.path as path
+
+inspectStorage label: Text, sources: [Text; ~] -> Unit uses Console, File {
+    sources -> semanticContext.prepareFiles => prepared
+    prepared -> expressionTypeIds.resolveContext => facts
+    prepared -> typedIr.lowerResolvedContext(facts) => typed
+    [Int; ~] => symbols!
+    typed -> each node { symbols! -> push(node.symbol) }
+    prepared -> ownership.analyzeResolvedLoweredContext(typed, facts.types) => diagnostics
+    true => unchanged!
+    0 => ordinal!
+    ordinal! < (typed -> len) -> while {
+        symbols![ordinal!] != typed[ordinal!].symbol -> if { false => unchanged! }
+        ordinal! + 1 => ordinal!
+    }
+    "$label=$(diagnostics -> len)/$(unchanged!)" -> println
+}
+
+inspectLoan label: Text, source: Text, library: ref [Text; ~] -> Unit uses Console, File {
+    [Text; ~] => paths!
+    library -> each entry { paths! -> push(entry) }
+    paths! -> push(source)
+    paths! -> semanticContext.prepareFiles => prepared
+    prepared -> ownership.analyzeContext => diagnostics
+    diagnostics -> len => count
+    count > 0 -> if { diagnostics[0].code } else { 0 } => code
+    "$label=$count/$code" -> println
+}
+
+main {
+    inspectStorage("outer", ["examples/regression/modules/borrowed-text-storage/outer.slg",; ~])
+    inspectStorage("sibling", ["examples/regression/modules/borrowed-text-storage/sibling.slg",; ~])
+    inspectStorage("suffix", ["examples/regression/modules/borrowed-text-storage/suffix.slg",; ~])
+    inspectStorage("functions", ["examples/regression/modules/borrowed-text-storage/functions.slg",; ~])
+    inspectStorage("modules", ["examples/regression/modules/borrowed-text-storage/module0.slg", "examples/regression/modules/borrowed-text-storage/module1.slg", "examples/regression/modules/borrowed-text-storage/module2.slg"; ~])
+    "stdlib" -> path.fromText(path.nativeStyle()) => libraryRoot
+    libraryRoot -> sourceRoot.discoverDirect => discovered
+    [Text; ~] => library!
+    discovered -> each entry { entry -> pathText => source
+        library! -> push(source) }
+    inspectLoan("loop-loan", "examples/regression/diagnostics/borrowed-text-origin-reassignment-loop-join.slg", library!)
+    inspectLoan("replace", "examples/regression/477-borrowed-text-origin-reassignment.slg", library!)
+    inspectLoan("replace-cfg", "examples/regression/479-borrowed-text-origin-reassignment-cfg.slg", library!)
+    inspectLoan("last-use", "examples/regression/472-borrowed-text-branch-last-use.slg", library!)
+}
