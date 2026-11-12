@@ -836,12 +836,18 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
                 or node.ruleId == grammar.ruleIdControlFlowExpression())
                 and candidateOperator == grammar.tokenIdQuestion()
                 -> if {
-                    false => flowQuestionOwnedByPostfix!
+                    # A nested flow owns its suffix just as a postfix does.
+                    # Do not wrap later flow targets in the same propagation.
+                    false => flowQuestionOwnedByChild!
                     0 => flowQuestionCstSearch!
-                    flowQuestionCstSearch! < greenCount and not flowQuestionOwnedByPostfix!
+                    flowQuestionCstSearch! < greenCount and not flowQuestionOwnedByChild!
                         -> while {
                             green[flowQuestionCstSearch!] => flowQuestionCst
-                            flowQuestionCst.ruleId == grammar.ruleIdPostfixExpression()
+                            flowQuestionCstSearch! != cstIndex!
+                                and (flowQuestionCst.ruleId == grammar.ruleIdPostfixExpression()
+                                or flowQuestionCst.ruleId == grammar.ruleIdFlowExpression()
+                                or flowQuestionCst.ruleId == grammar.ruleIdValueFlowExpression()
+                                or flowQuestionCst.ruleId == grammar.ruleIdControlFlowExpression())
                                 and operatorTokenIndex! >= flowQuestionCst.firstToken
                                 and operatorTokenIndex! < flowQuestionCst.firstToken + flowQuestionCst.tokenCount
                                 -> if {
@@ -849,11 +855,11 @@ public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.Synta
                                     flowQuestionAncestor! >= 0 and flowQuestionAncestor! != cstIndex!
                                         -> while { green[flowQuestionAncestor!].parent => flowQuestionAncestor! }
                                     flowQuestionAncestor! == cstIndex!
-                                        -> if { true => flowQuestionOwnedByPostfix! }
+                                        -> if { true => flowQuestionOwnedByChild! }
                                 }
                             flowQuestionCstSearch! + 1 => flowQuestionCstSearch!
                         }
-                    not flowQuestionOwnedByPostfix! -> if {
+                    not flowQuestionOwnedByChild! -> if {
                         true => flowHasTry!
                         operatorTokenIndex! => flowTryToken!
                     }

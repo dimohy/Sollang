@@ -3888,6 +3888,9 @@ The postfix applies to a complete value-flow expression as well as to its
 source, so `owner -> fallibleTransform?` propagates the target Result without
 an intermediate binding. If the target consumes an owned source, both the
 success and propagated-error paths transfer that source exactly once.
+A propagation suffix belongs to the flow prefix ending at its `?` token.
+Later targets consume that prefix's successful payload; they do not acquire
+another propagation merely because their source contains the same `?`.
 Inside interpolation, a field access after `?` uses the `Ok` payload type only
 after the Result and enclosing function error types are validated. If `?` is
 invalid, report its propagation error before field display eligibility.

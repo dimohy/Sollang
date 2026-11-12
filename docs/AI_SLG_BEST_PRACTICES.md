@@ -1516,6 +1516,10 @@ source -> parse? => parsed
 parsed -> validate? => valid
 ```
 
+Later flow targets may consume a successful payload directly:
+`source -> parse? -> consume`. The `?` belongs to `parse`'s Result, so a
+`Unit`-returning sink does not receive a second propagation suffix.
+
 Return distinct typed errors for distinct actionable failures. Never turn I/O,
 parse, limit, capability, checksum, ownership, or target failures into an empty
 value, zero, success, or catch-all default. Validate cheap input contracts
