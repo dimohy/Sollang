@@ -10,10 +10,12 @@ main {
         Windows { "windows-x64" }
         Posix { "linux-x64" }
     } => target
-    ["tests/library-interop/catalog_consumer.slg"; ~] => sourcePaths
+    ["tests/library-interop/current/catalog_consumer.slg"; ~] => sourcePaths
     sourcePaths -> semanticContext.prepareFiles => prepared
     prepared.package -> libraryImports.load(sourcePaths, target, nativeStyle) => catalog
     prepared.package -> libraryImports.resolveQualified(catalog) => libraryCalls
+    "catalog diagnostics = $(catalog.diagnosticCount)" -> println
+    "library resolutions = $(libraryCalls -> len)" -> println
     prepared.calls -> each resolvedCall {
         "call = $(resolvedCall.callAst),$(resolvedCall.functionSymbol),$(resolvedCall.targetSourceModule),$(resolvedCall.status)" -> println
     }
@@ -30,10 +32,10 @@ main {
     0 => nodeIndex!
     nodeIndex! < (ir! -> len) -> while {
         ir![nodeIndex!] => node
-        (node.kind == 0 or node.kind == 6 or node.kind == 10 or node.kind == 11 or node.kind == 17)
+        node.kind == 0 or node.kind == 6 or node.kind == 10 or node.kind == 11 or node.kind == 17
             -> if {
-            "$(nodeIndex!): $(node.kind),$(node.parent),$(node.sourceModule),$(node.astNode),$(node.symbol),$(node.targetModule),$(node.typeId),$(node.operand0),$(node.operand1),$(node.nextOperand),$(node.flags)" -> println
-        }
+                "$(nodeIndex!): $(node.kind),$(node.parent),$(node.sourceModule),$(node.astNode),$(node.symbol),$(node.targetModule),$(node.typeId),$(node.operand0),$(node.operand1),$(node.nextOperand),$(node.flags)" -> println
+            }
         nodeIndex! + 1 => nodeIndex!
     }
 }
