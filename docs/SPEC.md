@@ -6842,6 +6842,12 @@ Current backend:
   zero-input methods whose compiled body is a literal `ldstr` followed by `ret`,
   with printable ASCII content of at most 4096 characters. Unsupported bodies,
   control characters and non-ASCII literals are rejected before source generation.
+  A build checks generated-policy consistency for roots owning the compiler
+  project or a policy's C# source, and for inputs claiming generated provenance
+  through a generated header or region marker. A path shared with an ordinary
+  authored module does not establish policy ownership. Removing a marker from
+  an owned output does not disable validation. Explicit policy synchronization
+  continues to require the complete source authority.
   Source type fields retain the parser's canonical type spelling: punctuation
   spacing, normalized decimal extents, product labels, imported paths and current
   generic or associated names. Open imports respect declarations in every file of

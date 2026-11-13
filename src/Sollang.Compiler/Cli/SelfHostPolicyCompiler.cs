@@ -16,18 +16,32 @@ internal static class SelfHostPolicyCompiler
     {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var roots = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-        foreach (var type in typeof(SelfHostPolicyCompiler).Assembly.GetTypes())
+        var policies = typeof(SelfHostPolicyCompiler).Assembly.GetTypes()
+            .Select(type => type.GetCustomAttribute<SelfHostPolicyAttribute>())
+            .OfType<SelfHostPolicyAttribute>().ToArray();
+        foreach (var policy in policies)
         {
-            if (type.GetCustomAttribute<SelfHostPolicyAttribute>() is not { } policy) continue;
             var suffix = Path.DirectorySeparatorChar + policy.Output.Replace('/', Path.DirectorySeparatorChar);
             foreach (var path in sourcePaths)
             {
                 var full = Path.GetFullPath(path);
-                if (full.EndsWith(suffix, comparison)) roots.Add(full[..^suffix.Length]);
+                if (!full.EndsWith(suffix, comparison)) continue;
+                var root = full[..^suffix.Length];
+                // An authored module can have the same path as a later policy
+                // projection. Ownership or generated provenance admits a root
+                // to the check; a failed check is never ignored.
+                if (File.Exists(Path.Combine(root, "src/Sollang.Compiler/Sollang.Compiler.csproj"))
+                    || policies.Any(candidate => File.Exists(WithinRoot(root, candidate.Source)))
+                    || ClaimsGeneratedPolicy(full))
+                    roots.Add(root);
             }
         }
         foreach (var root in roots) Synchronize(["--root", root, "--check"], verbose: false);
     }
+
+    private static bool ClaimsGeneratedPolicy(string path) => File.Exists(path)
+        && File.ReadLines(path).Any(line => line.TrimStart().StartsWith("# Generated from ", StringComparison.Ordinal)
+            || line.TrimStart().StartsWith("# BEGIN generated ", StringComparison.Ordinal));
 
     public static int Run(string[] args) => Synchronize(args, verbose: true);
 

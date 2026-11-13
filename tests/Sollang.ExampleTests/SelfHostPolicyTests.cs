@@ -8,7 +8,7 @@ internal static class SelfHostPolicyTests
 {
     internal static int Run(string compilerPath, string resultPath)
     {
-        const int expectedTestCount = 84;
+        const int expectedTestCount = 91;
         if (File.Exists(resultPath)) throw new IOException("Result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
@@ -351,6 +351,51 @@ internal static class SelfHostPolicyTests
             var drift = Sync(true);
             Check("edited-generated-source-rejected", drift.Exit != 0 && drift.Output.Contains("SELFHOST_POLICY_OUTPUT_DRIFT", StringComparison.Ordinal));
             Check("regenerate", Sync(false).Exit == 0 && Sync(true).Exit == 0);
+            var checkInputs = exporter.GetMethod("CheckGeneratedInputs", BindingFlags.NonPublic | BindingFlags.Static)!;
+            string? CheckInputs(params string[] paths)
+            {
+                try { checkInputs.Invoke(null, [paths]); return null; }
+                catch (TargetInvocationException error) { return error.InnerException!.Message; }
+            }
+            string Input(string owner, string relative, string content)
+            {
+                var path = Path.Combine(directory, owner, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, content);
+                return path;
+            }
+            const string authored = "namespace authored.policy\n";
+            var legacyInputs = new[] { "selfhost/llvm/runtime.slg", "selfhost/llvm/text/functions.slg",
+                "selfhost/llvm/emitter/diagnostics.slg" }
+                .Select(path => Input("legacy-authored", path, authored)).ToArray();
+            Check("authored-matching-policy-paths-accepted", CheckInputs(legacyInputs) is null);
+            var claimed = Input("claimed-output", "selfhost/generated/windows_link_policy.slg",
+                "# Generated from src/Sollang.Compiler/Shared/Policies/WindowsLinkPolicy.cs\n" + authored);
+            Check("claimed-output-missing-authority-rejected",
+                CheckInputs(claimed)?.StartsWith("SELFHOST_POLICY_SOURCE_DRIFT", StringComparison.Ordinal) is true);
+            var claimedRegion = Input("claimed-region", "selfhost/llvm/runtime.slg",
+                authored + "# BEGIN generated NativeRuntime\n# END generated NativeRuntime\n");
+            Check("claimed-region-missing-authority-rejected",
+                CheckInputs(claimedRegion)?.StartsWith("SELFHOST_POLICY_SOURCE_DRIFT", StringComparison.Ordinal) is true);
+            Input("owned-project", "src/Sollang.Compiler/Sollang.Compiler.csproj", "<Project />");
+            var ownedInput = Input("owned-project", "selfhost/llvm/runtime.slg", authored);
+            Check("owned-project-missing-authority-rejected",
+                CheckInputs(ownedInput)?.StartsWith("SELFHOST_POLICY_SOURCE_DRIFT", StringComparison.Ordinal) is true);
+            Input("owned-source", (string)attributes[0].ConstructorArguments[2].Value!, "// source ownership\n");
+            var sourceOwnedInput = Input("owned-source", "selfhost/llvm/runtime.slg", authored);
+            Check("owned-policy-source-retains-check",
+                CheckInputs(sourceOwnedInput)?.StartsWith("SELFHOST_POLICY_SOURCE_DRIFT", StringComparison.Ordinal) is true);
+            Check("valid-generated-input-checked", CheckInputs(generatedPath) is null);
+            var generatedBytes = File.ReadAllBytes(generatedPath);
+            File.WriteAllLines(generatedPath, File.ReadAllLines(generatedPath).Where(line =>
+                !line.StartsWith("# Generated from ", StringComparison.Ordinal)
+                && !line.StartsWith("# source-sha256:", StringComparison.Ordinal)
+                && !line.StartsWith("# BEGIN generated ", StringComparison.Ordinal)
+                && !line.StartsWith("# END generated ", StringComparison.Ordinal)));
+            File.AppendAllText(generatedPath, "\n# changed owned projection\n");
+            Check("owned-output-marker-removal-cannot-bypass-check",
+                CheckInputs(generatedPath)?.StartsWith("SELFHOST_POLICY_OUTPUT_DRIFT", StringComparison.Ordinal) is true);
+            File.WriteAllBytes(generatedPath, generatedBytes);
             runtimeProbeContract = WriteRuntimeProbe(compiler, root, directory);
         }
         catch (Exception error) { failure = error.ToString(); }

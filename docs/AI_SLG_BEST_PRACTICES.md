@@ -2190,6 +2190,12 @@ Before compiling self-host sources, run `selfhost-sync --root <repository>
 --check` with the selected managed compiler. A source change requires rebuilding
 that compiler; a generated-source change requires regeneration. Both checks
 precede semantic or native compilation, including cached builds.
+An input root belongs to this policy check when it contains the compiler project
+or a policy's C# source, or an input claims generated provenance with a generated
+header or region marker. Ordinary authored modules in a historical source package
+do not become current policy projections merely by sharing their file paths.
+Owned roots retain the check even when an output's generated marker is removed.
+The explicit `selfhost-sync` command always requires the full policy authority.
 
 Cache key layouts use compiled `CodegenKeyRule` values: the domain tag and
 ordered `CodegenKeyPart` sequence are generated together with the enum schema
