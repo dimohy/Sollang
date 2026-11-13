@@ -1,0 +1,22 @@
+{
+  "original": "W:\\MyWorks\\Sollang\\artifacts\\fn1186\\cases\\003a7719fc08bf0c8d4e\\runner\\compiler-artifacts\\iJVxa1PLl-Gm6GMSS9OxmoOIhYpybbAYQm_iES3n9xU.exe.ll",
+  "control": "artifacts\\socket-zero-capacity1204\\native1208\\socket-receive-zero-capacity\\probe.exe.ll",
+  "functions": {
+    "sollang_platform_socket_receive": {
+      "equal": true,
+      "sha256": "1b4d3e632b426ef2dc12d9b7e1b5bef57d9076f2cc9c20542aab1d5dc3b697f7",
+      "lines": 28,
+      "text": "define internal %sollang.socket_result @sollang_platform_socket_receive(i64 %socket, ptr %buffer, i64 %capacity, i32 %flags) #0 {\n    entry:\n      %positive = icmp ugt i64 %capacity, 0\n      %fits = icmp ule i64 %capacity, 2147483647\n      %valid = and i1 %positive, %fits\n      br i1 %valid, label %receive, label %invalid_argument\n\n    receive:\n      %capacity32 = trunc i64 %capacity to i32\n      %count32 = call i32 @recv(i64 %socket, ptr %buffer, i32 %capacity32, i32 %flags)\n      %ok = icmp sge i32 %count32, 0\n      br i1 %ok, label %success, label %failure\n\n    failure:\n      %error = call i32 @WSAGetLastError()\n      %kind = call i32 @sollang_socket_error_kind(i32 %error)\n      %failed = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 %kind, i32 %error)\n      ret %sollang.socket_result %failed\n\n    invalid_argument:\n      %invalid = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 1, i32 0)\n      ret %sollang.socket_result %invalid\n\n    success:\n      %count = zext i32 %count32 to i64\n      %result = call %sollang.socket_result @sollang_socket_result(i64 %count, i32 -1, i32 0)\n      ret %sollang.socket_result %result\n    }"
+    },
+    "sollang_socket_result": {
+      "equal": true,
+      "sha256": "8c692503e13bfaabd0ac620f77db966b5c2ec32177a9f5491656cfe91a7ddd53",
+      "lines": 7,
+      "text": "define internal %sollang.socket_result @sollang_socket_result(i64 %value, i32 %kind, i32 %code) #0 {\n    entry:\n      %with_value = insertvalue %sollang.socket_result poison, i64 %value, 0\n      %with_kind = insertvalue %sollang.socket_result %with_value, i32 %kind, 1\n      %result = insertvalue %sollang.socket_result %with_kind, i32 %code, 2\n      ret %sollang.socket_result %result\n    }"
+    }
+  },
+  "resultType": "%sollang.socket_result = type { i64, i32, i32 }",
+  "status": "exact-helper-equivalence",
+  "originalLlvmSha256": "42f769ee2cbac1c9cf1af4f725486ce2cb037530325ad48a801a01691a834935",
+  "controlLlvmSha256": "be150bf93e9326d407ea94d38f4f2646dac29b37765ee6af203a7312efd129b2"
+}
