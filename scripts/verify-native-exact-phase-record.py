@@ -49,6 +49,18 @@ def pins(values, binary=None, cleanup=None):
             require(authority.file_hash(local(name)) == expected, "INPUT_CHANGED: " + name)
 
 
+def compiler_runtime_pins(values, binary):
+    binary_path = reference_path(binary)
+    if binary_path.suffix.lower() == ".dll":
+        pins(values)
+        require(any(local(name) == binary_path for name in values), "MANAGED_RUNTIME_MAIN_MISSING")
+    else:
+        # The producer records .NET sidecars only for managed products. Native
+        # products have an empty sidecar map; their executable still needs its
+        # own current content hash, checked above.
+        require(binary_path.suffix.lower() == ".exe" and values == {}, "NATIVE_RUNTIME_SCOPE")
+
+
 def oracle(expected, outcome, process):
     """Only the static contract authorizes nonzero compiler/grammar exits."""
     exit_code = expected["exitCode"]
@@ -89,7 +101,7 @@ def verify(context, record_path):
     require(proof["compilerRuntimeHashesStart"] == proof["compilerRuntimeHashesEnd"]
             == context["CompilerRuntimeHashes"], "RUNTIME_SCOPE")
     pins(context["InputHashes"])
-    pins(context["CompilerRuntimeHashes"])
+    compiler_runtime_pins(context["CompilerRuntimeHashes"], context["CompilerBinary"])
     binaries = {side: contract["compilerBinaries"][side]}
     require(proof["compilerBinaries"] == binaries, "COMPILER")
     if contract["phase"] == "parsing":

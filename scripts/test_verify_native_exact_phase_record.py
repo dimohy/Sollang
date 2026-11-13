@@ -53,5 +53,45 @@ class OracleTests(unittest.TestCase):
                 self.assertEqual(reader.reference_path(reference), code.resolve())
 
 
+class CompilerRuntimeTests(unittest.TestCase):
+    def test_native_empty_sidecars_still_require_actual_executable_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = root / "compiler.exe"
+            product.write_bytes(b"native product")
+            binary = dict(path="compiler.exe", sha256=reader.authority.file_hash(product))
+            with patch.object(reader, "ROOT", root):
+                reader.compiler_runtime_pins({}, binary)
+                with self.assertRaisesRegex(ValueError, "REFERENCE_CHANGED"):
+                    reader.compiler_runtime_pins({}, dict(binary, sha256="F" * 64))
+
+    def test_native_cannot_acquire_unexpected_managed_sidecar_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = root / "compiler.exe"
+            product.write_bytes(b"native product")
+            binary = dict(path="compiler.exe", sha256=reader.authority.file_hash(product))
+            with patch.object(reader, "ROOT", root):
+                for values in (None, [], {"other.dll": "F" * 64}):
+                    with self.assertRaisesRegex(ValueError, "NATIVE_RUNTIME_SCOPE"):
+                        reader.compiler_runtime_pins(values, binary)
+
+    def test_managed_sidecars_cannot_be_empty_or_omit_main_product(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = root / "compiler.dll"
+            product.write_bytes(b"managed product")
+            config = root / "compiler.runtimeconfig.json"
+            config.write_text("{}", encoding="utf-8")
+            binary = dict(path="compiler.dll", sha256=reader.authority.file_hash(product))
+            values = {str(path): reader.authority.file_hash(path) for path in (product, config)}
+            with patch.object(reader, "ROOT", root):
+                reader.compiler_runtime_pins(values, binary)
+                with self.assertRaisesRegex(ValueError, "INPUTS_MISSING"):
+                    reader.compiler_runtime_pins({}, binary)
+                with self.assertRaisesRegex(ValueError, "MANAGED_RUNTIME_MAIN_MISSING"):
+                    reader.compiler_runtime_pins({str(config): values[str(config)]}, binary)
+
+
 if __name__ == "__main__":
     unittest.main()
