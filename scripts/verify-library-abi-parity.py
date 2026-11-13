@@ -106,7 +106,7 @@ def main():
     inputs = {str(p.resolve()): sha(p) for p in paths}
     output = args.output.resolve()
     initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
-    output.mkdir()
+    output.mkdir(parents=True)
     result = dict(schemaVersion=1, status='running', completed=0, total=8, cases=[],
                   scope=contract['scope'], inputHashes=inputs, claimsGoalComplete=False)
     with VerificationContractLease(list(map(Path, inputs))):
