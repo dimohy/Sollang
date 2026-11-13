@@ -1,0 +1,77 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sys.io
+
+verify source: Text, expectedPrimaryMoves: Int, expectedExtraCalls: Int -> Unit uses Console {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => types
+    prepared -> typedIr.lowerResolvedContext(types) => nodes
+    nodes -> typedIr.movesFrom(prepared, types.types) => moves
+    0 => primaryMoves!
+    moves -> each moved {
+        moved.siteIr -> typedIr.branchStageInput(nodes, prepared.package.ranges, prepared.package.nodes) => input
+        input >= 0 and moved.valueIr == input -> if {
+            primaryMoves! + 1 => primaryMoves!
+        }
+    }
+    0 => extraCalls!
+    -1 => previousExtra!
+    true => isolated!
+    0 => index!
+    nodes -> each node {
+        index! -> typedIr.branchStageInput(nodes, prepared.package.ranges, prepared.package.nodes) => input
+        input >= 0 and node.operand0 >= 0 -> if {
+            extraCalls! + 1 => extraCalls!
+            node.operand0 != previousExtra! and nodes[node.operand0].nextOperand < 0
+                -> unless {
+                    false => isolated!
+                }
+            node.operand0 => previousExtra!
+        }
+        index! + 1 => index!
+    }
+    (moves -> len) == 1 => oneMove
+    primaryMoves! == expectedPrimaryMoves => primary
+    extraCalls! == expectedExtraCalls => extra
+    "moves=$oneMove,primary=$primary,extra=$extra,isolated=$(isolated!)" -> println
+}
+
+main {
+    """"
+        length values: ref [Int; ~] -> Int => values -> len
+        consume values: move [Int; ~] -> Int => values -> len
+        main {
+            [10, 20, 30; ~] => values
+            values -> branch {
+                observed: ref -> length
+                consumed: move -> consume
+            } => facts
+        }
+    """" -> verify(1, 0)
+
+    """"
+        length values: ref [Int; ~], extra: Int -> Int => (values -> len) + extra
+        consume values: move [Int; ~], extra: Int -> Int => (values -> len) + extra
+        main {
+            [10, 20, 30; ~] => values
+            values -> branch {
+                observed: ref -> length(11)
+                consumed: move -> consume(22)
+            } => facts
+        }
+    """" -> verify(1, 2)
+
+    """"
+        length values: ref [Int; ~] -> Int => values -> len
+        take values: ref [Int; ~], payload: move [Int; ~] -> Int => payload -> len
+        main {
+            [10, 20, 30; ~] => values
+            [40, 50; ~] => payload
+            values -> branch {
+                observed: ref -> length
+                consumed: ref -> take(payload)
+            } => facts
+        }
+    """" -> verify(0, 1)
+}

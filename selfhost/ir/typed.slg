@@ -1886,6 +1886,37 @@ public isBorrowedBlockInputBinding valueIr: Int, typed: ref [TypedIrNode; ~], so
     role.kind == 35 and role.astNode == binding.astNode
 }
 
+public branchStageInput callIndex: Int, ir: [TypedIrNode; ~], ranges: ref [analysis.SourceAnalysisRange; ~], nodes: ref [ast.AstNode; ~] -> Int {
+    ir[callIndex] => call
+    call.kind != 6 -> if { -1 -> return }
+    -1 => inputIndex!
+    call.parent >= 0 and ir[call.parent].kind == 39
+        -> if {
+            ir[call.parent] => arm
+            arm.parent >= 0 and (ir[arm.parent].kind == 37 or ir[arm.parent].kind == 38)
+                -> if {
+                    ir[arm.parent].operand1 => inputIndex!
+                    nodes[ranges[call.sourceModule].astStart + call.astNode].start => callStart
+                    UIntSize(0) => previousStart!
+                    0 => candidateIndex!
+                    candidateIndex! < (ir -> len) -> while {
+                        ir[candidateIndex!] => candidate
+                        (candidate -> isJunctionStage) and candidate.parent == call.parent and candidateIndex! != callIndex
+                            -> if {
+                                nodes[ranges[candidate.sourceModule].astStart + candidate.astNode].start => candidateStart
+                                candidateStart < callStart and (inputIndex! == ir[arm.parent].operand1 or candidateStart > previousStart!)
+                                    -> if {
+                                        candidateIndex! => inputIndex!
+                                        candidateStart => previousStart!
+                                    }
+                            }
+                        candidateIndex! + 1 => candidateIndex!
+                    }
+                }
+        }
+    inputIndex!
+}
+
 public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [MoveEvent; ~] {
     ir -> functionDeclarationIrs => functionIrs
     [MoveEvent; ~] => events!
@@ -1922,13 +1953,15 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
         site -> isOwnedContainerTransform -> if {
             movedValueIrs! -> push(site.operand0)
         }
-        site.kind == 6 and site.symbol >= 0 and site.operand0 >= 0
+        siteIndex! -> branchStageInput(ir, prepared.package.ranges, prepared.package.nodes) => branchInput
+        (branchInput >= 0 -> if { branchInput } else { site.operand0 }) => primaryInput
+        site.kind == 6 and site.symbol >= 0 and primaryInput >= 0
             -> if {
                 functionIrs -> each functionIndex {
                     ir[functionIndex] => function
                     function.kind == 0 and function.sourceModule == site.targetModule and function.symbol == site.symbol and function.operand1 >= 0
                         -> if {
-                            site.operand0 => movedArgumentIndex!
+                            primaryInput => movedArgumentIndex!
                             function.operand1 => movedParameterIndex!
                             0 => movedParameterOrdinal!
                             movedArgumentIndex! >= 0 and movedParameterIndex! >= 0
@@ -1938,7 +1971,7 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
                                     movedParameterOrdinal! == 0 -> if {
                                         # The call owns its first additional argument;
                                         # the primary can be shared with other calls.
-                                        site.operand1 => movedArgumentIndex!
+                                        (branchInput >= 0 -> if { site.operand0 } else { site.operand1 }) => movedArgumentIndex!
                                         function.nextOperand => movedParameterIndex!
                                     } else {
                                         ir[movedArgumentIndex!].nextOperand => movedArgumentIndex!

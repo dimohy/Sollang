@@ -1056,34 +1056,7 @@ emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordin
         }
 }
 branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    context.ir[callIndex] => call
-    call.kind != 6 -> if { -1 -> return }
-    -1 => flowIndex!
-    call.parent >= 0 and context.ir[call.parent].kind == 39
-        -> if {
-            context.ir[call.parent] => arm
-            arm.parent >= 0 and (context.ir[arm.parent].kind == 37 or context.ir[arm.parent].kind == 38)
-                -> if {
-                    context.ir[arm.parent].operand1 => flowIndex!
-                    call -> sourceStart(context, state) => callStart
-                    UIntSize(0) => previousStart!
-                    0 => candidateIndex!
-                    candidateIndex! < (context.ir -> len) -> while {
-                        context.ir[candidateIndex!] => candidate
-                        (candidate -> typedIr.isJunctionStage) and candidate.parent == call.parent and candidateIndex! != callIndex
-                            -> if {
-                                candidate -> sourceStart(context, state) => candidateStart
-                                candidateStart < callStart and (flowIndex! == context.ir[arm.parent].operand1 or candidateStart > previousStart!)
-                                    -> if {
-                                        candidateIndex! => flowIndex!
-                                        candidateStart => previousStart!
-                                    }
-                            }
-                        candidateIndex! + 1 => candidateIndex!
-                    }
-                }
-        }
-    flowIndex!
+    callIndex -> typedIr.branchStageInput(context.ir, context.ranges, context.nodes)
 }
 # Allocation, conversion and call emission must visit the same logical inputs.
 # An implicit branch input precedes the explicit list without rewriting its
