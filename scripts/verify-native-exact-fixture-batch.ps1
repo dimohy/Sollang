@@ -603,7 +603,7 @@ function Write-NativeExactBatchReport {
         total = $totalFixtures
         results = @($results | Select-Object Fixture, Success, Error)
     }
-    if ($null -ne $phaseContext) { $report.phaseFixturePlan = @($Fixture) }
+    $report.phaseFixturePlan = @($Fixture)
     [IO.File]::WriteAllText($batchReportPath, ($report | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }
 Write-NativeExactBatchReport -State running
