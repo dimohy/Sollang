@@ -654,6 +654,21 @@ writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitt
     }
     context.ir[functionIndex] => referenceFunction
     context.ir[valueIndex] => referenceValue
+    referenceValue.kind == 15 and referenceValue.operand0 >= 0
+        -> if {
+            context.ir[referenceValue.operand0].typeId => indexedType!
+            indexedType! >= 0 and context.types[indexedType!].kind == 8
+                -> if { context.types[indexedType!].first => indexedType! }
+            indexedType! >= 0 -> if {
+                context.types[indexedType!].kind => containerKind
+                containerKind == 2 or containerKind == 3 or containerKind == 4
+                    -> if {
+                        # Array indexing already computed the checked element place.
+                        "%v$(valueIndex -> valueNameId(state))_ptr" -> print
+                        return
+                    }
+            }
+        }
     false => wroteParameter!
     referenceValue.kind == 10 and referenceFunction.operand1 >= 0
         -> if {

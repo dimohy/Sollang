@@ -12,7 +12,7 @@ main {
     }
 
     main {
-        fixture.create
+        fixture.create()
         fixture.clone
         fixture.add(20, 22)
     }
@@ -27,9 +27,16 @@ main {
         qualified: qualifiedCalls
     } => request
     request -> calls.resolveModulesPrepared => resolved
+    [Bool; ~] => emitted!
+    package.symbols -> each { emitted! -> push(false) }
     resolved -> each call {
         package.ranges[call.targetSourceModule] => targetRange
-        package.symbols[targetRange.symbolStart + call.functionSymbol] => target
-        "resolved = $(call.status),$(call.origin),$(target.kind),$(target.flags)" -> println
+        targetRange.symbolStart + call.functionSymbol => symbolIndex
+        not emitted![symbolIndex] or call.status != 0
+            -> if {
+            package.symbols[symbolIndex] => target
+            "resolved = $(call.status),$(call.origin),$(target.kind),$(target.flags)" -> println
+            true => emitted![symbolIndex]
+        }
     }
 }
