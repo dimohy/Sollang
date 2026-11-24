@@ -22,7 +22,43 @@ main {
         public work value: Int -> Int = intrinsic
     """" => runtimeSource
 
-    [consumerSource, publicSource, runtimeSource; ~]
+    """"
+        namespace sys.io
+
+        import sys.runtime as rt
+
+        # Console and standard-stream access are system I/O effects. Portable memory
+        # readers, writers, and buffers live in std.io.
+        public print value: Text -> Unit uses Console {
+            value -> rt.print
+        }
+
+        public println value: Text -> Unit uses Console {
+            value -> rt.println
+        }
+
+        public readInt prompt: Text -> Int uses Console {
+            prompt -> rt.readInt
+        }
+    """" => ioProvider
+    """"
+        namespace sys.runtime
+
+        public print value: Text -> Unit = intrinsic
+
+        public println value: Text -> Unit = intrinsic
+
+        public readInt prompt: Text -> Int = intrinsic
+
+        public eprint value: Text -> Unit = intrinsic
+
+        public eprintln value: Text -> Unit = intrinsic
+
+        # Makes every preceding stdout byte observable before a program performs a
+        # blocking read. Native targets report a failed operating-system flush.
+        public flushStandardOutput: -> Unit uses Console = intrinsic
+    """" => consoleProvider
+    [consumerSource, publicSource, runtimeSource, ioProvider, consoleProvider; ~]
         -> semanticContext.prepare => prepared
     0 => workCalls!
     0 => failedCalls!

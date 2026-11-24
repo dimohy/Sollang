@@ -13,9 +13,9 @@ scanCalls values: ref [calls.ModuleCallResolution; ~] -> CallScan {
     0 => index!
     index! < (values -> len) -> while {
         values[index!] => call
-        call.sourceModule == 1 and call.targetSourceModule == 0 and call.status == 0
+        call.sourceModule == 2 and call.targetSourceModule == 1 and call.status == 0
             -> if { resolvedImportedMethods! + 1 => resolvedImportedMethods! }
-        call.sourceModule == 1 and call.status == 2
+        call.sourceModule == 2 and call.status == 2
             -> if { true => unresolvedImportedMethod! }
         index! + 1 => index!
     }
@@ -31,7 +31,7 @@ verificationMessage values: ref [typedIr.TypedIrNode; ~], callScan: CallScan -> 
     0 => index!
     index! < (values -> len) -> while {
         values[index!] => node
-        (node.kind == 6 or node.kind == 9) and node.targetModule == 0
+        (node.kind == 6 or node.kind == 9) and node.targetModule == 1
             -> if {
                 true => sawImportedCall!
                 node.typeId >= 0 -> if { true => sawTypedResult! }
@@ -112,7 +112,14 @@ main {
         }
     """" => sampleSource
 
-    [netSource, sampleSource; ~] -> semanticContext.prepare => context
+    """
+    namespace sys.io
+    public print value: Text -> Unit {}
+    public println value: Text -> Unit {}
+    public readInt prompt: Text -> Int => 7
+    """ => ioSource
+
+    [ioSource, netSource, sampleSource; ~] -> semanticContext.prepareWithStandardLibrarySources(1) => context
     context.calls -> scanCalls => callScan
     context -> typedIr.lowerContext => ir
     ir -> verificationMessage(callScan) -> println
