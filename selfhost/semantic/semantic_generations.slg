@@ -144,6 +144,19 @@ public capture prepared: ref context.SemanticSnapshot, finalTypes: ref expressio
 }
 
 public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, paths: ref [Text; ~], sourceModule: Int, identity: CompilationIdentity, declarationFingerprint: [UInt8], metadata: ref ownerTypes.CaptureMetadata -> owners.EncodedOwnerCalls {
+    (prepared.package.ranges -> len) -> digests.emptyCache => moduleDigests!
+    prepared -> capturePreparedWithDigests(finalTypes, paths, sourceModule, identity, declarationFingerprint, metadata, moduleDigests!)
+}
+
+appendModuleDigest module: ref digests.ModuleDigest, words: mut [UInt64; ~] -> Bool {
+    module.status != 0 -> if { false -> return }
+    words -> push(UInt64(module.name -> len))
+    module.name -> each word { words -> push(word) }
+    module.bytes -> each byte { words -> push(UInt64(byte)) }
+    true
+}
+
+public capturePreparedWithDigests prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, paths: ref [Text; ~], sourceModule: Int, identity: CompilationIdentity, declarationFingerprint: [UInt8], metadata: ref ownerTypes.CaptureMetadata, moduleDigests: mut digests.DigestCache -> owners.EncodedOwnerCalls {
     owners.EncodedOwnerCalls { words: [UInt64; ~], status: 10 } => invalid
     (declarationFingerprint -> len) != 32 -> if { invalid -> return }
     prepared -> owners.capturePrepared(finalTypes, sourceModule, metadata) => payload
@@ -163,11 +176,9 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
     [UInt64(6002245308512486734), 1, 0, identity.compiler, identity.target, identity.configuration, UInt64(payload.words -> len), UInt64(required! -> len); ~] => words!
     declarationFingerprint -> each byte { words! -> push(UInt64(byte)) }
     required! -> each requiredSource {
-        prepared.package -> digests.capture(prepared.modules, paths, requiredSource) => module
-        module.status != 0 -> if { invalid -> return }
-        words! -> push(UInt64(module.name -> len))
-        module.name -> each word { words! -> push(word) }
-        module.bytes -> each byte { words! -> push(UInt64(byte)) }
+        prepared.package -> digests.cachedIndex(prepared.modules, paths, requiredSource, moduleDigests) => index
+        moduleDigests.entries[index] -> appendModuleDigest(words!)
+            -> unless { invalid -> return }
     }
     payload.words -> each word { words! -> push(word) }
     UInt64((words! -> len) + 32) => words![2]

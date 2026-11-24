@@ -1603,6 +1603,8 @@ emitDeferredBoolTextRootBytes prefix: Text -> Unit uses Console {
 
 emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request.whileIndex => materializeIndex
+    Arena(0) => materializeGuardNames!
+    "materialize$(materializeIndex -> valueNameId(state))" -> materialize(materializeGuardNames!) => materializeGuardPrefix
     context.ir[materializeIndex] => materializeNode
     materializeNode.operand0 -> producerValueIndex(context, state) => materializeTextIndex
     context.ir[materializeTextIndex] => materializeText
@@ -1736,8 +1738,16 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
                 ", %materialize$(materializeIndex -> valueNameId(state))_root" -> print
                 materializeLengthOrdinal! -> writeDecimal
                 "_length" -> println
+                materializeLengthOrdinal! + 1 => nextLength
+                "  %$(materializeGuardPrefix)_materialized_text_length_ok$(nextLength) = icmp uge i64 %$(materializeGuardPrefix)_source_length$(nextLength), %$(materializeGuardPrefix)_source_length$(materializeLengthOrdinal!)" -> println
+                "  br i1 %$(materializeGuardPrefix)_materialized_text_length_ok$(nextLength), label %$(materializeGuardPrefix)_source_length$(nextLength)_ready, label %$(materializeGuardPrefix)_text_length_overflow" -> println
+                "$(materializeGuardPrefix)_source_length$(nextLength)_ready:" -> println
                 materializeLengthOrdinal! + 1 => materializeLengthOrdinal!
             }
+        "  br label %$(materializeGuardPrefix)_text_length_ready" -> println
+        "$(materializeGuardPrefix)_text_length_overflow:" -> println
+        request -> emitRuntimeTrap(materializeGuardPrefix, "text_length", "materialized_text_length_overflow", context, state)
+        "$(materializeGuardPrefix)_text_length_ready:" -> println
     } else {
         "  %materialize$(materializeIndex -> valueNameId(state))_source_ptr = extractvalue %sollang.text " -> print
         materializeChoice -> if { "%calltext$(materializeIndex)_arg0" -> print } else {
@@ -1775,6 +1785,11 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
     "  %materialize$(materializeIndex -> valueNameId(state))_end = add i64 %materialize$(materializeIndex -> valueNameId(state))_used, %materialize$(materializeIndex -> valueNameId(state))_source_length" -> print
     materializeRootCount > 0 -> if { materializeRootCount -> writeDecimal }
     "" -> println
+    "  %$(materializeGuardPrefix)_arena_size_ok = icmp uge i64 %$(materializeGuardPrefix)_end, %$(materializeGuardPrefix)_used" -> println
+    "  br i1 %$(materializeGuardPrefix)_arena_size_ok, label %$(materializeGuardPrefix)_check_capacity, label %$(materializeGuardPrefix)_arena_size_overflow" -> println
+    "$(materializeGuardPrefix)_arena_size_overflow:" -> println
+    request -> emitRuntimeTrap(materializeGuardPrefix, "arena_size", "arena_size_overflow", context, state)
+    "$(materializeGuardPrefix)_check_capacity:" -> println
     "  %materialize$(materializeIndex -> valueNameId(state))_fits = icmp ule i64 %materialize$(materializeIndex -> valueNameId(state))_end, %materialize$(materializeIndex -> valueNameId(state))_capacity" -> println
     "  br i1 %materialize$(materializeIndex -> valueNameId(state))_fits, label %materialize$(materializeIndex -> valueNameId(state))_keep, label %materialize$(materializeIndex -> valueNameId(state))_grow" -> println
     "materialize$(materializeIndex -> valueNameId(state))_keep:" -> println
@@ -1784,8 +1799,6 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
     "  %materialize$(materializeIndex -> valueNameId(state))_doubled_enough = icmp uge i64 %materialize$(materializeIndex -> valueNameId(state))_doubled, %materialize$(materializeIndex -> valueNameId(state))_end" -> println
     "  %materialize$(materializeIndex -> valueNameId(state))_new_capacity = select i1 %materialize$(materializeIndex -> valueNameId(state))_doubled_enough, i64 %materialize$(materializeIndex -> valueNameId(state))_doubled, i64 %materialize$(materializeIndex -> valueNameId(state))_end" -> println
     "  %materialize$(materializeIndex -> valueNameId(state))_grown = call ptr @sollang_resize(ptr %materialize$(materializeIndex -> valueNameId(state))_data, i64 %materialize$(materializeIndex -> valueNameId(state))_used, i64 %materialize$(materializeIndex -> valueNameId(state))_new_capacity)" -> println
-    Arena(0) => materializeGuardNames!
-    "materialize$(materializeIndex -> valueNameId(state))" -> materialize(materializeGuardNames!) => materializeGuardPrefix
     materializeGuardPrefix -> emitAllocationGuard("_grown", request.ownerIndex, context, state)
     "  br label %materialize$(materializeIndex -> valueNameId(state))_ready" -> println
     "materialize$(materializeIndex -> valueNameId(state))_ready:" -> println

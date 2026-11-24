@@ -78,6 +78,32 @@ public emitFragment cached: ref units.CodegenUnits, index: Int -> Unit uses Cons
     owner -> slice(0, owner -> len) -> print
 }
 
+verifyStagedBytes expected: ref [UInt8; ~], temporary: Text, identity: generations.CompilationIdentity -> Int uses File {
+    temporary -> files.readSourcePath -> when {
+        Err(code) { code -> return }
+        Ok(mapped) {
+            mapped -> len => length
+            length < 64 or length > 2147483591 or length % 8 != 0
+                -> if { 21 -> return }
+            length == UIntSize(expected -> len) -> if {
+                UIntSize(0) => offset!
+                true => matches!
+                offset! < length and matches! -> while {
+                    (mapped -> byte(offset!)) != expected[Int(offset!)]
+                        -> if { false => matches! }
+                    offset! + 1 => offset!
+                }
+                matches! -> if { 0 -> return }
+            }
+        }
+    }
+    # Retain the cache reader's framing and checksum diagnostics on a mismatch.
+    # A valid but different cache may never replace the verified staged bytes.
+    temporary -> load(identity) => checked
+    checked.status != 0 -> if { checked.status -> return }
+    33
+}
+
 public publish source: Text, temporary: Text, destination: Text, identity: generations.CompilationIdentity -> Result<Publication, Int> uses File {
     temporary == destination -> if { Result<Publication, Int>.Err(35) -> return }
     source -> units.readStreamedUnits -> when {
@@ -140,8 +166,8 @@ public publish source: Text, temporary: Text, destination: Text, identity: gener
             not (writer -> file.sync) -> if { Result<Publication, Int>.Err(32) -> return }
         }
     }
-    temporary -> load(identity) => checked
-    checked.status != 0 -> if { Result<Publication, Int>.Err(checked.status) -> return }
+    bytes! -> verifyStagedBytes(temporary, identity) => readbackStatus
+    readbackStatus != 0 -> if { Result<Publication, Int>.Err(readbackStatus) -> return }
     file.AtomicReplaceRequest { temporary: temporary, destination: destination } -> file.atomicReplace
         -> unless { Result<Publication, Int>.Err(34) -> return }
     Result<Publication, Int>.Ok(Publication { total: parts -> len, reused: reused! })

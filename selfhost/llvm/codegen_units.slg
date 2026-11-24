@@ -156,6 +156,15 @@ identityUtf8Valid words: ref [UInt64; ~], start: Int, length: Int -> Bool {
     true
 }
 
+asciiWord word: UInt64 -> Bool {
+    word => remaining!
+    0..<8 -> each {
+        remaining! % 256 >= 128 -> if { false -> return }
+        remaining! / 256 => remaining!
+    }
+    true
+}
+
 packedUtf8Valid words: ref [UInt64; ~], wordStart: Int, byteLength: Int -> Bool {
     byteLength < 0 -> if { false -> return }
     byteLength -> requiredWords => storageWords
@@ -163,9 +172,14 @@ packedUtf8Valid words: ref [UInt64; ~], wordStart: Int, byteLength: Int -> Bool 
         -> unless { false -> return }
     0 => index!
     index! < byteLength -> while {
-        words -> utf8Scalar(wordStart, index!, byteLength, true) => scalar
-        scalar.value < 0 -> if { false -> return }
-        index! + scalar.byteLength => index!
+        index! % 8 == 0 and byteLength - index! >= 8 and (words[wordStart + index! / 8] -> asciiWord)
+            -> if {
+                index! + 8 => index!
+            } else {
+                words -> utf8Scalar(wordStart, index!, byteLength, true) => scalar
+                scalar.value < 0 -> if { false -> return }
+                index! + scalar.byteLength => index!
+            }
     }
     true
 }
@@ -261,15 +275,17 @@ public pack text: Text -> PackedFragment {
     Int(text -> len) => byteLength
     0 => byteIndex!
     byteIndex! < byteLength -> while {
-        byteIndex! % 8 => byteOffset
-        byteOffset == 0 -> if { words! -> push(0) }
-        words! -> len => wordCount
-        byteOffset -> power256 => factor
-        words![wordCount - 1] => currentWord
-        text -> byte(UIntSize(byteIndex!)) => currentByte
-        currentWord + UInt64(currentByte) * factor => packedWord
-        packedWord => words![wordCount - 1]
-        byteIndex! + 1 => byteIndex!
+        byteLength - byteIndex! => remaining
+        remaining < 8 -> if { remaining } else { 8 } => wordBytes
+        UInt64(0) => word!
+        wordBytes => offset!
+        offset! > 0 -> while {
+            offset! - 1 => offset!
+            text -> byte(UIntSize(byteIndex! + offset!)) => currentByte
+            word! * 256 + UInt64(currentByte) => word!
+        }
+        words! -> push(word!)
+        byteIndex! + wordBytes => byteIndex!
     }
     PackedFragment { words: words!, byteLength: byteLength } => result
     result

@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.semantic_cache
 import sollang.compiler.semantic.context as context
 import sollang.compiler.semantic.expression_type_ids as expressions
 import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.semantic.module_source_digests as digests
 import sollang.compiler.semantic.semantic_static_arrays as staticArrays
 import sollang.compiler.semantic.owner_call_facts as owners
 import sollang.compiler.semantic.owner_type_facts as ownerTypes
@@ -273,9 +274,10 @@ public resolveWithExternalResultsWithExecutionMode initialPrepared: move context
             } => arrayPlan
             UInt64(arrayPlan -> len) => words![8]
             arrayPlan -> each word { words! -> push(word) }
+            sourceCount -> digests.emptyCache => moduleDigests!
             0..<sourceCount -> each source {
                 captureAllowed! -> if {
-                    resolved.prepared -> generations.capturePrepared(resolved.types, paths, source, identity, declarationFingerprint, captureMetadata) => encoded
+                    resolved.prepared -> generations.capturePreparedWithDigests(resolved.types, paths, source, identity, declarationFingerprint, captureMetadata, moduleDigests!) => encoded
                     encoded -> appendGenerationRow(words!, sourceCount - source - 1) => status
                     status != 0 -> if {
                         skipped! + 1 => skipped!

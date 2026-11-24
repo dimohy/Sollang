@@ -12,6 +12,38 @@ public struct ModuleDigest {
     public status: Int
 }
 
+# One compilation owns this index. The prepared package, namespace identities
+# and ordered source paths must stay fixed while its generations are captured.
+public struct DigestCache {
+    public indexBySource: [Int; ~]
+    public entries: [ModuleDigest; ~]
+}
+
+public emptyCache sourceCount: Int -> DigestCache {
+    [Int; ~] => indexBySource!
+    0..<sourceCount -> each { indexBySource! -> push(-1) }
+    DigestCache { indexBySource: indexBySource!, entries: [ModuleDigest; ~] }
+}
+
+setCachedIndex indices: mut [Int; ~], source: Int, entry: Int -> Unit {
+    entry => indices[source]
+}
+
+public cachedIndex package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], paths: ref [Text; ~], sourceModule: Int, cache: mut DigestCache -> Int {
+    cache.indexBySource[sourceModule] => known
+    known >= 0 -> if { known -> return }
+    package -> capture(identities, paths, sourceModule) => digest
+    cache.entries -> len => entry
+    cache.entries -> push(digest)
+    cache.indexBySource -> setCachedIndex(sourceModule, entry)
+    0..<(cache.indexBySource -> len) -> each candidate {
+        cache.indexBySource[candidate] < 0
+            and modules.sameLogicalAnalyzedSource(package.sources, identities, sourceModule, candidate, package.tokens, package.ranges)
+            -> if { cache.indexBySource -> setCachedIndex(candidate, entry) }
+    }
+    entry
+}
+
 public logicalName package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int -> [UInt64; ~] {
     [UInt64; ~] => words!
     sourceModule < 0 or sourceModule >= (package.ranges -> len) or sourceModule >= (identities -> len)

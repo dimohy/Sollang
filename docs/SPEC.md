@@ -5008,7 +5008,8 @@ syntax! -> reset
 - `deferredText -> materialize(arena!)` formats into one contiguous arena
   allocation and returns an ordinary non-owning `Text` view. Interpolation
   holes have already been evaluated once in source order; materialization only
-  formats their retained values.
+  formats their retained values. The byte total and resulting arena offset
+  are checked for unsigned overflow before choosing capacity or copying bytes.
 - A materialized `Text` borrows its arena owner. While that view is live,
   `alloc`, `store`, `reset`, move, and drop of the conflicting arena are
   rejected. Passing the owner to any `mut Arena` parameter is likewise rejected
@@ -6942,6 +6943,9 @@ Current backend:
   before the native driver invokes the linker. The complete stream owner remains
   alive while fragment views are used. Reuse admission still requires the current
   implementation and dependency keys, and persistence requires a successful link.
+  Before replacing a native codegen cache, the publisher verifies that the
+  flushed temporary file contains the same bytes as the validated envelope.
+  A framing, checksum or byte mismatch prevents replacement.
 - canonical self-host module interfaces retain the full parsed namespace as
   length-prefixed UTF-8 bytes in the schema-2 interface payload. Whitespace and
   comments do not participate in namespace identity. The namespace hash is a
